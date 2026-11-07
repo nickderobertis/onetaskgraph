@@ -21,7 +21,14 @@
 //! Applying it to its own output changes nothing, which is what the spike measured of Linear: a
 //! follow-up write of what Linear stored is stored as it was sent. The samples each rewrite is
 //! held to are `crates/onetaskgraph-linear-e2e/tests/fixtures/linear_rewrites/`, whose README
-//! names the spike report each comes from. The plugin predicts none of this; it is the loopback's
+//! names the spike report each comes from. Five more were observed of writes to `TES2` on
+//! 2026-11-07, and are held by the module's tests: a bare Linear issue URL is stored under the
+//! issue's identifier, fragment kept, as `[TES2-1766](https://linear.app/<workspace>/issue/TES2-1766)`;
+//! a bare address with a non-ASCII character is linked under itself, its destination percent-encoded;
+//! a word under `.md` with a fragment is linked under `http://` as a domain is; and every other link's
+//! destination is stored in angle brackets. A bare document's or project's address stored under its
+//! title, verbatim, is `fixtures::linear_titled`'s, and the `related` relation between two issues one of which
+//! links the other is `fixtures::linear_derive_relations`'s. The plugin predicts none of this; it is the loopback's
 //! alone, so the store's follow-up path runs on every gate at no Linear quota.
 
 // llmlint: ignore-file[code_lands_in_the_domain_that_owns_it] This is the loopback Linear's own store: the loopback lives in this shared e2e harness because more than one suite drives it — the engine's own `onetaskgraph-e2e` and the Linear suite both copy into it — and its write handlers in `fixtures.rs` are what apply this rewrite, as the standing suppression on `LinearMarkdown` there records. A copy of it in one suite would leave the other's loopback storing what it is sent.
@@ -269,7 +276,7 @@ fn inline(text: &str) -> String {
             }
             '[' => {
                 if let Some(end) = link_end(text, at) {
-                    stored.push_str(&text[at..end]);
+                    stored.push_str(&linked(&text[at..end]));
                     end - at
                 } else {
                     stored.push_str("\\[");
@@ -297,7 +304,12 @@ fn inline(text: &str) -> String {
             }
             _ => match autolink(text, at, previous) {
                 Some((token, target)) => {
-                    stored.push_str(&format!("[{token}](<{target}>)"));
+                    match issue_identifier(token) {
+                        Some(identifier) => {
+                            stored.push_str(&format!("[{identifier}]({token})"));
+                        }
+                        None => stored.push_str(&format!("[{token}](<{target}>)")),
+                    }
                     token.len()
                 }
                 None => {
@@ -310,6 +322,19 @@ fn inline(text: &str) -> String {
         at += taken;
     }
     stored
+}
+
+/// The Markdown link `link` as Linear stores it: its destination in angle brackets, but for a link
+/// to a Linear issue under its identifier, which it keeps as it stored it.
+fn linked(link: &str) -> String {
+    let Some((text, target)) = link.split_once("](") else {
+        return link.to_owned();
+    };
+    let target = target.strip_suffix(')').unwrap_or(target);
+    if target.starts_with('<') || issue_identifier(target) == Some(text.trim_start_matches('[')) {
+        return link.to_owned();
+    }
+    format!("{text}](<{target}>)")
 }
 
 /// Where the code span opened by the `run` backticks at `at` ends — just past the next run of
@@ -330,8 +355,18 @@ fn code_span_end(text: &str, at: usize, run: usize) -> Option<usize> {
 /// Where the Markdown link whose `[` is at `at` ends — `[text](target)`, the target bare or in
 /// angle brackets — or `None` when no link starts there.
 fn link_end(text: &str, at: usize) -> Option<usize> {
-    let close = at + 1 + text[at + 1..].find(']')?;
-    if text[at + 1..close].contains(['[', '`', '\\']) {
+    // A link's text holds balanced brackets: Linear stores a title holding some as it is.
+    let mut depth = 0_usize;
+    let close = at
+        + text[at..].find(|c: char| {
+            depth = match c {
+                '[' => depth + 1,
+                ']' => depth - 1,
+                _ => depth,
+            };
+            depth == 0
+        })?;
+    if text[at + 1..close].contains(['`', '\\']) {
         return None;
     }
     let target = close + 1;
@@ -389,7 +424,7 @@ fn autolink(text: &str, at: usize, previous: Option<char>) -> Option<(&str, Stri
         let scheme = rest.find("://").expect("checked just now") + 3;
         let end = rest.find(stops).unwrap_or(rest.len());
         let token = rest[..end].trim_end_matches(trailing);
-        return (token.len() > scheme).then(|| (token, token.to_owned()));
+        return (token.len() > scheme).then(|| (token, percent_encoded(token)));
     }
     let host_end = rest
         .find(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '.'))
@@ -397,6 +432,12 @@ fn autolink(text: &str, at: usize, previous: Option<char>) -> Option<(&str, Stri
     let host = rest[..host_end].trim_end_matches(['.', '-']);
     let labels: Vec<&str> = host.split('.').collect();
     let top = labels.last()?.to_ascii_lowercase();
+    // A file name with a fragment, which reads as a domain under Moldova's.
+    if top == "md" && labels.len() >= 2 && rest[host.len()..].starts_with('#') {
+        let end = rest.find(stops).unwrap_or(rest.len());
+        let token = rest[..end].trim_end_matches(trailing);
+        return Some((token, format!("http://{token}")));
+    }
     if labels.len() < 2
         || labels.iter().any(|label| label.is_empty())
         || !AUTOLINKED_TOP_LEVEL_DOMAINS.contains(&top.as_str())
@@ -414,6 +455,33 @@ fn autolink(text: &str, at: usize, previous: Option<char>) -> Option<(&str, Stri
         host
     };
     Some((token, format!("http://{token}")))
+}
+
+/// `token` with each non-ASCII byte percent-encoded, as Linear writes the destination of an address
+/// it autolinks under itself.
+fn percent_encoded(token: &str) -> String {
+    let mut encoded = String::with_capacity(token.len());
+    for c in token.chars() {
+        if c.is_ascii() {
+            encoded.push(c);
+        } else {
+            let mut bytes = [0; 4];
+            for byte in c.encode_utf8(&mut bytes).bytes() {
+                encoded.push_str(&format!("%{byte:02X}"));
+            }
+        }
+    }
+    encoded
+}
+
+// llmlint: ignore[contracts_have_one_source_or_a_drift_gate] This model of Linear states Linear's address independently of the engine on purpose: reusing `section_links`'s reading would let the two never disagree. The journeys through the binary drive one against the other, and it was observed of `TES2` on 2026-11-07.
+/// The identifier a bare Linear issue URL names, a fragment after it or not: `TES2-1766` of
+/// `https://linear.app/<workspace>/issue/TES2-1766`.
+fn issue_identifier(url: &str) -> Option<&str> {
+    let (_, identifier) = url
+        .strip_prefix("https://linear.app/")?
+        .split_once("/issue/")?;
+    identifier.split(['/', '#']).next()
 }
 
 /// Where an ordered list item's number ends in `text`, a line with its indentation taken off —
@@ -637,6 +705,34 @@ mod tests {
             ),
             ("# Top\n\nText.", "# Top\n\nText."),
             ("1. one\n2. two\n3. three", "1. one\n2. two\n3. three"),
+            (
+                "| https://linear.app/w/issue/TES2-1 |\n",
+                "| [TES2-1](https://linear.app/w/issue/TES2-1) |\n",
+            ),
+            (
+                "| https://linear.app/w/issue/TES2-1#heading-a-12345678 |\n",
+                "| [TES2-1](https://linear.app/w/issue/TES2-1#heading-a-12345678) |\n",
+            ),
+            (
+                "[Design [v2]](<https://linear.app/w/document/d-1>)",
+                "[Design [v2]](<https://linear.app/w/document/d-1>)",
+            ),
+            (
+                "| https://linear.app/w/issue/TES2-1/its-title |\n",
+                "| [TES2-1](https://linear.app/w/issue/TES2-1/its-title) |\n",
+            ),
+            (
+                "See https://linear.app/w/document/日本語-c58f now.",
+                "See [https://linear.app/w/document/日本語-c58f](<https://linear.app/w/document/%E6%97%A5%E6%9C%AC%E8%AA%9E-c58f>) now.",
+            ),
+            (
+                "| second-task.md#budget | second-task.md |\n",
+                "| [second-task.md#budget](<http://second-task.md#budget>) | second-task.md |\n",
+            ),
+            (
+                "See [the first](https://linear.app/w/issue/TES2-1#heading-a-12345678).",
+                "See [the first](<https://linear.app/w/issue/TES2-1#heading-a-12345678>).",
+            ),
             (
                 "```rust\n- [x] _y_ ~\n    kept\n```",
                 "```rust\n- [x] _y_ ~\n    kept\n```",

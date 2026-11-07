@@ -548,6 +548,19 @@ impl BodyLinks {
         let mut out = String::with_capacity(written.len());
         let mut at = 0;
         while at < written.len() {
+            // A placeholder the destination autolinked when it was first written, which names
+            // it twice and only as a whole is a link to anything: replaced whole.
+            if let Some((length, text)) = replacements.iter().find_map(|(placeholder, text)| {
+                let length = autolinked(written, at, &placeholder.text)?;
+                (placeholder.spelled == Spelled::Literal)
+                    .then_some(text.as_ref())
+                    .flatten()
+                    .map(|text| (length, text))
+            }) {
+                out.push_str(text);
+                at += length;
+                continue;
+            }
             let found = replacements.iter().find(|(placeholder, _)| {
                 if placeholder.spelled == Spelled::Destination {
                     // As it was sent, or as a destination that writes every link destination in
@@ -930,6 +943,15 @@ fn with_fragment(link: String, fragment: Option<&str>) -> String {
 /// Whether `location` occurs at `at` as a whole reference, as `delimited_at` reads one.
 fn delimited(content: &str, at: usize, location: &str) -> bool {
     super::delimited_at(content, at, location)
+}
+
+/// The length of the autolink of `text` at `at` — `[text](<http://text>)` or its `https://`
+/// spelling, as Linear stores a word it reads as an address — when one is there.
+fn autolinked(written: &str, at: usize, text: &str) -> Option<usize> {
+    ["http", "https"].iter().find_map(|scheme| {
+        let link = format!("[{text}](<{scheme}://{text}>)");
+        written[at..].starts_with(&link).then_some(link.len())
+    })
 }
 
 /// Whether the placeholder `text` of a link spelled literally occurs at `at`: as a whole

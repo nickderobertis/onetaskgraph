@@ -648,8 +648,10 @@ pub trait TaskSource: Send + Sync {
     /// content instead — a rendering's `body_digest`, a copy's
     /// [`MetadataKey::COPIED_DESTINATION_VERSION_KEY`] — and writes it back once, beside them,
     /// as its own request. That follow-up write's own answer is then compared with this
-    /// content byte for byte, and a backend that does not hold its own stored content stable
-    /// is refused as `stored-content-diverged`. Defaulted to `None`: a backend that stores what
+    /// content, and a backend that does not hold its own stored content stable is refused as
+    /// `stored-content-diverged`; only a `linear` source's answer that autolinked or escaped a copy's
+    /// own text is written back once more instead, and that write's answer is compared byte for
+    /// byte. Defaulted to `None`: a backend that stores what
     /// it is given says nothing, and nothing is compared or written again.
     fn stored_content(&self, record: MetadataRecord, id: &NativeId) -> Option<String> {
         let _ = (record, id);

@@ -16,13 +16,16 @@
 //!   reports and a heading, so a body copied *out of* that kind is recognised exactly as an
 //!   authored one is;
 //! - [`SectionForm::markup`] is the markup a destination's bodies carry for its headings to
-//!   be addressable at all, which only GitHub needs.
+//!   be addressable at all, which only GitHub needs;
+//! - [`SectionForm::inlines_reference_links`] says whether that kind keeps a reference-style
+//!   link at all, which Linear does not.
 //!
 //! A heading is carried between them as its text and its position among the headings of
 //! that text in its record ([`Heading`]), never as a slug, because the slug rules of GitHub
 //! and Linear differ. The README's "Section links" is where these forms are stated for a
 //! consumer.
 
+use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
@@ -113,6 +116,167 @@ fn plain(text: &str) -> String {
         .collect::<String>()
         .trim()
         .to_owned()
+}
+
+/// `content` with each reference-style link — `[text][label]`, `[text][]` or `[label]` — whose
+/// definition it holds written inline, and each definition every use of which was inlined left
+/// out. A definition nothing uses is no link, and is left as it was written.
+///
+/// CommonMark decides what is a link and what is a definition, so a code span, a code block and
+/// a footnote are left alone. An image reference is left with its definition: an inline image
+/// is what a copy reads as an asset of the record, which `![alt][label]` never named. A
+/// definition's title is left out, because the only inline link Linear was observed to keep has a
+/// destination and nothing after it.
+#[must_use]
+pub fn inline_reference_links(content: &str) -> String {
+    use pulldown_cmark::{Event, LinkType, Options, Parser, Tag, TagEnd};
+    let parser = || {
+        Parser::new_ext(
+            content,
+            Options::ENABLE_TABLES
+                | Options::ENABLE_FOOTNOTES
+                | Options::ENABLE_STRIKETHROUGH
+                | Options::ENABLE_TASKLISTS,
+        )
+    };
+    let reading = parser();
+    let definitions = reading.reference_definitions();
+    if definitions.iter().next().is_none() {
+        return content.to_owned();
+    }
+    let mut edits: Vec<(std::ops::Range<usize>, String)> = Vec::new();
+    let mut kept: Vec<std::ops::Range<usize>> = Vec::new();
+    let mut used: Vec<std::ops::Range<usize>> = Vec::new();
+    let mut images = 0_usize;
+    for (event, range) in parser().into_offset_iter() {
+        match event {
+            Event::Start(Tag::Image { id, .. }) => {
+                images += 1;
+                kept.extend(
+                    definitions
+                        .get(&id)
+                        .map(|definition| definition.span.clone()),
+                );
+            }
+            Event::End(TagEnd::Image) => images -= 1,
+            Event::Start(Tag::Link { link_type, id, .. })
+                if matches!(
+                    link_type,
+                    LinkType::Reference | LinkType::Collapsed | LinkType::Shortcut
+                ) =>
+            {
+                let Some(definition) = definitions.get(&id) else {
+                    continue;
+                };
+                // The parser's range of `[text][]` ends before its `[]`.
+                let collapsed =
+                    link_type == LinkType::Collapsed && content[range.end..].starts_with("[]");
+                let range = range.start..range.end + if collapsed { 2 } else { 0 };
+                let text = link_text(&content[range.clone()], link_type);
+                match text.filter(|_| images == 0 && !definition.dest.is_empty()) {
+                    Some(text) => {
+                        used.push(definition.span.clone());
+                        edits.push((
+                            range,
+                            format!("[{text}]({})", inline_destination(&definition.dest)),
+                        ));
+                    }
+                    None => kept.push(definition.span.clone()),
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut dropped: Vec<std::ops::Range<usize>> = definitions
+        .iter()
+        .map(|(_, definition)| definition.span.clone())
+        .filter(|span| used.contains(span) && !kept.contains(span))
+        .map(|span| whole_lines(content, span))
+        .collect();
+    dropped.sort_by_key(|span| span.start);
+    let mut joined: Vec<std::ops::Range<usize>> = Vec::new();
+    for span in dropped {
+        match joined.last_mut().filter(|last| last.end >= span.start) {
+            Some(last) => last.end = last.end.max(span.end),
+            None => joined.push(span),
+        }
+    }
+    let ended = joined
+        .last()
+        .is_some_and(|last| content[last.end..].trim().is_empty());
+    for span in joined {
+        // A definition stood alone between blank lines: one blank line stays where it was.
+        let apart = content[..span.start].is_empty() || content[..span.start].ends_with("\n\n");
+        let after = content[span.end..]
+            .find('\n')
+            .map(|line| span.end + line + 1);
+        let end = after
+            .filter(|end| apart && content[span.end..*end].trim().is_empty())
+            .unwrap_or(span.end);
+        edits.push((span.start..end, String::new()));
+    }
+    edits.sort_by_key(|(range, _)| range.start);
+    let mut inlined = String::with_capacity(content.len());
+    let mut at = 0;
+    for (range, written) in edits {
+        inlined.push_str(&content[at..range.start]);
+        inlined.push_str(&written);
+        at = range.end;
+    }
+    inlined.push_str(&content[at..]);
+    if ended {
+        // What followed the last definition was blank: the body ends as it did.
+        inlined.truncate(inlined.trim_end().len());
+        if content.ends_with('\n') {
+            inlined.push('\n');
+        }
+    }
+    inlined
+}
+
+/// The text of the reference link spelled `link`, of the type the parser read it as — `None`
+/// when `link` is not spelled as that type is.
+fn link_text(link: &str, link_type: pulldown_cmark::LinkType) -> Option<&str> {
+    use pulldown_cmark::LinkType;
+    let inner = link.strip_prefix('[')?.strip_suffix(']')?;
+    match link_type {
+        LinkType::Shortcut => Some(inner),
+        LinkType::Collapsed => inner.strip_suffix("]["),
+        _ => {
+            // A label holds no unescaped bracket, so the last one opens it.
+            let opening = inner
+                .rmatch_indices('[')
+                .map(|(at, _)| at)
+                .find(|at| !inner[..*at].ends_with('\\'))?;
+            inner[..opening].strip_suffix(']')
+        }
+    }
+}
+
+/// `target` as an inline link's destination: in angle brackets where it could not be read bare.
+fn inline_destination(target: &str) -> String {
+    if target.contains(|c: char| c.is_whitespace() || matches!(c, '(' | ')' | '<' | '>')) {
+        format!("<{target}>")
+    } else {
+        target.to_owned()
+    }
+}
+
+/// `span` widened over the whole lines it stands on, when nothing but indentation or a quotation
+/// mark comes before it on its first line, its last line's break included.
+fn whole_lines(content: &str, span: std::ops::Range<usize>) -> std::ops::Range<usize> {
+    let line = content[..span.start].rfind('\n').map_or(0, |at| at + 1);
+    let lead = &content[line..span.start];
+    let start = if lead.chars().all(|c| c == ' ' || c == '>') {
+        line
+    } else {
+        span.start
+    };
+    let end = content[span.end..]
+        .find('\n')
+        .filter(|at| content[span.end..span.end + at].trim().is_empty())
+        .map_or(span.end, |at| span.end + at + 1);
+    start..end
 }
 
 /// Every ATX heading's text in `content`, in order — `## Budgets` is `Budgets` — skipping
@@ -318,6 +482,41 @@ impl SectionForm {
             "linear" => Some(Self::Linear(linear_section_form())),
             _ => None,
         }
+    }
+
+    /// Whether a copy writes this kind's bodies with each reference-style link inline
+    /// ([`inline_reference_links`]), because the kind would keep it only as text: Linear stores
+    /// `[name][1]` and `[1]: <target>` with their brackets escaped, so neither is a link there.
+    #[must_use]
+    pub fn inlines_reference_links(self) -> bool {
+        matches!(self, Self::Linear(_))
+    }
+
+    /// Whether a line this kind answered a follow-up write with reads as the line it was sent,
+    /// differing only as the kind rewrites text it had not seen before: Linear's autolinks and
+    /// escapes, by [`linear_written`]. `titles` holds the title of each record the copy wrote there,
+    /// by its address, which is what Linear links that record's bare address under. Any other kind
+    /// holds to bytes.
+    #[must_use]
+    pub fn reads_as_sent(
+        self,
+        sent: &str,
+        stored: &str,
+        titles: &BTreeMap<String, String>,
+    ) -> bool {
+        if !matches!(self, Self::Linear(_)) {
+            return false;
+        }
+        let plain = linear_written(sent, None);
+        plain == linear_written(stored, Some((&plain, titles)))
+    }
+
+    /// Whether this kind relates two records of its own by itself when a body links one from the
+    /// other: Linear adds a `related` relation between two issues so linked, so a copy does not
+    /// read one as a change at the destination.
+    #[must_use]
+    pub fn derives_related_edges(self) -> bool {
+        matches!(self, Self::Linear(_))
     }
 
     /// Every spelling, in this kind's own form, of a record whose source reports `location`:
@@ -701,4 +900,113 @@ impl BodyMarkup for GithubAnchors {
         read
     }
 }
+/// `line` with what Linear does to text it is written undone: `\\[`, `\\]` and `\\~` unescaped, a
+/// destination taken out of its angle brackets, and an autolink back to what was written. That is
+/// a link whose text is its destination, percent-decoded or under `http://` or not, or, given what
+/// was sent, a link to an address that line holds bare under exactly what Linear titles that address
+/// with: an issue's identifier, or the title of the document or project the address is in `titles`.
+/// Any other text on such a link is not Linear's, and reads as the link it is.
+fn linear_written(line: &str, sent: Option<(&str, &BTreeMap<String, String>)>) -> String {
+    let untitled = sent.map_or_else(
+        || line.to_owned(),
+        |(sent, titles)| without_titles(line, sent, titles),
+    );
+    let unescaped = untitled
+        .replace("\\[", "[")
+        .replace("\\]", "]")
+        .replace("\\~", "~");
+    let mut plain = String::with_capacity(unescaped.len());
+    let mut rest = unescaped.as_str();
+    while let Some(opening) = rest.find('[') {
+        plain.push_str(&rest[..opening]);
+        rest = &rest[opening..];
+        let Some((link, text, target)) = link_at(rest) else {
+            plain.push('[');
+            rest = &rest[1..];
+            continue;
+        };
+        if target == text
+            || target.strip_prefix("http://") == Some(text)
+            || percent_decoded(target).as_deref() == Some(text)
+        {
+            plain.push_str(text);
+        } else if issue_identifier(target) == Some(text)
+            && sent.is_some_and(|(sent, _)| holds_bare(sent, target))
+        {
+            plain.push_str(target);
+        } else {
+            plain.push_str(&format!("[{text}]({target})"));
+        }
+        rest = &rest[link..];
+    }
+    plain.push_str(rest);
+    plain
+}
+
+/// `line` with each link under the title `titles` holds for its address, as Linear stores a bare
+/// document's or project's address, back to that address where `sent` holds it bare. It is taken
+/// off before anything is unescaped because Linear stores a title as it is, brackets and all.
+fn without_titles(line: &str, sent: &str, titles: &BTreeMap<String, String>) -> String {
+    let mut plain = line.to_owned();
+    for (address, title) in titles {
+        let opening = format!("[{title}]({address}");
+        let mut from = 0;
+        while let Some(at) = plain[from..].find(&opening).map(|at| from + at) {
+            let target = at + 1 + title.len() + 2;
+            let close = plain[target..].find(')').map(|end| target + end);
+            match close.filter(|close| {
+                let target = &plain[target..*close];
+                (target == address || target[address.len()..].starts_with('#'))
+                    && holds_bare(sent, target)
+            }) {
+                Some(close) => {
+                    let bare = plain[target..close].to_owned();
+                    plain.replace_range(at..=close, &bare);
+                    from = at + bare.len();
+                }
+                None => from = at + opening.len(),
+            }
+        }
+    }
+    plain
+}
+
+/// Whether `line` holds `target` other than as a link's destination.
+fn holds_bare(line: &str, target: &str) -> bool {
+    line.match_indices(target)
+        .any(|(at, _)| !line[..at].ends_with(['(', '<']))
+}
+
+// llmlint: ignore[contracts_have_one_source_or_a_drift_gate] Linear owns this address; the store's Linear model states it again independently on purpose, because a model reusing the engine's reading could not disagree with it. The journeys through the binary drive one against the other, so they cannot part unseen, and it was observed of `TES2` on 2026-11-07.
+/// The identifier in the address of a Linear issue: `TES2-1` of
+/// `https://linear.app/<workspace>/issue/TES2-1/its-title#heading-a-12345678`.
+fn issue_identifier(target: &str) -> Option<&str> {
+    let (_, issue) = target
+        .strip_prefix("https://linear.app/")?
+        .split_once("/issue/")?;
+    issue.split(['/', '#']).next()
+}
+
+/// The inline link `text` opens with: its length, its text and its destination out of any angle
+/// brackets.
+fn link_at(text: &str) -> Option<(usize, &str, &str)> {
+    let close = text.find("](")?;
+    let inner = &text[1..close];
+    if inner.contains('[') {
+        return None;
+    }
+    let after = close + 2;
+    let (target, end) = match text[after..].strip_prefix('<') {
+        Some(angled) => {
+            let end = angled.find(">)")?;
+            (&angled[..end], after + 1 + end + 2)
+        }
+        None => {
+            let end = text[after..].find(')')?;
+            (&text[after..after + end], after + end + 1)
+        }
+    };
+    Some((end, inner, target))
+}
+
 // llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]

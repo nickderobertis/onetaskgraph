@@ -9,6 +9,10 @@
 //! `onetaskgraph.copied_destination_version`. One follow-up write sends the stored content back
 //! verbatim beside them, as its own request, and its own answer has to report that content
 //! again; a backend that rewrites its own stored content is refused as `stored-content-diverged`.
+//! A copy's follow-up also finishes links in that content, so what it sends holds text of the
+//! store's own the backend has not seen: an answer differing from it only as Linear autolinks or
+//! escapes such text ([`SectionForm::reads_as_sent`]) is that text normalized rather than a divergence, and its
+//! answer is what the copy then records, by one more write.
 //! No read of the item follows either write: the answers are the record.
 
 use std::collections::BTreeMap;
@@ -22,6 +26,7 @@ use serde_json::Value;
 use super::EngineError;
 use crate::GlobalId;
 use crate::resolve::ResolvedSource;
+use crate::section_links::SectionForm;
 use crate::template::{Sha256Digest, TemplateProvenance};
 
 /// Let go of what `destination` still holds from an earlier write of the `record` `id`, before
@@ -88,13 +93,55 @@ pub(super) fn unstable(
     stored: &str,
 ) -> Option<EngineError> {
     let again = destination.source().stored_content(record, id)?;
-    let differs = first_difference(stored, &again)?;
-    Some(EngineError::StoredContentDiverged {
+    let differs = first_difference_by(stored, &again, |sent, stored| sent == stored)?;
+    Some(diverged(destination, id, differs))
+}
+
+/// The refusal naming where the `id` of `destination` stores other content than it was sent.
+fn diverged(destination: &ResolvedSource, id: &NativeId, differs: Difference) -> EngineError {
+    EngineError::StoredContentDiverged {
         item: GlobalId::new(destination.name().clone(), id.clone()),
         line: differs.line,
         sent: differs.sent,
         stored: differs.stored,
-    })
+    }
+}
+
+/// What a follow-up's own answer said of the `sent` content, when a backend's normalizing of text
+/// it had not seen before is to be told from a change: see [`normalized`].
+pub(super) enum Normalized {
+    /// It reported `sent` again, or said nothing.
+    Kept,
+    /// It reported this, which reads as `sent` line by line: [`SectionForm::reads_as_sent`].
+    Stored(String),
+    /// It reported other content.
+    Diverged(EngineError),
+}
+
+/// [`unstable`] for a follow-up whose `sent` holds text the backend had not seen before, where
+/// Linear's autolinking or escaping of that text is told from a person's change. `titles` holds
+/// the title of each record the copy wrote at `destination`, by its address.
+pub(super) fn normalized(
+    destination: &ResolvedSource,
+    record: MetadataRecord,
+    id: &NativeId,
+    sent: &str,
+    titles: &BTreeMap<String, String>,
+) -> Normalized {
+    let Some(again) = destination.source().stored_content(record, id) else {
+        return Normalized::Kept;
+    };
+    let form = SectionForm::for_kind(destination.kind());
+    let reads_as_sent = |sent_line: &str, stored_line: &str| {
+        sent_line == stored_line
+            || form.is_some_and(|form| form.reads_as_sent(sent_line, stored_line, titles))
+    };
+    let differs = first_difference_by(sent, &again, reads_as_sent);
+    match differs {
+        Some(differs) => Normalized::Diverged(diverged(destination, id, differs)),
+        None if again == sent => Normalized::Kept,
+        None => Normalized::Stored(again),
+    }
 }
 
 /// What a write that carried `payloads` uploaded, read off the content it said it sent: each
@@ -163,7 +210,11 @@ struct Difference {
     stored: Option<String>,
 }
 
-fn first_difference(sent: &str, stored: &str) -> Option<Difference> {
+fn first_difference_by(
+    sent: &str,
+    stored: &str,
+    same: impl Fn(&str, &str) -> bool,
+) -> Option<Difference> {
     if sent == stored {
         return None;
     }
@@ -172,13 +223,16 @@ fn first_difference(sent: &str, stored: &str) -> Option<Difference> {
     let mut line = 0;
     loop {
         line += 1;
-        let (sent_line, stored_line) = (sent_lines.next(), stored_lines.next());
-        if sent_line != stored_line {
-            return Some(Difference {
-                line,
-                sent: sent_line.map(str::to_owned),
-                stored: stored_line.map(str::to_owned),
-            });
+        match (sent_lines.next(), stored_lines.next()) {
+            (None, None) => return None,
+            (Some(sent), Some(stored)) if same(sent, stored) => {}
+            (sent, stored) => {
+                return Some(Difference {
+                    line,
+                    sent: sent.map(str::to_owned),
+                    stored: stored.map(str::to_owned),
+                });
+            }
         }
     }
 }
@@ -196,7 +250,7 @@ mod tests {
     };
     use serde_json::{Value, json};
 
-    use super::{forget, restamp, rewritten, served, unstable};
+    use super::{Normalized, forget, normalized, restamp, rewritten, served, unstable};
     use crate::engine::EngineError;
     use crate::resolve::ResolvedSource;
     use crate::template::body_digest;
@@ -205,12 +259,13 @@ mod tests {
     struct Answering {
         inner: InMemorySource,
         stored: Mutex<Option<String>>,
+        kind: &'static str,
     }
 
     #[async_trait::async_trait]
     impl TaskSource for Answering {
         fn kind(&self) -> &'static str {
-            "answering"
+            self.kind
         }
         fn capabilities(&self) -> Capabilities {
             self.inner.capabilities()
@@ -264,11 +319,17 @@ mod tests {
 
     /// A source whose last write's answer says it stores `stored`.
     fn answering(stored: Option<&str>) -> ResolvedSource {
+        answering_as("answering", stored)
+    }
+
+    /// [`answering`], a source of the kind `kind`.
+    fn answering_as(kind: &'static str, stored: Option<&str>) -> ResolvedSource {
         ResolvedSource::adopt(
             SourceName::new("loud".to_owned()).expect("a name"),
             Box::new(Answering {
                 inner: InMemorySource::new(InMemoryConfig::default()).expect("a source"),
                 stored: Mutex::new(stored.map(str::to_owned)),
+                kind,
             }),
         )
     }
@@ -374,6 +435,128 @@ mod tests {
             "{shown}"
         );
         assert!(!shown.contains("ruling"), "{shown}");
+    }
+
+    #[test]
+    fn a_follow_up_answered_with_its_own_text_autolinked_is_told_from_a_change() {
+        let id = NativeId("T-1".to_owned());
+        let design = "https://linear.app/w/document/design-1a2b";
+        let titles = BTreeMap::from([(design.to_owned(), "Design [v2]".to_owned())]);
+        let answer_on = |kind, sent: &str, stored: Option<&str>| {
+            normalized(
+                &answering_as(kind, stored),
+                MetadataRecord::Task,
+                &id,
+                sent,
+                &titles,
+            )
+        };
+        let answer = |sent: &str, stored: &str| answer_on("linear", sent, Some(stored));
+        let url = "https://linear.app/w/document/d#heading-a-12345678";
+        let sent = format!("Intro\n| {url} |\n\\[1\\]: [x](y) ~");
+        let stored = format!("Intro\n| [{url}](<{url}>) |\n\\[1\\]: [x](<y>) \\~");
+        assert!(matches!(answer(&sent, &sent), Normalized::Kept));
+        assert!(matches!(answer_on("linear", &sent, None), Normalized::Kept));
+        assert!(matches!(answer(&sent, &stored), Normalized::Stored(held) if held == stored));
+        // What Linear does to an address it was sent bare, every form of it observed.
+        for (sent, stored) in [
+            ("a.io", "[a.io](<http://a.io>)"),
+            (
+                "| https://linear.app/w/issue/TES2-1 |",
+                "| [TES2-1](https://linear.app/w/issue/TES2-1) |",
+            ),
+            (
+                "| https://linear.app/w/issue/TES2-1/its-title#heading-a-12345678 |",
+                "| [TES2-1](https://linear.app/w/issue/TES2-1/its-title#heading-a-12345678) |",
+            ),
+            (
+                design,
+                "[Design [v2]](https://linear.app/w/document/design-1a2b)",
+            ),
+            (
+                "https://linear.app/w/document/design-1a2b#heading-a-12345678",
+                "[Design [v2]](https://linear.app/w/document/design-1a2b#heading-a-12345678)",
+            ),
+            (
+                "https://linear.app/w/document/日本語-c58f",
+                "[https://linear.app/w/document/日本語-c58f](<https://linear.app/w/document/%E6%97%A5%E6%9C%AC%E8%AA%9E-c58f>)",
+            ),
+        ] {
+            assert!(
+                matches!(answer(sent, stored), Normalized::Stored(_)),
+                "{stored}"
+            );
+        }
+        // Any other text on such a link is a change: only what Linear titles it with is Linear's.
+        for (sent, stored) in [
+            ("https://a.example/x", "[changed](https://a.example/x)"),
+            (
+                "[a](<https://linear.app/w/issue/T-1>)",
+                "[b](https://linear.app/w/issue/T-1)",
+            ),
+            (
+                "| https://linear.app/w/issue/TES2-1 |",
+                "| [edited](https://linear.app/w/issue/TES2-1) |",
+            ),
+            (
+                "| https://linear.app/w/issue/TES2-1 |",
+                "| [TES2-2](https://linear.app/w/issue/TES2-1) |",
+            ),
+            (
+                design,
+                "[edited](https://linear.app/w/document/design-1a2b)",
+            ),
+            (
+                "https://linear.app/w/document/design-1a2bcd",
+                "[Design [v2]](https://linear.app/w/document/design-1a2bcd)",
+            ),
+            (
+                "https://linear.app/w/project/plan-9f",
+                "[Plan](https://linear.app/w/project/plan-9f)",
+            ),
+            (
+                "https://a.example/x",
+                "[https://a.example/x](<https://a.example/%79>)",
+            ),
+            // A link the store wrote keeps its text: a person's change of it is a change.
+            (
+                "| [budget](https://linear.app/w/issue/TES2-1) |",
+                "| [changed](<https://linear.app/w/issue/TES2-1>) |",
+            ),
+            (
+                "[Design](https://linear.app/w/document/design-1a2b)",
+                "[Design [v2]](https://linear.app/w/document/design-1a2b)",
+            ),
+            // A link to elsewhere is no autolink.
+            ("a.io", "[a.io](<http://b.io>)"),
+        ] {
+            assert!(
+                matches!(answer(sent, stored), Normalized::Diverged(_)),
+                "{stored}"
+            );
+        }
+        // A person's change is refused at its own line, past the autolink before it.
+        let edited = format!("Intro\n| [{url}](<{url}>) |\n\\[1\\]: [x](<z>) \\~");
+        let Normalized::Diverged(EngineError::StoredContentDiverged { line, .. }) =
+            answer(&sent, &edited)
+        else {
+            panic!("a change is refused");
+        };
+        assert_eq!(line, 3);
+        // A line more is no normalization.
+        assert!(matches!(
+            answer(&sent, &format!("{stored}\nA person's line.")),
+            Normalized::Diverged(_)
+        ));
+        // A kind with no section form says nothing of what its backend does: bytes alone.
+        assert!(matches!(
+            answer_on(
+                "answering",
+                "https://a.io",
+                Some("[https://a.io](<https://a.io>)")
+            ),
+            Normalized::Diverged(_)
+        ));
     }
 
     #[test]

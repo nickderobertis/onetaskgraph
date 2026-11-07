@@ -1086,6 +1086,26 @@ struct Prior {
     /// Its comments there, every page of them, when a `--comments` copy read them — `None`
     /// for every other read, and for an item that is not a task.
     comments: Option<Vec<Comment>>,
+    /// The far ends of each `related` edge the destination holds of its own accord, because a
+    /// body this copy writes links one end from the other: see
+    /// [`Engine::note_derived_relations`].
+    derived: Vec<DependencyEndpoint>,
+}
+
+impl Prior {
+    /// Its forward edges there as a copy compares them: without those the destination derived,
+    /// unless this copy writes the same edge itself (`outgoing`).
+    fn counted_edges(&self, outgoing: &[DependencyEdge]) -> Vec<DependencyEdge> {
+        self.edges
+            .iter()
+            .filter(|edge| {
+                !self.derived.contains(&edge.to)
+                    || edge.kind != DependencyKind::Related
+                    || outgoing.iter().any(|sent| sent.to == edge.to)
+            })
+            .cloned()
+            .collect()
+    }
 }
 
 /// One item that landed with an edge whose far end was not written yet.
@@ -1271,6 +1291,9 @@ struct Journal {
     /// Every item this copy landed, by interface and source id, and the id it landed under —
     /// which a later body's link to it names.
     landed: HashMap<(Level, GlobalId), NativeId>,
+    /// The title of each project and document this copy wrote, by destination and by its address
+    /// there: what a destination that titles a bare link to one links it under.
+    titles: HashMap<SourceName, BTreeMap<String, String>>,
     /// Each item written with links not addressable yet, its latest write alone.
     sections_pending: Vec<SectionsPending>,
     /// Each copied item's section-link figures, as its last rendering left them.
@@ -1322,6 +1345,15 @@ struct Journal {
     ownership_lost: bool,
 }
 
+/// How a follow-up's own answer is held to the content it sends.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FollowUpAnswer {
+    /// It sends back what the destination stored, so its answer reports that byte for byte.
+    Exact,
+    /// It holds a link finished in it, which the destination has not been sent and may normalize.
+    MayNormalize,
+}
+
 /// One write sent again, as its own request, because the destination stores other content than
 /// it was sent: that stored content verbatim, with every fingerprint the item keeps recomputed
 /// over it — see `stored`.
@@ -1347,6 +1379,8 @@ struct FollowUp {
     /// The content the destination said it stores, which the follow-up's own answer has to
     /// report again.
     stored: String,
+    /// How its answer is held to what it sends.
+    answer: FollowUpAnswer,
 }
 
 /// How to take back one comment write a `--comments` copy made.
@@ -5251,6 +5285,7 @@ impl Engine {
         // Each record a body links to is written before the body, so a link is addressable when
         // its body is first written rather than finished by a write of its own.
         let mut planned = targets_first(planned);
+        self.note_derived_relations(&mut planned)?;
         // Once a document's references point where they land, and before anything is compared
         // with the destination or written to it: every status is what its destination will
         // store, so an unchanged item reads as unchanged.
@@ -8008,6 +8043,7 @@ impl Engine {
             record: Some(stamped.record.clone()),
             comments: Some(comments),
             stored: content_of(&stamped.item).unwrap_or_default().to_owned(),
+            answer: FollowUpAnswer::Exact,
         };
         journal.follow_ups.push(follow);
         journal
@@ -9108,6 +9144,7 @@ impl Engine {
             assets,
             recorded,
             comments: held_comments,
+            derived: Vec::new(),
         }))
     }
 
@@ -9390,6 +9427,21 @@ impl Engine {
         journal
             .landed
             .insert((created_kind, item.source.clone()), landed.clone());
+        if created_kind != Level::Task
+            && let Some(address) = located(
+                destination
+                    .source()
+                    .written_location(created_kind.record(), &landed)
+                    .as_ref(),
+            )
+            .or_else(|| prior_location.clone())
+        {
+            journal
+                .titles
+                .entry(destination.name().clone())
+                .or_default()
+                .insert(address, described(&composed).0.to_owned());
+        }
         journal
             .sections_pending
             .retain(|held| !(&held.at == destination.name() && held.id == landed));
@@ -9446,6 +9498,63 @@ impl Engine {
             journal.follow_ups.push(follow);
         }
         Ok(landed)
+    }
+
+    /// Note, on each task this call updates on a destination that relates records by itself, every
+    /// `related` edge it holds to another task of this call when the body this call writes for
+    /// either of the two links the other. Such an edge is the destination's, not a person's or a
+    /// copy's, so it is no change there. Any other `related` edge still is, and so is one to a task
+    /// outside this call, whose body it does not hold.
+    fn note_derived_relations(&self, planned: &mut [Planned]) -> Result<(), EngineError> {
+        let mut ends: Vec<(SourceName, NativeId, String, String)> = Vec::new();
+        for item in planned.iter() {
+            let (Target::Update { id, .. }, Some(held), Item::Task(task)) =
+                (&item.target, &item.held, &item.item)
+            else {
+                continue;
+            };
+            if !SectionForm::for_kind(self.writable(&item.to)?.kind())
+                .is_some_and(SectionForm::derives_related_edges)
+            {
+                continue;
+            }
+            if let Some(location) = located(location_of(&held.item)) {
+                ends.push((
+                    item.to.clone(),
+                    id.clone(),
+                    location,
+                    task.content.clone().unwrap_or_default(),
+                ));
+            }
+        }
+        for item in planned.iter_mut() {
+            let Target::Update { id, .. } = &item.target else {
+                continue;
+            };
+            let Some(near) = ends.iter().find(|end| end.0 == item.to && end.1 == *id) else {
+                continue;
+            };
+            let Some(held) = item.held.as_mut() else {
+                continue;
+            };
+            held.derived = held
+                .edges
+                .iter()
+                .filter(|edge| edge.kind == DependencyKind::Related)
+                .map(|edge| edge.to.clone())
+                .filter(|far| {
+                    let far_id = far.to_string();
+                    ends.iter().any(|end| {
+                        let named = far_id == end.1.as_str()
+                            || far_id == GlobalId::new(end.0.clone(), end.1.clone()).to_string();
+                        end.0 == near.0
+                            && named
+                            && (links_to(&near.3, &end.2) || links_to(&end.3, &near.2))
+                    })
+                })
+                .collect();
+        }
+        Ok(())
     }
 
     /// Send each follow-up write `journal` holds, as its own request, and answer every item whose
@@ -9558,6 +9667,7 @@ impl Engine {
                     stored::restamp(metadata_of(&mut follow.item), &[&stored], &finished);
                     set_content(&mut follow.item, finished.clone());
                     follow.stored = finished;
+                    follow.answer = FollowUpAnswer::MayNormalize;
                 }
                 settle(journal, &held.source, figures, 0);
                 continue;
@@ -9583,6 +9693,7 @@ impl Engine {
                 record: held.record,
                 comments: held.comments,
                 stored: finished,
+                answer: FollowUpAnswer::MayNormalize,
             });
         }
         Ok(())
@@ -9593,8 +9704,10 @@ impl Engine {
         journal: &mut Journal,
     ) -> Result<Vec<(GlobalId, EngineError)>, EngineError> {
         let mut diverged = Vec::new();
-        for mut follow in std::mem::take(&mut journal.follow_ups) {
+        let mut owed = std::collections::VecDeque::from(std::mem::take(&mut journal.follow_ups));
+        while let Some(mut follow) = owed.pop_front() {
             let destination = self.writable(&follow.at)?;
+            let record_again = follow.record.clone();
             if let Some(mut record) = follow.record.take() {
                 if let record::SourceVersion::Token(token) = &mut record.version
                     && let Some(version) = journal.linked_versions.get(&follow.source)
@@ -9618,14 +9731,14 @@ impl Engine {
             let kind = follow.item.level().record();
             stored::forget(destination, kind, &follow.id);
             let target = Some(follow.id.clone());
-            let written = match follow.item {
+            let written = match follow.item.clone() {
                 Item::Task(task) => {
                     destination
                         .source()
                         .write_task(&ItemWrite {
                             target,
                             item: *task,
-                            depends_on: follow.edges,
+                            depends_on: follow.edges.clone(),
                         })
                         .await
                 }
@@ -9635,7 +9748,7 @@ impl Engine {
                         .write_project(&ItemWrite {
                             target,
                             item: *project,
-                            depends_on: follow.edges,
+                            depends_on: follow.edges.clone(),
                         })
                         .await
                 }
@@ -9664,8 +9777,28 @@ impl Engine {
                     },
                 ));
             }
-            if let Some(error) = stored::unstable(destination, kind, &follow.id, &follow.stored) {
-                diverged.push((follow.source, error));
+            if follow.answer == FollowUpAnswer::Exact {
+                if let Some(error) = stored::unstable(destination, kind, &follow.id, &follow.stored)
+                {
+                    diverged.push((follow.source, error));
+                }
+                continue;
+            }
+            let titles = journal.titles.get(&follow.at).cloned().unwrap_or_default();
+            match stored::normalized(destination, kind, &follow.id, &follow.stored, &titles) {
+                stored::Normalized::Kept => {}
+                stored::Normalized::Diverged(error) => diverged.push((follow.source, error)),
+                // What the destination made of text of this copy's own, which a read now reports:
+                // written once more beside the fingerprints of it, so a repeat copy finds them
+                // true. Its answer has to report it byte for byte, as any stored content's does.
+                stored::Normalized::Stored(held) => {
+                    stored::restamp(metadata_of(&mut follow.item), &[&follow.stored], &held);
+                    set_content(&mut follow.item, held.clone());
+                    follow.stored = held;
+                    follow.record = record_again;
+                    follow.answer = FollowUpAnswer::Exact;
+                    owed.push_back(follow);
+                }
             }
         }
         Ok(diverged)
@@ -9859,7 +9992,8 @@ fn changes(
     if recorded_unchanged(item, held, &outgoing, edges, destination.name(), covers) {
         return false;
     }
-    !same(&held.item, &outgoing, destination.name()) || !same_edges(&held.edges, edges)
+    !same(&held.item, &outgoing, destination.name())
+        || !same_edges(&held.counted_edges(edges), edges)
 }
 
 /// `item` with its status as `destination` reads it back once written — see
@@ -11595,6 +11729,7 @@ fn follow_up_of(
         record,
         comments,
         stored,
+        answer: FollowUpAnswer::Exact,
     })
 }
 
@@ -11683,7 +11818,8 @@ fn recorded_unchanged(
     } else {
         None
     };
-    let now = record::digest_of(&held.item, &held.edges, comments, destination);
+    let counted = held.counted_edges(edges);
+    let now = record::digest_of(&held.item, &counted, comments, destination);
     if !record::holds(
         described(&held.item).1,
         &version.to_string(),
@@ -11694,7 +11830,7 @@ fn recorded_unchanged(
     }
     // Who may read it is this copy's to decide afresh — a project a new private member makes
     // private — whatever its source holds.
-    same_edges(&held.edges, edges)
+    same_edges(&counted, edges)
         && classification_of(&held.item) == classification_of(outgoing)
         && match (&held.item, outgoing) {
             (Item::Task(held), Item::Task(outgoing)) => {
@@ -11709,6 +11845,15 @@ fn recorded_unchanged(
             (Item::Document(held), Item::Document(outgoing)) => held.project == outgoing.project,
             _ => false,
         }
+}
+
+/// Whether `body` links the record at `location`: holds that address whole, with nothing either
+/// side of it that would make it part of a longer one.
+fn links_to(body: &str, location: &str) -> bool {
+    body.match_indices(location).any(|(at, _)| {
+        !body[..at].ends_with(|c: char| c.is_alphanumeric() || matches!(c, '/' | ':' | '.' | '-'))
+            && !body[at + location.len()..].starts_with(|c: char| c.is_alphanumeric() || c == '-')
+    })
 }
 
 /// Whether the destination already reads exactly as this copy would leave it.

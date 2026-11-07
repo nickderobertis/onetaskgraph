@@ -843,6 +843,17 @@ impl Projecting {
                                 form.read_same_record(content, own.as_deref(), stored.as_deref())
                             },
                         );
+                    // A destination that would keep a reference-style link only as text has it
+                    // read inline, so it is reduced to its text as any inline link is.
+                    let authored = if crate::section_links::SectionForm::for_kind(
+                        engine.writable(&task.to)?.kind(),
+                    )
+                    .is_some_and(crate::section_links::SectionForm::inlines_reference_links)
+                    {
+                        crate::section_links::inline_reference_links(&authored)
+                    } else {
+                        authored
+                    };
                     task.links = view_links(
                         engine,
                         task,

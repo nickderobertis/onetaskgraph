@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 
 use super::{
     Engine, EngineError, Level, Planned, Running, content_of, fits, located, location_of,
-    metadata_of, metadata_ref, refused, set_content, stops_a_location,
+    metadata_of, metadata_ref, refused, set_content, stops_a_location, stored,
 };
 use crate::config::SourceVisibility;
 use crate::section_links::SectionForm;
@@ -13,12 +13,36 @@ use onetaskgraph_plugin_api::{
 };
 
 impl Engine {
+    /// Write `item`'s body and carried comments with each reference-style link inline when its
+    /// destination would keep such a link only as text, before anything reads them for what they
+    /// name: an inlined link is then rewritten, screened and counted as any inline link is. A
+    /// rendering's provenance moves with its body, as a rewrite of its references moves it.
+    fn inline_reference_links(&self, item: &mut Planned) -> Result<(), EngineError> {
+        if !SectionForm::for_kind(self.writable(&item.to)?.kind())
+            .is_some_and(SectionForm::inlines_reference_links)
+        {
+            return Ok(());
+        }
+        if let Some(content) = content_of(&item.item).map(str::to_owned) {
+            let inlined = crate::section_links::inline_reference_links(&content);
+            if inlined != content {
+                stored::restamp(metadata_of(&mut item.item), &[&content], &inlined);
+                set_content(&mut item.item, inlined);
+            }
+        }
+        for comment in item.carried.iter_mut().flatten() {
+            comment.body = crate::section_links::inline_reference_links(&comment.body);
+        }
+        Ok(())
+    }
+
     /// Remove private addresses before the boundary check sees a public body's content.
     pub(super) async fn prepare_public_body(
         &self,
         item: &mut Planned,
         running: &mut Running,
     ) -> Result<(), EngineError> {
+        self.inline_reference_links(item)?;
         if self.declared(&item.to) == SourceVisibility::Private {
             return Ok(());
         }

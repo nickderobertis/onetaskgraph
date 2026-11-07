@@ -1487,6 +1487,23 @@ them do; this is the inventory of what is owed, not a status board.
 147. Under a `sanitize_command` or a linking caller's own rewriting policy, each narrow write on
      a GitHub board sends exactly the requests it sends with only a `check_command`, its own text
      stored replaced; a term already stored stays until `sources sanitize` rewrites it.
+148. A design document whose budget table links each budget as `[name][n]`, with `[n]:
+     ../tasks/<file>.md#<slug>` after the table, copied with its project to a Linear source declared
+     private, one declared public and one undeclared, lands on a Linear that normalizes what it
+     stores with each cell an inline link in the heading-link form and no definition, and a repeat
+     writes nothing; a private folder's table copied to a public Linear holds each cell as a link or
+     as its text alone; a carried comment and a public view are written inline too; and through a
+     private Linear back to a folder each is a relative path with the authored `#<slug>`.
+149. A follow-up finishing a link in a copy to Linear, answered with its own URL autolinked under the
+     issue's identifier, is not refused: the answer is written back with what the copy records, a word
+     Linear linked as an address when first written ends a link to the heading, and a repeat writes
+     nothing; a design document naming an issue by its URL beside its budget table lands the same way,
+     and two naming each other by a bare path each land the other's address under its title; and an
+     answer also holding a line a person added, or such a link under any other text, is refused as
+     `stored-content-diverged`, naming it.
+150. A `related` relation Linear adds between two tasks of one copy, whose sent bodies link one from
+     the other on either end, is no change, so a repeat writes nothing; one between two tasks whose
+     bodies do not link each other is still reported `updated`.
 
 ## The public boundary
 
@@ -1559,7 +1576,9 @@ A reference is a literal
 occurrence in it of the exact location string a source reports for a related record — the
 `String` inside `Location::Path` or `Location::Url` — or, read in a folder of Markdown, a
 Markdown link to a path relative to the body's own file that resolves to one; and it becomes the
-location string the *destination* reports for that record's counterpart. A reference may carry
+location string the *destination* reports for that record's counterpart. A reference-style link bound for
+Linear, which keeps none, is first written inline (`section_links::inline_reference_links`), so it
+is then read as an inline link is. A reference may carry
 a fragment — a `#` straight after the location, as in `[budgets](<location>#budgets)`. **A
 fragment naming a heading is a section link, and is written in the destination's own section
 form**: one `SectionForm` entry per destination kind in `onetaskgraph-core`'s `section_links`

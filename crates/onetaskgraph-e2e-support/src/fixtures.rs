@@ -6213,7 +6213,13 @@ pub enum LinearMarkdown {
     /// section-links live check observed TES2 storing every link of an issue, a project and a
     /// document on 2026-11-02, and stores what it stored as it was sent.
     Angled,
+    /// Stores it as [`LinearMarkdown::Measured`] does, with a line a person added after its first:
+    /// a person's edit that a write's answer reports, as [`PERSON_EDIT`] spells it.
+    PersonEdited,
 }
+
+/// The line [`LinearMarkdown::PersonEdited`] adds.
+pub const PERSON_EDIT: &str = "A person added this line.";
 
 /// `written` as the workspace `data` stores a long form, by what it was told with
 /// [`LinearWorkspace::rewrite_markdown_on_write`].
@@ -6222,7 +6228,7 @@ fn linear_stored(data: &Value, written: Option<&Value>) -> Value {
         return written.cloned().unwrap_or(Value::Null);
     };
     match data["_linear_markdown"].as_str() {
-        Some("measured") => json!(crate::linear_markdown::stored(text)),
+        Some("measured") => json!(linear_titled(data, crate::linear_markdown::stored(text))),
         Some("unstable") => {
             let stored = crate::linear_markdown::stored(text)
                 .split('\n')
@@ -6240,8 +6246,37 @@ fn linear_stored(data: &Value, written: Option<&Value>) -> Value {
             json!(stored)
         }
         Some("angled") => json!(linear_angled(text)),
+        Some("person-edited") => json!(crate::linear_markdown::stored(text).replacen(
+            '\n',
+            &format!("\n{PERSON_EDIT}\n"),
+            1
+        )),
         _ => json!(text),
     }
+}
+
+// llmlint: ignore[code_lands_in_the_domain_that_owns_it] The loopback Linear lives in this shared e2e harness because more than one suite drives it; this reads the workspace's own rows, which `linear_markdown::stored` has no access to.
+/// `stored` with each document's and project's bare address linked under its title, as a write to
+/// `TES2` was observed storing one on 2026-11-07.
+fn linear_titled(data: &Value, mut stored: String) -> String {
+    for (collection, kind, title) in [
+        ("documents", "document", "title"),
+        ("projects", "project", "title"),
+    ] {
+        for row in data[collection].as_array().into_iter().flatten() {
+            let address = linear_web_address(row, kind);
+            let (Some(address), Some(title)) = (address.as_str(), row[title].as_str()) else {
+                continue;
+            };
+            for held in [
+                format!("[{address}](<{address}>)"),
+                format!("[{title}](<{address}>)"),
+            ] {
+                stored = stored.replace(&held, &format!("[{title}]({address})"));
+            }
+        }
+    }
+    stored
 }
 
 /// `text` with every Markdown link destination not in angle brackets put in them.
@@ -6718,6 +6753,7 @@ impl LinearWorkspace {
             LinearMarkdown::Measured => "measured",
             LinearMarkdown::Unstable => "unstable",
             LinearMarkdown::Angled => "angled",
+            LinearMarkdown::PersonEdited => "person-edited",
         });
     }
 
@@ -7151,6 +7187,7 @@ fn linear_serve(
             for hook in due {
                 (hook.change)(&workspace);
             }
+            linear_derive_relations(&mut workspace.state.lock().unwrap());
             let text = serde_json::to_string(&response).unwrap();
             let _ = write!(
                 stream,
@@ -8381,7 +8418,10 @@ fn linear_write_item(
     let (_, stamp) = linear_tick(data);
     let vocabulary = json!({"_linear_states": data["_linear_states"].clone(),
         "_linear_project_statuses": data["_linear_project_statuses"].clone()});
-    let vocabulary_markdown = json!({"_linear_markdown": data["_linear_markdown"].clone()});
+    let vocabulary_markdown = json!({"_linear_markdown": data["_linear_markdown"].clone(),
+        "documents": data["documents"].clone(),
+        "projects": data["projects"].clone(),
+    });
     let stateless = data["_linear_stateless"] == true;
     let web_workspace = data["_linear_web_workspace"].as_str().map(str::to_owned);
     let burnt = linear_burnt(data);
@@ -8871,14 +8911,17 @@ fn linear_write_relation(
         }
     }
     let edge = json!({"from":input.get(near_key).ok_or("missing near id")?,"to":input.get(far_key).ok_or("missing far id")?,"kind":kind});
-    data[if project {
+    let edges = data[if project {
         "project_dependencies"
     } else {
         "task_dependencies"
     }]
     .as_array_mut()
-    .ok_or("fixture edges are not an array")?
-    .push(edge);
+    .ok_or("fixture edges are not an array")?;
+    // A relation Linear already derived from a link is the one asked for.
+    if !edges.contains(&edge) {
+        edges.push(edge);
+    }
     Ok(if project {
         json!({"projectRelationCreate":{"success":true,"projectRelation":{"id":"PR-W"}}})
     } else {
@@ -9268,6 +9311,56 @@ fn linear_priority_name(number: &Value) -> Value {
         Some(4.0) => "low",
         _ => "none",
     })
+}
+
+// llmlint: ignore[code_lands_in_the_domain_that_owns_it] The loopback Linear lives in this shared e2e harness because more than one suite drives it, and only its server loop here can apply this after a write.
+/// The `related` relation Linear adds of its own between an issue whose description links another
+/// issue and that issue, as a copy to `TES2` was observed to on 2026-11-07, unless the two are
+/// related already. A workspace storing what it is sent byte for byte adds none, as every journey
+/// that does not ask for Linear's own rewriting expects.
+fn linear_derive_relations(data: &mut Value) {
+    if !matches!(
+        data["_linear_markdown"].as_str(),
+        Some("measured" | "angled" | "person-edited")
+    ) {
+        return;
+    }
+    let issues: Vec<(Value, String, String)> = data["tasks"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|row| {
+            (
+                row["id"].clone(),
+                linear_web_address(row, "issue")
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned(),
+                row["_linear_description"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned(),
+            )
+        })
+        .collect();
+    let Some(edges) = data["task_dependencies"].as_array_mut() else {
+        return;
+    };
+    for (id, _, description) in &issues {
+        for (other, address, _) in &issues {
+            let links = description.match_indices(address.as_str()).any(|(at, _)| {
+                !description[at + address.len()..]
+                    .starts_with(|c: char| c.is_alphanumeric() || c == '-')
+            });
+            let related = edges.iter().any(|edge| {
+                (edge["from"] == *id && edge["to"] == *other)
+                    || (edge["from"] == *other && edge["to"] == *id)
+            });
+            if id != other && links && !related {
+                edges.push(json!({"from": id, "to": other, "kind": "related"}));
+            }
+        }
+    }
 }
 
 /// One narrow `issueUpdate`: the `priority` alone or the `description` alone of an issue this

@@ -3340,6 +3340,66 @@ fn a_new_linear_views_link_to_its_own_heading_names_the_id_its_create_was_answer
 }
 
 #[test]
+fn a_views_reference_links_on_a_public_linear_are_its_own_heading_and_text_alone() {
+    // Linear keeps no reference-style link, so a view there holds each inline: its link to its
+    // own heading in Linear's form, its link to the private plan's other task as its text, and
+    // neither definition as text a reader would see.
+    let mut handle = None;
+    let store = Store::laid(Some(registered), |sandbox| {
+        let (mut config, workspace) =
+            crate::fixtures::linear_workspace(sandbox, crate::fixtures::dataset());
+        config["status_mapping"] = crate::fixtures::linear_default_mapping();
+        handle = Some(workspace);
+        sandbox.secrets_file("LINEAR_API_KEY=fixture-key\n");
+        json!({
+            "tracker": {"plugin": "linear", "config": config, "visibility": "public"},
+            "vault": {"routes": [{"repositories": ["github.com/openco/*"], "to": "tracker"}]},
+        })
+    });
+    let workspace = handle.expect("the workspace");
+    private_rollout(&store);
+    store.record(
+        "plan",
+        "tasks",
+        "sectioned",
+        &format!(
+            "title: Retry the widget once\nstatus: todo\nproject: rollout\nrepositories: [{OPEN}]"
+        ),
+        "See [the retry][r] and [the ingest][i].\n\n### Step 2.b: retry (once)\n\nOnce.\n\n\
+         [r]: #step-2b-retry-once\n[i]: producer.md#anywhere\n",
+    );
+    let landed = copy_rollout(&store);
+    let view = view_of(&store, &landed, &landed["plan:sectioned"]);
+    let native = view.split_once(':').expect("a qualified id").1.to_owned();
+    let url = shown(&store, "task", &view)["location"]["url"]
+        .as_str()
+        .expect("a Linear address")
+        .to_owned();
+    let id8: String = onetaskgraph_e2e_support::linear_editor::stored(
+        &workspace
+            .editor_state(
+                onetaskgraph_e2e_support::fixtures::LinearRecord::Task,
+                &native,
+            )
+            .expect("an editor state"),
+    )
+    .iter()
+    .find(|(text, _)| text == "Step 2.b: retry (once)")
+    .map(|(_, id)| id.replace('-', "")[..8].to_owned())
+    .expect("the heading's stored id");
+    let held = workspace.long_form("tasks", &native).unwrap_or_default();
+    assert!(
+        held.contains(&format!(
+            "See [the retry]({url}#heading-step-2b-retry-once-{id8}) and the ingest."
+        )),
+        "{held}"
+    );
+    for gone in ["[r]", "[i]", "producer.md"] {
+        assert!(!held.contains(gone), "{gone}: {held}");
+    }
+}
+
+#[test]
 fn a_refused_update_finishing_a_new_views_link_takes_the_whole_copy_back() {
     // Linear refuses the write that finishes a new view's link to its own heading: the copy
     // fails, and no view it created is left behind.
