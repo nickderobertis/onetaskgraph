@@ -77,10 +77,12 @@ for crate in $crates; do
       || fatal "building $crate's instrumented test units failed" "$next"
     # What ci.yml's `lint` compiles, each crate's `lint` and `typecheck` commands as written:
     # scripts/check-warm-rust-cache.sh holds these lines to them.
+    # llmlint: ignore-block[work_goes_through_command_surface] Those targets are cached Nx targets, and a replay would compile nothing into the target directory this leg exists to save, so the warmer invokes cargo as it does for every other build here.
     cargo clippy --quiet -p "$crate" --all-targets --all-features --locked -- -D warnings \
       || fatal "linting $crate failed" "$next"
     cargo check --quiet -p "$crate" --all-targets --all-features --locked \
       || fatal "checking $crate failed" "$next"
+    # llmlint: ignore-end[work_goes_through_command_surface]
   fi
 done
 

@@ -148,7 +148,6 @@ try {
   // llmlint: ignore[tool_output_is_signal] Standard output is this script's machine-read interface: Nx hashes this one line.
   console.log(digest(parts));
 } catch (error) {
-  // No digest: Nx then fails the run rather than hashing a task over less than it reads.
   console.error(`nx-cargo-closure: ${error.message}`);
   console.error(
     "next: run it from a checkout of this repository, name a crate under crates/, and repair Cargo.lock with 'cargo metadata'",

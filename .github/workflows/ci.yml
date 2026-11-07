@@ -133,13 +133,6 @@ jobs:
           version: ${{ steps.pins.outputs.uv }}
           enable-cache: true
           save-cache: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
-      # test-linux's restored family unpacks to what ran that job out of disk, and this job's
-      # capture builds beside it, so the same unused SDKs go, in the background, costing no time.
-      - name: Free the disk the restored family and the capture need
-        shell: bash
-        run: |
-          df -h /
-          sudo nohup rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL >/dev/null 2>&1 &
       # Reads rust-toolchain.toml; its built-in cache keys `target` and the cargo registry on
       # Cargo.lock, the toolchain and the OS, and cargo's fingerprints refuse a stale unit.
       # test-linux's family, which .github/workflows/rust-cache-warm.yml saves on main with this
