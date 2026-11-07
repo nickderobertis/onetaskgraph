@@ -23,7 +23,7 @@ __all__ += _models.__all__
 
 #: The version this package publishes. `pyproject.toml`, the Cargo workspace and the
 #: TypeScript package must all agree; scripts/check-workspace-config.sh reconciles them.
-__version__ = "0.14.5"
+__version__ = "0.14.6"
 
 if not TYPE_CHECKING:
 
