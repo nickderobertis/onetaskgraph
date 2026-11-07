@@ -112,3 +112,4 @@ pub use template::{
     RenderedTemplate, Sha256Digest, Template, TemplateError, TemplateInput, TemplateLoader,
     TemplateProvenance, TemplateVariable, TemplateVariables, VariableType,
 };
+// Demonstration only: a change touching this crate, so its budget targets are selected. Never merged.
