@@ -155,7 +155,10 @@
 //! moved was only the separator: where S ends in a table row and its line break, `S + "\n\n" +
 //! slot` is stored as `S + "\n" + slot`, which is no change to S — so the follow-up is judged by
 //! the content its answer reports, never by whether its whole long form is what was sent, and
-//! [`metadata_description`] recovers S exactly without cutting into it.
+//! [`metadata_description`] recovers S exactly without cutting into it. A copy's follow-up that
+//! finishes a link also holds text of the store's own Linear has not seen, so an answer differing
+//! only as Linear autolinks or escapes that text is written back once more rather than refused:
+//! the engine's `stored::normalized` tells it from a change a person made.
 //! Both halves hold whichever way the store loads this source: served over the stdio plugin
 //! protocol, the stored content crosses as a write result's `stored_content`
 //! (`docs/plugin-protocol.md` §3.16, §4.9).

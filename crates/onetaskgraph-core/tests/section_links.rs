@@ -241,3 +241,49 @@ fn an_anchor_a_person_wrote_and_one_in_a_fenced_example_survive_reading() {
         "an authored body reads as it is"
     );
 }
+
+/// The budget table a design document is authored with, as a copy to Linear writes it.
+#[test]
+fn every_reference_style_spelling_is_written_inline_and_its_definition_left_out() {
+    use onetaskgraph_core::section_links::inline_reference_links as inlined;
+    for (authored, wanted) in [
+        (
+            "| Budget | Limit |\n| --- | --- |\n| [one][1] | 2 |\n| [two][2] | 3 |\n\n\
+             [1]: ../tasks/t.md#budget-one\n[2]: ../tasks/t.md#budget-two\n",
+            "| Budget | Limit |\n| --- | --- |\n| [one](../tasks/t.md#budget-one) | 2 |\n\
+             | [two](../tasks/t.md#budget-two) | 3 |\n",
+        ),
+        // The collapsed and the shortcut spelling, a label in another case, and one use of many.
+        (
+            "[Name][] and [name] and [other][NAME].\n\n[name]: https://a.example/b\n",
+            "[Name](https://a.example/b) and [name](https://a.example/b) and \
+             [other](https://a.example/b).\n",
+        ),
+        // Mid-body, one blank line stays; a title is left out, angle brackets stay where needed.
+        (
+            "See [a][a].\n\n[a]: <x (1).md> \"A title\"\n\nThen more.\n",
+            "See [a](<x (1).md>).\n\nThen more.\n",
+        ),
+    ] {
+        assert_eq!(inlined(authored), wanted, "{authored:?}");
+        assert_eq!(inlined(wanted), wanted, "inlining {wanted:?} again");
+    }
+    for kept in [
+        // No definition, an inline link, and text that only looks like one.
+        "[a][b] and [c] and [d](e.md) and `[f][g]`.\n",
+        "- [x] done\n\n[y]: is not a definition of anything here.\n",
+        "A note.[^1]\n\n[^1]: The footnote.\n",
+        // A definition nothing uses is no link, and is left as it was written.
+        "Text.\n\n[unused]: x.md\n",
+        // Code holds nothing, and an image reference keeps what it uses.
+        "`[a][1]`\n\n```\n[a][1]\n[1]: x.md\n```\n",
+        "![alt][1]\n\n[1]: https://a.example/i.png\n",
+    ] {
+        assert_eq!(inlined(kept), kept, "{kept:?}");
+    }
+    // An image and a link sharing a definition: the link is inlined, and the definition stays.
+    assert_eq!(
+        inlined("![alt][1] and [link][1]\n\n[1]: a.png\n"),
+        "![alt][1] and [link](a.png)\n\n[1]: a.png\n"
+    );
+}

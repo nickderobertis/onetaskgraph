@@ -1321,7 +1321,12 @@ it only where the provenance vouched for what was sent, so a hand edit's entry i
 came, and a copy's `onetaskgraph.copied_destination_version` — and writes the stored content
 back once, beside them, as its own request. That follow-up's own answer has to report the same
 content again; a destination that stores it otherwise is refused as `stored-content-diverged`,
-naming the item and the first line that moved. No read of the item follows either write. So
+naming the item and the first line that moved. A follow-up that also finishes a link holds text
+Linear has not seen, so an answer differing only as Linear autolinks a URL, escapes a bracket or a
+tilde, or puts a destination in angle brackets is no divergence: that answer is written back the
+same way, and has to come back unchanged. Other text in the answer, such as a person's edit it
+reports, is refused. An edit made before the follow-up and absent from its answer is overwritten
+unseen, since no read precedes it. No read of the item follows either write. So
 every item a copy lands records a `body_digest` that a read of it verifies, whatever Markdown its
 template holds.
 
@@ -1424,6 +1429,18 @@ decided: it writes the form, parses it back and supplies its markup.
     `record-url` writes the record's URL alone, for a measurement.
 - Any other destination, a stdio plugin among them, receives every fragment byte for byte on
   the rewritten link, as before section forms existed.
+
+**A reference-style link on Linear.** Linear keeps no reference-style link: it stores `[name][1]`
+and `[1]: <target>` with their brackets escaped, as text, and autolinks a URL after them. So a copy
+to Linear writes each `[text][label]`, `[text][]` or `[label]` whose definition the copied body
+holds as an inline link to that target, in a body and in a carried comment alike. It is then read
+as any inline link is below, so the cases below that leave a definition as written do not apply to
+a used one here. A definition every use of which was inlined is not written. A definition's title
+is left out, an image reference keeps its definition, and a definition nothing uses is left as
+written. A copy out of Linear reads the inline link, so a folder of Markdown gets it back inline
+as a relative path with the authored `#<slug>`. GitHub Projects and local Markdown keep the
+reference-style spelling. A Linear plugin served over the stdio protocol has no section form, so
+its bodies are not inlined.
 
 **Which spellings a copy reads.** What a copy reads as a link to a record depends on where the
 body is bound. Each case below holds for every destination kind:

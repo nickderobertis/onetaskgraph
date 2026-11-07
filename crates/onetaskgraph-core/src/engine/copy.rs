@@ -1347,6 +1347,9 @@ struct FollowUp {
     /// The content the destination said it stores, which the follow-up's own answer has to
     /// report again.
     stored: String,
+    /// Whether it holds text the destination has not been sent, a link finished in it, which the
+    /// destination may normalize: otherwise its answer has to report it byte for byte.
+    unseen_text: bool,
 }
 
 /// How to take back one comment write a `--comments` copy made.
@@ -8008,6 +8011,7 @@ impl Engine {
             record: Some(stamped.record.clone()),
             comments: Some(comments),
             stored: content_of(&stamped.item).unwrap_or_default().to_owned(),
+            unseen_text: false,
         };
         journal.follow_ups.push(follow);
         journal
@@ -9558,6 +9562,7 @@ impl Engine {
                     stored::restamp(metadata_of(&mut follow.item), &[&stored], &finished);
                     set_content(&mut follow.item, finished.clone());
                     follow.stored = finished;
+                    follow.unseen_text = true;
                 }
                 settle(journal, &held.source, figures, 0);
                 continue;
@@ -9583,6 +9588,7 @@ impl Engine {
                 record: held.record,
                 comments: held.comments,
                 stored: finished,
+                unseen_text: true,
             });
         }
         Ok(())
@@ -9593,8 +9599,10 @@ impl Engine {
         journal: &mut Journal,
     ) -> Result<Vec<(GlobalId, EngineError)>, EngineError> {
         let mut diverged = Vec::new();
-        for mut follow in std::mem::take(&mut journal.follow_ups) {
+        let mut owed = std::collections::VecDeque::from(std::mem::take(&mut journal.follow_ups));
+        while let Some(mut follow) = owed.pop_front() {
             let destination = self.writable(&follow.at)?;
+            let record_again = follow.record.clone();
             if let Some(mut record) = follow.record.take() {
                 if let record::SourceVersion::Token(token) = &mut record.version
                     && let Some(version) = journal.linked_versions.get(&follow.source)
@@ -9618,14 +9626,14 @@ impl Engine {
             let kind = follow.item.level().record();
             stored::forget(destination, kind, &follow.id);
             let target = Some(follow.id.clone());
-            let written = match follow.item {
+            let written = match follow.item.clone() {
                 Item::Task(task) => {
                     destination
                         .source()
                         .write_task(&ItemWrite {
                             target,
                             item: *task,
-                            depends_on: follow.edges,
+                            depends_on: follow.edges.clone(),
                         })
                         .await
                 }
@@ -9635,7 +9643,7 @@ impl Engine {
                         .write_project(&ItemWrite {
                             target,
                             item: *project,
-                            depends_on: follow.edges,
+                            depends_on: follow.edges.clone(),
                         })
                         .await
                 }
@@ -9664,8 +9672,27 @@ impl Engine {
                     },
                 ));
             }
-            if let Some(error) = stored::unstable(destination, kind, &follow.id, &follow.stored) {
-                diverged.push((follow.source, error));
+            if !follow.unseen_text {
+                if let Some(error) = stored::unstable(destination, kind, &follow.id, &follow.stored)
+                {
+                    diverged.push((follow.source, error));
+                }
+                continue;
+            }
+            match stored::normalized(destination, kind, &follow.id, &follow.stored) {
+                stored::Normalized::Kept => {}
+                stored::Normalized::Diverged(error) => diverged.push((follow.source, error)),
+                // What the destination made of text of this copy's own, which a read now reports:
+                // written once more beside the fingerprints of it, so a repeat copy finds them
+                // true. Its answer has to report it byte for byte, as any stored content's does.
+                stored::Normalized::Stored(held) => {
+                    stored::restamp(metadata_of(&mut follow.item), &[&follow.stored], &held);
+                    set_content(&mut follow.item, held.clone());
+                    follow.stored = held;
+                    follow.record = record_again;
+                    follow.unseen_text = false;
+                    owed.push_back(follow);
+                }
             }
         }
         Ok(diverged)
@@ -11595,6 +11622,7 @@ fn follow_up_of(
         record,
         comments,
         stored,
+        unseen_text: false,
     })
 }
 

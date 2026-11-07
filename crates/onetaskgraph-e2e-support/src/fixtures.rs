@@ -6213,7 +6213,13 @@ pub enum LinearMarkdown {
     /// section-links live check observed TES2 storing every link of an issue, a project and a
     /// document on 2026-11-02, and stores what it stored as it was sent.
     Angled,
+    /// Stores it as [`LinearMarkdown::Measured`] does, with a line a person added after its first:
+    /// a person's edit that a write's answer reports, as [`PERSON_EDIT`] spells it.
+    PersonEdited,
 }
+
+/// The line [`LinearMarkdown::PersonEdited`] adds.
+pub const PERSON_EDIT: &str = "A person added this line.";
 
 /// `written` as the workspace `data` stores a long form, by what it was told with
 /// [`LinearWorkspace::rewrite_markdown_on_write`].
@@ -6240,6 +6246,11 @@ fn linear_stored(data: &Value, written: Option<&Value>) -> Value {
             json!(stored)
         }
         Some("angled") => json!(linear_angled(text)),
+        Some("person-edited") => json!(crate::linear_markdown::stored(text).replacen(
+            '\n',
+            &format!("\n{PERSON_EDIT}\n"),
+            1
+        )),
         _ => json!(text),
     }
 }
@@ -6718,6 +6729,7 @@ impl LinearWorkspace {
             LinearMarkdown::Measured => "measured",
             LinearMarkdown::Unstable => "unstable",
             LinearMarkdown::Angled => "angled",
+            LinearMarkdown::PersonEdited => "person-edited",
         });
     }
 

@@ -9,6 +9,10 @@
 //! `onetaskgraph.copied_destination_version`. One follow-up write sends the stored content back
 //! verbatim beside them, as its own request, and its own answer has to report that content
 //! again; a backend that rewrites its own stored content is refused as `stored-content-diverged`.
+//! A copy's follow-up also finishes links in that content, so what it sends holds text of the
+//! store's own the backend has not seen: an answer differing from it only as Linear autolinks or
+//! escapes such text ([`Normalized`]) is that text normalized rather than a divergence, and its
+//! answer is what the copy then records, by one more write.
 //! No read of the item follows either write: the answers are the record.
 
 use std::collections::BTreeMap;
@@ -88,13 +92,102 @@ pub(super) fn unstable(
     stored: &str,
 ) -> Option<EngineError> {
     let again = destination.source().stored_content(record, id)?;
-    let differs = first_difference(stored, &again)?;
-    Some(EngineError::StoredContentDiverged {
+    let differs = first_difference_by(stored, &again, |sent, stored| sent == stored)?;
+    Some(diverged(destination, id, differs))
+}
+
+/// The refusal naming where the `id` of `destination` stores other content than it was sent.
+fn diverged(destination: &ResolvedSource, id: &NativeId, differs: Difference) -> EngineError {
+    EngineError::StoredContentDiverged {
         item: GlobalId::new(destination.name().clone(), id.clone()),
         line: differs.line,
         sent: differs.sent,
         stored: differs.stored,
-    })
+    }
+}
+
+/// What a follow-up's own answer said of the `sent` content, when a backend's normalizing of text
+/// it had not seen before is to be told from a change: see [`normalized`].
+pub(super) enum Normalized {
+    /// It reported `sent` again, or said nothing.
+    Kept,
+    /// It reported this, which reads as `sent` line by line once [`denormalized`].
+    Stored(String),
+    /// It reported other content.
+    Diverged(EngineError),
+}
+
+/// [`unstable`] for a follow-up whose `sent` holds text the backend had not seen before, where
+/// Linear's autolinking or escaping of that text is told from a person's change.
+pub(super) fn normalized(
+    destination: &ResolvedSource,
+    record: MetadataRecord,
+    id: &NativeId,
+    sent: &str,
+) -> Normalized {
+    let Some(again) = destination.source().stored_content(record, id) else {
+        return Normalized::Kept;
+    };
+    let reads_as_sent = |sent_line: &str, stored_line: &str| {
+        sent_line == stored_line || denormalized(sent_line) == denormalized(stored_line)
+    };
+    let differs = first_difference_by(sent, &again, reads_as_sent);
+    match differs {
+        Some(differs) => Normalized::Diverged(diverged(destination, id, differs)),
+        None if again == sent => Normalized::Kept,
+        None => Normalized::Stored(again),
+    }
+}
+
+/// `line` with what Linear does to text it is written undone: `\\[`, `\\]` and `\\~` unescaped, a
+/// destination taken out of its angle brackets, and an autolink — a link whose destination is its
+/// text, or its text under `http://` — back to that text. Text a person changed reads otherwise.
+fn denormalized(line: &str) -> String {
+    let unescaped = line
+        .replace("\\[", "[")
+        .replace("\\]", "]")
+        .replace("\\~", "~");
+    let mut plain = String::with_capacity(unescaped.len());
+    let mut rest = unescaped.as_str();
+    while let Some(opening) = rest.find('[') {
+        plain.push_str(&rest[..opening]);
+        rest = &rest[opening..];
+        let Some((link, text, target)) = link_at(rest) else {
+            plain.push('[');
+            rest = &rest[1..];
+            continue;
+        };
+        if target == text || target.strip_prefix("http://") == Some(text) {
+            plain.push_str(text);
+        } else {
+            plain.push_str(&format!("[{text}]({target})"));
+        }
+        rest = &rest[link..];
+    }
+    plain.push_str(rest);
+    plain
+}
+
+/// The inline link `text` opens with: its length, its text and its destination out of any angle
+/// brackets.
+fn link_at(text: &str) -> Option<(usize, &str, &str)> {
+    let close = text.find("](")?;
+    let inner = &text[1..close];
+    if inner.contains('[') {
+        return None;
+    }
+    let after = close + 2;
+    let (target, end) = match text[after..].strip_prefix('<') {
+        Some(angled) => {
+            let end = angled.find(">)")?;
+            (&angled[..end], after + 1 + end + 2)
+        }
+        None => {
+            let end = text[after..].find(')')?;
+            (&text[after..after + end], after + end + 1)
+        }
+    };
+    Some((end, inner, target))
 }
 
 /// What a write that carried `payloads` uploaded, read off the content it said it sent: each
@@ -163,7 +256,11 @@ struct Difference {
     stored: Option<String>,
 }
 
-fn first_difference(sent: &str, stored: &str) -> Option<Difference> {
+fn first_difference_by(
+    sent: &str,
+    stored: &str,
+    same: impl Fn(&str, &str) -> bool,
+) -> Option<Difference> {
     if sent == stored {
         return None;
     }
@@ -172,13 +269,16 @@ fn first_difference(sent: &str, stored: &str) -> Option<Difference> {
     let mut line = 0;
     loop {
         line += 1;
-        let (sent_line, stored_line) = (sent_lines.next(), stored_lines.next());
-        if sent_line != stored_line {
-            return Some(Difference {
-                line,
-                sent: sent_line.map(str::to_owned),
-                stored: stored_line.map(str::to_owned),
-            });
+        match (sent_lines.next(), stored_lines.next()) {
+            (None, None) => return None,
+            (Some(sent), Some(stored)) if same(sent, stored) => {}
+            (sent, stored) => {
+                return Some(Difference {
+                    line,
+                    sent: sent.map(str::to_owned),
+                    stored: stored.map(str::to_owned),
+                });
+            }
         }
     }
 }
@@ -196,7 +296,7 @@ mod tests {
     };
     use serde_json::{Value, json};
 
-    use super::{forget, restamp, rewritten, served, unstable};
+    use super::{Normalized, forget, normalized, restamp, rewritten, served, unstable};
     use crate::engine::EngineError;
     use crate::resolve::ResolvedSource;
     use crate::template::body_digest;
@@ -374,6 +474,53 @@ mod tests {
             "{shown}"
         );
         assert!(!shown.contains("ruling"), "{shown}");
+    }
+
+    #[test]
+    fn a_follow_up_answered_with_its_own_text_autolinked_is_told_from_a_change() {
+        let id = NativeId("T-1".to_owned());
+        let url = "https://linear.app/w/document/d#heading-a-12345678";
+        let sent = format!("Intro\n| {url} |\n\\[1\\]: [x](y) ~");
+        let stored = format!("Intro\n| [{url}](<{url}>) |\n\\[1\\]: [x](<y>) \\~");
+        let answer =
+            |stored: &str| normalized(&answering(Some(stored)), MetadataRecord::Task, &id, &sent);
+        assert!(matches!(answer(&sent), Normalized::Kept));
+        assert!(matches!(
+            normalized(&answering(None), MetadataRecord::Task, &id, &sent),
+            Normalized::Kept
+        ));
+        assert!(matches!(answer(&stored), Normalized::Stored(held) if held == stored));
+        // A bare domain Linear links under `http://` reads as the domain.
+        assert!(matches!(
+            normalized(
+                &answering(Some("[a.io](<http://a.io>)")),
+                MetadataRecord::Task,
+                &id,
+                "a.io"
+            ),
+            Normalized::Stored(_)
+        ));
+        // A person's change is refused at its own line, past the autolink before it.
+        let edited = format!("Intro\n| [{url}](<{url}>) |\n\\[1\\]: [x](<z>) \\~");
+        let Normalized::Diverged(EngineError::StoredContentDiverged { line, .. }) = answer(&edited)
+        else {
+            panic!("a change is refused");
+        };
+        assert_eq!(line, 3);
+        // A link to elsewhere is no autolink, and a line more is no normalization.
+        assert!(matches!(
+            normalized(
+                &answering(Some("[a.io](<http://b.io>)")),
+                MetadataRecord::Task,
+                &id,
+                "a.io"
+            ),
+            Normalized::Diverged(_)
+        ));
+        assert!(matches!(
+            answer(&format!("{stored}\nA person's line.")),
+            Normalized::Diverged(_)
+        ));
     }
 
     #[test]
