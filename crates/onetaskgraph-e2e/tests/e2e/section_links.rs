@@ -5232,3 +5232,156 @@ fn a_relation_linear_derives_from_a_link_is_no_change_and_any_other_still_is() {
         "{after:?}"
     );
 }
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace exercise the engine's copy across two plugins.
+#[test]
+fn a_relation_linear_derived_to_a_task_outside_the_copy_is_still_a_change() {
+    // Alone, the copy holds no body of the far end, so it cannot say Linear made the relation.
+    let sandbox = Sandbox::new();
+    let linear = mutually_linked(&sandbox);
+    let copy = ["project", "copy", "plans:P", "--to", "linear", "--json"];
+    let report = outcomes(&ok(&sandbox, &copy));
+    let holds_relation = ["plans:first-task", "plans:second-task"]
+        .into_iter()
+        .find(|key| {
+            let shown: Value = serde_json::from_str(&ok(
+                &sandbox,
+                &["task", "deps", &landed_task(&report, key), "--json"],
+            ))
+            .expect("JSON");
+            shown["items"]
+                .as_array()
+                .is_some_and(|items| items.iter().any(|edge| edge["kind"] == "related"))
+        })
+        .expect("Linear related the two");
+    let mark = linear.mark(None);
+    let alone = outcomes(&ok(
+        &sandbox,
+        &["task", "copy", holds_relation, "--to", "linear", "--json"],
+    ));
+    assert_eq!(alone[holds_relation]["action"], "updated", "{alone:?}");
+    assert!(!linear.writes_since(&mark, None).is_empty());
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace exercise the engine's copy across two plugins.
+#[test]
+fn a_relation_a_plan_names_and_a_link_derives_is_written_and_a_repeat_writes_nothing() {
+    let sandbox = Sandbox::new();
+    let linear = mutually_linked(&sandbox);
+    let root = root_of(&sandbox, "plans");
+    std::fs::write(
+        root.join("tasks/second-task.md"),
+        "---\ntitle: Second\nstatus: todo\nproject: P\n\
+         depends_on:\n  - {id: first-task, kind: related}\n---\n## Budget seconds\n\n\
+         See [the first](first-task.md#budget-requests).\n",
+    )
+    .expect("the task");
+    let copy = ["project", "copy", "plans:P", "--to", "linear", "--json"];
+    let report = outcomes(&ok(&sandbox, &copy));
+    let second = landed_task(&report, "plans:second-task");
+    let shown: Value =
+        serde_json::from_str(&ok(&sandbox, &["task", "deps", &second, "--json"])).expect("JSON");
+    assert_eq!(
+        shown["items"]
+            .as_array()
+            .expect("edges")
+            .iter()
+            .filter(|edge| edge["kind"] == "related")
+            .count(),
+        1,
+        "{shown}"
+    );
+    let mark = linear.mark(None);
+    ok(&sandbox, &copy);
+    assert_eq!(linear.writes_since(&mark, None), Vec::<String>::new());
+}
+
+/// A hook matching the follow-up that finishes the first task's bare address in [`mutually_linked`].
+fn finishes_the_bare_address(query: &str, variables: &Value) -> bool {
+    query.contains("issueUpdate(")
+        && variables["input"]["description"]
+            .as_str()
+            .is_some_and(|text| text.contains("| Second | https://"))
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace exercise the engine's copy across two plugins.
+#[test]
+fn the_write_of_what_linear_normalized_is_itself_held_to_its_answer() {
+    // Linear autolinked the follow-up's URL, and a person's line arrives in the answer to the
+    // write that sends that autolink back: refused, naming the line.
+    let sandbox = Sandbox::new();
+    let linear = mutually_linked(&sandbox);
+    let Store::Linear(workspace) = &linear else {
+        unreachable!("a workspace")
+    };
+    workspace.after_request(finishes_the_bare_address, 0, |workspace| {
+        workspace.rewrite_markdown_on_write(crate::fixtures::LinearMarkdown::PersonEdited);
+    });
+    let output = sandbox
+        .command()
+        .args(["project", "copy", "plans:P", "--to", "linear", "--json"])
+        .output()
+        .expect("the binary runs");
+    assert_eq!(output.status.code(), Some(4), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains(crate::fixtures::PERSON_EDIT),
+        "{}",
+        stderr(&output)
+    );
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace exercise the engine's copy across two plugins.
+#[test]
+fn a_refused_write_of_what_linear_normalized_takes_the_whole_copy_back() {
+    let sandbox = Sandbox::new();
+    let linear = mutually_linked(&sandbox);
+    let Store::Linear(workspace) = &linear else {
+        unreachable!("a workspace")
+    };
+    workspace.after_request(finishes_the_bare_address, 0, |workspace| {
+        workspace.lose_answer_once(onetaskgraph_linear::graphql::ISSUE_REWRITE);
+    });
+    let output = sandbox
+        .command()
+        .args(["project", "copy", "plans:P", "--to", "linear"])
+        .output()
+        .expect("the binary runs");
+    assert_ne!(output.status.code(), Some(0), "{}", stdout(&output));
+    let listed: Value = serde_json::from_str(&ok(
+        &sandbox,
+        &["task", "list", "--source", "linear", "--json"],
+    ))
+    .expect("JSON");
+    assert_eq!(listed["items"], json!([]), "{listed}");
+    // Nothing left to undo: the plan copies whole once Linear answers.
+    ok(
+        &sandbox,
+        &["project", "copy", "plans:P", "--to", "linear", "--json"],
+    );
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace exercise the engine's copy across two plugins.
+#[test]
+fn a_bare_path_to_a_landed_document_is_stored_under_its_title_and_a_repeat_writes_nothing() {
+    let sandbox = Sandbox::new();
+    let linear = mutually_linked(&sandbox);
+    let landed = copy_budget_plan(&sandbox, "plans", "linear");
+    let root = root_of(&sandbox, "plans");
+    std::fs::write(
+        root.join("tasks/second-task.md"),
+        "---\ntitle: Second\nstatus: todo\nproject: P\n---\n## Budget seconds\n\n\
+         | Design | ../documents/D.md |\n",
+    )
+    .expect("the task");
+    let copy = ["project", "copy", "plans:P", "--to", "linear", "--json"];
+    ok(&sandbox, &copy);
+    let address = landed["D"].location(&sandbox);
+    let held = linear.raw(&landed["second"]);
+    assert!(
+        held.contains(&format!("| Design | [Design]({address}) |")),
+        "{held}"
+    );
+    let mark = linear.mark(None);
+    ok(&sandbox, &copy);
+    assert_eq!(linear.writes_since(&mark, None), Vec::<String>::new());
+}

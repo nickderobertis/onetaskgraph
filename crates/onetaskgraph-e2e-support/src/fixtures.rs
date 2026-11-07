@@ -6228,7 +6228,7 @@ fn linear_stored(data: &Value, written: Option<&Value>) -> Value {
         return written.cloned().unwrap_or(Value::Null);
     };
     match data["_linear_markdown"].as_str() {
-        Some("measured") => json!(crate::linear_markdown::stored(text)),
+        Some("measured") => json!(linear_titled(data, crate::linear_markdown::stored(text))),
         Some("unstable") => {
             let stored = crate::linear_markdown::stored(text)
                 .split('\n')
@@ -6253,6 +6253,30 @@ fn linear_stored(data: &Value, written: Option<&Value>) -> Value {
         )),
         _ => json!(text),
     }
+}
+
+// llmlint: ignore[code_lands_in_the_domain_that_owns_it] The loopback Linear lives in this shared e2e harness because more than one suite drives it; this reads the workspace's own rows, which `linear_markdown::stored` has no access to.
+/// `stored` with each document's and project's bare address linked under its title, as a write to
+/// `TES2` was observed storing one on 2026-11-07.
+fn linear_titled(data: &Value, mut stored: String) -> String {
+    for (collection, kind, title) in [
+        ("documents", "document", "title"),
+        ("projects", "project", "title"),
+    ] {
+        for row in data[collection].as_array().into_iter().flatten() {
+            let address = linear_web_address(row, kind);
+            let (Some(address), Some(title)) = (address.as_str(), row[title].as_str()) else {
+                continue;
+            };
+            for held in [
+                format!("[{address}](<{address}>)"),
+                format!("[{title}](<{address}>)"),
+            ] {
+                stored = stored.replace(&held, &format!("[{title}]({address})"));
+            }
+        }
+    }
+    stored
 }
 
 /// `text` with every Markdown link destination not in angle brackets put in them.
@@ -8394,7 +8418,10 @@ fn linear_write_item(
     let (_, stamp) = linear_tick(data);
     let vocabulary = json!({"_linear_states": data["_linear_states"].clone(),
         "_linear_project_statuses": data["_linear_project_statuses"].clone()});
-    let vocabulary_markdown = json!({"_linear_markdown": data["_linear_markdown"].clone()});
+    let vocabulary_markdown = json!({"_linear_markdown": data["_linear_markdown"].clone(),
+        "documents": data["documents"].clone(),
+        "projects": data["projects"].clone(),
+    });
     let stateless = data["_linear_stateless"] == true;
     let web_workspace = data["_linear_web_workspace"].as_str().map(str::to_owned);
     let burnt = linear_burnt(data);
@@ -8884,14 +8911,17 @@ fn linear_write_relation(
         }
     }
     let edge = json!({"from":input.get(near_key).ok_or("missing near id")?,"to":input.get(far_key).ok_or("missing far id")?,"kind":kind});
-    data[if project {
+    let edges = data[if project {
         "project_dependencies"
     } else {
         "task_dependencies"
     }]
     .as_array_mut()
-    .ok_or("fixture edges are not an array")?
-    .push(edge);
+    .ok_or("fixture edges are not an array")?;
+    // A relation Linear already derived from a link is the one asked for.
+    if !edges.contains(&edge) {
+        edges.push(edge);
+    }
     Ok(if project {
         json!({"projectRelationCreate":{"success":true,"projectRelation":{"id":"PR-W"}}})
     } else {
@@ -9283,6 +9313,7 @@ fn linear_priority_name(number: &Value) -> Value {
     })
 }
 
+// llmlint: ignore[code_lands_in_the_domain_that_owns_it] The loopback Linear lives in this shared e2e harness because more than one suite drives it, and only its server loop here can apply this after a write.
 /// The `related` relation Linear adds of its own between an issue whose description links another
 /// issue and that issue, as a copy to `TES2` was observed to on 2026-11-07, unless the two are
 /// related already. A workspace storing what it is sent byte for byte adds none, as every journey

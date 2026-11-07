@@ -143,8 +143,9 @@ pub(super) fn normalized(
 /// `line` with what Linear does to text it is written undone: `\\[`, `\\]` and `\\~` unescaped, a
 /// destination taken out of its angle brackets, and an autolink back to what was written. That is
 /// a link whose destination is its text, or its text under `http://`, or, when `sent` is the line
-/// as it was sent, a link whose destination `sent` holds bare, whatever its text: Linear links a
-/// bare issue URL under the issue's identifier. Text a person changed reads otherwise.
+/// as it was sent, a link to a Linear record whose address `sent` holds bare. Linear titles that
+/// link itself, by an issue's identifier or a document's or a project's title, so its text is
+/// Linear's and says nothing about who changed it. Text a person changed reads otherwise.
 fn denormalized(line: &str, sent: Option<&str>) -> String {
     let unescaped = line
         .replace("\\[", "[")
@@ -162,7 +163,7 @@ fn denormalized(line: &str, sent: Option<&str>) -> String {
         };
         if target == text || target.strip_prefix("http://") == Some(text) {
             plain.push_str(text);
-        } else if sent.is_some_and(|sent| holds_bare(sent, target)) {
+        } else if names_linear_record(target) && sent.is_some_and(|sent| holds_bare(sent, target)) {
             plain.push_str(target);
         } else {
             plain.push_str(&format!("[{text}]({target})"));
@@ -176,7 +177,18 @@ fn denormalized(line: &str, sent: Option<&str>) -> String {
 /// Whether `line` holds `target` other than as a link's destination.
 fn holds_bare(line: &str, target: &str) -> bool {
     line.match_indices(target)
-        .any(|(at, _)| !line[..at].ends_with('('))
+        .any(|(at, _)| !line[..at].ends_with(['(', '<']))
+}
+
+/// Whether `target` is the address of an issue, a document or a project of a Linear workspace.
+fn names_linear_record(target: &str) -> bool {
+    target
+        .strip_prefix("https://linear.app/")
+        .is_some_and(|path| {
+            ["/issue/", "/document/", "/project/"]
+                .iter()
+                .any(|kind| path.contains(kind))
+        })
 }
 
 /// The inline link `text` opens with: its length, its text and its destination out of any angle
@@ -521,6 +533,29 @@ mod tests {
             ),
             Normalized::Stored(_)
         ));
+        // A bare document's address linked under its title, as real Linear links one.
+        assert!(matches!(
+            normalized(
+                &answering(Some("[Design](https://linear.app/w/document/design-1a2b)")),
+                MetadataRecord::Task,
+                &id,
+                "https://linear.app/w/document/design-1a2b"
+            ),
+            Normalized::Stored(_)
+        ));
+        // Elsewhere, a link under another text is no autolink, and nor is one in angle brackets.
+        for (sent, stored) in [
+            ("https://a.example/x", "[changed](https://a.example/x)"),
+            (
+                "[a](<https://linear.app/w/issue/T-1>)",
+                "[b](https://linear.app/w/issue/T-1)",
+            ),
+        ] {
+            assert!(matches!(
+                normalized(&answering(Some(stored)), MetadataRecord::Task, &id, sent),
+                Normalized::Diverged(_)
+            ));
+        }
         // A link the store wrote keeps its text: a person's change of it is a change.
         assert!(matches!(
             normalized(

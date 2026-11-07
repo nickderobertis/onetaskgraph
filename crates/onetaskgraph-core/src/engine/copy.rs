@@ -1089,7 +1089,7 @@ struct Prior {
     /// The far ends of each `related` edge the destination holds of its own accord, because a
     /// body this copy writes links one end from the other: see
     /// [`Engine::note_derived_relations`].
-    derived: Vec<String>,
+    derived: Vec<DependencyEndpoint>,
 }
 
 impl Prior {
@@ -1099,7 +1099,7 @@ impl Prior {
         self.edges
             .iter()
             .filter(|edge| {
-                !self.derived.contains(&edge.to.to_string())
+                !self.derived.contains(&edge.to)
                     || edge.kind != DependencyKind::Related
                     || outgoing.iter().any(|sent| sent.to == edge.to)
             })
@@ -1342,6 +1342,15 @@ struct Journal {
     ownership_lost: bool,
 }
 
+/// How a follow-up's own answer is held to the content it sends.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FollowUpAnswer {
+    /// It sends back what the destination stored, so its answer reports that byte for byte.
+    Exact,
+    /// It holds a link finished in it, which the destination has not been sent and may normalize.
+    MayNormalize,
+}
+
 /// One write sent again, as its own request, because the destination stores other content than
 /// it was sent: that stored content verbatim, with every fingerprint the item keeps recomputed
 /// over it — see `stored`.
@@ -1367,9 +1376,8 @@ struct FollowUp {
     /// The content the destination said it stores, which the follow-up's own answer has to
     /// report again.
     stored: String,
-    /// Whether it holds text the destination has not been sent, a link finished in it, which the
-    /// destination may normalize: otherwise its answer has to report it byte for byte.
-    unseen_text: bool,
+    /// How its answer is held to what it sends.
+    answer: FollowUpAnswer,
 }
 
 /// How to take back one comment write a `--comments` copy made.
@@ -8032,7 +8040,7 @@ impl Engine {
             record: Some(stamped.record.clone()),
             comments: Some(comments),
             stored: content_of(&stamped.item).unwrap_or_default().to_owned(),
-            unseen_text: false,
+            answer: FollowUpAnswer::Exact,
         };
         journal.follow_ups.push(follow);
         journal
@@ -9515,11 +9523,12 @@ impl Engine {
                 .edges
                 .iter()
                 .filter(|edge| edge.kind == DependencyKind::Related)
-                .map(|edge| edge.to.to_string())
+                .map(|edge| edge.to.clone())
                 .filter(|far| {
+                    let far_id = far.to_string();
                     ends.iter().any(|end| {
-                        let named = far == end.1.as_str()
-                            || *far == GlobalId::new(end.0.clone(), end.1.clone()).to_string();
+                        let named = far_id == end.1.as_str()
+                            || far_id == GlobalId::new(end.0.clone(), end.1.clone()).to_string();
                         end.0 == near.0
                             && named
                             && (links_to(&near.3, &end.2) || links_to(&end.3, &near.2))
@@ -9640,7 +9649,7 @@ impl Engine {
                     stored::restamp(metadata_of(&mut follow.item), &[&stored], &finished);
                     set_content(&mut follow.item, finished.clone());
                     follow.stored = finished;
-                    follow.unseen_text = true;
+                    follow.answer = FollowUpAnswer::MayNormalize;
                 }
                 settle(journal, &held.source, figures, 0);
                 continue;
@@ -9666,7 +9675,7 @@ impl Engine {
                 record: held.record,
                 comments: held.comments,
                 stored: finished,
-                unseen_text: true,
+                answer: FollowUpAnswer::MayNormalize,
             });
         }
         Ok(())
@@ -9750,7 +9759,7 @@ impl Engine {
                     },
                 ));
             }
-            if !follow.unseen_text {
+            if follow.answer == FollowUpAnswer::Exact {
                 if let Some(error) = stored::unstable(destination, kind, &follow.id, &follow.stored)
                 {
                     diverged.push((follow.source, error));
@@ -9768,7 +9777,7 @@ impl Engine {
                     set_content(&mut follow.item, held.clone());
                     follow.stored = held;
                     follow.record = record_again;
-                    follow.unseen_text = false;
+                    follow.answer = FollowUpAnswer::Exact;
                     owed.push_back(follow);
                 }
             }
@@ -11701,7 +11710,7 @@ fn follow_up_of(
         record,
         comments,
         stored,
-        unseen_text: false,
+        answer: FollowUpAnswer::Exact,
     })
 }
 
