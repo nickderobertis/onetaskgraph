@@ -3,7 +3,7 @@
 #
 # The tests that reach a real API are ordinary tests of an ordinary `test` target, so which
 # projects a diff selects is nearly all of what decides whether a session is opened. The
-# hole it leaves is a release: release-plz rewrites `Cargo.lock`, a `sharedGlobals` input,
+# hole it leaves is a release: release-plz rewrites `Cargo.lock`, a global selection input,
 # so Nx marks every project for a diff that reaches no plugin behaviour at all — and one
 # live GitHub Projects session costs about a fifth of the account's hourly GraphQL
 # allowance (crates/onetaskgraph-github-projects/session-cost.md). That is how the default
@@ -14,7 +14,9 @@
 # permitted set is whole paths rather than basenames, a version substitution is evidence
 # about a line rather than about a file, and any question this cannot answer is `run`,
 # because it fails toward spending the budget rather than toward skipping the lane. What
-# is written below is why each of those is spelled the way the code spells it.
+# is written below is why each of those is spelled the way the code spells it. Result replay
+# does not replace this: a live test's hash carries the run's own nonces, so it never replays,
+# and retiring this exclusion would be a coverage decision that spends the shared allowance.
 #
 # Usage:
 #

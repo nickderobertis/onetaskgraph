@@ -221,7 +221,8 @@ jobs:
         run: just ci-lint
       # The release pull request alone: the pass-time budget of the pool maintenance
       # onevcs.toml declares. lint owns this additional policy budget on Linux,
-      # already bootstrapped with the pinned pruner.
+      # already bootstrapped with the pinned pruner. Kept: it adds this budget's run to a release
+      # and skips no test elsewhere, so result replay has nothing here to take over.
       - name: Pool-maintenance pass-time budget on the release pull request
         if: startsWith(github.head_ref, 'release-plz-')
         run: just pool-maintenance-budget

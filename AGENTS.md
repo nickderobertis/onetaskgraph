@@ -416,7 +416,7 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   happened, which says so on its face and is not read as a defect in the code.
 - **A version bump is not a reason to reach a real API, and one decision says so.**
   Affected selection is the edge those tests sit behind, and a release defeats it:
-  release-plz rewrites `Cargo.lock`, which is a `sharedGlobals` input, so every project in
+  release-plz rewrites `Cargo.lock`, which is a global selection input, so every project in
   the workspace is selected and both hosted lanes open a session for a diff that reaches no
   plugin behaviour at all. That is not a hypothetical — it is why the default branch went
   red with the account's whole GraphQL allowance exhausted, which then refuses ordinary
@@ -1718,6 +1718,26 @@ is not excluded too.
   against GitHub on every gate run. `.github/tests/ci-events.test.mjs` holds which jobs run:
   a pull request's five, and on a push to main release-plz, `budgets` alone from `ci.yml`, the
   warmer and the canonical gallery, which skips the release commit.
+- **Only main saves Rust build caches, and results survive by room, not by cleanup.** GitHub
+  removes whatever was read longest ago once a save finds the listing over 10 GiB, and results
+  take about 3 MB, so a run's saves are what push them out. So `rust-cache-warm.yml` is the saver
+  pull requests restore from and `release-plz` saves its own family on main; every Rust step of
+  `ci.yml` and `release.yml` has `cache-save-if: false`, and `lint` restores `test-linux`'s family,
+  whose warm leg builds `lint`'s compile lines too. Each warm leg's last ordinary step deletes its
+  family's superseded copies (`scripts/actions-cache-prune.mjs`, a create-repo copy), which runs
+  before that leg's save, so a family holds at most two copies. That job holds `actions: write`
+  while building merged source: only that step is handed the token explicitly, but a setup action's
+  own default input can read it, so this narrows the risk and does not close it. A fork's run
+  writes no cache. `.github/policy/tests/rust-cache-warm.test.mjs` holds all of it, and
+  `onetaskgraph-cache-headroom` shows the room going while it is still cheap to fix.
+- **A crate's tasks read their Cargo closure, not every Cargo file.** A merge that moved a global
+  input moved every proven hash, and the release pull request re-ran them. `nx.json`'s `default`
+  names `cargoInputs`, empty there; each crate declares it as `scripts/nx-cargo-closure.mjs` over
+  itself (an e2e suite over itself and the binary it spawns), so a lock entry or an e2e suite's
+  manifest moves only the tasks whose dependency closure reaches it, and what is not Rust reads
+  none. `workspace` keeps the whole digest, because its guards read every manifest; the targets
+  spelling `--ecosystem cargo --keep-version` read versions on purpose and stay whole too.
+  `.github/nx-policy/tests/nx-hashes.test.mjs` proves both directions against real Nx and cargo.
 - **Nx results persist through the shared remote cache.** Check-tool versions come from
   `.tool-versions` through `scripts/ci-tool-pins.sh` before
   installation; every cached target hashes that file. Existing ecosystem locks and the
@@ -1839,8 +1859,9 @@ is not excluded too.
   main merge still omits the build-only warmer. `.github/policy/tests/` records real
   workflow scheduling as telemetry; its `budgets` target applies the one-job and four-run
   bounds in `.github/policy/budgets.yaml`. No scheduled or downstream event allocates Mac.
-- **Nine budgets in the root `budgets.yaml` hold CI, CD and the local gate**, each
-  `measure: reported` and read from telemetry, never measured fresh. Eight are labelled
+- **Ten budgets in the root `budgets.yaml` hold CI, CD and the local gate**, each
+  `measure: reported` and read from telemetry or GitHub's own answers, never measured fresh.
+  Nine are labelled
   `release-tail` and run `scripts/actions-budget-figures.sh` — a byte-identical copy of
   dero-skills' create-repo source, edited only there — over saved CI telemetry and read-only GitHub answers:
   `onetaskgraph-ci-check-time` (longest CI job of a release's pull requests, 1800 s),
@@ -1848,11 +1869,14 @@ is not excluded too.
   (a carried PR's checks plus its merge to the release tail, only when its merge changes a
   `.github/release-published-paths` path, 5400 s),
   `onetaskgraph-ci-job-count` (5) and `onetaskgraph-cd-job-count` (6), and
-  `onetaskgraph-release-read-requests` (6), `onetaskgraph-pr-read-requests` (2), and
+  `onetaskgraph-release-read-requests` (6), `onetaskgraph-pr-read-requests` (2),
   `onetaskgraph-nx-cache-use` (100% remote replay among attempt-qualified task/OS/hash
-  executions, excluding local hits). Cache-use reads saved executions and promotion receipts
-  directly through GitHub; the other figures retain onevcs. Its design threshold is revisited
-  after real release-tail observations; missing evidence never passes. They are
+  executions, excluding local hits, a task whose base moved counted as a miss) and
+  `onetaskgraph-cache-headroom` (at least 3.37 GB left under GitHub's 10 GiB line, counting each
+  family the cleanup steps name at its newest copy). Cache-use reads saved executions and
+  promotion receipts directly through GitHub and headroom reads the listing; the other figures
+  retain onevcs. Cache-use's design threshold is revisited after real release-tail observations;
+  missing evidence never passes. They are
   checked once, after the release, by the last step of `release.yml`'s `publish` —
   `onebudgetspec check budgets.yaml --label release-tail`, after a step installing the pinned
   onevcs and onebudgetspec, under a token granted `actions`, `contents` and `pull-requests`

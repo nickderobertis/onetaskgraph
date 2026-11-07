@@ -103,7 +103,8 @@ jobs:
   # request with — reads the two trees. Anything it cannot decide answers false — an unreadable
   # revision, a failed classifier, an answer other than `true` — and a job that fails anyway
   # still lets warm-macos run, so the macOS leg warms: a cold build costs every pull request
-  # more than one warm leg costs main.
+  # more than one warm leg costs main. Kept: this skip is what holds the Mac-spending runs per
+  # lifecycle to the budget of 4 (.github/policy/budgets.yaml), and it builds, so nothing replays it.
   release-merge:
     name: release merge
     runs-on: ubuntu-latest
