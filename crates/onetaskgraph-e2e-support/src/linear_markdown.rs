@@ -474,6 +474,7 @@ fn percent_encoded(token: &str) -> String {
     encoded
 }
 
+// llmlint: ignore[contracts_have_one_source_or_a_drift_gate] This model of Linear states Linear's address independently of the engine on purpose: reusing `section_links`'s reading would let the two never disagree. The journeys through the binary drive one against the other, and it was observed of `TES2` on 2026-11-07.
 /// The identifier a bare Linear issue URL names, a fragment after it or not: `TES2-1766` of
 /// `https://linear.app/<workspace>/issue/TES2-1766`.
 fn issue_identifier(url: &str) -> Option<&str> {

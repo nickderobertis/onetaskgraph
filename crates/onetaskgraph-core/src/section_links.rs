@@ -977,6 +977,7 @@ fn holds_bare(line: &str, target: &str) -> bool {
         .any(|(at, _)| !line[..at].ends_with(['(', '<']))
 }
 
+// llmlint: ignore[contracts_have_one_source_or_a_drift_gate] Linear owns this address; the store's Linear model states it again independently on purpose, because a model reusing the engine's reading could not disagree with it. The journeys through the binary drive one against the other, so they cannot part unseen, and it was observed of `TES2` on 2026-11-07.
 /// The identifier in the address of a Linear issue: `TES2-1` of
 /// `https://linear.app/<workspace>/issue/TES2-1/its-title#heading-a-12345678`.
 fn issue_identifier(target: &str) -> Option<&str> {

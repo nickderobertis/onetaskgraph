@@ -5390,10 +5390,12 @@ fn a_bare_path_to_a_landed_document_is_stored_under_its_title_and_a_repeat_write
 #[test]
 fn every_reference_style_spelling_is_written_inline_on_linear_and_left_elsewhere() {
     let design = "[Collapsed][] and [shortcut] and [full][t].\n\n`[code][t]` stays, as does \
-         ![alt][img], and a note.[^1]\n\n[Collapsed]: ../tasks/first-task.md#budget-requests\n\
+         ![alt][img], and a note.[^1]\n\n[both][shared] shares its target with ![pic][shared].\n\n\
+         [Collapsed]: ../tasks/first-task.md#budget-requests\n\
          [shortcut]: ../tasks/second-task.md#budget-seconds\n\
          [t]: ../tasks/first-task.md#budget-requests \"A title\"\n\
-         [img]: https://a.example/i.png\n[unused]: https://a.example/unused\n\n\
+         [img]: https://a.example/i.png\n[unused]: https://a.example/unused\n\
+         [shared]: https://a.example/shared.png\n\n\
          [^1]: The footnote.\n";
     let sandbox = Sandbox::new();
     let plans = budget_plan(&sandbox, "plans");
@@ -5437,6 +5439,16 @@ fn every_reference_style_spelling_is_written_inline_on_linear_and_left_elsewhere
     for kept in ["i.png", "unused", "The footnote."] {
         assert!(held.contains(kept), "{kept}: {held}");
     }
+    // A definition a link shares with an image stays for the image, and the link is inline.
+    assert!(
+        held.contains("[both](<https://a.example/shared.png>)")
+            && held.contains("!\\[pic\\]\\[shared\\]"),
+        "{held}"
+    );
+    assert!(
+        held.contains("\\[shared\\]: "),
+        "the shared definition stays: {held}"
+    );
     // A folder of Markdown keeps every spelling as written.
     let mark = copy_budget_plan(&sandbox, "plans", "folder");
     assert_eq!(
@@ -5747,6 +5759,74 @@ fn a_hand_edited_rendering_inlined_on_linear_carries_its_provenance_as_it_came()
     );
     assert_eq!(landed["metadata"]["onetaskgraph.template"], provenance);
     assert_ne!(provenance["body_digest"], json!(sha256(content)));
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace exercise the engine's copy across two plugins.
+#[test]
+fn a_project_naming_itself_by_a_bare_path_is_stored_under_its_title_and_a_repeat_writes_nothing() {
+    let sandbox = Sandbox::new();
+    let linear = mutually_linked(&sandbox);
+    std::fs::write(
+        root_of(&sandbox, "plans").join("projects/P.md"),
+        "---\ntitle: Budgeted plan\nstatus: todo\n---\nThis plan: P.md\n",
+    )
+    .expect("the project");
+    let copy = ["project", "copy", "plans:P", "--to", "linear", "--json"];
+    let project = copied_to(&ok(&sandbox, &copy), "plans:P");
+    let Store::Linear(workspace) = &linear else {
+        unreachable!("a workspace")
+    };
+    let held = workspace
+        .long_form("projects", native_of(&project))
+        .expect("its long form");
+    assert!(
+        held.starts_with("This plan: [Budgeted plan](https://linear.app/"),
+        "{held}"
+    );
+    // A source that gives a project no change token versions what the copy composed, which the
+    // first copy composed before its own address was known: the next copy rewrites it once.
+    ok(&sandbox, &copy);
+    let mark = linear.mark(None);
+    ok(&sandbox, &copy);
+    assert_eq!(linear.writes_since(&mark, None), Vec::<String>::new());
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace exercise the engine's copy across two plugins.
+#[test]
+fn a_non_ascii_address_a_follow_up_finished_is_autolinked_under_itself_and_not_refused() {
+    let sandbox = Sandbox::new();
+    let linear = designs_naming_each_other(&sandbox);
+    let Store::Linear(workspace) = &linear else {
+        unreachable!("a workspace")
+    };
+    // The address Linear gives a document whose title holds no ASCII letter it can fold.
+    let address = "https://linear.app/fixture/document/日本語-c58fa10e0233";
+    let encoded = "https://linear.app/fixture/document/%E6%97%A5%E6%9C%AC%E8%AA%9E-c58fa10e0233";
+    workspace.bend_answers(
+        |query, variables| {
+            query.contains("documentCreate(") && variables["input"]["title"] == "Second design"
+        },
+        1,
+        move |_, body| body["documentCreate"]["document"]["url"] = json!(address),
+    );
+    ok(
+        &sandbox,
+        &["project", "copy", "plans:P", "--to", "linear", "--json"],
+    );
+    let report = ok(
+        &sandbox,
+        &[
+            "document", "copy", "plans:D", "plans:E", "--to", "linear", "--json",
+        ],
+    );
+    let design = copied_to(&report, "plans:D");
+    let held = workspace
+        .long_form("documents", native_of(&design))
+        .expect("its long form");
+    assert!(
+        held.starts_with(&format!("| Other | [{address}](<{encoded}>) |")),
+        "{held}"
+    );
 }
 
 fn native_of(id: &str) -> &str {
