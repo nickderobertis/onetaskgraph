@@ -867,6 +867,7 @@ function runCommand(words, url, additions = {}) {
       env: {
         PATH: process.env.PATH,
         HOME: process.env.HOME,
+        DBUS_SESSION_BUS_ADDRESS: "disabled:",
         GITHUB_API_URL: url,
         GITHUB_REPOSITORY: "nickderobertis/onetaskgraph",
         GH_TOKEN: "recorded-token",
