@@ -25,6 +25,14 @@ function requested(args) {
   return crates.length ? crates : null;
 }
 
+// A lock entry's dependencies, one quoted line each; any other shape is refused, never read as none.
+function lockDependencies(block, name) {
+  if (!/^dependencies\b/m.test(block)) return [];
+  const list = block.match(/^dependencies = \[\n((?: "[^"]+",\n)*)\]$/m);
+  if (!list) throw new Error(`Cargo.lock's entry for ${name} has an unreadable dependencies list`);
+  return [...list[1].matchAll(/"([^"]+)"/g)].map((match) => match[1]);
+}
+
 // The lock is generated, so these line shapes are the whole of its grammar here. An entry is keyed
 // with its source, because two sources may lock one name at one version.
 function lockPackages(text) {
@@ -34,9 +42,7 @@ function lockPackages(text) {
     const version = block.match(/^version = "([^"]+)"$/m)?.[1];
     if (!name || !version) throw new Error("Cargo.lock holds a package with no name or version");
     const source = block.match(/^source = "([^"]+)"$/m)?.[1] ?? "";
-    const dependencies = [
-      ...(block.match(/^dependencies = \[\n([\s\S]*?)^\]$/m)?.[1] ?? "").matchAll(/"([^"]+)"/g),
-    ].map((match) => match[1]);
+    const dependencies = lockDependencies(block, name);
     const id = `${name} ${version} ${source}`;
     if (packages.has(id)) throw new Error(`Cargo.lock locks ${id} twice`);
     packages.set(id, { id, name, version, source, block, dependencies });

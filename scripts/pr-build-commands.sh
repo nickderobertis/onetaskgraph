@@ -87,7 +87,6 @@ for found in sorted(pathlib.Path("crates").glob("*/project.json"), key=lambda fo
             refuse(path, f"its `test` target runs `{command}`, which is neither `cargo test` nor a guard script")
     if not built:
         refuse(path, "its `test` target runs no `cargo test`")
-    # What lint compiles of this crate. A crate with neither target gives it nothing to compile.
     for target in ("lint", "typecheck"):
         node = targets.get(target) if isinstance(targets, dict) else None
         if node is None:

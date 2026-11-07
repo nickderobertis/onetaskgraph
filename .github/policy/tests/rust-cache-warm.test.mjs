@@ -365,8 +365,6 @@ test("a workflow not shaped as one is refused naming where", () => {
   );
 });
 
-// ---- Keeping results in the Actions cache: only main saves, and each warm leg cleans up. ----
-
 const CLEANUP = "Delete this family's superseded copies";
 const TOKEN = `\${{ github.token }}`;
 const FAMILIES = {
@@ -862,7 +860,6 @@ async function cacheServer(entries) {
   return { url: `http://127.0.0.1:${server.address().port}`, seen, close: () => server.close() };
 }
 
-// Run a workflow's or a budget's command as written, against the stand-in.
 function runCommand(words, url, additions = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(words[0], words.slice(1), {
