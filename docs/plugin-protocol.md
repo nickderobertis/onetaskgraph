@@ -963,9 +963,7 @@ engine recomputes every fingerprint it records over the stored content — a ren
 of the stored content verbatim beside them. That follow-up write's own `stored_content` has to
 be the stored content again; one that is not is refused as `stored-content-diverged`, naming the
 item, the first differing line and both texts, because the backend did not hold its own stored
-content stable. Only when a copy's follow-up has just finished a link in it, so that it holds text
-the backend has not seen, is an answer differing in no more than a URL autolinked, a bracket or a
-tilde escaped or a destination put in angle brackets written back once more on the same terms. No read of the item follows either write. Absent or `null` means the plugin has
+content stable. No read of the item follows either write. Absent or `null` means the plugin has
 nothing to say, and nothing is written again. A create's answer is the only way the engine learns that id, so a create
 answered in any other shape is reported to a copy's caller as a destination that may hold
 an item the copy could not take back, rather than as a refusal: a plugin that refuses a

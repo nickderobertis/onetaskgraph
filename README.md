@@ -1441,7 +1441,7 @@ is left out, an image reference keeps its definition, and a definition nothing u
 written. A copy out of Linear reads the inline link, so a folder of Markdown gets it back inline
 as a relative path with the authored `#<slug>`. GitHub Projects and local Markdown keep the
 reference-style spelling. A Linear plugin served over the stdio protocol has no section form, so
-its bodies are not inlined.
+its bodies are not inlined and its follow-ups are held byte for byte.
 
 **A relation Linear adds itself.** When an issue's description links another issue, Linear adds a
 `related` relation between the two on its own. A copy does not count that relation as a change when

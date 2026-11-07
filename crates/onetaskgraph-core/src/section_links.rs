@@ -117,6 +117,79 @@ fn plain(text: &str) -> String {
         .to_owned()
 }
 
+/// `line` with what Linear does to text it is written undone: `\\[`, `\\]` and `\\~` unescaped, a
+/// destination taken out of its angle brackets, and an autolink back to what was written. That is
+/// a link whose destination is its text, or its text under `http://`, or, when `sent` is the line
+/// as it was sent, a link to a Linear record whose address `sent` holds bare. Linear titles that
+/// link itself, by an issue's identifier or a document's or a project's title, so its text is
+/// Linear's and says nothing about who changed it. Text a person changed reads otherwise.
+fn linear_written(line: &str, sent: Option<&str>) -> String {
+    let unescaped = line
+        .replace("\\[", "[")
+        .replace("\\]", "]")
+        .replace("\\~", "~");
+    let mut plain = String::with_capacity(unescaped.len());
+    let mut rest = unescaped.as_str();
+    while let Some(opening) = rest.find('[') {
+        plain.push_str(&rest[..opening]);
+        rest = &rest[opening..];
+        let Some((link, text, target)) = link_at(rest) else {
+            plain.push('[');
+            rest = &rest[1..];
+            continue;
+        };
+        if target == text || target.strip_prefix("http://") == Some(text) {
+            plain.push_str(text);
+        } else if names_linear_record(target) && sent.is_some_and(|sent| holds_bare(sent, target)) {
+            plain.push_str(target);
+        } else {
+            plain.push_str(&format!("[{text}]({target})"));
+        }
+        rest = &rest[link..];
+    }
+    plain.push_str(rest);
+    plain
+}
+
+/// Whether `line` holds `target` other than as a link's destination.
+fn holds_bare(line: &str, target: &str) -> bool {
+    line.match_indices(target)
+        .any(|(at, _)| !line[..at].ends_with(['(', '<']))
+}
+
+/// Whether `target` is the address of an issue, a document or a project of a Linear workspace.
+fn names_linear_record(target: &str) -> bool {
+    target
+        .strip_prefix("https://linear.app/")
+        .is_some_and(|path| {
+            ["/issue/", "/document/", "/project/"]
+                .iter()
+                .any(|kind| path.contains(kind))
+        })
+}
+
+/// The inline link `text` opens with: its length, its text and its destination out of any angle
+/// brackets.
+fn link_at(text: &str) -> Option<(usize, &str, &str)> {
+    let close = text.find("](")?;
+    let inner = &text[1..close];
+    if inner.contains('[') {
+        return None;
+    }
+    let after = close + 2;
+    let (target, end) = match text[after..].strip_prefix('<') {
+        Some(angled) => {
+            let end = angled.find(">)")?;
+            (&angled[..end], after + 1 + end + 2)
+        }
+        None => {
+            let end = text[after..].find(')')?;
+            (&text[after..after + end], after + end + 1)
+        }
+    };
+    Some((end, inner, target))
+}
+
 /// `content` with each reference-style link — `[text][label]`, `[text][]` or `[label]` — whose
 /// definition it holds written inline, and each definition every use of which was inlined left
 /// out. A definition nothing uses is no link, and is left as it was written.
@@ -489,6 +562,18 @@ impl SectionForm {
     #[must_use]
     pub fn inlines_reference_links(self) -> bool {
         matches!(self, Self::Linear(_))
+    }
+
+    /// Whether a line this kind answered a follow-up write with reads as the line it was sent,
+    /// differing only as the kind rewrites text it had not seen before: Linear's autolinks and
+    /// escapes, by [`linear_written`]. Any other kind holds to bytes.
+    #[must_use]
+    pub fn reads_as_sent(self, sent: &str, stored: &str) -> bool {
+        if !matches!(self, Self::Linear(_)) {
+            return false;
+        }
+        let plain = linear_written(sent, None);
+        plain == linear_written(stored, Some(&plain))
     }
 
     /// Whether this kind relates two records of its own by itself when a body links one from the
