@@ -128,7 +128,9 @@
         "versionFreeNpm",
         "{workspaceRoot}/.tool-versions"
       ],
-      "outputs": ["{workspaceRoot}/target/budget-results/onetaskgraph-linear-e2e-budget-results.json"]
+      "outputs": [
+        "{workspaceRoot}/target/budget-results/onetaskgraph-linear-e2e-budget-results.json"
+      ]
     },
     "live-documents": {
       "executor": "nx:run-commands",

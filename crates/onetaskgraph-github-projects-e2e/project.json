@@ -200,7 +200,9 @@
         "{workspaceRoot}/.tool-versions"
       ],
       "//": "Reports the current complete main/assets pair and ordinary offline telemetry through onebudgetspec. Current identity inputs prevent stale-session cache reuse. Credentialless or explicitly not-selected runs print live measurement unavailable and retain offline budgets.",
-      "outputs": ["{workspaceRoot}/target/budget-results/onetaskgraph-github-projects-e2e-budget-results.json"]
+      "outputs": [
+        "{workspaceRoot}/target/budget-results/onetaskgraph-github-projects-e2e-budget-results.json"
+      ]
     },
     "budgets-host": {
       "executor": "nx:run-commands",

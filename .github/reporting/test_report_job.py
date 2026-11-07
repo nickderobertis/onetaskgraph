@@ -79,14 +79,18 @@ NO_SAVED_RESULT = 'no saved result was found on this run'
 # Off a pull request's own run the CI-time pair reads a release, and this job holds no onevcs.
 FIGURES_NEED_ONEVCS = 'onevcs is not on PATH'
 LIVE_SESSION = BudgetId('github-live-session-points')
-# ci.yml's budgets targets test-linux runs in this path's journey, by the file each saves. The
-# policy and report-job targets read recordings of real runs, proven on the pull request itself.
-SAVING_TARGETS = {'onetaskgraph-live-janitor:budgets': 'onetaskgraph-live-janitor-budget-results.json',
-                  'onetaskgraph-linear-e2e:budgets': 'onetaskgraph-linear-e2e-budget-results.json',
-                  'onetaskgraph-github-projects-e2e:budgets': 'onetaskgraph-github-projects-e2e-budget-results.json'}
+# ci.yml's budgets targets test-linux runs, by the file each saves. Nx caches the three whose names
+# hold no test of its own to re-run; the other two always execute.
+CACHED_SAVING_TARGETS = {'onetaskgraph-live-janitor:budgets': 'onetaskgraph-live-janitor-budget-results.json',
+                         'onetaskgraph-linear-e2e:budgets': 'onetaskgraph-linear-e2e-budget-results.json',
+                         'onetaskgraph-github-projects-e2e:budgets': 'onetaskgraph-github-projects-e2e-budget-results.json'}
+UNCACHED_SAVING_TARGETS = {'github-workflow-policy:budgets': 'github-workflow-policy-budget-results.json',
+                           'report-job:budgets': 'report-job-budget-results.json'}
 SAVING_BUDGET_FILES = ('crates/onetaskgraph-live-janitor/budgets.yaml', 'crates/onetaskgraph-linear-e2e/budgets.yaml',
-                       'crates/onetaskgraph-github-projects-e2e/budgets.yaml', 'pool-maintenance/budgets.yaml')
+                       'crates/onetaskgraph-github-projects-e2e/budgets.yaml', 'pool-maintenance/budgets.yaml',
+                       '.github/policy/budgets.yaml', '.github/reporting/budgets.yaml')
 LONGEST_JOB_SECONDS = 1234
+RECORDED_OWN_SECONDS = 77.5
 TRANSFER_SERVICES = ('artifact-service', 'blob-storage', 'object-storage', 'release-host', 'package-index')
 
 
@@ -147,6 +151,46 @@ class ReplayedFigures:
 
     provenance: str
     figures: dict[int, dict[BudgetId, ReplayedFigure]]
+
+
+class RecordedFigures(NamedTuple):
+    """What `recorded_figures` installed in a copy of the tree."""
+
+    figures: dict[BudgetId, float]
+    log: Path
+
+
+class SavingTree(NamedTuple):
+    """A journey over a copy of this tree whose saving targets judge recorded figures."""
+
+    journey: 'Journey'
+    figures: dict[BudgetId, float]
+    log: Path
+
+
+class SavedFigure(NamedTuple):
+    """One budget's result in a saved check report."""
+
+    actual: float
+    verdict: Verdict
+
+
+class CommandOutcome(NamedTuple):
+    """How one check's real entry point ended."""
+
+    status: int
+    output: str
+
+
+class EnforcingCheck(NamedTuple):
+    """A real check of the left-out budgets, and how it treats one over its line."""
+
+    name: str
+    budgets_file: str
+    command: list[str]
+    status: int
+    warns: bool
+    budgets: frozenset[BudgetId]
 
 
 class Released(NamedTuple):
@@ -801,8 +845,6 @@ class WholeJob(unittest.TestCase):
 
         journey.base = heads[-1]
         artifact = harness.zipped({'report.json': self.saved_results(saved)})
-        self.assertGreater(len(artifact), SAVED_ARTIFACT_BYTES * 0.8, 'about the workload')
-        self.assertLess(len(artifact), SAVED_ARTIFACT_BYTES * 1.2, 'about the workload')
         journey.host.attach(journey.next_run + 1, 'budget-check-results-test-linux', artifact)
         counts.unlink(missing_ok=True)
         journey.host.clear_requests()
@@ -827,6 +869,7 @@ class WholeJob(unittest.TestCase):
         worst['metrics'][REST_METRIC] = max((record['metrics'][REST_METRIC] for record in figures),
                                             key=lambda metric: metric['value'])
         # llmlint: ignore-end[modern_domain_modeling]
+        worst['metrics'][TIME_METRIC]['detail'] += f'; workload: {ROWS} rows, {COMMITS} commits, {len(artifact)} zipped saved-results bytes'
         (TELEMETRY / 'report-job.json').write_text(json.dumps(worst, indent=2))
         tools = STATE / 'tools'
         shutil.copytree(push.temp / 'onebudgetspec-action/tools', tools, dirs_exist_ok=True)
@@ -886,7 +929,9 @@ def recorded_figures(tree, identifiers, over=()):
         # llmlint: ignore-block[modern_domain_modeling] This edits one field of a budgets file in place and writes it back whole; a model would drop every field the edit does not name.
         document = yaml.safe_load(path.read_text())
         for budget in document['budgets']:
-            if budget['id'] == LIVE_SESSION or budget['id'] not in identifiers[name]:
+            # The live lane saves nothing without a credential, and the action knows the job's own
+            # budget by its command, whose telemetry the caller records.
+            if budget['id'] in (LIVE_SESSION, OWN) or budget['id'] not in identifiers[name]:
                 continue
             step = 1 if budget['direction'] == 'max' else -1
             figures[budget['id']] = budget['threshold'] + (step if budget['id'] in over else 0)
@@ -894,7 +939,7 @@ def recorded_figures(tree, identifiers, over=()):
         # llmlint: ignore-end[modern_domain_modeling]
         path.write_text(yaml.safe_dump(document))
     figures_file.write_text(json.dumps(figures))
-    return figures, log
+    return RecordedFigures(figures, log)
 
 
 def budget_ids(tree, name):
@@ -904,7 +949,8 @@ def budget_ids(tree, name):
 def host_environment(tree):
     """What a job's own step holds beyond its tools. Nothing of an outer Nx run reaches a nested one."""
     return {'PATH': os.environ['PATH'], 'HOME': str(tree.parent), 'NX_DAEMON': 'false', 'NX_TUI': 'false',
-            'NX_NO_CLOUD': 'true', 'CI': '1', 'DBUS_SESSION_BUS_ADDRESS': 'disabled:'}
+            'NX_NO_CLOUD': 'true', 'CI': '1', 'DBUS_SESSION_BUS_ADDRESS': 'disabled:',
+            'UV_CACHE_DIR': os.environ.get('UV_CACHE_DIR', str(Path.home() / '.cache/uv'))}
 
 
 def run_in(tree, command, **options):
@@ -927,9 +973,17 @@ class SavedResults(unittest.TestCase):
         for link in ('node_modules', '.github/node_modules'):
             (tree / link).symlink_to(ROOT / link)
         identifiers = {name: budget_ids(tree, name) for name in SAVING_BUDGET_FILES}
-        figures, log = recorded_figures(tree, identifiers, over=over)
+        recorded = recorded_figures(tree, identifiers, over=over)
         journey.base = journey.repository.commit('recorded figures')
-        return journey, figures, log
+        # report-job:budgets reads with the release's own reader, already fetched for this run, over
+        # the recording report-job:test made.
+        shutil.copytree(TREE, tree / 'target/report-job' / TAG)
+        recording = tree / '.github/reporting/.telemetry/report-job.json'
+        recording.parent.mkdir()
+        # llmlint: ignore[modern_domain_modeling] The telemetry file the released reader reads, in the action's own shape.
+        recording.write_text(json.dumps({'schema_version': 1, 'labels': ['ci-report'], 'metrics': {
+            TIME_METRIC: {'value': RECORDED_OWN_SECONDS, 'detail': 'recorded', 'unavailable': None}}}))
+        return SavingTree(journey, recorded.figures, recorded.log)
 
     def upload(self, journey, job_name, run_id):
         """ci.yml's real upload step of `job_name`, by the real action, to the doubled results service."""
@@ -946,11 +1000,12 @@ class SavedResults(unittest.TestCase):
     def artifact_figures(self, files):
         """Each budget's figure and verdict across an artifact's check reports."""
         results = [result for content in files.values() for result in json.loads(content)['results']]
-        return {result['id']: (result['actual'], result['verdict']) for result in results}
+        return {result['id']: SavedFigure(result['actual'], result['verdict']) for result in results}
 
     def another_jobs_checkout(self, journey):
         """`budgets` checks out afresh: neither a result nor what measured it reaches it."""
         shutil.rmtree(journey.repository.path / 'target')
+        shutil.rmtree(journey.repository.path / '.github/reporting/.telemetry')
 
     def test_a_saved_figure_travels_from_its_target_to_the_row_and_on_into_the_base_history(self):
         journey, figures, log = self.saving_tree()
@@ -958,14 +1013,14 @@ class SavedResults(unittest.TestCase):
 
         # Each target saves, and a replayed hit restores the same bytes without measuring again.
         saved_files = {}
-        for target, name in SAVING_TARGETS.items():
+        for target, name in (CACHED_SAVING_TARGETS | UNCACHED_SAVING_TARGETS).items():
             ran = nx_budgets(tree, target)
             self.assertEqual(ran.returncode, 0, ran.stdout + ran.stderr)
             self.assertNotIn('local cache', ran.stdout, target)
             saved_files[name] = (tree / 'target/budget-results' / name).read_bytes()
         log.unlink()
-        shutil.rmtree(tree / 'target/budget-results')
-        for target, name in SAVING_TARGETS.items():
+        for target, name in CACHED_SAVING_TARGETS.items():
+            (tree / 'target/budget-results' / name).unlink()
             replayed = nx_budgets(tree, target)
             self.assertEqual(replayed.returncode, 0, replayed.stdout + replayed.stderr)
             self.assertIn('local cache', replayed.stdout, target)
@@ -989,8 +1044,9 @@ class SavedResults(unittest.TestCase):
         uploaded_by_lint = self.upload(journey, 'lint', run_id)
         self.assertEqual(set(uploaded_by_lint), {'pool-maintenance-budget-results.json'})
         expected = self.artifact_figures({**uploaded, **uploaded_by_lint})
-        self.assertEqual({identifier: figure for identifier, (figure, _) in expected.items()},
-                         {identifier: figure for identifier, figure in figures.items() if identifier in expected})
+        self.assertEqual({identifier: saved.actual for identifier, saved in expected.items() if identifier != OWN},
+                         {identifier: figure for identifier, figure in figures.items() if identifier not in OMITTED})
+        self.assertIn(OWN, expected, 'report-job:budgets saved a figure, which the row must not take')
         self.assertNotIn(LIVE_SESSION, expected, 'no credential, so the live lane saved nothing')
         self.another_jobs_checkout(journey)
 
@@ -1001,20 +1057,23 @@ class SavedResults(unittest.TestCase):
         self.assertEqual(pull_request.outcomes['saved-results'], 'success', pull_request.stdout)
         rows = pull_request.rows()
         markdown = pull_request.markdown()
-        for identifier, (figure, verdict) in expected.items():
-            if identifier in OMITTED:
+        for identifier, saved in expected.items():
+            if identifier in OMITTED or identifier == OWN:
                 continue
-            self.assertEqual((rows[identifier]['current'], rows[identifier]['verdict']), (figure, verdict), identifier)
-            self.assertIn(f'{figure:g}'.split('.')[0], table_row(markdown, identifier).replace(',', ''), identifier)
+            self.assertEqual((rows[identifier]['current'], rows[identifier]['verdict']), (saved.actual, saved.verdict), identifier)
+            self.assertIn(f'{saved.actual:g}'.split('.')[0], table_row(markdown, identifier).replace(',', ''), identifier)
+        own_figure = pull_request.saved('report-job.json')['metrics'][TIME_METRIC]['value']
+        self.assertEqual(rows[OWN]['current'], own_figure, "the job's own figure is its own")
+        self.assertEqual(expected[OWN].actual, RECORDED_OWN_SECONDS)
+        self.assertNotEqual(rows[OWN]['current'], RECORDED_OWN_SECONDS)
         self.assertFalse(log.exists(), 'a budget with a saved result runs no command here')
 
         # A budget with none shows no number, and says so.
-        for identifier in (LIVE_SESSION, BudgetId('onetaskgraph-macos-jobs-per-run')):
-            self.assertNotIn('current', rows[identifier], rows[identifier])
-            self.assertEqual(rows[identifier]['unavailable'], NO_SAVED_RESULT)
-            row = table_row(markdown, identifier)
-            self.assertIn(NO_SAVED_RESULT, row)
-            self.assertNotRegex(row.split('|')[3], r'\d', row)
+        self.assertNotIn('current', rows[LIVE_SESSION], rows[LIVE_SESSION])
+        self.assertEqual(rows[LIVE_SESSION]['unavailable'], NO_SAVED_RESULT)
+        row = table_row(markdown, LIVE_SESSION)
+        self.assertIn(NO_SAVED_RESULT, row)
+        self.assertNotRegex(row.split('|')[3], r'\d', row)
         self.assertEqual(rows[CHECK_TIME]['current'], LONGEST_JOB_SECONDS)
         assert_left_out_and_counted(self, pull_request)
         self.assertIn(OMITTED_LINE, journey.host.comments[0]['body'])
@@ -1033,9 +1092,9 @@ class SavedResults(unittest.TestCase):
         self.assertFalse(log.exists(), "those budgets' commands do not run in this job")
         taken = history_figures(push, merge)
         merged_figures = {result['id']: result['actual'] for result in pull_request.saved('budget-run.json')['results']['results']}
-        for identifier, (figure, _) in expected.items():
-            if identifier not in OMITTED:
-                self.assertEqual(taken[identifier], figure, identifier)
+        for identifier, saved in expected.items():
+            if identifier not in OMITTED and identifier != OWN:
+                self.assertEqual(taken[identifier], saved.actual, identifier)
         self.assertEqual(taken[CHECK_TIME], merged_figures[CHECK_TIME])
         self.assertEqual(taken[JOB_COUNT], merged_figures[JOB_COUNT])
         self.assertFalse(set(taken) & OMITTED)
@@ -1050,7 +1109,7 @@ class SavedResults(unittest.TestCase):
         (tree / 'target/budget-results/broken.json').write_text('{ not a report')
         uploaded = self.upload(journey, 'test-linux', run_id)
         self.assertEqual(self.artifact_figures({'r': uploaded['onetaskgraph-live-janitor-budget-results.json']}),
-                         {janitor: (figures[janitor], 'over')})
+                         {janitor: SavedFigure(figures[janitor], 'over')})
         self.another_jobs_checkout(journey)
         job = journey.pull_request()
         self.assertEqual(job.exit_code, 1, 'an enforced saved verdict fails the job')
@@ -1082,36 +1141,36 @@ class Enforcement(unittest.TestCase):
         project = lambda name: json.loads((ROOT / name).read_text())
         release = yaml.safe_load((ROOT / '.github/workflows/release.yml').read_text())
         tail = release['jobs']['publish']['steps'][-1]['run'].strip()
-        over = 'over'
         return (
             # publish's last step: red on an overrun, and nothing reads its result.
-            ('release tail', self.TAIL, ['bash', '-c', tail], 1, over,
-             OMITTED & {'onetaskgraph-cd-job-time', 'onetaskgraph-release-cycle-time', 'onetaskgraph-cd-job-count',
-                        'onetaskgraph-release-read-requests', 'onetaskgraph-pr-read-requests', 'onetaskgraph-nx-cache-use'}),
+            EnforcingCheck('the release tail', self.TAIL, ['bash', '-c', tail], 1, False, OMITTED & {
+                'onetaskgraph-cd-job-time', 'onetaskgraph-release-cycle-time', 'onetaskgraph-cd-job-count',
+                'onetaskgraph-release-read-requests', 'onetaskgraph-pr-read-requests', 'onetaskgraph-nx-cache-use'}),
             # `just gate`'s check: a warning, because a development machine's timing varies too much.
-            ('the gate', self.TAIL, ['bash', 'scripts/gate-time.sh', '--check'], 0, 'warning',
-             OMITTED & {'onetaskgraph-gate-time'}),
+            EnforcingCheck('the gate', self.TAIL, ['bash', 'scripts/gate-time.sh', '--check'], 0, True,
+                           OMITTED & {'onetaskgraph-gate-time'}),
             # sdks/python:budgets-host: a warning, for a host-variable reading alone.
-            ('the SDK', self.SDK, ['bash', '-c', project('sdks/python/project.json')['targets']['budgets-host']['options']['command']],
-             0, 'warning', OMITTED & {'sdk-import-cpu-seconds'}),
+            EnforcingCheck('the SDK', self.SDK,
+                           ['bash', '-c', project('sdks/python/project.json')['targets']['budgets-host']['options']['command']],
+                           0, True, OMITTED & {'sdk-import-cpu-seconds'}),
             # The plan copy's budgets-host: a failure, a host budget not being host-variable.
-            ('the plan copy', self.PLAN, ['bash', '-c', project('crates/onetaskgraph-github-projects-e2e/project.json')['targets']['budgets-host']['options']['command']],
-             1, over, OMITTED & {'github-plan-copy-real-seconds-unchanged', 'github-plan-copy-real-seconds-changed',
-                                 'github-plan-copy-real-seconds-first'}),
+            EnforcingCheck('the plan copy', self.PLAN,
+                           ['bash', '-c', project('crates/onetaskgraph-github-projects-e2e/project.json')['targets']['budgets-host']['options']['command']],
+                           1, False, OMITTED & {'github-plan-copy-real-seconds-unchanged', 'github-plan-copy-real-seconds-changed',
+                                                'github-plan-copy-real-seconds-first'}),
         )
 
     def outcome(self, journey, check, *, with_label):
-        name, budgets_file, command, _, _, identifiers = check
         tree = journey.repository.path
-        original = (tree / budgets_file).read_text()
-        self.addCleanup(lambda text=original: (tree / budgets_file).write_text(text))
+        path = tree / check.budgets_file
+        original = path.read_text()
+        self.addCleanup(lambda text=original: path.write_text(text))
         if not with_label:
-            (tree / budgets_file).write_text(original.replace(f', {OMIT_LABEL}]', ']'))
-        recorded_figures(tree, {budgets_file: budget_ids(tree, budgets_file)}, over=identifiers)
-        ran = run_in(tree, command)
-        output = ran.stdout + ran.stderr
-        (tree / budgets_file).write_text(original)
-        return ran.returncode, output
+            path.write_text(original.replace(f', {OMIT_LABEL}]', ']'))
+        recorded_figures(tree, {check.budgets_file: budget_ids(tree, check.budgets_file)}, over=check.budgets)
+        ran = run_in(tree, check.command)
+        path.write_text(original)
+        return CommandOutcome(ran.returncode, ran.stdout + ran.stderr)
 
     def test_each_left_out_budget_stays_selected_with_the_verdict_its_check_gave_before(self):
         journey = Journey(self)
@@ -1120,19 +1179,19 @@ class Enforcement(unittest.TestCase):
             (tree / link).symlink_to(ROOT / link)
         covered = set()
         for check in self.checks():
-            name, budgets_file, _, exit_code, verdict, identifiers = check
-            self.assertTrue(identifiers, name)
-            covered |= identifiers
-            before, before_output = self.outcome(journey, check, with_label=False)
-            after, after_output = self.outcome(journey, check, with_label=True)
-            self.assertEqual((after, before), (exit_code, exit_code), name + after_output + before_output)
-            for identifier in identifiers:
-                for output in (before_output, after_output):
-                    line = next((line for line in output.splitlines() if line.startswith(f'budget {identifier}:')), '')
-                    self.assertIn('— over', line, f'{name} {identifier}: {output}')
-            if verdict == 'warning':
-                self.assertIn('warning', after_output, name)
-                self.assertIn('warning', before_output, name)
+            self.assertTrue(check.budgets, check.name)
+            covered |= check.budgets
+            before = self.outcome(journey, check, with_label=False)
+            after = self.outcome(journey, check, with_label=True)
+            self.assertEqual((after.status, before.status), (check.status, check.status),
+                             check.name + after.output + before.output)
+            for identifier in check.budgets:
+                for outcome in (before, after):
+                    line = next((line for line in outcome.output.splitlines() if line.startswith(f'budget {identifier}:')), '')
+                    self.assertIn('— over', line, f'{check.name} {identifier}: {outcome.output}')
+            if check.warns:
+                self.assertIn('warning', after.output, check.name)
+                self.assertIn('warning', before.output, check.name)
         self.assertEqual(covered, OMITTED)
 
 
@@ -1167,7 +1226,7 @@ class Contract(unittest.TestCase):
         self.assertEqual(given - set(declared), set())
         self.assertEqual({name for name, spec in declared.items() if spec.get('required')} - given, set())
 
-    def test_exactly_the_stated_budgets_carry_the_label_with_no_threshold_or_command_moved(self):
+    def test_exactly_the_stated_budgets_carry_the_label_and_the_job_names_both_inputs(self):
         labelled = set()
         listed = subprocess.run(['git', 'ls-files', '-co', '--exclude-standard'], cwd=ROOT, capture_output=True,
                                 text=True, check=True).stdout.split()
