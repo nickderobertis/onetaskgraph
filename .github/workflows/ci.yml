@@ -5,7 +5,8 @@
 # before they merge (`strict: false`, the user's decision of 2026-10-18), and nothing re-runs
 # the tests on a push to main — .github/workflows/rust-cache-warm.yml builds there instead, and
 # its job fails when main does not build. AGENTS.md records that trade. A push to main runs only
-# `budgets` here, which saves that commit's results as the history pull requests compare with.
+# `budgets` here, which records the merged pull request's figures as the history pull requests
+# compare with.
 #
 # Every job runs the same `just` recipes a contributor runs locally, over the projects its diff
 # can reach, and derives its base explicitly rather than letting Nx guess one.
@@ -213,6 +214,14 @@ jobs:
       - name: Pool-maintenance pass-time budget on the release pull request
         if: startsWith(github.head_ref, 'release-plz-')
         run: just pool-maintenance-budget
+      # That step's results, for the `budgets` job's report: no other step of this job saves any.
+      - uses: actions/upload-artifact@v7
+        if: always() && startsWith(github.head_ref, 'release-plz-')
+        with:
+          name: budget-check-results-lint
+          path: target/budget-results/
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Install oneharness and llmlint
         run: |
           just setup-llmlint
@@ -457,6 +466,15 @@ jobs:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           LINEAR_WRITE_TEAM: ${{ vars.LINEAR_WRITE_TEAM }}
         run: cargo run --locked -p onetaskgraph-live-janitor -- --linear --release-leases target/linear-leases
+      # What this job's `budgets` targets saved, a replayed Nx cache hit's restored file included,
+      # for the `budgets` job's report. Linux alone: each figure stays one platform's.
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: budget-check-results-test-linux
+          path: target/budget-results/
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Report cache entries and task executions
         if: always()
         shell: bash
@@ -707,9 +725,12 @@ jobs:
       - cancel: nx-cache
 
   # The budget report: the released action's own job, on every pull request and every push to main,
-  # checking each budget whose command can run here and keeping one standing comment. The full
-  # history lets local git prove each saved base commit's ancestry, and the group serializes
-  # comment writers. .github/reporting holds its budget and the journeys that drive it.
+  # keeping one standing comment. On a pull request each row takes what test-linux and lint saved
+  # and reports, or says none was found; on a push to main each takes the merged pull request's
+  # figure, so no test job runs there. Budgets labelled not-measured-on-pr have no row, one line
+  # counts them, and their checks elsewhere are unchanged. The full history lets local git prove
+  # each saved base commit's ancestry, and the group serializes comment writers. .github/reporting
+  # holds its budget and the journeys that drive it.
   budgets:
     needs: [lint, test-linux, test-windows, test-macos]
     if: always()
@@ -727,7 +748,9 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: nickderobertis/onebudgetspec-github-action@v0.1.2
+      - uses: nickderobertis/onebudgetspec-github-action@v0.2.0
         with:
           token: ${{ github.token }}
           enforcement-exclude-labels: release-tail,report-only
+          omit-labels: not-measured-on-pr
+          saved-results-artifacts: budget-check-results-*

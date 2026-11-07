@@ -132,7 +132,7 @@ budgets:
   - id: github-plan-copy-real-seconds-unchanged
     description: >-
       The real seconds the two processes of an unchanged re-copy of the generated 10-item plan ran on a 2,000-item loopback board, beside the simulated seconds its gated budget holds. It protects the copy's own work on the machine that runs it from growing unseen.
-    labels: [github, host]
+    labels: [github, host, not-measured-on-pr]
     measure: reported
     # llmlint: ignore[budget_commands_measure_directly] Every budget of this file selects a report-only entry in `budget_runner`, the harness-runner convention this crate's budgets landed with; every plan-copy budget, its host-labelled real-time figures included, names this one generic entry. It reads only the telemetry `plan_copy.rs` recorded during the crate's test run, refuses a recording of another plan, board or scenario, and hands the figure to onebudgetspec, which alone judges it.
     command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_plan_copy", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-github-projects-e2e"]
@@ -144,7 +144,7 @@ budgets:
   - id: github-plan-copy-real-seconds-changed
     description: >-
       The real seconds the two processes of a re-copy after one task's body changed of the generated 10-item plan ran on a 2,000-item loopback board, beside the simulated seconds its gated budget holds. It protects the copy's own work on the machine that runs it from growing unseen.
-    labels: [github, host]
+    labels: [github, host, not-measured-on-pr]
     measure: reported
     # llmlint: ignore[budget_commands_measure_directly] Every budget of this file selects a report-only entry in `budget_runner`, the harness-runner convention this crate's budgets landed with; every plan-copy budget, its host-labelled real-time figures included, names this one generic entry. It reads only the telemetry `plan_copy.rs` recorded during the crate's test run, refuses a recording of another plan, board or scenario, and hands the figure to onebudgetspec, which alone judges it.
     command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_plan_copy", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-github-projects-e2e"]
@@ -156,7 +156,7 @@ budgets:
   - id: github-plan-copy-real-seconds-first
     description: >-
       The real seconds the two processes of a first copy of the generated 10-item plan ran on a 2,000-item loopback board, beside the simulated seconds its gated budget holds. It protects the copy's own work on the machine that runs it from growing unseen.
-    labels: [github, host]
+    labels: [github, host, not-measured-on-pr]
     measure: reported
     # llmlint: ignore[budget_commands_measure_directly] Every budget of this file selects a report-only entry in `budget_runner`, the harness-runner convention this crate's budgets landed with; every plan-copy budget, its host-labelled real-time figures included, names this one generic entry. It reads only the telemetry `plan_copy.rs` recorded during the crate's test run, refuses a recording of another plan, board or scenario, and hands the figure to onebudgetspec, which alone judges it.
     command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_plan_copy", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-github-projects-e2e"]

@@ -85,7 +85,7 @@
       "executor": "nx:run-commands",
       "dependsOn": ["test"],
       "options": {
-        "command": "bun run onebudgetspec check crates/onetaskgraph-live-janitor/budgets.yaml"
+        "command": "bun run onebudgetspec check crates/onetaskgraph-live-janitor/budgets.yaml --save-results target/budget-results/onetaskgraph-live-janitor-budget-results.json"
       },
       "cache": true,
       "inputs": [
@@ -101,7 +101,7 @@
         "{workspaceRoot}/.tool-versions"
       ],
       "//": "Judges the request count recorded by the offline test, on every platform. The cache includes the measured code, telemetry and onebudgetspec pins.",
-      "outputs": []
+      "outputs": ["{workspaceRoot}/target/budget-results/onetaskgraph-live-janitor-budget-results.json"]
     }
   },
   "// ownership": "llmlint: ignore-block[new_command_or_client_gets_its_own_project] The existing scheduled janitor owns both hosted sweeps; this dependency mirrors its GitHub plugin dependency rather than introducing another scheduled command.",
