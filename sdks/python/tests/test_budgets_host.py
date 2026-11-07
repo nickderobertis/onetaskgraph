@@ -87,7 +87,7 @@ def test_the_registered_import_budget_is_host_variable() -> None:
     budgets = yaml.safe_load((PACKAGE / "budgets.yaml").read_text(encoding="utf-8"))
     (budget,) = budgets["budgets"]
     assert budget["id"] == "sdk-import-cpu-seconds"
-    assert set(budget["labels"]) == {"host", "host-variable"}
+    assert set(budget["labels"]) == {"host", "host-variable", "not-measured-on-pr"}
 
 
 def test_direct_checks_remain_strict_for_ci(tmp_path: Path) -> None:
