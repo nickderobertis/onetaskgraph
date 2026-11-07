@@ -259,6 +259,7 @@ def released_action():
     # own, and it is that release of the action this file proves.
     pinned_by_the_action = harness.artifact_action
 
+    # llmlint: ignore[protocol_based_seams] The released harness is one fixed module with no seam to implement; this wraps its one resolver for one more action, and only this file replaces it.
     def artifact_action(uses):
         name, reference = uses.split('@', 1)
         if name == 'actions/upload-artifact' and uses in ci_upload_actions():
@@ -442,10 +443,12 @@ class Journey:
         """GitHub's job listing of a run, which the harness the action ships has no need of."""
         answer_otherwise = self.host.read
 
+        # llmlint: ignore[protocol_based_seams] The released harness's host is one fixed class with no seam to implement; this adds the one GitHub route it has no need of, and only this file replaces it.
         def read(handler, path):
             if re.fullmatch(r'/repos/owner/repo/actions/runs/\d+/jobs', path.split('?')[0]) is None:
                 return answer_otherwise(handler, path)
             jobs = recorded_jobs(self.longest_seconds)
+            # llmlint: ignore[modern_domain_modeling] This is GitHub's job-listing response on the wire, and the figures script validates its shape.
             return self.host.reply(handler, 200, json.dumps({'total_count': len(jobs), 'jobs': jobs}).encode())
 
         self.host.read = read
@@ -590,7 +593,7 @@ class ProductionCatalog(unittest.TestCase):
         self.assertIn('report-only', table_row(markdown, CHECK_TIME))
         assert_left_out_and_counted(self, job)
 
-    def test_a_pull_request_reports_its_own_runs_jobs_with_one_read(self):
+    def test_a_pull_request_reports_its_own_runs_jobs_with_one_read_per_figure(self):
         journey = Journey(self)
         journey.host.clear_requests()
         job = journey.pull_request()
@@ -991,6 +994,7 @@ class SavedResults(unittest.TestCase):
         self.assertEqual(step['with']['path'], 'target/budget-results/')
         uploader = harness.Job(journey.host, journey.repository, 'pull_request', 'head', run_id=run_id, action_path=TREE)
         self.addCleanup(uploader.close)
+        # llmlint: ignore[modern_domain_modeling] This is the expression context the released harness's Expression reads, in its own shape.
         context = {'inputs': {}, 'github': uploader.github, 'steps': {}, 'runner': {'temp': str(uploader.temp)}}
         output = uploader.temp / 'upload-output'
         outcome, _ = uploader._artifact_action(step, harness.Expression(context), output)
@@ -1068,7 +1072,6 @@ class SavedResults(unittest.TestCase):
         self.assertNotEqual(rows[OWN]['current'], RECORDED_OWN_SECONDS)
         self.assertFalse(log.exists(), 'a budget with a saved result runs no command here')
 
-        # A budget with none shows no number, and says so.
         self.assertNotIn('current', rows[LIVE_SESSION], rows[LIVE_SESSION])
         self.assertEqual(rows[LIVE_SESSION]['unavailable'], NO_SAVED_RESULT)
         row = table_row(markdown, LIVE_SESSION)
