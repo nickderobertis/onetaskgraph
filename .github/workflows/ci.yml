@@ -123,24 +123,29 @@ jobs:
       - uses: extractions/setup-just@v4
         with:
           just-version: ${{ steps.pins.outputs.just }}
+      # A fork's run writes nothing to any cache: this action saves its own binary otherwise.
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: package.json
+          no-cache: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
       - uses: astral-sh/setup-uv@v7
         with:
           version: ${{ steps.pins.outputs.uv }}
           enable-cache: true
+          save-cache: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
       # Reads rust-toolchain.toml; its built-in cache keys `target` and the cargo registry on
-      # Cargo.lock, the toolchain and the OS, and cargo's fingerprints refuse a stale unit. An
-      # entry is never re-saved under its key, so a key whose entry holds no build is retired
-      # by naming a new one here.
+      # Cargo.lock, the toolchain and the OS, and cargo's fingerprints refuse a stale unit.
+      # test-linux's family, which .github/workflows/rust-cache-warm.yml saves on main with this
+      # job's compile lines built too (scripts/warm-rust-cache.sh), so a first push starts warm.
+      # main is the one writer of Rust build caches: a pull request restores and saves nothing.
       # rust-cache hashes every installed compiler; exclude the unused floating one.
       - name: Exclude the unused floating compiler from the build cache
         shell: bash
         run: rustup toolchain uninstall stable
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          cache-key: lint-afresh
+          cache-shared-key: test-linux
+          cache-save-if: false
       # cargo-binstall is what makes scripts/scoped-release-plz.sh download release-plz rather
       # than build it from source.
       - uses: taiki-e/install-action@v2
@@ -194,12 +199,12 @@ jobs:
       # only from a job that passed, and a tool built from source is the cost worth keeping
       # even when a later step fails or the timeout ends the job.
       - uses: actions/cache/save@v6
-        if: steps.release-plz-cache.outputs.cache-hit != 'true'
+        if: steps.release-plz-cache.outputs.cache-hit != 'true' && github.event.pull_request.head.repo.full_name == github.repository
         with:
           path: ~/.cache/onetaskgraph/tools/release-plz
           key: release-plz-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.release-plz }}
       - uses: actions/cache/save@v6
-        if: steps.prune-superseded-cache.outputs.cache-hit != 'true'
+        if: steps.prune-superseded-cache.outputs.cache-hit != 'true' && github.event.pull_request.head.repo.full_name == github.repository
         with:
           path: |
             ~/.cargo/bin/cargo-prune-superseded
@@ -209,7 +214,8 @@ jobs:
         run: just ci-lint
       # The release pull request alone: the pass-time budget of the pool maintenance
       # onevcs.toml declares. lint owns this additional policy budget on Linux,
-      # already bootstrapped with the pinned pruner.
+      # already bootstrapped with the pinned pruner. Kept: it adds this budget's run to a release
+      # and skips no test elsewhere, so result replay has nothing here to take over.
       - name: Pool-maintenance pass-time budget on the release pull request
         if: startsWith(github.head_ref, 'release-plz-')
         run: just pool-maintenance-budget
@@ -307,9 +313,11 @@ jobs:
       - uses: extractions/setup-just@v4
         with:
           just-version: ${{ steps.pins.outputs.just }}
+      # A fork's run writes nothing to any cache: this action saves its own binary otherwise.
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: package.json
+          no-cache: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
       - name: Install the workflow tooling
         run: just github-workflows-bootstrap
       # The classifier affects only Rust coverage; functional and SDK tasks still run.
@@ -340,11 +348,11 @@ jobs:
         with:
           version: ${{ steps.pins.outputs.uv }}
           enable-cache: true
+          save-cache: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
       # Reads rust-toolchain.toml; its built-in cache keys `target` and the cargo registry on
-      # Cargo.lock, the toolchain and the OS, and cargo's fingerprints refuse a stale unit. A
-      # run cut short by the timeout still saves what it built, which the next run starts from.
-      # The shared key is the one .github/workflows/rust-cache-warm.yml saves on main, which is
-      # the only cache a new pull request can restore.
+      # Cargo.lock, the toolchain and the OS, and cargo's fingerprints refuse a stale unit.
+      # The shared key is the one .github/workflows/rust-cache-warm.yml saves on main, the one
+      # writer of Rust build caches: this job restores it and saves nothing.
       # rust-cache hashes every installed compiler; exclude the unused floating one.
       - name: Exclude the unused floating compiler from the build cache
         shell: bash
@@ -352,6 +360,7 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           cache-shared-key: test-linux
+          cache-save-if: false
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-llvm-cov@${{ steps.pins.outputs.cargo-llvm-cov }},cargo-nextest@${{ steps.pins.outputs.cargo-nextest }},cargo-machete@${{ steps.pins.outputs.cargo-machete }},cargo-deny@${{ steps.pins.outputs.cargo-deny }},cargo-binstall@${{ steps.pins.outputs.cargo-binstall }}
@@ -398,12 +407,12 @@ jobs:
         run: just bootstrap --outputStyle=static
       # Saved straight after Bootstrap, as lint's are.
       - uses: actions/cache/save@v6
-        if: steps.release-plz-cache.outputs.cache-hit != 'true'
+        if: steps.release-plz-cache.outputs.cache-hit != 'true' && github.event.pull_request.head.repo.full_name == github.repository
         with:
           path: ~/.cache/onetaskgraph/tools/release-plz
           key: release-plz-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.release-plz }}
       - uses: actions/cache/save@v6
-        if: steps.prune-superseded-cache.outputs.cache-hit != 'true'
+        if: steps.prune-superseded-cache.outputs.cache-hit != 'true' && github.event.pull_request.head.repo.full_name == github.repository
         with:
           path: |
             ~/.cargo/bin/cargo-prune-superseded
@@ -507,15 +516,18 @@ jobs:
       - uses: extractions/setup-just@v4
         with:
           just-version: ${{ steps.pins.outputs.just }}
+      # A fork's run writes nothing to any cache: this action saves its own binary otherwise.
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: package.json
+          no-cache: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
       - name: Install the workflow tooling
         run: just github-workflows-bootstrap
       - uses: astral-sh/setup-uv@v7
         with:
           version: ${{ steps.pins.outputs.uv }}
           enable-cache: true
+          save-cache: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
       # rust-cache hashes every installed compiler; exclude the unused floating one.
       - name: Exclude the unused floating compiler from the build cache
         shell: bash
@@ -523,6 +535,7 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           cache-shared-key: test-windows
+          cache-save-if: false
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-llvm-cov@${{ steps.pins.outputs.cargo-llvm-cov }},cargo-nextest@${{ steps.pins.outputs.cargo-nextest }},cargo-machete@${{ steps.pins.outputs.cargo-machete }},cargo-deny@${{ steps.pins.outputs.cargo-deny }},cargo-binstall@${{ steps.pins.outputs.cargo-binstall }}
@@ -569,12 +582,12 @@ jobs:
         run: just bootstrap --outputStyle=static
       # Saved straight after Bootstrap, as lint's are.
       - uses: actions/cache/save@v6
-        if: steps.release-plz-cache.outputs.cache-hit != 'true'
+        if: steps.release-plz-cache.outputs.cache-hit != 'true' && github.event.pull_request.head.repo.full_name == github.repository
         with:
           path: ~/.cache/onetaskgraph/tools/release-plz
           key: release-plz-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.release-plz }}
       - uses: actions/cache/save@v6
-        if: steps.prune-superseded-cache.outputs.cache-hit != 'true'
+        if: steps.prune-superseded-cache.outputs.cache-hit != 'true' && github.event.pull_request.head.repo.full_name == github.repository
         with:
           path: |
             ~/.cargo/bin/cargo-prune-superseded
@@ -617,15 +630,18 @@ jobs:
       - uses: extractions/setup-just@v4
         with:
           just-version: ${{ steps.pins.outputs.just }}
+      # A fork's run writes nothing to any cache: this action saves its own binary otherwise.
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: package.json
+          no-cache: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
       - name: Install the workflow tooling
         run: just github-workflows-bootstrap
       - uses: astral-sh/setup-uv@v7
         with:
           version: ${{ steps.pins.outputs.uv }}
           enable-cache: true
+          save-cache: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
       # rust-cache hashes every installed compiler; exclude the unused floating one.
       - name: Exclude the unused floating compiler from the build cache
         shell: bash
@@ -633,6 +649,7 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           cache-shared-key: test-macos
+          cache-save-if: false
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-llvm-cov@${{ steps.pins.outputs.cargo-llvm-cov }},cargo-nextest@${{ steps.pins.outputs.cargo-nextest }},cargo-machete@${{ steps.pins.outputs.cargo-machete }},cargo-deny@${{ steps.pins.outputs.cargo-deny }},cargo-binstall@${{ steps.pins.outputs.cargo-binstall }}
@@ -679,12 +696,12 @@ jobs:
         run: just bootstrap --outputStyle=static
       # Saved straight after Bootstrap, as lint's are.
       - uses: actions/cache/save@v6
-        if: steps.release-plz-cache.outputs.cache-hit != 'true'
+        if: steps.release-plz-cache.outputs.cache-hit != 'true' && github.event.pull_request.head.repo.full_name == github.repository
         with:
           path: ~/.cache/onetaskgraph/tools/release-plz
           key: release-plz-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.release-plz }}
       - uses: actions/cache/save@v6
-        if: steps.prune-superseded-cache.outputs.cache-hit != 'true'
+        if: steps.prune-superseded-cache.outputs.cache-hit != 'true' && github.event.pull_request.head.repo.full_name == github.repository
         with:
           path: |
             ~/.cargo/bin/cargo-prune-superseded

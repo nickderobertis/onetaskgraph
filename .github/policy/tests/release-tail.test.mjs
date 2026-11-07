@@ -394,7 +394,10 @@ function checkout(budgets = readFileSync(join(root, "budgets.yaml"), "utf8")) {
   // These historical releases predate cache receipts. The cache journey tests that CLI
   // separately with its real executions and receipts; this replay owns the other figures.
   const document = budgetDocument(budgets);
-  document.budgets = document.budgets.filter((budget) => budget.id !== "onetaskgraph-nx-cache-use");
+  // Nor do they hold a cache listing; rust-cache-warm.test.mjs replays the headroom's own.
+  document.budgets = document.budgets.filter(
+    (budget) => !["onetaskgraph-nx-cache-use", "onetaskgraph-cache-headroom"].includes(budget.id),
+  );
   writeFileSync(join(dir, "budgets.yaml"), stringify(document));
   copyFileSync(
     join(root, "scripts/actions-budget-figures.sh"),
@@ -864,7 +867,7 @@ test("the figures script is the unedited create-repo copy its header names", () 
     lines[2],
     "# source: github.com/nickderobertis/dero-skills/skills/bootstrap/create-repo/assets/budgets/actions-budget-figures.sh",
   );
-  assert.equal(lines[3], "# version: 11");
+  assert.equal(lines[3], "# version: 12");
   const digest = lines[4].match(/^# sha256: ([0-9a-f]{64})$/)?.[1];
   const body = lines.slice(5).join("\n");
   assert.equal(
@@ -872,7 +875,7 @@ test("the figures script is the unedited create-repo copy its header names", () 
     digest,
     "the copy was edited in place",
   );
-  assert.equal(digest, "4e712406a1b09dac07d496be28d6a71141958de3259efb5c85f1dc23744fa5a4");
+  assert.equal(digest, "b77b3b6fdccba79eae1db6523122d22eec80ac0738d5b4df03321db600697d3d");
 });
 
 // The reconciliation script, against a stand-in for gh that answers each path with its
@@ -1001,10 +1004,26 @@ process.stdout.write(text);
   }
 });
 
-test("the release tail selects both owned budgets with their registered commands", () => {
+test("the release tail selects the owned budgets with their registered commands", () => {
   const budgets = budgetDocument(readFileSync(join(root, "budgets.yaml"), "utf8")).budgets;
   for (const [id, command] of [
     ["onetaskgraph-nx-cache-use", ["bash", "scripts/actions-budget-figures.sh", "cache-use"]],
+    [
+      "onetaskgraph-cache-headroom",
+      [
+        "bash",
+        "scripts/actions-budget-figures.sh",
+        "cache-headroom",
+        "--family",
+        "v0-rust-test-linux-Linux-x64-",
+        "--family",
+        "v0-rust-test-windows-Windows_NT-x64-",
+        "--family",
+        "v0-rust-test-macos-Darwin-arm64-",
+        "--family",
+        "v0-rust-release-plz-Linux-x64-",
+      ],
+    ],
     [
       "onetaskgraph-release-cycle-time",
       [

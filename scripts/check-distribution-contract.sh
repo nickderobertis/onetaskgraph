@@ -46,7 +46,7 @@ while read -r platform runner target ext npm; do
   job=$(sed -n "/^  build-$platform:\$/,/^  [a-z-]*:\$/p" <<< "$workflow")
   [[ -n $job ]] || fail "the release workflow has no build-$platform job"
   grep -Fq "runs-on: $runner" <<< "$job" || fail "the build-$platform job must run on $runner"
-  grep -Fq "with: { target: $target }" <<< "$job" || fail "the build-$platform job must install the $target Rust target"
+  grep -Fq "with: { target: $target, " <<< "$job" || fail "the build-$platform job must install the $target Rust target"
   grep -Fq "run: just release-$platform build --tag" <<< "$job" || fail "the build-$platform job must build, package and test-install through 'just release-$platform build'"
 done <<< "$mappings"
 ! grep -RqiE 'x86_64-apple-darwin|darwin-x64|rosetta' .github/workflows release-targets.toml npm/platforms npm/cli/package.json scripts/product_versions.py scripts/verify-release-products.py scripts/release_products.py scripts/release_cd.py || fail "an Intel macOS target, carrier or Rosetta step is still declared; Intel macOS is no longer released"

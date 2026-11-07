@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Prove the Rust cache warmer leaves what a pull request's Linux build reuses: run the real
 # scripts/warm-rust-cache.sh in the Linux leg's mode (--instrumented) into a scratch target
-# directory, then make that job's builds against the same directory, and fail naming every
+# directory, then make that job's builds and lint's against the same directory, and fail naming every
 # dependency crate cargo compiled again. rust-cache saves the target directory's dependency
 # units, so a dependency the second pass rebuilt is one the warmer's save would not have
 # spared a pull request.
@@ -79,10 +79,10 @@ plain() {
   sed "s/$(printf '\033')\[[0-9;]*[A-Za-z]//g" "$1" | tr -d '\r'
 }
 
-# rebuilt <log>: the non-workspace crates a build log says cargo compiled, one per line.
+# rebuilt <log>: the non-workspace crates a build log says cargo compiled or checked, one per line.
 rebuilt() {
   local status=0
-  plain "$1" | sed -n 's/^ *Compiling \([^ ]*\) v.*/\1/p' | sort -u \
+  plain "$1" | sed -n -E 's/^ *(Compiling|Checking) ([^ ]*) v.*/\2/p' | sort -u \
     | grep -vxF -f <(printf '%s\n' $members) || status=$?
   # 1 is grep's "nothing left", which is the answer; anything above it is grep failing.
   [ "$status" -le 1 ] || fail "grep failed (exit $status) filtering $1" "re-run; if it repeats, check the scratch directory is readable"
@@ -118,7 +118,12 @@ grep -E -- '^cargo llvm-cov .*--package onetaskgraph-plugin-api ' "$scratch/buil
 CARGO_TARGET_DIR="$scratch/empty" cargo test --no-run --locked --all-features -p onetaskgraph-plugin-api \
   >"$scratch/control.log" 2>&1 || { cat "$scratch/control.log" >&2; fail "the control's partial warm failed" "fix what cargo reports above"; }
 CARGO_TARGET_DIR="$scratch/empty" replay "$scratch/control.builds" "$scratch/control.rebuilt"
-[ -s "$scratch/control.rebuilt" ] || fail "an incomplete warm passed: the instrumented build after an uninstrumented one reported no dependency compiled" "make rebuilt() match cargo's 'Compiling' lines again"
+[ -s "$scratch/control.rebuilt" ] || fail "an incomplete warm passed: the instrumented build after an uninstrumented one reported no dependency compiled" "make rebuilt() match cargo's 'Compiling' and 'Checking' lines again"
+# And lint's: a dependency cargo only checks prints 'Checking', which the scan has to read too.
+grep -E -- '^cargo check .*-p onetaskgraph-plugin-api ' "$scratch/builds" >"$scratch/control-check.builds" \
+  || fail "the job's builds hold no cargo check of onetaskgraph-plugin-api for the control" "point the control at a crate whose typecheck target scripts/pr-build-commands.sh lists"
+CARGO_TARGET_DIR="$scratch/empty" replay "$scratch/control-check.builds" "$scratch/control-check.rebuilt"
+[ -s "$scratch/control-check.rebuilt" ] || fail "an incomplete warm passed: the check over a warm without it reported no dependency checked" "make rebuilt() match cargo's 'Checking' lines again"
 rm -rf "$scratch/empty"
 
 if ! "$warmed"; then

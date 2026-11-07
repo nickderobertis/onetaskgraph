@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Print, one command per line, every build test-linux makes of this workspace's Rust units,
-# read from where each is declared rather than restated: each crate's `test` target's cargo
+# Print, one command per line, every build test-linux and lint make of this workspace's Rust
+# units, read from where each is declared rather than restated: each crate's `lint` and
+# `typecheck` targets' cargo commands, which lint makes over test-linux's restored family;
+# each crate's `test` target's cargo
 # commands from its project.json, with --no-run, and what a scripts/live-crate-test.sh command
 # there builds under ONETASKGRAPH_TESTS_UNDER_COVERAGE=1; the instrumented run scripts/rust-coverage.sh
 # makes of each crate, with a filter selecting no test (cargo-llvm-cov refuses --no-report
@@ -48,6 +50,7 @@ for found in sorted(pathlib.Path("crates").glob("*/project.json"), key=lambda fo
     except (OSError, ValueError) as error:
         sys.exit(f"pr-build-commands: {path}: could not be read as JSON ({error}); next: fix that file so it parses")
     tags = node.get("tags", []) if isinstance(node, dict) else []
+    targets = node.get("targets") if isinstance(node, dict) else None
     for key in ("targets", "test", "options"):
         node = node.get(key) if isinstance(node, dict) else None
     if not isinstance(node, dict):
@@ -84,6 +87,15 @@ for found in sorted(pathlib.Path("crates").glob("*/project.json"), key=lambda fo
             refuse(path, f"its `test` target runs `{command}`, which is neither `cargo test` nor a guard script")
     if not built:
         refuse(path, "its `test` target runs no `cargo test`")
+    for target in ("lint", "typecheck"):
+        node = targets.get(target) if isinstance(targets, dict) else None
+        if node is None:
+            continue
+        step = node.get("options") if isinstance(node, dict) else None
+        command = step.get("command") if isinstance(step, dict) else None
+        if not isinstance(command, str) or not command.startswith(("cargo clippy ", "cargo check ")):
+            refuse(path, f"its `{target}` target runs `{command}`, which is neither `cargo clippy` nor `cargo check`")
+        out.append(command.replace(" --quiet", ""))
 try:
     with open("scripts/rust-coverage.sh", encoding="utf-8") as handle:
         coverage = handle.read()

@@ -30,6 +30,9 @@
     "github-nx-policy",
     "report-job"
   ],
+  "namedInputs": {
+    "cargoInputs": ["versionFreeCargo"]
+  },
   "targets": {
     "bootstrap": {
       "executor": "nx:run-commands",

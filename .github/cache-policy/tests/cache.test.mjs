@@ -171,14 +171,15 @@ const eventFile = (file) =>
   );
 
 // Biome excludes exactly these upstream-owned copies; this drift test holds them byte-identical.
-// Full-file digests, including headers: remote cache v7 from dero-skills
-// 880a80a63e8fbd106eb86cebe8f908c4d6eb75e3; figures v11 from
-// 63e071b72420bd6737226a50cb8a7a7760cc73a4; version-free inputs v3 from
+// Full-file digests, including headers: remote cache v8, figures v12 and cache prune v1 from
+// dero-skills 270bea5d287f6fe6a844fd6b882922eacadf6ecf; version-free inputs v3 from
 // fe20052d06406bb07869c5236147b6693489d52f (owned Cargo and Python pins).
 const copies = {
   "scripts/actions-budget-figures.sh":
-    "a3606ff3d00be139d52a7cbb2905f45e2ade99383417be31cc74cc7ce6c39eba",
-  "scripts/nx-remote-cache.mjs": "54ae95b681b0195afbb15f9f0849cd3e555d2b5d616cb47c9fa3119d35c8ee7a",
+    "c6a80ccd9051b95c84421505f79dea7b0e8b1b02f1dffcc16a90827b7d400da4",
+  "scripts/actions-cache-prune.mjs":
+    "4c7bfd986ddb7e59b395a00eb3bb74892b44b76234d0c2a61d63ddf7a49b37a7",
+  "scripts/nx-remote-cache.mjs": "88c72d76565a53bb7c09702255d8fe2be72165d1abcbca48bc125984d140fcf7",
   "scripts/nx-version-free-inputs.mjs":
     "624fed99b45a57532ef672ccb4638e4b8052dd12fdee0274fa2f23e9f2f16b60",
 };
@@ -880,6 +881,7 @@ function proveCacheBudget({ dir, workspace, env, pr, laterPr, routes, stage }) {
     "failed",
     "throttled",
     "changed-hash",
+    "moved-base",
     "local-hit",
     "missing-job",
     "expired",
@@ -907,6 +909,15 @@ function proveCacheBudget({ dir, workspace, env, pr, laterPr, routes, stage }) {
         attempt.status = "failed";
         attempt.http_status = scenario === "throttled" ? 429 : 500;
       }
+    }
+    // A merge landed between the carried pull request's final run and its merge: that run tested
+    // the task on a base its merge's first parent is not, and the release hashes it otherwise.
+    if (scenario === "moved-base") {
+      current.hash = "deadbeef";
+      current.result = "executed";
+      current.remote_status = 404;
+      for (const document of documents.slice(0, 2)) document.execution.base_sha = "7".repeat(40);
+      answers[`${prefix}/commits/${sourcePr.merge_commit_sha}`].parents = [{ sha: "8".repeat(40) }];
     }
     if (scenario === "changed-hash") {
       current.hash = "deadbeef";
@@ -1062,6 +1073,14 @@ function proveCacheBudget({ dir, workspace, env, pr, laterPr, routes, stage }) {
       if (scenario === "replayed")
         console.info(
           `Simulated release selection, real journey telemetry: ${output.split("\n")[0]}`,
+        );
+      if (scenario === "moved-base")
+        assert.match(
+          output,
+          new RegExp(
+            `: base_moved, #\\d+ tested \\S+ on base ${"7".repeat(40)}, merged on ${"8".repeat(40)}`,
+          ),
+          output,
         );
       if (scenario === "local-hit") assert.match(output, /skipped local hits: 1/);
       if (["failed-store", "throttled-store"].includes(scenario))

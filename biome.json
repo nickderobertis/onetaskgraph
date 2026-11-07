@@ -16,6 +16,7 @@
       "!**/.venv",
       "!gh-secrets.json",
       "!scripts/nx-remote-cache.mjs",
+      "!scripts/actions-cache-prune.mjs",
       "!scripts/nx-version-free-inputs.mjs"
     ]
   },

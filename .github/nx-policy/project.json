@@ -26,6 +26,7 @@
       "{workspaceRoot}/.github/test-setup.mjs",
       "{workspaceRoot}/**/project.json",
       "{workspaceRoot}/scripts/nx-version-free-inputs.mjs",
+      "{workspaceRoot}/scripts/nx-cargo-closure.mjs",
       "{workspaceRoot}/scripts/nx-remote-cache.mjs",
       "{workspaceRoot}/scripts/ci-job.sh",
       "{workspaceRoot}/.github/nx-version-files",

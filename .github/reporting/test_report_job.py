@@ -383,6 +383,9 @@ def catalog():
 def expected_reason(budget):
     """Why this production budget cannot measure in the job, in the words of its row."""
     match budget.command:
+        # The one figure GitHub answers on a pull request: this job's double holds no cache listing.
+        case ['bash', 'scripts/actions-budget-figures.sh', 'cache-headroom', *_]:
+            return 'actions/cache/storage-limit answered HTTP'
         case ['bash', 'scripts/actions-budget-figures.sh', 'cache-use', *_]:
             return 'no release: pass --release TAG'
         case ['bash', 'scripts/actions-budget-figures.sh', *_]:

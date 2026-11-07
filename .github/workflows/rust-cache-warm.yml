@@ -6,7 +6,13 @@
 # slowest job, and test-macos, cold, was that job. It is skipped on a release merge, whose
 # change is workspace-crate versions and changelogs alone: rust-cache stores no workspace
 # crate, so the next pull request's prefix restore of the previous save is as warm. Each leg
-# restores its own previous save, so a push builds only what changed.
+# restores its own previous save, so a push builds only what changed. This workflow is the only
+# saver of the Rust build caches pull requests restore; `release-plz` saves a family of its own on
+# main. Each leg's last ordinary step deletes its family's superseded copies, keeping the newest on
+# main: rust-cache's post step saves after it, so a family holds at most two copies, and each
+# leg's job holds `actions: write` for that step alone, which is the only step handed the token.
+# Cleanup does not rescue results a run's saves already evicted: budgets.yaml's
+# onetaskgraph-cache-headroom holds the room those saves need.
 # scripts/warm-rust-cache.sh says what is built and why.
 # .github/policy/tests/rust-cache-warm.test.mjs holds each leg to its job's key and build inputs.
 
@@ -26,6 +32,9 @@ permissions:
 jobs:
   warm:
     name: warm (${{ matrix.os }})
+    permissions:
+      contents: read
+      actions: write # the cleanup step alone deletes superseded cache copies
     strategy:
       fail-fast: false
       matrix:
@@ -33,9 +42,11 @@ jobs:
           - os: ubuntu-latest
             job: test-linux
             build: --instrumented
+            families: --family v0-rust-test-linux-Linux-x64- --family v0-rust-release-plz-Linux-x64-
           - os: windows-latest
             job: test-windows
             build: ""
+            families: --family v0-rust-test-windows-Windows_NT-x64-
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
@@ -82,13 +93,18 @@ jobs:
         if: matrix.job == 'test-linux'
         shell: bash
         run: just warm-cache-reuse-check-warmed
+      - name: Delete this family's superseded copies
+        run: node scripts/actions-cache-prune.mjs ${{ matrix.families }}
+        env:
+          GH_TOKEN: ${{ github.token }}
 
   # Whether this push is a release merge: release-plz's version and changelog edits and nothing
   # else, as .github/semantic-release.py — the classifier macOS lanes reads a release pull
   # request with — reads the two trees. Anything it cannot decide answers false — an unreadable
   # revision, a failed classifier, an answer other than `true` — and a job that fails anyway
   # still lets warm-macos run, so the macOS leg warms: a cold build costs every pull request
-  # more than one warm leg costs main.
+  # more than one warm leg costs main. Kept: this skip is what holds the Mac-spending runs per
+  # lifecycle to the budget of 4 (.github/policy/budgets.yaml), and it builds, so nothing replays it.
   release-merge:
     name: release merge
     runs-on: ubuntu-latest
@@ -128,6 +144,9 @@ jobs:
     if: ${{ !cancelled() && needs.release-merge.outputs.version-only != 'true' }}
     runs-on: macos-latest
     timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: write # the cleanup step alone deletes superseded cache copies
     steps:
       - uses: actions/checkout@v7
         with:
@@ -149,3 +168,7 @@ jobs:
       - name: Build what test-macos builds
         shell: bash
         run: bash scripts/warm-rust-cache.sh
+      - name: Delete this family's superseded copies
+        run: node scripts/actions-cache-prune.mjs --family v0-rust-test-macos-Darwin-arm64-
+        env:
+          GH_TOKEN: ${{ github.token }}

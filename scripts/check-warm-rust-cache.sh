@@ -3,10 +3,10 @@
 # answers `cargo metadata` with two crates and records every other invocation, and a stand-in
 # distribution journey that records its arguments. Each leg must build every crate's test units
 # with every feature and with its defaults, the Linux leg each crate's instrumented units and
-# the crate publication's packaging verification too, and both the distribution journey's
-# release build alone; any other invocation is refused.
-# Each build scripts/pr-build-commands.sh reads test-linux making has to be one of those
-# shapes. A build the warmer stops making leaves every later pull request cold, and nothing
+# `lint`'s compile lines and the crate publication's packaging verification too, and both the
+# distribution journey's release build alone; any other invocation is refused.
+# Each build scripts/pr-build-commands.sh reads test-linux and lint making has to be one of
+# those shapes. A build the warmer stops making leaves every later pull request cold, and nothing
 # else says so.
 #
 #   scripts/check-warm-rust-cache.sh
@@ -60,6 +60,8 @@ expected() {
     echo "cargo test --quiet --no-run --locked --all-features -p $crate"
     echo "cargo test --quiet --no-run --locked -p $crate"
     [ "$1" = plain ] || echo "cargo llvm-cov --no-report nextest --package $crate --all-features --locked -E none() --no-tests=pass"
+    [ "$1" = plain ] || echo "cargo clippy --quiet -p $crate --all-targets --all-features --locked -- -D warnings"
+    [ "$1" = plain ] || echo "cargo check --quiet -p $crate --all-targets --all-features --locked"
   done
   [ "$1" = plain ] || echo "cargo package -p alpha -p beta --locked --allow-dirty --target-dir $tree/target/crate-publication"
   echo "distribution --release-build-only"
@@ -76,7 +78,7 @@ for name in plain instrumented; do
   fi
 done
 
-# And every build test-linux makes, read from where each is declared, has to be one the
+# And every build test-linux and lint make, read from where each is declared, has to be one the
 # instrumented leg makes for every crate, up to the crate, the test target and the filter.
 bash "$root/scripts/pr-build-commands.sh" >"$scratch/pr-builds" 2>"$scratch/pr-builds.log" \
   || { cat "$scratch/pr-builds.log" >&2; fail "scripts/pr-build-commands.sh failed" "fix what it reports above"; }
@@ -105,7 +107,7 @@ for line in open(sys.argv[2], encoding="utf-8").read().splitlines():
 PY
 if [ -s "$scratch/unwarmed" ]; then
   tr -d '\r' <"$scratch/unwarmed" >&2
-  fail "test-linux makes the builds above, which scripts/warm-rust-cache.sh makes in no shape" "build each of them in scripts/warm-rust-cache.sh with the same flags"
+  fail "test-linux or lint makes the builds above, which scripts/warm-rust-cache.sh makes in no shape" "build each of them in scripts/warm-rust-cache.sh with the same flags"
 fi
 
 for arguments in "--bogus" "--instrumented extra"; do
