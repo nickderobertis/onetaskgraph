@@ -11828,11 +11828,12 @@ fn recorded_unchanged(
         }
 }
 
-/// Whether `body` links the record at `location`: holds it with nothing after it that would make
-/// it another address.
+/// Whether `body` links the record at `location`: holds that address whole, with nothing either
+/// side of it that would make it part of a longer one.
 fn links_to(body: &str, location: &str) -> bool {
     body.match_indices(location).any(|(at, _)| {
-        !body[at + location.len()..].starts_with(|c: char| c.is_alphanumeric() || c == '-')
+        !body[..at].ends_with(|c: char| c.is_alphanumeric() || matches!(c, '/' | ':' | '.' | '-'))
+            && !body[at + location.len()..].starts_with(|c: char| c.is_alphanumeric() || c == '-')
     })
 }
 

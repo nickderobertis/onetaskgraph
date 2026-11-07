@@ -5385,3 +5385,100 @@ fn a_bare_path_to_a_landed_document_is_stored_under_its_title_and_a_repeat_write
     ok(&sandbox, &copy);
     assert_eq!(linear.writes_since(&mark, None), Vec::<String>::new());
 }
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: folders of Markdown and the loopback Linear workspace exercise the engine's copy across two plugins.
+#[test]
+fn every_reference_style_spelling_is_written_inline_on_linear_and_left_elsewhere() {
+    let design = "[Collapsed][] and [shortcut] and [full][t].\n\n`[code][t]` stays, as does \
+         ![alt][img], and a note.[^1]\n\n[Collapsed]: ../tasks/first-task.md#budget-requests\n\
+         [shortcut]: ../tasks/second-task.md#budget-seconds\n\
+         [t]: ../tasks/first-task.md#budget-requests \"A title\"\n\
+         [img]: https://a.example/i.png\n[unused]: https://a.example/unused\n\n\
+         [^1]: The footnote.\n";
+    let sandbox = Sandbox::new();
+    let plans = budget_plan(&sandbox, "plans");
+    let (linear, config) = store(&sandbox, "linear", "linear", None);
+    let (_, folder) = store(&sandbox, "local-md", "folder", None);
+    configure(
+        &sandbox,
+        &[("plans", &plans), ("linear", &config), ("folder", &folder)],
+    );
+    std::fs::write(
+        root_of(&sandbox, "plans").join("documents/D.md"),
+        format!("---\ntitle: Design\nproject: P\n---\n{design}"),
+    )
+    .expect("the design document");
+    let Store::Linear(workspace) = &linear else {
+        unreachable!("a workspace")
+    };
+    workspace.rewrite_markdown_on_write(crate::fixtures::LinearMarkdown::Measured);
+    let landed = copy_budget_plan(&sandbox, "plans", "linear");
+    let link = |key: &str, heading: &str, slug: &str| {
+        format!(
+            "{}#heading-{slug}-{}",
+            landed[key].location(&sandbox),
+            stored_id8(workspace, &landed[key], heading, 0)
+        )
+    };
+    let first = link("first", "Budget requests", "budget-requests");
+    let second = link("second", "Budget seconds", "budget-seconds");
+    let held = linear.raw(&landed["D"]);
+    assert!(
+        held.starts_with(&format!(
+            "[Collapsed](<{first}>) and [shortcut](<{second}>) and [full](<{first}>).\n\n\
+             `[code][t]` stays, as does "
+        )),
+        "{held}"
+    );
+    for gone in ["A title", "[Collapsed]:", "\\[Collapsed\\]:", "\\[t\\]:"] {
+        assert!(!held.contains(gone), "{gone}: {held}");
+    }
+    // An image's definition, one nothing uses and a footnote are no link written inline.
+    for kept in ["i.png", "unused", "The footnote."] {
+        assert!(held.contains(kept), "{kept}: {held}");
+    }
+    // A folder of Markdown keeps every spelling as written.
+    let mark = copy_budget_plan(&sandbox, "plans", "folder");
+    assert_eq!(
+        mark["D"].content(&sandbox).trim_end(),
+        design.trim_end(),
+        "elsewhere nothing is inlined"
+    );
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace exercise the engine's copy across two plugins.
+#[test]
+fn a_follow_ups_answer_changing_a_links_text_or_target_is_refused() {
+    for (from, to) in [
+        ("[the docs]", "[edited]"),
+        ("https://a.example/x", "https://b.example/y"),
+    ] {
+        let sandbox = Sandbox::new();
+        let linear = mutually_linked(&sandbox);
+        std::fs::write(
+            root_of(&sandbox, "plans").join("tasks/first-task.md"),
+            "---\ntitle: First\nstatus: todo\nproject: P\n---\n## Budget requests\n\n\
+             | Second | second-task.md |\n| Docs | [the docs](https://a.example/x) |\n",
+        )
+        .expect("the task");
+        let Store::Linear(workspace) = &linear else {
+            unreachable!("a workspace")
+        };
+        workspace.bend_answers(finishes_the_bare_address, 1, move |_, body| {
+            let held = &mut body["issueUpdate"]["issue"]["description"];
+            let edited = held.as_str().expect("a description").replace(from, to);
+            *held = json!(edited);
+        });
+        let output = sandbox
+            .command()
+            .args(["project", "copy", "plans:P", "--to", "linear", "--json"])
+            .output()
+            .expect("the binary runs");
+        assert_eq!(output.status.code(), Some(4), "{}", stderr(&output));
+        assert!(
+            stderr(&output).contains("did not keep the content") && stderr(&output).contains(to),
+            "{}",
+            stderr(&output)
+        );
+    }
+}
