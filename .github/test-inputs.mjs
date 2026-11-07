@@ -78,6 +78,10 @@ export const policyJourneyReadSet = [
   "scripts/check-real-release-preparation.sh",
   "scripts/check-npm-publish.sh",
   "scripts/check-fixture-discrimination.sh",
+  "crates/onetaskgraph-github-projects-e2e/project.json",
+  "crates/onetaskgraph-github-projects-e2e/lane_runner.py",
+  "crates/onetaskgraph-linear-e2e/project.json",
+  "crates/onetaskgraph-live-janitor/project.json",
 ];
 
 export const policyJourneyFiles = [
@@ -88,6 +92,7 @@ export const policyJourneyFiles = [
   ".github/policy/tests/release-shortcut.test.mjs",
   ".github/policy/tests/reusable.test.mjs",
   ".github/policy/tests/rust-cache-warm.test.mjs",
+  ".github/policy/tests/saved-results.test.mjs",
 ];
 
 // Repository files the budget journeys read, beyond the workflow graph: the root budgets file,
@@ -96,7 +101,7 @@ export const policyJourneyFiles = [
 // name: the release commit and the push it pins are immutable.
 export const budgetJourneyReadSet = [
   "budgets.yaml",
-  ".github/reporting/action-v0.1.2.yml",
+  ".github/reporting/action-v0.2.0.yml",
   ".github/governance.json",
   "justfile",
   "package.json",

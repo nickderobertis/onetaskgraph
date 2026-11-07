@@ -1,16 +1,22 @@
 # The `budgets` job's own budget, which its action checks after its main result upload. The limit
-# is provisional until real runs have measured it. report-job:test records the same figure at the
-# workload below, and report-job:budgets reads that recording back.
+# is an estimate until real runs have measured this workload: jobs before saved results took 10.30 s
+# with the post inside the interval, and the spike measured the saved-results read at 0.47 to 1.02 s
+# and the merged-run lookup at 1.24 to 1.87 s. report-job:test records the same figure at the workload
+# below, and report-job:budgets reads that recording back.
 schema_version: 1
 budgets:
-  # Workload: one budget job with 100 catalog rows and one rolling file of 20 base commits, timed
-  # from cold install through checks, history, comment and main result upload. Its final check and
-  # verdict upload, and runner queue, setup and teardown, are outside the interval.
-  # llmlint: ignore[budgets_track_product_owner_outcomes] The issue explicitly requires the new last job to have its own latency budget beside the existing maximum-CI-job budget.
+  # Workload: one budgets job per pull request push or base push, with 60 catalog rows and one
+  # rolling file of up to 20 base commits, downloading one results artifact of about 50 KB; on a base
+  # push it also reads the merged pull request's run. The job's own judgment, the comment post that
+  # carries it (1.14 to 1.86 s on the spike's runs), its verdict upload, and runner queue, setup and
+  # teardown are outside the interval: it cannot include them in a figure it reports about itself.
+  # llmlint: ignore[budgets_track_product_owner_outcomes] The report job's own time budget sits beside this repository's longest-CI-job budget, the overlap the design that added this job approved. This task narrows its interval and adds no overlap.
   - id: onetaskgraph-budget-report-command-seconds
     description: >-
-      The budget report job from its cold install through the checks, the history read, the comment
-      and the main result upload. It protects the turnaround of the check every pull request waits on.
+      The budget report job from its cold install through the checks, the saved-results read, the
+      history read and the main result upload, the interval ending before the comment post; the
+      breakdown in detail gives install, check, archive and render seconds and the request counts. It
+      protects the turnaround of the check every pull request waits on.
     labels: [ci-report]
     measure: reported
     command: [onebudgetspec-github-action, telemetry, --metric, report-command-seconds, --input, .telemetry/report-job.json]

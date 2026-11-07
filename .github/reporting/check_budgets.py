@@ -21,7 +21,8 @@ def main():
     with tarfile.open(next((tree / 'dist').glob('*.tar.gz'))) as archive:
         archive.extractall(tools, filter='data')
     path = os.pathsep.join([str(tools), str(ROOT / 'node_modules/.bin'), os.environ['PATH']])
-    return subprocess.run(['onebudgetspec', 'check', '.github/reporting/budgets.yaml'], cwd=ROOT,
+    return subprocess.run(['onebudgetspec', 'check', '.github/reporting/budgets.yaml',
+                           '--save-results', 'target/budget-results/report-job-budget-results.json'], cwd=ROOT,
                           env={**os.environ, 'PATH': path}, check=False).returncode
 
 

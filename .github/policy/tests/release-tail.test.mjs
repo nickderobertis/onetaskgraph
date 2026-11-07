@@ -13,7 +13,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { after, before, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { parse, stringify } from "yaml";
@@ -867,7 +867,7 @@ test("the figures script is the unedited create-repo copy its header names", () 
     lines[2],
     "# source: github.com/nickderobertis/dero-skills/skills/bootstrap/create-repo/assets/budgets/actions-budget-figures.sh",
   );
-  assert.equal(lines[3], "# version: 12");
+  assert.equal(lines[3], "# version: 13");
   const digest = lines[4].match(/^# sha256: ([0-9a-f]{64})$/)?.[1];
   const body = lines.slice(5).join("\n");
   assert.equal(
@@ -875,7 +875,7 @@ test("the figures script is the unedited create-repo copy its header names", () 
     digest,
     "the copy was edited in place",
   );
-  assert.equal(digest, "b77b3b6fdccba79eae1db6523122d22eec80ac0738d5b4df03321db600697d3d");
+  assert.equal(digest, "d530d435aead03a443b1ea528db96eef9b97cc343d7eb3fade0b09099bd112ef");
 });
 
 // The reconciliation script, against a stand-in for gh that answers each path with its
@@ -1040,4 +1040,81 @@ test("the release tail selects the owned budgets with their registered commands"
     assert.ok(budget.labels.includes("release-tail"));
     assert.deepEqual(budget.command, command);
   }
+});
+
+// A pull request's own run, through the registered commands: GitHub's job listing is the one thing
+// doubled, and it answers `gh api` itself, the body alone, with the budgets job reading it in progress.
+test("on a pull request's own run the CI-time pair reads that run's jobs and no release", (t) => {
+  const recording = V13.ok.find(
+    (r) => r.name.startsWith("jobs-of-pr-") && r.response.body.jobs.length === 4,
+  );
+  assert.ok(recording, "a pull request's four finished checking jobs are recorded");
+  const runId = recording.response.body.jobs[0].run_id;
+  const jobs = [
+    ...recording.response.body.jobs,
+    {
+      ...recording.response.body.jobs.at(-1),
+      id: recording.response.body.jobs.at(-1).id + 1,
+      name: "budgets",
+      status: "in_progress",
+      conclusion: null,
+      completed_at: null,
+    },
+  ];
+  const body = { total_count: jobs.length, jobs };
+  const double = replay([
+    {
+      name: recording.name,
+      text: JSON.stringify(body),
+      response: { status: 200, body },
+      sidecar: { path: jobsPath(runId) },
+    },
+  ]);
+  const home = join(scratch, `home-${cases++}`);
+  mkdirSync(home);
+  const ran = spawnSync(
+    "onebudgetspec",
+    [
+      "check",
+      "budgets.yaml",
+      "--id",
+      "onetaskgraph-ci-check-time",
+      "--id",
+      "onetaskgraph-ci-job-count",
+      "--output",
+      "json",
+    ],
+    {
+      cwd: checkout(),
+      env: {
+        PATH: [dirname(double.program), ...toolPath, process.env.PATH].join(":"),
+        HOME: home,
+        GH_TOKEN: "replay-token",
+        GITHUB_EVENT_NAME: "pull_request",
+        GITHUB_REPOSITORY: REPOSITORY,
+        GITHUB_RUN_ID: String(runId),
+      },
+      encoding: "utf8",
+      timeout: 120_000,
+    },
+  );
+  const results = Object.fromEntries(
+    JSON.parse(ran.stdout).results.map((result) => [result.id, result]),
+  );
+  const seconds = Math.max(
+    ...recording.response.body.jobs
+      .filter((job) => job.status === "completed" && job.runner_name)
+      .map((job) => ts(job.completed_at) - ts(job.started_at)),
+  );
+  const check = results["onetaskgraph-ci-check-time"];
+  const count = results["onetaskgraph-ci-job-count"];
+  assert.equal(check.actual, seconds, ran.stdout + ran.stderr);
+  assert.equal(check.verdict, seconds > 1800 ? "over" : "within");
+  assert.equal(count.actual, jobs.length, ran.stdout + ran.stderr);
+  assert.equal(count.verdict, jobs.length > 5 ? "over" : "within");
+  assert.deepEqual(double.served(), [jobsPath(runId), jobsPath(runId)], "one read per figure");
+  t.diagnostic(
+    `replayed from ${recording.name}: longest ${check.actual}s of ${check.threshold} (${check.verdict}), ` +
+      `${count.actual} jobs of ${count.threshold} (${count.verdict})`,
+  );
 });

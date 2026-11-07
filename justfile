@@ -48,7 +48,7 @@ pool-maintenance:
 
 # Measure one steady-state pool-maintenance pass against its host-labelled budget.
 pool-maintenance-budget:
-    @bun run onebudgetspec check pool-maintenance/budgets.yaml --label host
+    @bun run onebudgetspec check pool-maintenance/budgets.yaml --label host --save-results target/budget-results/pool-maintenance-budget-results.json
 
 # Fails on any issue: there is no warnings-only mode. The phases are spelled out
 # rather than hidden behind one aggregate target so it is visible from here that the

@@ -372,7 +372,9 @@ const FAMILIES = {
   "test-windows": ["v0-rust-test-windows-Windows_NT-x64-"],
   "test-macos": ["v0-rust-test-macos-Darwin-arm64-"],
 };
-// create-repo's landing commit, 270bea5d287f6fe6a844fd6b882922eacadf6ecf.
+// create-repo's commit afc6829981dc31ad4221fc7cf706916d078ada35, which holds its landing commit
+// 270bea5d287f6fe6a844fd6b882922eacadf6ecf's prune and remote cache unchanged and figures v13,
+// v12 and the pull request's own run together.
 const COPIES = {
   "scripts/actions-cache-prune.mjs": {
     source: "assets/ci/actions-cache-prune.mjs",
@@ -381,8 +383,8 @@ const COPIES = {
   },
   "scripts/actions-budget-figures.sh": {
     source: "assets/budgets/actions-budget-figures.sh",
-    version: 12,
-    sha256: "b77b3b6fdccba79eae1db6523122d22eec80ac0738d5b4df03321db600697d3d",
+    version: 13,
+    sha256: "d530d435aead03a443b1ea528db96eef9b97cc343d7eb3fade0b09099bd112ef",
   },
   "scripts/nx-remote-cache.mjs": {
     source: "assets/ci/nx-remote-cache.mjs",
@@ -663,7 +665,7 @@ test("each way of losing the copies, the cleanup, the saves or the guards is ref
     "a versions file behind": [
       /actions-budget-figures\.versions does not end at this copy/,
       (all) => {
-        all.copies["scripts/actions-budget-figures.versions"] += "13 feed\n";
+        all.copies["scripts/actions-budget-figures.versions"] += "14 feed\n";
       },
     ],
     "a leg without its cleanup": [

@@ -171,12 +171,12 @@ const eventFile = (file) =>
   );
 
 // Biome excludes exactly these upstream-owned copies; this drift test holds them byte-identical.
-// Full-file digests, including headers: remote cache v8, figures v12 and cache prune v1 from
-// dero-skills 270bea5d287f6fe6a844fd6b882922eacadf6ecf; version-free inputs v3 from
+// Full-file digests, including headers: remote cache v8, figures v13 and cache prune v1 from
+// dero-skills afc6829981dc31ad4221fc7cf706916d078ada35; version-free inputs v3 from
 // fe20052d06406bb07869c5236147b6693489d52f (owned Cargo and Python pins).
 const copies = {
   "scripts/actions-budget-figures.sh":
-    "c6a80ccd9051b95c84421505f79dea7b0e8b1b02f1dffcc16a90827b7d400da4",
+    "f4dbf47e81ce3baf9acf92d4e92f284614bf9c6a3774a76f18ed89893ce7d3b0",
   "scripts/actions-cache-prune.mjs":
     "4c7bfd986ddb7e59b395a00eb3bb74892b44b76234d0c2a61d63ddf7a49b37a7",
   "scripts/nx-remote-cache.mjs": "88c72d76565a53bb7c09702255d8fe2be72165d1abcbca48bc125984d140fcf7",

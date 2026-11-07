@@ -1650,18 +1650,28 @@ The capture drives `local-md` and `in-memory` only: no credential or socket.
 
 `ci.yml`'s `budgets` job is the released `onebudgetspec-github-action` alone, after the other jobs
 however they ended, on every pull request and push to main; `.github/reporting` holds its budget
-and `report-job:test`, the journeys that drive it. It judges a command only by what its argv names,
-so **a budget that needs saved telemetry names that record in its command** (last argument, which
-the libtest filter or script ignores): the row then reads unavailable instead of a build starting on
-the runner or the job going red. The figures script refuses extra arguments and the budgets it serves
-need a release, so `enforcement-exclude-labels` lists `release-tail`: each is an unavailable row with
-the script's own message, and is enforced on the release tail as before. On this catalog the job's own budget and
-`onetaskgraph-cache-headroom`, which needs no release and reads the listing with this job's token,
-measure on a real pull request, so those two are all the base history holds until another can run
-here; every other row reads no baseline.
-`onetaskgraph-ci-check-time` carries `report-only` as well, and `report-job:test` proves its figure
-and adverse flag over replayed telemetry; removing that label enforces it only where `release-tail`
-is not excluded too.
+and `report-job:test`, the journeys that drive it. **A pull request's rows are saved results.** Each
+`budgets` target `test-linux` runs passes `--save-results target/budget-results/<project>-budget-results.json`
+(the name is what `.github/nx-policy` holds a cached output to) and declares it in its Nx `outputs`
+where it is cached; `test-linux` uploads the directory as `budget-check-results-test-linux` and the
+`lint` job's release-only `just pool-maintenance-budget` as `budget-check-results-lint`. The other
+platforms run the same targets and upload nothing, so each figure stays a Linux figure.
+`onetaskgraph-ci-check-time` and `onetaskgraph-ci-job-count` read the pull request's own run through
+the figures script. **A push to main runs no test job:** each row takes the merged pull request's
+figure, so a pull request's value and its baseline are one measurement.
+
+**A budget labelled `not-measured-on-pr` has no row and runs no command here, and one line counts
+them.** A pull request can neither measure nor move it, and its check elsewhere is unchanged: the
+release tail, `just gate`, `budgets-host`. Put the label on a budget only once no CI job runs it. A
+row with nothing saved reads `no saved result was found on this run`, naming no cause, because the job
+cannot tell a target this change did not select from a result that was lost. So **a budget that needs
+saved telemetry names that record in its command** (last argument, which the libtest filter or script
+ignores): without a result the row then reads unavailable instead of a build starting on the runner or
+the job going red. `enforcement-exclude-labels` still lists `release-tail`, so the CI-time pair and
+`onetaskgraph-cache-headroom`, which needs no release and reads the listing with this job's token, report
+and enforce nothing here. `onetaskgraph-ci-check-time` carries `report-only` as well, and
+`report-job:test` proves its figure and adverse flag; removing that label enforces it only where
+`release-tail` is not excluded too.
 
 ## Recorded decisions
 
