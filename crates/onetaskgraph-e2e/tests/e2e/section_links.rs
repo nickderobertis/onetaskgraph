@@ -5560,9 +5560,12 @@ fn a_person_relabelling_an_address_linear_titled_is_refused() {
             .output()
             .expect("the binary runs");
         assert_eq!(output.status.code(), Some(4), "{}", stderr(&output));
+        // Refused on the follow-up's own answer, as the person left it, rather than on a later
+        // write of it that Linear stored otherwise again.
+        let row = if issue { "| Second | [" } else { "| Other | [" };
         assert!(
             stderr(&output).contains("did not keep the content")
-                && stderr(&output).contains(&format!("[{label}](https://")),
+                && stderr(&output).contains(&format!("stored: \"{row}{label}](https://")),
             "{}",
             stderr(&output)
         );
