@@ -408,6 +408,14 @@ test("a release's version bump keeps every crate's Cargo closure", () => {
       .replace(`version = "${version}"`, 'version = "99.0.0"')
       .replaceAll(`version = "=${version}"`, 'version = "=99.0.0"'),
   );
+  for (const crate of readdirSync(join(dir, "crates"))) {
+    const member = join(dir, "crates", crate, "Cargo.toml");
+    if (existsSync(member))
+      writeFileSync(
+        member,
+        readFileSync(member, "utf8").replaceAll(`version = "=${version}"`, 'version = "=99.0.0"'),
+      );
+  }
   writeFileSync(
     join(dir, "Cargo.lock"),
     readFileSync(join(dir, "Cargo.lock"), "utf8")
@@ -471,6 +479,8 @@ test("the Cargo closure refuses what it cannot read, leaving Nx no digest to has
     lock,
     '[[package]]\nname = "onetaskgraph"\nversion = "1"\n  dependencies = [\n "x",\n]\n',
   );
+  refused(closure(["--crate", "onetaskgraph"]), 1, /unreadable dependencies list/);
+  writeFileSync(lock, '[[package]]\nname = "onetaskgraph"\nversion = "1"\n"dependencies" = []\n');
   refused(closure(["--crate", "onetaskgraph"]), 1, /unreadable dependencies list/);
   writeFileSync(lock, '[[package]]\nname = "onetaskgraph"\nname = "other"\nversion = "1"\n');
   refused(closure(["--crate", "onetaskgraph"]), 1, /repeats name/);

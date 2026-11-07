@@ -40,9 +40,11 @@ function lockField(block, field) {
 
 // A lock entry's dependencies, one quoted line each; any other shape is refused, never read as none.
 function lockDependencies(block, name) {
-  if (!/^\s*dependencies\b/m.test(block)) return [];
+  const keys = block.match(/^\s*"?dependencies"?\s*=/gm)?.length ?? 0;
+  if (!keys) return [];
   const list = block.match(/^dependencies = \[\n((?: "[^"]+",\n)*)\]$/m);
-  if (!list) throw new Error(`Cargo.lock's entry for ${name} has an unreadable dependencies list`);
+  if (keys > 1 || !list)
+    throw new Error(`Cargo.lock's entry for ${name} has an unreadable dependencies list`);
   return [...list[1].matchAll(/"([^"]+)"/g)].map((match) => match[1]);
 }
 
