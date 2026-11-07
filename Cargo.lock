@@ -1418,6 +1418,7 @@ dependencies = [
 name = "onetaskgraph-github-projects-e2e"
 version = "0.14.4"
 dependencies = [
+ "async-trait",
  "chrono",
  "libc",
  "onebudgetspec-core",

@@ -28717,7 +28717,7 @@ export const runtimeSchemas = {
   "WritePolicyConfig": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "WritePolicyConfig",
-    "description": "The commands a store asks about the public boundary: `write_policy` at the document's\nroot.\n\nBoth are generic command lines rather than a named tool, so the policy behind them stays\nthe caller's. `visibility_command` is handed `{\"repository\": \"<host/owner/name>\"}` on its\nstandard input and answers `{\"visibility\": \"public\" | \"private\" | \"unknown\"}`;\n`check_command` is handed a whole [`PublicWriteInput`](crate::boundary::PublicWriteInput)\nand passes a write only by exiting 0 with `{\"verdict\": \"pass\"}`. Either may be left out:\nwithout a visibility command every repository is `unknown`, which is private, and without\na check command no write to a public destination passes.\n\n`sanitize_command` is handed a whole\n[`PublicSanitizeInput`](crate::boundary::PublicSanitizeInput) and answers the write's\nrewritable entries with every declared replacement applied, and its verdict; with it, every\nscreened write is put to it **in place of** `check_command`, and what it answers is what is\nwritten. `terms_command` answers a scope's resolved terms, which only `sources sanitize`\nasks for. `replacements` is the caller's replacement layer, sent with every sanitisation\nand above every declaration level the policy reads, a later entry winning; it is refused\nat load without a `sanitize_command`, because nothing would apply it.",
+    "description": "The commands a store asks about the public boundary: `write_policy` at the document's\nroot.\n\nBoth are generic command lines rather than a named tool, so the policy behind them stays\nthe caller's. `visibility_command` is handed `{\"repository\": \"<host/owner/name>\"}` on its\nstandard input and answers `{\"visibility\": \"public\" | \"private\" | \"unknown\"}`;\n`check_command` is handed a whole [`PublicWriteInput`](crate::boundary::PublicWriteInput)\nand passes a write only by exiting 0 with `{\"verdict\": \"pass\"}`. Either may be left out:\nwithout a visibility command every repository is `unknown`, which is private, and without\na check command no write to a public destination passes.\n\n`sanitize_command` is handed a whole\n[`PublicSanitizeInput`](crate::boundary::PublicSanitizeInput) and answers the write's\nrewritable entries with every declared replacement applied, and its verdict; with it, every\nscreened write is put to it **in place of** `check_command`, and what it answers is what is\nwritten. `terms_command` answers a scope's resolved terms, which only `sources sanitize`\nasks for. `replacements` is the caller's replacement layer, sent with every sanitisation\nand above every declaration level the policy reads, a later entry winning; it is refused\nat load without a `sanitize_command`, because nothing would apply it.\n\n`sanitize_stored_on_write` opts a store into the read-first guard: a narrow write to a task\nis screened with the task and every comment on it as stored, and what that rewrites is\nwritten back first. Off, a narrow write screens only what it writes and a stored term is left\nfor `sources sanitize`. It is refused at load without a `sanitize_command` for the same\nreason as `replacements`; a linking caller's own policy opts in through\n`Engine::with_sanitize_stored_on_write`.",
     "type": "object",
     "properties": {
       "visibility_command": {
@@ -28771,6 +28771,11 @@ export const runtimeSchemas = {
           "$ref": "#/$defs/Replacement"
         },
         "default": []
+      },
+      "sanitize_stored_on_write": {
+        "description": "Whether a narrow write to a task first rewrites the terms already stored on it.",
+        "type": "boolean",
+        "default": false
       }
     },
     "additionalProperties": false,
