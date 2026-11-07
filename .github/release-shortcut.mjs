@@ -4,6 +4,8 @@ import { fileURLToPath } from "node:url";
 
 // Rust coverage may be omitted only when main already proved the same source tree.
 // Functional tests and SDK coverage still run. Unknown history or edits require coverage.
+// It stays beside result replay because this is the tier replay cannot serve: raw Rust profiles
+// and objects are uncached, so without it a release would re-instrument what main measured.
 const RUN = "run";
 const SKIP = "skip";
 const decision = (rust_coverage, reason) => ({ schema_version: 1, rust_coverage, reason });

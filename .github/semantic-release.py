@@ -1,5 +1,9 @@
 # llmlint: ignore-file[async_typed_clients_at_boundaries] This CLI compares local Git blobs and invokes a local parser, with no hosted API or shared service client; sequential subprocess execution keeps one conservative classification and matches the repository guard convention.
-"""Compare release-owned values; all other parsed fields must remain identical."""
+"""Compare release-owned values; all other parsed fields must remain identical.
+
+Kept beside result replay: it is what lets the Rust coverage tier, which is uncached, and the
+warmer's macOS leg, which holds the macOS budget of four, skip a tree that changed versions alone.
+"""
 import json
 from dataclasses import dataclass
 import subprocess

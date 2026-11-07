@@ -394,7 +394,10 @@ function checkout(budgets = readFileSync(join(root, "budgets.yaml"), "utf8")) {
   // These historical releases predate cache receipts. The cache journey tests that CLI
   // separately with its real executions and receipts; this replay owns the other figures.
   const document = budgetDocument(budgets);
-  document.budgets = document.budgets.filter((budget) => budget.id !== "onetaskgraph-nx-cache-use");
+  // Nor do they hold a cache listing; rust-cache-warm.test.mjs replays the headroom's own.
+  document.budgets = document.budgets.filter(
+    (budget) => !["onetaskgraph-nx-cache-use", "onetaskgraph-cache-headroom"].includes(budget.id),
+  );
   writeFileSync(join(dir, "budgets.yaml"), stringify(document));
   copyFileSync(
     join(root, "scripts/actions-budget-figures.sh"),
@@ -1001,10 +1004,26 @@ process.stdout.write(text);
   }
 });
 
-test("the release tail selects both owned budgets with their registered commands", () => {
+test("the release tail selects the owned budgets with their registered commands", () => {
   const budgets = budgetDocument(readFileSync(join(root, "budgets.yaml"), "utf8")).budgets;
   for (const [id, command] of [
     ["onetaskgraph-nx-cache-use", ["bash", "scripts/actions-budget-figures.sh", "cache-use"]],
+    [
+      "onetaskgraph-cache-headroom",
+      [
+        "bash",
+        "scripts/actions-budget-figures.sh",
+        "cache-headroom",
+        "--family",
+        "v0-rust-test-linux-Linux-x64-",
+        "--family",
+        "v0-rust-test-windows-Windows_NT-x64-",
+        "--family",
+        "v0-rust-test-macos-Darwin-arm64-",
+        "--family",
+        "v0-rust-release-plz-Linux-x64-",
+      ],
+    ],
     [
       "onetaskgraph-release-cycle-time",
       [

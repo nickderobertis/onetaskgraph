@@ -928,7 +928,7 @@ $2
     fi
     reset_fixture
 
-    # The version-only diff is why the decision exists: Cargo.lock is a `sharedGlobals`
+    # The version-only diff is why the decision exists: Cargo.lock is a global selection
     # input, so Nx alone selects every project — and the decision's own `--exclude` is what
     # takes the lane back out.
     fixture_version_only

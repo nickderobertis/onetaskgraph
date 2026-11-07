@@ -79,6 +79,10 @@ NO_SAVED_RESULT = 'no saved result was found on this run'
 # Off a pull request's own run the CI-time pair reads a release, and this job holds no onevcs.
 FIGURES_NEED_ONEVCS = 'onevcs is not on PATH'
 LIVE_SESSION = BudgetId('github-live-session-points')
+# The one row beyond the CI-time pair whose command runs in the job: it needs no release and no saved
+# result, and what it reads is GitHub's cache listing.
+HEADROOM = BudgetId('onetaskgraph-cache-headroom')
+CACHE_LISTING_REFUSED = 'actions/cache/storage-limit answered HTTP'
 # ci.yml's budgets targets test-linux runs, by the file each saves. Nx caches the three whose names
 # hold no test of its own to re-run; the other two always execute.
 CACHED_SAVING_TARGETS = {'onetaskgraph-live-janitor:budgets': 'onetaskgraph-live-janitor-budget-results.json',
@@ -585,11 +589,14 @@ class ProductionCatalog(unittest.TestCase):
         reasons = {entry['id']: entry['reason'] for entry in run['unavailable']}
         markdown = job.markdown()
         self.assertIn(job.sha, markdown)
-        for identifier in shown() - set(verdicts):
+        for identifier in shown() - set(verdicts) - {HEADROOM}:
             self.assertEqual(reasons[identifier], NO_SAVED_RESULT, identifier)
             row = table_row(markdown, identifier)
             self.assertIn('unavailable', row, row)
             self.assertIn(NO_SAVED_RESULT, row, row)
+        # Its command does run here; this job's double holds no cache listing, and the read says so.
+        self.assertIn(CACHE_LISTING_REFUSED, reasons[HEADROOM])
+        self.assertIn(CACHE_LISTING_REFUSED, table_row(markdown, HEADROOM))
         self.assertIn('report-only', table_row(markdown, CHECK_TIME))
         assert_left_out_and_counted(self, job)
 

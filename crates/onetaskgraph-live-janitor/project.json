@@ -4,6 +4,11 @@
   "projectType": "library",
   "tags": ["lang:rust", "layer:testing"],
   "//": "Unpublished scheduled cleanup executable. Test and coverage invoke offline tests only; neither runs the janitor against GitHub.",
+  "namedInputs": {
+    "cargoInputs": [
+      { "runtime": "node scripts/nx-cargo-closure.mjs --crate onetaskgraph-live-janitor" }
+    ]
+  },
   "targets": {
     "bootstrap": {
       "executor": "nx:run-commands",

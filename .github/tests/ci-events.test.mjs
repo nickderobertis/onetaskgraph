@@ -29,7 +29,7 @@ const UNCHANGED = {
   "release-plz.yml": "009bb4f705c0d9ce349f887d92b47de09059897ccbce07f166f1021fcec36183",
   "linear-documents.yml": "4c00908a0f0e78dd5927e17d989ef54440eec1f0237317755c4c241a3894a1ab",
   "live-janitor.yml": "12f972eff5e7402be7c9d87de5d5a01191ef96499605d01bc7f4f957001feebb",
-  "rust-cache-warm.yml": "7c51576d0077c5d6fb34ef30fd6fb992b4b36e142fc6997d819779daf8a54335",
+  "rust-cache-warm.yml": "2592cb8dba1e30f4741304b3d59e711cf895bec22073233b2683cdbba0bb412c",
 };
 const WORKFLOWS = ["ci.yml", "release.yml", "visual-docs.yml", ...Object.keys(UNCHANGED)];
 

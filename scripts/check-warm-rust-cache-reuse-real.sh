@@ -79,7 +79,8 @@ fn answers() {
 }
 RS
 cat >"$crate/project.json" <<'JSON'
-{"targets": {"test": {"options": {"command": "cargo test --quiet -p onetaskgraph-plugin-api --all-features --locked"}}}}
+{"targets": {"test": {"options": {"command": "cargo test --quiet -p onetaskgraph-plugin-api --all-features --locked"}},
+  "typecheck": {"options": {"command": "cargo check --quiet -p onetaskgraph-plugin-api --all-targets --all-features --locked"}}}}
 JSON
 cat >"$dep/Cargo.toml" <<'TOML'
 [package]

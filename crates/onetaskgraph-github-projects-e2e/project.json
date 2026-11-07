@@ -11,6 +11,11 @@
     "onetaskgraph-github-live"
   ],
   "namedInputs": {
+    "cargoInputs": [
+      {
+        "runtime": "node scripts/nx-cargo-closure.mjs --crate onetaskgraph-github-projects-e2e --crate onetaskgraph"
+      }
+    ],
     "default": [
       "{projectRoot}/**/*",
       "!{projectRoot}/Cargo.toml",
@@ -29,7 +34,7 @@
       "{workspaceRoot}/crates/onetaskgraph-local-md/**/*",
       "!{workspaceRoot}/crates/onetaskgraph-local-md/CHANGELOG.md",
       "!{workspaceRoot}/crates/onetaskgraph-local-md/Cargo.toml",
-      "versionFreeCargo"
+      "cargoInputs"
     ]
   },
   "targets": {

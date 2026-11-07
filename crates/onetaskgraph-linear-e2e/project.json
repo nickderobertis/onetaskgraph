@@ -6,6 +6,11 @@
   "//": "A test-only member holding only tests/, which spawn the binary onetaskgraph:build made. Its implicitDependencies are the plugin crate it exercises, so a change to that plugin selects it and a change to a sibling plugin does not; the binary, the engine and the shared harness it also exercises are named in its own `default` named input instead, which Nx treats as touching this project when they change without the graph edge that would make every plugin's change select it through them. scripts/check-nx-graph.sh reconciles both halves against the Cargo graph, and scripts/check-affected-selection.sh proves the selection against real Nx.",
   "implicitDependencies": ["onetaskgraph-linear", "onetaskgraph-plugin-api", "onetaskgraph-live"],
   "namedInputs": {
+    "cargoInputs": [
+      {
+        "runtime": "node scripts/nx-cargo-closure.mjs --crate onetaskgraph-linear-e2e --crate onetaskgraph"
+      }
+    ],
     "default": [
       "{projectRoot}/**/*",
       "!{projectRoot}/Cargo.toml",
@@ -21,7 +26,7 @@
       "{workspaceRoot}/crates/onetaskgraph-local-md/**/*",
       "!{workspaceRoot}/crates/onetaskgraph-local-md/CHANGELOG.md",
       "!{workspaceRoot}/crates/onetaskgraph-local-md/Cargo.toml",
-      "versionFreeCargo"
+      "cargoInputs"
     ]
   },
   "targets": {

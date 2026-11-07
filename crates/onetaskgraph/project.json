@@ -10,6 +10,9 @@
     "onetaskgraph-plugin-api",
     "onetaskgraph-status-options"
   ],
+  "namedInputs": {
+    "cargoInputs": [{ "runtime": "node scripts/nx-cargo-closure.mjs --crate onetaskgraph" }]
+  },
   "targets": {
     "bootstrap": {
       "executor": "nx:run-commands",

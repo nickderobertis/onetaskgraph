@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build what test-linux, test-windows and test-macos build, and run nothing.
+# Build what lint, test-linux, test-windows and test-macos build, and run nothing.
 #
 #   scripts/warm-rust-cache.sh [--instrumented]
 #
@@ -17,6 +17,8 @@
 #   crates' `test` targets build them;
 #   with --instrumented (Linux), the same under cargo-llvm-cov, exactly as
 #   scripts/rust-coverage.sh builds them, with a filter that selects no test;
+#   with --instrumented (Linux), every crate's `lint` and `typecheck` compile lines, because
+#   `lint` restores test-linux's family;
 #   with --instrumented (Linux), the crate publication's packaging verification: every
 #   publishable crate packaged and built from its packaged sources, under the RUSTFLAGS and in
 #   the target directory scripts/release_cd.py gives `cargo publish`, as release-cd's test 23
@@ -73,6 +75,14 @@ for crate in $crates; do
     cargo llvm-cov --no-report nextest --package "$crate" --all-features --locked \
       -E 'none()' --no-tests=pass \
       || fatal "building $crate's instrumented test units failed" "$next"
+    # What ci.yml's `lint` compiles, each crate's `lint` and `typecheck` commands as written:
+    # scripts/check-warm-rust-cache.sh holds these lines to them.
+    # llmlint: ignore-block[work_goes_through_command_surface] Those targets are cached Nx targets, and a replay would compile nothing into the target directory this leg exists to save, so the warmer invokes cargo as it does for every other build here.
+    cargo clippy --quiet -p "$crate" --all-targets --all-features --locked -- -D warnings \
+      || fatal "linting $crate failed" "$next"
+    cargo check --quiet -p "$crate" --all-targets --all-features --locked \
+      || fatal "checking $crate failed" "$next"
+    # llmlint: ignore-end[work_goes_through_command_surface]
   fi
 done
 

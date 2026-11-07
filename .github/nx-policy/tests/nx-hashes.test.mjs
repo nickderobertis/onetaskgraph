@@ -5,6 +5,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   symlinkSync,
@@ -247,6 +248,13 @@ test("Nx's own hash file details retain every original cached target's file inpu
         `${id}: only the approved Rust coverage target becomes uncached`,
       );
       const covered = new Set(details.inputs.files);
+      // A task outside the Rust crates reads no Cargo file unless a digest above names it, which
+      // is the narrowing; the test below proves each closure against cargo's own answer.
+      const cargoFile = (file) => /(^|\/)Cargo\.(toml|lock)$/.test(file);
+      if (Object.keys(details.nodes).some((key) => key.includes("nx-cargo-closure.mjs")))
+        for (const file of tracked.filter(cargoFile)) covered.add(file);
+      else if (!/^onetaskgraph[^:]*:/.test(id))
+        for (const file of task.inputs.files.filter(cargoFile)) covered.add(file);
       for (const key of Object.keys(details.nodes)) {
         const runtime = key.match(
           /^runtime:node scripts\/nx-version-free-inputs\.mjs --ecosystem (cargo|npm|python|files)(?: --keep-version)?$/,
@@ -266,6 +274,254 @@ test("Nx's own hash file details retain every original cached target's file inpu
         `${ref}/${id}: original files lost from raw or canonical Nx inputs`,
       );
     }
+});
+
+// Cargo's own answer to which packages a workspace crate reaches: normal, build and dev edges
+// across every feature and target. Held beside scripts/nx-cargo-closure.mjs, not read from it.
+function cargoClosures(dir) {
+  const { packages, resolve } = JSON.parse(
+    command(dir, "cargo", [
+      "metadata",
+      "--format-version",
+      "1",
+      "--locked",
+      "--offline",
+      "--all-features",
+    ]),
+  );
+  const nodes = new Map(resolve.nodes.map((node) => [node.id, node]));
+  const closures = new Map();
+  for (const crate of packages.filter((entry) => !entry.source)) {
+    const reached = new Set();
+    const pending = [crate.id];
+    while (pending.length) {
+      const id = pending.pop();
+      if (reached.has(id)) continue;
+      reached.add(id);
+      pending.push(...nodes.get(id).dependencies);
+    }
+    closures.set(
+      crate.name,
+      new Set([...reached].map((id) => packages.find((entry) => entry.id === id).name)),
+    );
+  }
+  return closures;
+}
+// Whether a task reads one package's entry in `file`: as that raw file, by the whole Cargo
+// digest, or by a closure that cargo says reaches the package.
+function readsPackage(task, file, name, closures) {
+  if (task.inputs.files.includes(file)) return true;
+  return Object.keys(task.nodes).some((key) => {
+    if (/nx-version-free-inputs\.mjs --ecosystem cargo/.test(key)) return true;
+    const crates = key.match(/nx-cargo-closure\.mjs (.*)$/)?.[1].match(/--crate (\S+)/g);
+    return crates?.some((flag) => closures.get(flag.split(" ")[1])?.has(name));
+  });
+}
+
+test("a Cargo edit moves exactly the tasks reading it, and a tool version moves every task", () => {
+  const dir = fixture("cargo-narrowing", "HEAD", true);
+  const ids = selected(dir);
+  const initial = hashes(dir, ids);
+  const cached = ids.filter((id) => initial[id].definition.cache === true);
+  const closures = cargoClosures(dir);
+  const edit = (file, change) => {
+    const original = readFileSync(join(dir, file), "utf8");
+    const changed = change(original);
+    assert.notEqual(changed, original, `${file}: the edit took`);
+    writeFileSync(join(dir, file), changed);
+    const after = hashes(dir, cached);
+    writeFileSync(join(dir, file), original);
+    return Object.fromEntries(cached.map((id) => [id, after[id].hash !== initial[id].hash]));
+  };
+
+  // An e2e suite's manifest: its own tasks move; a crate's and an SDK's text tasks stay.
+  for (const crate of ["onetaskgraph-linear-e2e", "onetaskgraph-github-projects-e2e"]) {
+    const moved = edit(
+      `crates/${crate}/Cargo.toml`,
+      (body) => `${body}\n[package.metadata.nx-mutation]\nvalue = 1\n`,
+    );
+    for (const id of cached) {
+      const reads = readsPackage(initial[id], `crates/${crate}/Cargo.toml`, crate, closures);
+      assert.equal(moved[id], reads, `${crate} manifest: ${id} ${reads ? "reads it" : "does not"}`);
+    }
+    for (const id of [`${crate}:test`, `${crate}:lint`]) assert.ok(moved[id], `${id} moves`);
+    for (const id of [
+      "onetaskgraph-core:test",
+      "onetaskgraph-plugin-api:lint",
+      "onetaskgraph:test",
+      "sdk-python:format-check",
+      "sdk-typescript:lint",
+    ])
+      assert.equal(moved[id], false, `${crate} manifest: ${id} keeps its hash`);
+  }
+
+  // A lock entry a suite reaches and the plugin API does not.
+  const lock = "Cargo.lock";
+  const entry = (name, body) =>
+    new RegExp(`(\\[\\[package\\]\\]\\nname = "${name}"\\nversion = "[^"]+"\\n)`).exec(body);
+  const body = readFileSync(join(dir, lock), "utf8");
+  const third = (crate, without) =>
+    [...closures.get(crate)].find(
+      (name) => !closures.has(name) && !closures.get(without).has(name) && entry(name, body),
+    );
+  const narrow = third("onetaskgraph-github-projects-e2e", "onetaskgraph-core");
+  assert.ok(narrow, "a third-party package only that suite's closure reaches");
+  const moved = edit(lock, (text) =>
+    text.replace(entry(narrow, text)[1], (found) => `${found}# nx-mutation\n`),
+  );
+  for (const id of cached)
+    assert.equal(moved[id], readsPackage(initial[id], lock, narrow, closures), `${narrow}: ${id}`);
+  assert.ok(moved["onetaskgraph-github-projects-e2e:test"], `${narrow}: the suite moves`);
+  assert.equal(moved["onetaskgraph-plugin-api:test"], false, `${narrow}: the API keeps its hash`);
+  for (const id of ["sdk-python:lint", "sdk-typescript:format-check", "github-nx-policy:lint"])
+    assert.equal(moved[id], false, `${narrow}: ${id} reads no lock file`);
+
+  // A tool version is read by every cached task, so nothing above may have cost it.
+  const tools = edit(".tool-versions", (text) => text.replace(/^just .*$/m, "just 9.9.9"));
+  assert.deepEqual(
+    cached.filter((id) => !tools[id]),
+    [],
+    "a tool version moves every cached task",
+  );
+});
+
+test("a release's version bump keeps every crate's Cargo closure", () => {
+  const dir = fixture("cargo-closure-release", "HEAD", true);
+  const run = (crate) =>
+    command(dir, process.execPath, ["scripts/nx-cargo-closure.mjs", "--crate", crate]).trim();
+  const crates = [...cargoClosures(dir).keys()];
+  assert.equal(
+    crates.length,
+    readdirSync(join(dir, "crates")).filter((name) =>
+      existsSync(join(dir, "crates", name, "Cargo.toml")),
+    ).length,
+    "every workspace crate",
+  );
+  const before = crates.map(run);
+  const version = readFileSync(join(dir, "Cargo.toml"), "utf8").match(/^version = "([^"]+)"$/m)[1];
+  // As release-plz writes it: the workspace's version, the exact sibling pins beside each `path`,
+  // and each workspace crate's lock entry, which alone has no `source`.
+  const manifest = readFileSync(join(dir, "Cargo.toml"), "utf8");
+  writeFileSync(
+    join(dir, "Cargo.toml"),
+    manifest
+      .replace(`version = "${version}"`, 'version = "99.0.0"')
+      .replaceAll(`version = "=${version}"`, 'version = "=99.0.0"'),
+  );
+  for (const crate of readdirSync(join(dir, "crates"))) {
+    const member = join(dir, "crates", crate, "Cargo.toml");
+    if (existsSync(member))
+      writeFileSync(
+        member,
+        readFileSync(member, "utf8")
+          .replace(`version = "${version}"`, 'version = "99.0.0"')
+          .replaceAll(`version = "=${version}"`, 'version = "=99.0.0"'),
+      );
+  }
+  writeFileSync(
+    join(dir, "Cargo.lock"),
+    readFileSync(join(dir, "Cargo.lock"), "utf8")
+      .split("[[package]]\n")
+      .map((block) =>
+        block.includes("source = ")
+          ? block
+          : block.replace(`version = "${version}"`, 'version = "99.0.0"'),
+      )
+      .join("[[package]]\n"),
+  );
+  assert.deepEqual(crates.map(run), before, "a version alone moves no closure");
+  // A requirement that is more than the release's own version is a real input, here as in the
+  // whole digest: relaxing a sibling's exact pin moves both.
+  const whole = () =>
+    command(dir, process.execPath, ["scripts/nx-version-free-inputs.mjs", "--ecosystem", "cargo"]);
+  const wholeBefore = whole();
+  writeFileSync(
+    join(dir, "Cargo.toml"),
+    readFileSync(join(dir, "Cargo.toml"), "utf8").replace(
+      'crates/onetaskgraph-plugin-api", version = "=99.0.0"',
+      'crates/onetaskgraph-plugin-api", version = "^99.0.0"',
+    ),
+  );
+  assert.notEqual(run("onetaskgraph-linear"), before[crates.indexOf("onetaskgraph-linear")]);
+  assert.notEqual(whole(), wholeBefore, "the whole digest reads the same requirement");
+});
+
+test("the Cargo closure refuses what it cannot read, leaving Nx no digest to hash", () => {
+  const dir = fixture("cargo-closure-refusals", "HEAD", true);
+  const closure = (args, cwd = dir) =>
+    spawnSync(process.execPath, [join(dir, "scripts/nx-cargo-closure.mjs"), ...args], {
+      cwd,
+      env: { ...environment },
+      encoding: "utf8",
+    });
+  const refused = (result, status, says) => {
+    assert.equal(result.status, status, result.stderr);
+    assert.equal(result.stdout, "", "no digest");
+    assert.match(result.stderr, says);
+    assert.match(result.stderr, /next: /);
+  };
+  refused(closure(["--crates", "x"]), 2, /cannot read the arguments '--crates x'/);
+  refused(closure(["--crate", "nope"]), 1, /nope is no workspace crate/);
+  const outside = mkdtempSync(join(scratch, "not-a-repository-"));
+  refused(closure(["--crate", "onetaskgraph"], outside), 1, /nx-cargo-closure: /);
+  const memberManifest = join(dir, "crates/onetaskgraph-live/Cargo.toml");
+  const memberBody = readFileSync(memberManifest, "utf8");
+  writeFileSync(
+    memberManifest,
+    memberBody.replace(/^name = "onetaskgraph-live"$/m, 'name = "onetaskgraph"'),
+  );
+  refused(closure(["--crate", "onetaskgraph"]), 1, /both name onetaskgraph/);
+  writeFileSync(
+    memberManifest,
+    `[lib]\nname = "x"\n${memberBody.replace("[package]", "[package.other]")}`,
+  );
+  refused(closure(["--crate", "onetaskgraph"]), 1, /names no package in its \[package\] table/);
+  writeFileSync(memberManifest, memberBody);
+  const lock = join(dir, "Cargo.lock");
+  const body = readFileSync(lock, "utf8");
+  // Ambiguous: a dependency naming only a name that two locked packages share.
+  writeFileSync(
+    lock,
+    body.replace(
+      /\[\[package\]\]\nname = "onetaskgraph"\n/,
+      (found) => `[[package]]\nname = "onetaskgraph"\nversion = "0.0.1"\n\n${found}`,
+    ),
+  );
+  refused(closure(["--crate", "onetaskgraph"]), 1, /names onetaskgraph, which locks 2 packages/);
+  writeFileSync(
+    lock,
+    'version = 4\n[[package]]\nname = "onetaskgraph"\nversion = "1"\ndependencies = ["x"]\n',
+  );
+  refused(closure(["--crate", "onetaskgraph"]), 1, /unreadable dependencies list/);
+  writeFileSync(
+    lock,
+    'version = 4\n[[package]]\nname = "onetaskgraph"\nversion = "1"\n  dependencies = [\n "x",\n]\n',
+  );
+  refused(closure(["--crate", "onetaskgraph"]), 1, /an unexpected line: {3}dependencies/);
+  writeFileSync(
+    lock,
+    'version = 4\n[[package]]\nname = "onetaskgraph"\nversion = "1"\n"dependencies" = []\n',
+  );
+  refused(closure(["--crate", "onetaskgraph"]), 1, /an unexpected line: "dependencies"/);
+  writeFileSync(
+    lock,
+    'unexpected = bare\nversion = 4\n[[package]]\nname = "onetaskgraph"\nversion = "1"\n',
+  );
+  refused(closure(["--crate", "onetaskgraph"]), 1, /an unexpected line: unexpected = bare/);
+  writeFileSync(lock, 'version = 999\n\n[[package]]\nname = "onetaskgraph"\nversion = "1"\n');
+  refused(closure(["--crate", "onetaskgraph"]), 1, /lock file format version 999/);
+  writeFileSync(
+    lock,
+    'version = 4\n[[package]]\nname = "onetaskgraph"\nname = "other"\nversion = "1"\n',
+  );
+  refused(closure(["--crate", "onetaskgraph"]), 1, /repeats name/);
+  writeFileSync(
+    lock,
+    'version = 4\n[[package]]\nname = "onetaskgraph"\nversion = "1"\nsource = bare\n',
+  );
+  refused(closure(["--crate", "onetaskgraph"]), 1, /an unexpected line: source = bare/);
+  writeFileSync(lock, 'version = 4\n[[package]]\nsource = "x"\n');
+  refused(closure(["--crate", "onetaskgraph"]), 1, /a package with no name or version/);
 });
 
 function requireMoved(before, after, ids, rule) {

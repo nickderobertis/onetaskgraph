@@ -55,6 +55,14 @@ export const policyJourneyReadSet = [
   "scripts/ci-job.sh",
   "scripts/project.json",
   "justfile",
+  // rust-cache-warm.test.mjs runs the copied prune and headroom over a recorded listing.
+  "budgets.yaml",
+  "scripts/actions-cache-prune.mjs",
+  "scripts/actions-cache-prune.versions",
+  "scripts/actions-budget-figures.sh",
+  "scripts/actions-budget-figures.versions",
+  "scripts/nx-remote-cache.mjs",
+  "scripts/nx-remote-cache.versions",
   // Exactly the scripts:distribution-check and distribution-test guards; policy/tests/inventory.test.mjs holds the list to it.
   "scripts/check-distribution-contract.sh",
   "scripts/check-distribution-contract-enforced.sh",
