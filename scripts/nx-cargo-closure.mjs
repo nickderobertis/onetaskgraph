@@ -28,6 +28,16 @@ function requested(args) {
   return crates.length ? crates : null;
 }
 
+// One scalar of a lock entry, or undefined; a repeated or unquoted one is refused.
+function lockField(block, field) {
+  const lines = block.split("\n").filter((line) => new RegExp(`^\\s*${field}\\s*=`).test(line));
+  if (lines.length > 1) throw new Error(`Cargo.lock's entry repeats ${field}`);
+  if (!lines.length) return undefined;
+  const value = lines[0].match(new RegExp(`^${field} = "([^"]+)"$`))?.[1];
+  if (!value) throw new Error(`Cargo.lock's entry has an unreadable ${field}: ${lines[0]}`);
+  return value;
+}
+
 // A lock entry's dependencies, one quoted line each; any other shape is refused, never read as none.
 function lockDependencies(block, name) {
   if (!/^\s*dependencies\b/m.test(block)) return [];
@@ -41,10 +51,10 @@ function lockDependencies(block, name) {
 function lockPackages(text) {
   const packages = new Map();
   for (const block of text.split("[[package]]\n").slice(1)) {
-    const name = block.match(/^name = "([^"]+)"$/m)?.[1];
-    const version = block.match(/^version = "([^"]+)"$/m)?.[1];
+    const name = lockField(block, "name");
+    const version = lockField(block, "version");
     if (!name || !version) throw new Error("Cargo.lock holds a package with no name or version");
-    const source = block.match(/^source = "([^"]+)"$/m)?.[1] ?? "";
+    const source = lockField(block, "source") ?? "";
     const dependencies = lockDependencies(block, name);
     const id = `${name} ${version} ${source}`;
     if (packages.has(id)) throw new Error(`Cargo.lock locks ${id} twice`);
@@ -87,18 +97,20 @@ function closure(crates, packages, members) {
   return [...reached.values()].sort((a, b) => (a.id < b.id ? -1 : 1));
 }
 
-// A manifest with each workspace crate's version blanked: the package's own, the workspace's,
-// and any written beside a `path`, which is how a sibling is required.
-function versionFree(text) {
+// A manifest with the workspace's own version blanked: the package's, the workspace's, and a
+// sibling's requirement beside a `path`, its operator kept. Any other version is a real input.
+function versionFree(text, release) {
+  const quoted = release.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const own = new RegExp(`\\bversion\\s*=\\s*"([=^~<>]*)${quoted}"`);
   let table = "";
   return text
     .split("\n")
     .map((line) => {
       table = line.match(/^\s*\[+([^\]]+)\]+/)?.[1]?.trim() ?? table;
-      if (["package", "workspace.package"].includes(table))
-        return line.replace(/^(\s*version\s*=\s*)"[^"]*"/, '$1""');
-      return /\bpath\s*=/.test(line)
-        ? line.replace(/\bversion\s*=\s*"[^"]*"/, 'version = ""')
+      const packaged =
+        ["package", "workspace.package"].includes(table) && /^\s*version\s*=/.test(line);
+      return packaged || /\bpath\s*=/.test(line)
+        ? line.replace(own, 'version = "$1<version>"')
         : line;
     })
     .join("\n");
@@ -134,14 +146,17 @@ try {
     members.set(name, path);
   }
   const packages = lockPackages(readFileSync("Cargo.lock", "utf8"));
-  const parts = [["Cargo.toml", versionFree(readFileSync("Cargo.toml", "utf8"))]];
+  const root = readFileSync("Cargo.toml", "utf8");
+  const release = root.match(/^\[workspace\.package\]\n(?:[^[].*\n)*?version = "([^"]+)"$/m)?.[1];
+  if (!release) throw new Error("the root Cargo.toml states no [workspace.package] version");
+  const parts = [["Cargo.toml", versionFree(root, release)]];
   for (const entry of closure(crates, packages, members)) {
     const path = members.get(entry.name);
     // A workspace crate's lock entry differs from a release to the next by its version alone.
     if (path && !entry.block.includes("source = "))
       parts.push(
-        [entry.name, entry.block.replace(/^version = "[^"]*"$/m, 'version = ""')],
-        [path, versionFree(readFileSync(path, "utf8"))],
+        [entry.name, entry.block.replace(`version = "${release}"`, 'version = "<version>"')],
+        [path, versionFree(readFileSync(path, "utf8"), release)],
       );
     else parts.push([entry.id, entry.block]);
   }

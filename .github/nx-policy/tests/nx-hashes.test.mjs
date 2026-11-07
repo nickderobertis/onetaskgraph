@@ -420,6 +420,20 @@ test("a release's version bump keeps every crate's Cargo closure", () => {
       .join("[[package]]\n"),
   );
   assert.deepEqual(crates.map(run), before, "a version alone moves no closure");
+  // A requirement that is more than the release's own version is a real input, here as in the
+  // whole digest: relaxing a sibling's exact pin moves both.
+  const whole = () =>
+    command(dir, process.execPath, ["scripts/nx-version-free-inputs.mjs", "--ecosystem", "cargo"]);
+  const wholeBefore = whole();
+  writeFileSync(
+    join(dir, "Cargo.toml"),
+    readFileSync(join(dir, "Cargo.toml"), "utf8").replace(
+      'crates/onetaskgraph-plugin-api", version = "=99.0.0"',
+      'crates/onetaskgraph-plugin-api", version = "^99.0.0"',
+    ),
+  );
+  assert.notEqual(run("onetaskgraph-linear"), before[crates.indexOf("onetaskgraph-linear")]);
+  assert.notEqual(whole(), wholeBefore, "the whole digest reads the same requirement");
 });
 
 test("the Cargo closure refuses what it cannot read, leaving Nx no digest to hash", () => {
@@ -458,6 +472,10 @@ test("the Cargo closure refuses what it cannot read, leaving Nx no digest to has
     '[[package]]\nname = "onetaskgraph"\nversion = "1"\n  dependencies = [\n "x",\n]\n',
   );
   refused(closure(["--crate", "onetaskgraph"]), 1, /unreadable dependencies list/);
+  writeFileSync(lock, '[[package]]\nname = "onetaskgraph"\nname = "other"\nversion = "1"\n');
+  refused(closure(["--crate", "onetaskgraph"]), 1, /repeats name/);
+  writeFileSync(lock, '[[package]]\nname = "onetaskgraph"\nversion = "1"\nsource = bare\n');
+  refused(closure(["--crate", "onetaskgraph"]), 1, /unreadable source/);
   writeFileSync(lock, '[[package]]\nsource = "x"\n');
   refused(closure(["--crate", "onetaskgraph"]), 1, /a package with no name or version/);
 });
