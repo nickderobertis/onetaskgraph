@@ -2,6 +2,9 @@
 //
 //   node scripts/nx-cargo-closure.mjs --crate NAME [--crate NAME]...
 //
+// Exits 0 having printed the digest, 1 when a Cargo file cannot be read as expected, 2 on any other
+// arguments; a non-zero exit prints no digest and says why on standard error.
+//
 // Nx's `versionFreeCargo` hashes every manifest and all of Cargo.lock, so a dependency added to
 // one suite moved the hash of every Rust task in the workspace, and a pull request's proven
 // results missed when another merge landed. A build of `-p NAME` reads the root manifest, and of
@@ -27,7 +30,7 @@ function requested(args) {
 
 // A lock entry's dependencies, one quoted line each; any other shape is refused, never read as none.
 function lockDependencies(block, name) {
-  if (!/^dependencies\b/m.test(block)) return [];
+  if (!/^\s*dependencies\b/m.test(block)) return [];
   const list = block.match(/^dependencies = \[\n((?: "[^"]+",\n)*)\]$/m);
   if (!list) throw new Error(`Cargo.lock's entry for ${name} has an unreadable dependencies list`);
   return [...list[1].matchAll(/"([^"]+)"/g)].map((match) => match[1]);

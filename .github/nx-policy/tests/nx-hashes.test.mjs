@@ -453,6 +453,11 @@ test("the Cargo closure refuses what it cannot read, leaving Nx no digest to has
   refused(closure(["--crate", "onetaskgraph"]), 1, /names onetaskgraph, which locks 2 packages/);
   writeFileSync(lock, '[[package]]\nname = "onetaskgraph"\nversion = "1"\ndependencies = ["x"]\n');
   refused(closure(["--crate", "onetaskgraph"]), 1, /unreadable dependencies list/);
+  writeFileSync(
+    lock,
+    '[[package]]\nname = "onetaskgraph"\nversion = "1"\n  dependencies = [\n "x",\n]\n',
+  );
+  refused(closure(["--crate", "onetaskgraph"]), 1, /unreadable dependencies list/);
   writeFileSync(lock, '[[package]]\nsource = "x"\n');
   refused(closure(["--crate", "onetaskgraph"]), 1, /a package with no name or version/);
 });
