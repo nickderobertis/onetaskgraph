@@ -1,0 +1,3591 @@
+{
+  "repository": "nickderobertis/onetaskgraph",
+  "recorded_at": "2026-11-07T05:28:23Z",
+  "endpoint": "GET /repos/{r}/actions/caches?sort=size_in_bytes&direction=desc&per_page=100",
+  "storage_limit": { "max_cache_size_gb": 10 },
+  "total_count": 398,
+  "actions_caches": [
+    {
+      "id": 10149323606,
+      "ref": "refs/pull/3918/merge",
+      "key": "v0-rust-test-linux-Linux-x64-2c443741-44f64494",
+      "version": "91ac368ca68e0e337187f1dafe3d9cc713cb1c51515409582f07f4f62e2ab414",
+      "last_accessed_at": "2026-11-07T01:57:00.511857Z",
+      "created_at": "2026-11-07T01:57:00.511857Z",
+      "size_in_bytes": 1308658028
+    },
+    {
+      "id": 10020772580,
+      "ref": "refs/heads/main",
+      "key": "v0-rust-test-linux-Linux-x64-2c443741-6e0fea97",
+      "version": "91ac368ca68e0e337187f1dafe3d9cc713cb1c51515409582f07f4f62e2ab414",
+      "last_accessed_at": "2026-11-07T01:27:08.544353Z",
+      "created_at": "2026-11-04T20:15:36.744302Z",
+      "size_in_bytes": 1306168738
+    },
+    {
+      "id": 10148979420,
+      "ref": "refs/heads/main",
+      "key": "v0-rust-test-linux-Linux-x64-2c443741-44f64494",
+      "version": "91ac368ca68e0e337187f1dafe3d9cc713cb1c51515409582f07f4f62e2ab414",
+      "last_accessed_at": "2026-11-07T02:14:09.601410Z",
+      "created_at": "2026-11-07T01:41:24.830558Z",
+      "size_in_bytes": 1306075170
+    },
+    {
+      "id": 10149346069,
+      "ref": "refs/pull/3918/merge",
+      "key": "v0-rust-test-windows-Windows_NT-x64-1185fd9a-44f64494",
+      "version": "6f6234aa8d4a29f4ae8444085332a49c3dfbeab1fa3801f72cc983bd24343147",
+      "last_accessed_at": "2026-11-07T01:58:03.748977Z",
+      "created_at": "2026-11-07T01:58:03.748977Z",
+      "size_in_bytes": 637871406
+    },
+    {
+      "id": 10147130963,
+      "ref": "refs/pull/3917/merge",
+      "key": "v0-rust-test-windows-Windows_NT-x64-1185fd9a-44f64494",
+      "version": "6f6234aa8d4a29f4ae8444085332a49c3dfbeab1fa3801f72cc983bd24343147",
+      "last_accessed_at": "2026-11-07T00:44:11.021418Z",
+      "created_at": "2026-11-07T00:25:56.192252Z",
+      "size_in_bytes": 637536375
+    },
+    {
+      "id": 10020495453,
+      "ref": "refs/heads/main",
+      "key": "v0-rust-test-windows-Windows_NT-x64-1185fd9a-6e0fea97",
+      "version": "6f6234aa8d4a29f4ae8444085332a49c3dfbeab1fa3801f72cc983bd24343147",
+      "last_accessed_at": "2026-11-07T01:27:42.521424Z",
+      "created_at": "2026-11-04T20:09:50.368249Z",
+      "size_in_bytes": 634821647
+    },
+    {
+      "id": 10148854262,
+      "ref": "refs/heads/main",
+      "key": "v0-rust-test-windows-Windows_NT-x64-1185fd9a-44f64494",
+      "version": "6f6234aa8d4a29f4ae8444085332a49c3dfbeab1fa3801f72cc983bd24343147",
+      "last_accessed_at": "2026-11-07T02:14:36.299049Z",
+      "created_at": "2026-11-07T01:35:48.398026Z",
+      "size_in_bytes": 634777759
+    },
+    {
+      "id": 10147227022,
+      "ref": "refs/pull/3917/merge",
+      "key": "v0-rust-test-macos-Darwin-arm64-2e933a5e-44f64494",
+      "version": "082c20939f28078de34a5104f9eea359e64ca52bc78e4a18848fde022c1aec33",
+      "last_accessed_at": "2026-11-07T00:43:57.329415Z",
+      "created_at": "2026-11-07T00:29:36.507007Z",
+      "size_in_bytes": 613326113
+    },
+    {
+      "id": 10020471814,
+      "ref": "refs/heads/main",
+      "key": "v0-rust-test-macos-Darwin-arm64-2e933a5e-6e0fea97",
+      "version": "082c20939f28078de34a5104f9eea359e64ca52bc78e4a18848fde022c1aec33",
+      "last_accessed_at": "2026-11-07T01:38:41.528599Z",
+      "created_at": "2026-11-04T20:09:22.154085Z",
+      "size_in_bytes": 612672216
+    },
+    {
+      "id": 10149119384,
+      "ref": "refs/heads/main",
+      "key": "v0-rust-test-macos-Darwin-arm64-2e933a5e-44f64494",
+      "version": "082c20939f28078de34a5104f9eea359e64ca52bc78e4a18848fde022c1aec33",
+      "last_accessed_at": "2026-11-07T01:48:27.318799Z",
+      "created_at": "2026-11-07T01:47:37.473738Z",
+      "size_in_bytes": 612631368
+    },
+    {
+      "id": 10150181815,
+      "ref": "refs/heads/refs/tags/v0.14.5",
+      "key": "v0-rust-publish-Linux-x64-5e270797-44f64494",
+      "version": "91ac368ca68e0e337187f1dafe3d9cc713cb1c51515409582f07f4f62e2ab414",
+      "last_accessed_at": "2026-11-07T02:36:17.223522Z",
+      "created_at": "2026-11-07T02:36:17.223522Z",
+      "size_in_bytes": 303099021
+    },
+    {
+      "id": 10146668443,
+      "ref": "refs/pull/3917/merge",
+      "key": "v0-rust-lint-afresh-lint-Linux-x64-2c443741-44f64494",
+      "version": "91ac368ca68e0e337187f1dafe3d9cc713cb1c51515409582f07f4f62e2ab414",
+      "last_accessed_at": "2026-11-07T00:43:55.308651Z",
+      "created_at": "2026-11-07T00:09:10.172429Z",
+      "size_in_bytes": 280703412
+    },
+    {
+      "id": 10149215270,
+      "ref": "refs/pull/3918/merge",
+      "key": "v0-rust-lint-afresh-lint-Linux-x64-2c443741-44f64494",
+      "version": "91ac368ca68e0e337187f1dafe3d9cc713cb1c51515409582f07f4f62e2ab414",
+      "last_accessed_at": "2026-11-07T01:51:56.019390Z",
+      "created_at": "2026-11-07T01:51:56.019390Z",
+      "size_in_bytes": 218030228
+    },
+    {
+      "id": 10149913730,
+      "ref": "refs/heads/refs/tags/v0.14.5",
+      "key": "v0-rust-build-linux-Linux-x64-5e270797-44f64494",
+      "version": "91ac368ca68e0e337187f1dafe3d9cc713cb1c51515409582f07f4f62e2ab414",
+      "last_accessed_at": "2026-11-07T02:23:45.435103Z",
+      "created_at": "2026-11-07T02:23:45.435103Z",
+      "size_in_bytes": 199404523
+    },
+    {
+      "id": 10149872543,
+      "ref": "refs/heads/refs/tags/v0.14.5",
+      "key": "v0-rust-build-linux-arm64-Linux-arm64-4936b508-44f64494",
+      "version": "91ac368ca68e0e337187f1dafe3d9cc713cb1c51515409582f07f4f62e2ab414",
+      "last_accessed_at": "2026-11-07T02:21:49.025977Z",
+      "created_at": "2026-11-07T02:21:49.025977Z",
+      "size_in_bytes": 198546572
+    },
+    {
+      "id": 10149940328,
+      "ref": "refs/heads/refs/tags/v0.14.5",
+      "key": "v0-rust-build-windows-Windows_NT-x64-cdab7ceb-44f64494",
+      "version": "6f6234aa8d4a29f4ae8444085332a49c3dfbeab1fa3801f72cc983bd24343147",
+      "last_accessed_at": "2026-11-07T02:24:58.563746Z",
+      "created_at": "2026-11-07T02:24:58.563746Z",
+      "size_in_bytes": 186958591
+    },
+    {
+      "id": 10149857233,
+      "ref": "refs/heads/refs/tags/v0.14.5",
+      "key": "v0-rust-build-macos-Darwin-arm64-1d20e77f-44f64494",
+      "version": "082c20939f28078de34a5104f9eea359e64ca52bc78e4a18848fde022c1aec33",
+      "last_accessed_at": "2026-11-07T02:21:04.423589Z",
+      "created_at": "2026-11-07T02:21:04.423589Z",
+      "size_in_bytes": 181857038
+    },
+    {
+      "id": 10148657235,
+      "ref": "refs/heads/main",
+      "key": "v0-rust-release-plz-Linux-x64-5e270797-44f64494",
+      "version": "91ac368ca68e0e337187f1dafe3d9cc713cb1c51515409582f07f4f62e2ab414",
+      "last_accessed_at": "2026-11-07T02:15:01.216372Z",
+      "created_at": "2026-11-07T01:26:45.587200Z",
+      "size_in_bytes": 157830344
+    },
+    {
+      "id": 10019888580,
+      "ref": "refs/heads/main",
+      "key": "v0-rust-release-plz-Linux-x64-5e270797-6e0fea97",
+      "version": "91ac368ca68e0e337187f1dafe3d9cc713cb1c51515409582f07f4f62e2ab414",
+      "last_accessed_at": "2026-11-07T01:24:27.846658Z",
+      "created_at": "2026-11-04T19:56:58.803641Z",
+      "size_in_bytes": 143429277
+    },
+    {
+      "id": 6917246444,
+      "ref": "refs/heads/main",
+      "key": "bun-xETSyylFWPAobx/lMzEMUmGLIN4=",
+      "version": "3dbcc4f8dfd5fbbab9759602b7adb19c466cf9edfc277687f97ba9efbdc86d90",
+      "last_accessed_at": "2026-11-07T01:27:08.988262Z",
+      "created_at": "2026-08-24T01:02:24.353621Z",
+      "size_in_bytes": 36521307
+    },
+    {
+      "id": 6912158735,
+      "ref": "refs/heads/main",
+      "key": "bun-fR4r1tsFeXfPQkusQwkKD2kGnsE=",
+      "version": "4793076103aa823b0a4c97942d7385d4346f77a3c30a0bad6e0f1d748becbab5",
+      "last_accessed_at": "2026-11-07T02:25:23.940417Z",
+      "created_at": "2026-08-23T19:10:04.684958Z",
+      "size_in_bytes": 33843768
+    },
+    {
+      "id": 10148210249,
+      "ref": "refs/pull/3917/merge",
+      "key": "bun-kSmiCOujAb+jFWQqTDn70+CxniQ=",
+      "version": "0c867ee6264758fbca938e6c6d38a3160cb478f2770da2f831e22e4c9e3720d8",
+      "last_accessed_at": "2026-11-07T01:08:33.376391Z",
+      "created_at": "2026-11-07T01:08:33.376391Z",
+      "size_in_bytes": 21289721
+    },
+    {
+      "id": 10149680058,
+      "ref": "refs/pull/3918/merge",
+      "key": "bun-kSmiCOujAb+jFWQqTDn70+CxniQ=",
+      "version": "0c867ee6264758fbca938e6c6d38a3160cb478f2770da2f831e22e4c9e3720d8",
+      "last_accessed_at": "2026-11-07T02:13:07.123727Z",
+      "created_at": "2026-11-07T02:13:07.123727Z",
+      "size_in_bytes": 21289721
+    },
+    {
+      "id": 10149347626,
+      "ref": "refs/pull/3918/merge",
+      "key": "setup-uv-2-x86_64-pc-windows-msvc-windows-2025-3.13.17-pruned-ce037c87251359d4dc7a489142ec650d4d32dfc45d91d10ae71c974ececa7ced",
+      "version": "aa3e39b6835cb69af9f77bc24a566f9769f0c9d494315fa4dc7a13222f544ee8",
+      "last_accessed_at": "2026-11-07T01:58:05.831701Z",
+      "created_at": "2026-11-07T01:58:05.831701Z",
+      "size_in_bytes": 19124591
+    },
+    {
+      "id": 10149679450,
+      "ref": "refs/pull/3918/merge",
+      "key": "setup-uv-2-aarch64-apple-darwin-macos-16-3.13.17-pruned-ce037c87251359d4dc7a489142ec650d4d32dfc45d91d10ae71c974ececa7ced",
+      "version": "918460a9a4ec7d3b4bf031ffef03c97d60b35f7398f06b41409dc7803bc9da7b",
+      "last_accessed_at": "2026-11-07T02:13:05.500559Z",
+      "created_at": "2026-11-07T02:13:05.500559Z",
+      "size_in_bytes": 17261317
+    },
+    {
+      "id": 10148691879,
+      "ref": "refs/pull/3918/merge",
+      "key": "release-plz-Linux-X64-0.3.160",
+      "version": "26d5f39f105ccf8c3c84c023b3ac7dbfed03efa8af6a296d43ad59355e84e850",
+      "last_accessed_at": "2026-11-07T01:28:14.045915Z",
+      "created_at": "2026-11-07T01:28:14.045915Z",
+      "size_in_bytes": 16517232
+    },
+    {
+      "id": 10146338374,
+      "ref": "refs/pull/3917/merge",
+      "key": "release-plz-Linux-X64-0.3.160",
+      "version": "26d5f39f105ccf8c3c84c023b3ac7dbfed03efa8af6a296d43ad59355e84e850",
+      "last_accessed_at": "2026-11-07T00:44:04.402646Z",
+      "created_at": "2026-11-06T23:57:08.262937Z",
+      "size_in_bytes": 16517198
+    },
+    {
+      "id": 10149164798,
+      "ref": "refs/pull/3918/merge",
+      "key": "release-plz-macOS-ARM64-0.3.160",
+      "version": "26d5f39f105ccf8c3c84c023b3ac7dbfed03efa8af6a296d43ad59355e84e850",
+      "last_accessed_at": "2026-11-07T01:49:36.757094Z",
+      "created_at": "2026-11-07T01:49:36.757094Z",
+      "size_in_bytes": 14039847
+    },
+    {
+      "id": 10146354121,
+      "ref": "refs/pull/3917/merge",
+      "key": "release-plz-macOS-ARM64-0.3.160",
+      "version": "26d5f39f105ccf8c3c84c023b3ac7dbfed03efa8af6a296d43ad59355e84e850",
+      "last_accessed_at": "2026-11-07T00:44:15.418885Z",
+      "created_at": "2026-11-06T23:57:44.949265Z",
+      "size_in_bytes": 14039841
+    },
+    {
+      "id": 10148733461,
+      "ref": "refs/pull/3918/merge",
+      "key": "release-plz-Windows-X64-0.3.160",
+      "version": "d120764afe5dbe0abac9d1a0e219b6685aa2f8174dddeac28da116b1cf2b525a",
+      "last_accessed_at": "2026-11-07T01:29:58.468181Z",
+      "created_at": "2026-11-07T01:29:58.468181Z",
+      "size_in_bytes": 12958029
+    },
+    {
+      "id": 10146375172,
+      "ref": "refs/pull/3917/merge",
+      "key": "release-plz-Windows-X64-0.3.160",
+      "version": "d120764afe5dbe0abac9d1a0e219b6685aa2f8174dddeac28da116b1cf2b525a",
+      "last_accessed_at": "2026-11-07T00:44:36.006294Z",
+      "created_at": "2026-11-06T23:58:32.563647Z",
+      "size_in_bytes": 12958019
+    },
+    {
+      "id": 10148209533,
+      "ref": "refs/pull/3917/merge",
+      "key": "setup-uv-2-aarch64-apple-darwin-macos-16-3.13.17-pruned-1cb373fda31a52eac07470f254f6011af909447a4acbf0d59cbd95502b32cf6f",
+      "version": "918460a9a4ec7d3b4bf031ffef03c97d60b35f7398f06b41409dc7803bc9da7b",
+      "last_accessed_at": "2026-11-07T01:08:30.773799Z",
+      "created_at": "2026-11-07T01:08:30.773799Z",
+      "size_in_bytes": 2535736
+    },
+    {
+      "id": 10146339043,
+      "ref": "refs/pull/3917/merge",
+      "key": "prune-superseded-Linux-X64-0.1.1-68540ad6fbad5a5bcacb154a3c84705ce0240489d7937674e531bfd36297f31a",
+      "version": "2616b708b65d3c19d279629c18fb7e4ae41f1ee1892b466c8449276aa71f94d3",
+      "last_accessed_at": "2026-11-07T00:44:05.932358Z",
+      "created_at": "2026-11-06T23:57:09.332429Z",
+      "size_in_bytes": 561448
+    },
+    {
+      "id": 10148692135,
+      "ref": "refs/pull/3918/merge",
+      "key": "prune-superseded-Linux-X64-0.1.1-68540ad6fbad5a5bcacb154a3c84705ce0240489d7937674e531bfd36297f31a",
+      "version": "2616b708b65d3c19d279629c18fb7e4ae41f1ee1892b466c8449276aa71f94d3",
+      "last_accessed_at": "2026-11-07T01:28:14.543634Z",
+      "created_at": "2026-11-07T01:28:14.543634Z",
+      "size_in_bytes": 561448
+    },
+    {
+      "id": 10149165252,
+      "ref": "refs/pull/3918/merge",
+      "key": "prune-superseded-macOS-ARM64-0.1.1-68540ad6fbad5a5bcacb154a3c84705ce0240489d7937674e531bfd36297f31a",
+      "version": "2616b708b65d3c19d279629c18fb7e4ae41f1ee1892b466c8449276aa71f94d3",
+      "last_accessed_at": "2026-11-07T01:49:37.670530Z",
+      "created_at": "2026-11-07T01:49:37.670530Z",
+      "size_in_bytes": 442287
+    },
+    {
+      "id": 10146354494,
+      "ref": "refs/pull/3917/merge",
+      "key": "prune-superseded-macOS-ARM64-0.1.1-68540ad6fbad5a5bcacb154a3c84705ce0240489d7937674e531bfd36297f31a",
+      "version": "2616b708b65d3c19d279629c18fb7e4ae41f1ee1892b466c8449276aa71f94d3",
+      "last_accessed_at": "2026-11-07T00:44:17.671864Z",
+      "created_at": "2026-11-06T23:57:45.684058Z",
+      "size_in_bytes": 442284
+    },
+    {
+      "id": 10148733781,
+      "ref": "refs/pull/3918/merge",
+      "key": "prune-superseded-Windows-X64-0.1.1-68540ad6fbad5a5bcacb154a3c84705ce0240489d7937674e531bfd36297f31a",
+      "version": "496f4f5f48d4913a5833ffeb066504ad52fbc2410bb4e5c9447a8ff91d79ae64",
+      "last_accessed_at": "2026-11-07T01:29:59.130347Z",
+      "created_at": "2026-11-07T01:29:59.130347Z",
+      "size_in_bytes": 358723
+    },
+    {
+      "id": 10146375704,
+      "ref": "refs/pull/3917/merge",
+      "key": "prune-superseded-Windows-X64-0.1.1-68540ad6fbad5a5bcacb154a3c84705ce0240489d7937674e531bfd36297f31a",
+      "version": "496f4f5f48d4913a5833ffeb066504ad52fbc2410bb4e5c9447a8ff91d79ae64",
+      "last_accessed_at": "2026-11-07T00:44:36.771115Z",
+      "created_at": "2026-11-06T23:58:33.542162Z",
+      "size_in_bytes": 358721
+    },
+    {
+      "id": 10149854610,
+      "ref": "refs/heads/refs/tags/v0.14.5",
+      "key": "setup-uv-2-aarch64-apple-darwin-macos-16-3.13.17-pruned-ce037c87251359d4dc7a489142ec650d4d32dfc45d91d10ae71c974ececa7ced",
+      "version": "918460a9a4ec7d3b4bf031ffef03c97d60b35f7398f06b41409dc7803bc9da7b",
+      "last_accessed_at": "2026-11-07T02:20:56.718044Z",
+      "created_at": "2026-11-07T02:20:56.718044Z",
+      "size_in_bytes": 340482
+    },
+    {
+      "id": 10149871679,
+      "ref": "refs/heads/refs/tags/v0.14.5",
+      "key": "setup-uv-2-aarch64-unknown-linux-gnu-ubuntu-24.04-unknown-pruned-ce037c87251359d4dc7a489142ec650d4d32dfc45d91d10ae71c974ececa7ced",
+      "version": "6db063dfc25f608b072de08a569df17044985f859de13b9c8c29ef77309b9509",
+      "last_accessed_at": "2026-11-07T02:21:45.260392Z",
+      "created_at": "2026-11-07T02:21:45.260392Z",
+      "size_in_bytes": 340231
+    },
+    {
+      "id": 10149927403,
+      "ref": "refs/heads/refs/tags/v0.14.5",
+      "key": "setup-uv-2-x86_64-pc-windows-msvc-windows-2025-3.13.17-pruned-ce037c87251359d4dc7a489142ec650d4d32dfc45d91d10ae71c974ececa7ced",
+      "version": "aa3e39b6835cb69af9f77bc24a566f9769f0c9d494315fa4dc7a13222f544ee8",
+      "last_accessed_at": "2026-11-07T02:24:19.772460Z",
+      "created_at": "2026-11-07T02:24:19.772460Z",
+      "size_in_bytes": 339971
+    },
+    {
+      "id": 10149121708,
+      "ref": "refs/heads/main",
+      "key": "setup-uv-2-aarch64-apple-darwin-macos-16-3.13.17-pruned-1cb373fda31a52eac07470f254f6011af909447a4acbf0d59cbd95502b32cf6f",
+      "version": "918460a9a4ec7d3b4bf031ffef03c97d60b35f7398f06b41409dc7803bc9da7b",
+      "last_accessed_at": "2026-11-07T01:47:38.549685Z",
+      "created_at": "2026-11-07T01:47:38.549685Z",
+      "size_in_bytes": 279904
+    },
+    {
+      "id": 10150000998,
+      "ref": "refs/heads/main",
+      "key": "setup-uv-2-x86_64-pc-windows-msvc-windows-2025-3.13.17-pruned-ce037c87251359d4dc7a489142ec650d4d32dfc45d91d10ae71c974ececa7ced",
+      "version": "aa3e39b6835cb69af9f77bc24a566f9769f0c9d494315fa4dc7a13222f544ee8",
+      "last_accessed_at": "2026-11-07T02:27:45.121985Z",
+      "created_at": "2026-11-07T02:27:45.121985Z",
+      "size_in_bytes": 279545
+    },
+    {
+      "id": 10136220978,
+      "ref": "refs/heads/main",
+      "key": "setup-uv-2-x86_64-pc-windows-msvc-windows-2025-3.13.17-pruned-1cb373fda31a52eac07470f254f6011af909447a4acbf0d59cbd95502b32cf6f",
+      "version": "aa3e39b6835cb69af9f77bc24a566f9769f0c9d494315fa4dc7a13222f544ee8",
+      "last_accessed_at": "2026-11-07T01:23:56.168447Z",
+      "created_at": "2026-11-06T19:20:33.279770Z",
+      "size_in_bytes": 279502
+    },
+    {
+      "id": 10149216221,
+      "ref": "refs/pull/3918/merge",
+      "key": "setup-uv-2-x86_64-unknown-linux-gnu-ubuntu-24.04-unknown-pruned-ce037c87251359d4dc7a489142ec650d4d32dfc45d91d10ae71c974ececa7ced",
+      "version": "6db063dfc25f608b072de08a569df17044985f859de13b9c8c29ef77309b9509",
+      "last_accessed_at": "2026-11-07T01:51:57.366014Z",
+      "created_at": "2026-11-07T01:51:57.366014Z",
+      "size_in_bytes": 260282
+    },
+    {
+      "id": 10148586559,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-12901077301360629504",
+      "version": "a41ada4a04b391a14bbab5bbf201cd07b100f7947fb859d8019cd7b9b33dda2d",
+      "last_accessed_at": "2026-11-07T01:23:51.059386Z",
+      "created_at": "2026-11-07T01:23:51.059386Z",
+      "size_in_bytes": 17616
+    },
+    {
+      "id": 10148146415,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-12901077301360629504",
+      "version": "a41ada4a04b391a14bbab5bbf201cd07b100f7947fb859d8019cd7b9b33dda2d",
+      "last_accessed_at": "2026-11-07T01:06:05.259023Z",
+      "created_at": "2026-11-07T01:06:05.259023Z",
+      "size_in_bytes": 17615
+    },
+    {
+      "id": 10148586489,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-5067263235959595894",
+      "version": "1d5f40085c908bd6e9be6d96bc7fe9e6c22cecf5cce71e01c0702d62c0a92e02",
+      "last_accessed_at": "2026-11-07T01:23:50.881712Z",
+      "created_at": "2026-11-07T01:23:50.881712Z",
+      "size_in_bytes": 16733
+    },
+    {
+      "id": 10148134171,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-5067263235959595894",
+      "version": "1d5f40085c908bd6e9be6d96bc7fe9e6c22cecf5cce71e01c0702d62c0a92e02",
+      "last_accessed_at": "2026-11-07T01:05:37.472429Z",
+      "created_at": "2026-11-07T01:05:37.472429Z",
+      "size_in_bytes": 16733
+    },
+    {
+      "id": 10149715828,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-17686177040761771641",
+      "version": "bfbd1109c97fae21519f7eb4f43c2d2deb30bc6dc4f7d9f3026438554e5cf39e",
+      "last_accessed_at": "2026-11-07T02:14:33.686644Z",
+      "created_at": "2026-11-07T02:14:33.686644Z",
+      "size_in_bytes": 16685
+    },
+    {
+      "id": 10149113267,
+      "ref": "refs/pull/3918/merge",
+      "key": "nx-cache-17686177040761771641",
+      "version": "bfbd1109c97fae21519f7eb4f43c2d2deb30bc6dc4f7d9f3026438554e5cf39e",
+      "last_accessed_at": "2026-11-07T01:47:15.265964Z",
+      "created_at": "2026-11-07T01:47:15.265964Z",
+      "size_in_bytes": 16685
+    },
+    {
+      "id": 10149415377,
+      "ref": "refs/pull/3918/merge",
+      "key": "nx-cache-7537614720994343248",
+      "version": "ad6a4d9086f10a82218633fde7dc23fc397ace50b34a0832127c3f68c618b723",
+      "last_accessed_at": "2026-11-07T02:01:21.132040Z",
+      "created_at": "2026-11-07T02:01:21.132040Z",
+      "size_in_bytes": 11627
+    },
+    {
+      "id": 10149718450,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-7537614720994343248",
+      "version": "ad6a4d9086f10a82218633fde7dc23fc397ace50b34a0832127c3f68c618b723",
+      "last_accessed_at": "2026-11-07T02:14:40.148155Z",
+      "created_at": "2026-11-07T02:14:40.148155Z",
+      "size_in_bytes": 11605
+    },
+    {
+      "id": 10147884972,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-13010327959694432191",
+      "version": "57aeee67e1836d5371d54814808a813cf3c334fc27114fa373ea775f00640cea",
+      "last_accessed_at": "2026-11-07T00:55:22.140735Z",
+      "created_at": "2026-11-07T00:55:22.140735Z",
+      "size_in_bytes": 11583
+    },
+    {
+      "id": 10148589692,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-13010327959694432191",
+      "version": "57aeee67e1836d5371d54814808a813cf3c334fc27114fa373ea775f00640cea",
+      "last_accessed_at": "2026-11-07T01:23:59.451472Z",
+      "created_at": "2026-11-07T01:23:59.451472Z",
+      "size_in_bytes": 11548
+    },
+    {
+      "id": 10149182960,
+      "ref": "refs/pull/3918/merge",
+      "key": "nx-cache-4892584378487502457",
+      "version": "1ae6333804692ba43bab6e0c9c9284fdfd3ad09e57f438f1210cf247b5a76ad7",
+      "last_accessed_at": "2026-11-07T01:50:26.398701Z",
+      "created_at": "2026-11-07T01:50:26.398701Z",
+      "size_in_bytes": 11309
+    },
+    {
+      "id": 10149721166,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-4892584378487502457",
+      "version": "1ae6333804692ba43bab6e0c9c9284fdfd3ad09e57f438f1210cf247b5a76ad7",
+      "last_accessed_at": "2026-11-07T02:14:48.369880Z",
+      "created_at": "2026-11-07T02:14:48.369880Z",
+      "size_in_bytes": 11281
+    },
+    {
+      "id": 10148131757,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-9384844092370981813",
+      "version": "ff05034f5237ac608bfb18ebff518efedf5a4863cdeff5bf6bb9b91438381391",
+      "last_accessed_at": "2026-11-07T01:05:31.569045Z",
+      "created_at": "2026-11-07T01:05:31.569045Z",
+      "size_in_bytes": 11221
+    },
+    {
+      "id": 10148588094,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-9384844092370981813",
+      "version": "ff05034f5237ac608bfb18ebff518efedf5a4863cdeff5bf6bb9b91438381391",
+      "last_accessed_at": "2026-11-07T01:23:55.146182Z",
+      "created_at": "2026-11-07T01:23:55.146182Z",
+      "size_in_bytes": 11197
+    },
+    {
+      "id": 10149126038,
+      "ref": "refs/pull/3918/merge",
+      "key": "nx-cache-16499677671019579276",
+      "version": "b67e6daebff455a89f650c4e1f7d1fcff6bfd9623037a53842fb5913ff5e5006",
+      "last_accessed_at": "2026-11-07T01:47:51.228981Z",
+      "created_at": "2026-11-07T01:47:51.228981Z",
+      "size_in_bytes": 10585
+    },
+    {
+      "id": 10149716032,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-16499677671019579276",
+      "version": "b67e6daebff455a89f650c4e1f7d1fcff6bfd9623037a53842fb5913ff5e5006",
+      "last_accessed_at": "2026-11-07T02:14:34.178753Z",
+      "created_at": "2026-11-07T02:14:34.178753Z",
+      "size_in_bytes": 10584
+    },
+    {
+      "id": 10147045354,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-16035754210658926337",
+      "version": "7e1bfb2373b66d0e70b8e2c26e2ada22f448668c9d0f8a04e0d07e98c77c6f88",
+      "last_accessed_at": "2026-11-07T00:48:30.907741Z",
+      "created_at": "2026-11-07T00:22:49.500762Z",
+      "size_in_bytes": 8246
+    },
+    {
+      "id": 10148587955,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-16035754210658926337",
+      "version": "7e1bfb2373b66d0e70b8e2c26e2ada22f448668c9d0f8a04e0d07e98c77c6f88",
+      "last_accessed_at": "2026-11-07T01:23:54.770206Z",
+      "created_at": "2026-11-07T01:23:54.770206Z",
+      "size_in_bytes": 8245
+    },
+    {
+      "id": 10149246896,
+      "ref": "refs/pull/3918/merge",
+      "key": "nx-cache-14832349764493187150",
+      "version": "f0a1dc02aa236a203cd733a853a61e76fc2d13716656ebfa3f1d873deafd7f1e",
+      "last_accessed_at": "2026-11-07T01:53:18.032937Z",
+      "created_at": "2026-11-07T01:53:18.032937Z",
+      "size_in_bytes": 8159
+    },
+    {
+      "id": 10147603433,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-7840441633753828449",
+      "version": "5529d3b4d95f7c7f3631bcbe6cc69e68e1a034448757d7b9e7e940ed4098e0d3",
+      "last_accessed_at": "2026-11-07T00:46:04.333828Z",
+      "created_at": "2026-11-07T00:43:55.211397Z",
+      "size_in_bytes": 8159
+    },
+    {
+      "id": 10149721443,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-14832349764493187150",
+      "version": "f0a1dc02aa236a203cd733a853a61e76fc2d13716656ebfa3f1d873deafd7f1e",
+      "last_accessed_at": "2026-11-07T02:14:49.109719Z",
+      "created_at": "2026-11-07T02:14:49.109719Z",
+      "size_in_bytes": 8157
+    },
+    {
+      "id": 10148586203,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-7840441633753828449",
+      "version": "5529d3b4d95f7c7f3631bcbe6cc69e68e1a034448757d7b9e7e940ed4098e0d3",
+      "last_accessed_at": "2026-11-07T01:23:50.146588Z",
+      "created_at": "2026-11-07T01:23:50.146588Z",
+      "size_in_bytes": 8150
+    },
+    {
+      "id": 10148965117,
+      "ref": "refs/pull/3918/merge",
+      "key": "nx-cache-2018769200155740491",
+      "version": "754bbf86586456fc0806a46d56267687836b28eeeb00a1543cbc7344d8ddca74",
+      "last_accessed_at": "2026-11-07T01:40:42.270667Z",
+      "created_at": "2026-11-07T01:40:42.270667Z",
+      "size_in_bytes": 8142
+    },
+    {
+      "id": 10149715638,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-2018769200155740491",
+      "version": "754bbf86586456fc0806a46d56267687836b28eeeb00a1543cbc7344d8ddca74",
+      "last_accessed_at": "2026-11-07T02:14:33.174315Z",
+      "created_at": "2026-11-07T02:14:33.174315Z",
+      "size_in_bytes": 8142
+    },
+    {
+      "id": 10149555139,
+      "ref": "refs/pull/3918/merge",
+      "key": "nx-cache-15518999418183889311",
+      "version": "7d94793c9348dc606abaf2cd8099b6bd0554323a8d232ab583dded4e06067178",
+      "last_accessed_at": "2026-11-07T02:07:41.424276Z",
+      "created_at": "2026-11-07T02:07:41.424276Z",
+      "size_in_bytes": 8135
+    },
+    {
+      "id": 10149718863,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-15518999418183889311",
+      "version": "7d94793c9348dc606abaf2cd8099b6bd0554323a8d232ab583dded4e06067178",
+      "last_accessed_at": "2026-11-07T02:14:41.454001Z",
+      "created_at": "2026-11-07T02:14:41.454001Z",
+      "size_in_bytes": 8131
+    },
+    {
+      "id": 10146965150,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-6246081336019004286",
+      "version": "63a45df8ea0d1c598a772399e3ed829e98121ab2032179aa29844a857a484f1c",
+      "last_accessed_at": "2026-11-07T00:50:09.309441Z",
+      "created_at": "2026-11-07T00:19:51.290001Z",
+      "size_in_bytes": 8080
+    },
+    {
+      "id": 10148589622,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-6246081336019004286",
+      "version": "63a45df8ea0d1c598a772399e3ed829e98121ab2032179aa29844a857a484f1c",
+      "last_accessed_at": "2026-11-07T01:23:59.255991Z",
+      "created_at": "2026-11-07T01:23:59.255991Z",
+      "size_in_bytes": 8073
+    },
+    {
+      "id": 10146451518,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-14600336284204718125",
+      "version": "aa3ca127046471652422f5b250cb116b11e7fb6f68591801b5a5ff3ee2122eb9",
+      "last_accessed_at": "2026-11-07T00:46:13.245581Z",
+      "created_at": "2026-11-07T00:01:31.175556Z",
+      "size_in_bytes": 7441
+    },
+    {
+      "id": 10149715473,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-1193456442570153479",
+      "version": "46af363a9d90cdccac11f8044f1f8fb69ccc5e906c950bbf4c1fb5699677dac8",
+      "last_accessed_at": "2026-11-07T02:14:32.696997Z",
+      "created_at": "2026-11-07T02:14:32.696997Z",
+      "size_in_bytes": 7438
+    },
+    {
+      "id": 10148795859,
+      "ref": "refs/pull/3918/merge",
+      "key": "nx-cache-1193456442570153479",
+      "version": "46af363a9d90cdccac11f8044f1f8fb69ccc5e906c950bbf4c1fb5699677dac8",
+      "last_accessed_at": "2026-11-07T01:32:43.598923Z",
+      "created_at": "2026-11-07T01:32:43.598923Z",
+      "size_in_bytes": 7438
+    },
+    {
+      "id": 10148586351,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-14600336284204718125",
+      "version": "aa3ca127046471652422f5b250cb116b11e7fb6f68591801b5a5ff3ee2122eb9",
+      "last_accessed_at": "2026-11-07T01:23:50.516800Z",
+      "created_at": "2026-11-07T01:23:50.516800Z",
+      "size_in_bytes": 7430
+    },
+    {
+      "id": 10148181742,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-5447952629010847853",
+      "version": "344a6753c9c9bec812237f15f3f02364ffdcadeaa80b5d165f58300b15dbd94a",
+      "last_accessed_at": "2026-11-07T01:07:21.833392Z",
+      "created_at": "2026-11-07T01:07:21.833392Z",
+      "size_in_bytes": 7128
+    },
+    {
+      "id": 10148588167,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-5447952629010847853",
+      "version": "344a6753c9c9bec812237f15f3f02364ffdcadeaa80b5d165f58300b15dbd94a",
+      "last_accessed_at": "2026-11-07T01:23:55.328973Z",
+      "created_at": "2026-11-07T01:23:55.328973Z",
+      "size_in_bytes": 7106
+    },
+    {
+      "id": 10149280025,
+      "ref": "refs/pull/3918/merge",
+      "key": "nx-cache-2386087915199081369",
+      "version": "2b96ebc9ea1b5d30144cd41f8e1fc13332e2567532deb3c298b5a3688ee048e3",
+      "last_accessed_at": "2026-11-07T01:54:50.195903Z",
+      "created_at": "2026-11-07T01:54:50.195903Z",
+      "size_in_bytes": 7102
+    },
+    {
+      "id": 10149721680,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-2386087915199081369",
+      "version": "2b96ebc9ea1b5d30144cd41f8e1fc13332e2567532deb3c298b5a3688ee048e3",
+      "last_accessed_at": "2026-11-07T02:14:49.826263Z",
+      "created_at": "2026-11-07T02:14:49.826263Z",
+      "size_in_bytes": 7099
+    },
+    {
+      "id": 10149566662,
+      "ref": "refs/pull/3918/merge",
+      "key": "nx-cache-8973898104911450644",
+      "version": "85793389015cd8dfc4aa76582608ea364acd5cda92aebb91638945e324a62f5b",
+      "last_accessed_at": "2026-11-07T02:08:14.032701Z",
+      "created_at": "2026-11-07T02:08:14.032701Z",
+      "size_in_bytes": 6974
+    },
+    {
+      "id": 10147961208,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-13298714924462736187",
+      "version": "59a4788f523f6fa211fc0dc6b2f75403032f10d86283eabf9afb9eb291555723",
+      "last_accessed_at": "2026-11-07T00:58:35.170332Z",
+      "created_at": "2026-11-07T00:58:35.170332Z",
+      "size_in_bytes": 6949
+    },
+    {
+      "id": 10149719042,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-8973898104911450644",
+      "version": "85793389015cd8dfc4aa76582608ea364acd5cda92aebb91638945e324a62f5b",
+      "last_accessed_at": "2026-11-07T02:14:41.988307Z",
+      "created_at": "2026-11-07T02:14:41.988307Z",
+      "size_in_bytes": 6944
+    },
+    {
+      "id": 10148589869,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-13298714924462736187",
+      "version": "59a4788f523f6fa211fc0dc6b2f75403032f10d86283eabf9afb9eb291555723",
+      "last_accessed_at": "2026-11-07T01:23:59.894457Z",
+      "created_at": "2026-11-07T01:23:59.894457Z",
+      "size_in_bytes": 6938
+    },
+    {
+      "id": 10147906891,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-18391155437614419124",
+      "version": "bfb4f4857e7929abd165ce48fd00d4a47ab7875f756ae3a0bbd58c2b879efb4b",
+      "last_accessed_at": "2026-11-07T00:56:13.152569Z",
+      "created_at": "2026-11-07T00:56:13.152569Z",
+      "size_in_bytes": 6654
+    },
+    {
+      "id": 10148588014,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-18391155437614419124",
+      "version": "bfb4f4857e7929abd165ce48fd00d4a47ab7875f756ae3a0bbd58c2b879efb4b",
+      "last_accessed_at": "2026-11-07T01:23:54.956175Z",
+      "created_at": "2026-11-07T01:23:54.956175Z",
+      "size_in_bytes": 6650
+    },
+    {
+      "id": 10148963782,
+      "ref": "refs/pull/3918/merge",
+      "key": "nx-cache-6748558108915297743",
+      "version": "896bf5ae22129051bf458e19351b35d2baed223bdbfa70caf9b1bad04ffc6bb3",
+      "last_accessed_at": "2026-11-07T01:40:38.346412Z",
+      "created_at": "2026-11-07T01:40:38.346412Z",
+      "size_in_bytes": 6578
+    },
+    {
+      "id": 10149721013,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-6748558108915297743",
+      "version": "896bf5ae22129051bf458e19351b35d2baed223bdbfa70caf9b1bad04ffc6bb3",
+      "last_accessed_at": "2026-11-07T02:14:47.884381Z",
+      "created_at": "2026-11-07T02:14:47.884381Z",
+      "size_in_bytes": 6570
+    },
+    {
+      "id": 10149273096,
+      "ref": "refs/pull/3918/merge",
+      "key": "nx-cache-4585974138527130232",
+      "version": "fa91487cd8574af0e749dcad2c4fd6a279b8077b8d9208f33a4a38ec9006be59",
+      "last_accessed_at": "2026-11-07T01:54:30.236033Z",
+      "created_at": "2026-11-07T01:54:30.236033Z",
+      "size_in_bytes": 6054
+    },
+    {
+      "id": 10147746867,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-4530413200855320861",
+      "version": "25b94004ae0d4fb83a8d365e8ac4560f507d466acda70d81bec463ead5fe62db",
+      "last_accessed_at": "2026-11-07T00:49:46.267010Z",
+      "created_at": "2026-11-07T00:49:46.267010Z",
+      "size_in_bytes": 6053
+    },
+    {
+      "id": 10149718302,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-4585974138527130232",
+      "version": "fa91487cd8574af0e749dcad2c4fd6a279b8077b8d9208f33a4a38ec9006be59",
+      "last_accessed_at": "2026-11-07T02:14:39.771439Z",
+      "created_at": "2026-11-07T02:14:39.771439Z",
+      "size_in_bytes": 6037
+    },
+    {
+      "id": 10148589556,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-4530413200855320861",
+      "version": "25b94004ae0d4fb83a8d365e8ac4560f507d466acda70d81bec463ead5fe62db",
+      "last_accessed_at": "2026-11-07T01:23:59.068322Z",
+      "created_at": "2026-11-07T01:23:59.068322Z",
+      "size_in_bytes": 6033
+    },
+    {
+      "id": 10146871587,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-9737116039683425822",
+      "version": "f0c472b9ca1837e6cf172c7492d56b6f6a152b100880af76599e9c8d5dd2ffd6",
+      "last_accessed_at": "2026-11-07T00:47:15.846667Z",
+      "created_at": "2026-11-07T00:16:19.026733Z",
+      "size_in_bytes": 4913
+    },
+    {
+      "id": 10148587584,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-9737116039683425822",
+      "version": "f0c472b9ca1837e6cf172c7492d56b6f6a152b100880af76599e9c8d5dd2ffd6",
+      "last_accessed_at": "2026-11-07T02:14:46.388057Z",
+      "created_at": "2026-11-07T01:23:53.783381Z",
+      "size_in_bytes": 4912
+    },
+    {
+      "id": 10146593652,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-9802059075256930454",
+      "version": "63035b9abbc95914bee70c8f848c6f3dc28b2764c0d776691daa60ada52f7b5e",
+      "last_accessed_at": "2026-11-07T00:45:53.126892Z",
+      "created_at": "2026-11-07T00:06:25.463294Z",
+      "size_in_bytes": 4729
+    },
+    {
+      "id": 10148589238,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-9802059075256930454",
+      "version": "63035b9abbc95914bee70c8f848c6f3dc28b2764c0d776691daa60ada52f7b5e",
+      "last_accessed_at": "2026-11-07T02:14:38.448972Z",
+      "created_at": "2026-11-07T01:23:58.146891Z",
+      "size_in_bytes": 4708
+    },
+    {
+      "id": 10146697020,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-4778481675440463306",
+      "version": "e46487f14fc08b63353e436a224100163b13d80ee44dae91481128683c358c13",
+      "last_accessed_at": "2026-11-07T00:45:54.349199Z",
+      "created_at": "2026-11-07T00:10:09.473207Z",
+      "size_in_bytes": 3269
+    },
+    {
+      "id": 10148589313,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-4778481675440463306",
+      "version": "e46487f14fc08b63353e436a224100163b13d80ee44dae91481128683c358c13",
+      "last_accessed_at": "2026-11-07T02:14:39.394966Z",
+      "created_at": "2026-11-07T01:23:58.347775Z",
+      "size_in_bytes": 3258
+    },
+    {
+      "id": 10146879648,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-783877499157894229",
+      "version": "0a7309a81db0c71791923fb52cd5c96e395f635c23445e35e0861a9c7f1bb131",
+      "last_accessed_at": "2026-11-07T00:47:17.521314Z",
+      "created_at": "2026-11-07T00:16:36.913481Z",
+      "size_in_bytes": 3235
+    },
+    {
+      "id": 10148587858,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-783877499157894229",
+      "version": "0a7309a81db0c71791923fb52cd5c96e395f635c23445e35e0861a9c7f1bb131",
+      "last_accessed_at": "2026-11-07T02:14:47.353161Z",
+      "created_at": "2026-11-07T01:23:54.575185Z",
+      "size_in_bytes": 3226
+    },
+    {
+      "id": 10146727308,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-17779500208634643444",
+      "version": "0922373d08d119d2d7c2ddb9e71dfb20db4dc776a28d89428a5060f3c8976da8",
+      "last_accessed_at": "2026-11-07T00:46:04.524737Z",
+      "created_at": "2026-11-07T00:11:15.324265Z",
+      "size_in_bytes": 2806
+    },
+    {
+      "id": 10148586273,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-17779500208634643444",
+      "version": "0922373d08d119d2d7c2ddb9e71dfb20db4dc776a28d89428a5060f3c8976da8",
+      "last_accessed_at": "2026-11-07T02:14:32.210517Z",
+      "created_at": "2026-11-07T01:23:50.324054Z",
+      "size_in_bytes": 2794
+    },
+    {
+      "id": 10146580846,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-11437626622340900209",
+      "version": "eabca54a1c474048e784db8a49a9b5e0d646323efafd0acb2841e6239bf5dd2b",
+      "last_accessed_at": "2026-11-07T00:44:32.051166Z",
+      "created_at": "2026-11-07T00:06:00.710494Z",
+      "size_in_bytes": 2569
+    },
+    {
+      "id": 10148586145,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-11437626622340900209",
+      "version": "eabca54a1c474048e784db8a49a9b5e0d646323efafd0acb2841e6239bf5dd2b",
+      "last_accessed_at": "2026-11-07T02:14:31.882771Z",
+      "created_at": "2026-11-07T01:23:49.964114Z",
+      "size_in_bytes": 2569
+    },
+    {
+      "id": 10148225723,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-13042751879957975816",
+      "version": "6e3dc91c529c6f5cc5d3caa240db8bafc78d5c1e7f0894bbadad613e09588fde",
+      "last_accessed_at": "2026-11-07T01:09:11.914446Z",
+      "created_at": "2026-11-07T01:09:11.914446Z",
+      "size_in_bytes": 1579
+    },
+    {
+      "id": 10148588231,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-13042751879957975816",
+      "version": "6e3dc91c529c6f5cc5d3caa240db8bafc78d5c1e7f0894bbadad613e09588fde",
+      "last_accessed_at": "2026-11-07T01:23:55.504528Z",
+      "created_at": "2026-11-07T01:23:55.504528Z",
+      "size_in_bytes": 1573
+    },
+    {
+      "id": 10149721558,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-3822116648686548435",
+      "version": "2762d2c11a58f8c0d7a1ff3216537db738d38d95e4ed15282ebcbd5acd2dc76e",
+      "last_accessed_at": "2026-11-07T02:14:49.468344Z",
+      "created_at": "2026-11-07T02:14:49.468344Z",
+      "size_in_bytes": 1464
+    },
+    {
+      "id": 10146662351,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-13001390430161810343",
+      "version": "42875cad58758ae7e580f0237cae171072fb6f57428947ae340368d4500fe2ca",
+      "last_accessed_at": "2026-11-07T00:44:31.584048Z",
+      "created_at": "2026-11-07T00:08:54.583179Z",
+      "size_in_bytes": 1462
+    },
+    {
+      "id": 10148586034,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-13001390430161810343",
+      "version": "42875cad58758ae7e580f0237cae171072fb6f57428947ae340368d4500fe2ca",
+      "last_accessed_at": "2026-11-07T02:14:31.236019Z",
+      "created_at": "2026-11-07T01:23:49.590292Z",
+      "size_in_bytes": 1462
+    },
+    {
+      "id": 10149264534,
+      "ref": "refs/pull/3918/merge",
+      "key": "nx-cache-3822116648686548435",
+      "version": "2762d2c11a58f8c0d7a1ff3216537db738d38d95e4ed15282ebcbd5acd2dc76e",
+      "last_accessed_at": "2026-11-07T01:54:07.465147Z",
+      "created_at": "2026-11-07T01:54:07.465147Z",
+      "size_in_bytes": 1456
+    },
+    {
+      "id": 10146508106,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-15277295053800467581",
+      "version": "1bda86b2dc815a8784cc219cd321982dcfa932defeef69bb3abc867244f2525a",
+      "last_accessed_at": "2026-11-07T00:44:31.184638Z",
+      "created_at": "2026-11-07T00:03:32.420052Z",
+      "size_in_bytes": 1435
+    },
+    {
+      "id": 10148585941,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-15277295053800467581",
+      "version": "1bda86b2dc815a8784cc219cd321982dcfa932defeef69bb3abc867244f2525a",
+      "last_accessed_at": "2026-11-07T02:14:30.878290Z",
+      "created_at": "2026-11-07T01:23:49.407805Z",
+      "size_in_bytes": 1435
+    },
+    {
+      "id": 10146920595,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-4525212460083213972",
+      "version": "c7ff407b18ba5a1ecffdbfd019459c83532b50f4b804c874584a17499d9151eb",
+      "last_accessed_at": "2026-11-07T00:44:30.209193Z",
+      "created_at": "2026-11-07T00:18:06.793696Z",
+      "size_in_bytes": 1387
+    },
+    {
+      "id": 10148584963,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-4525212460083213972",
+      "version": "c7ff407b18ba5a1ecffdbfd019459c83532b50f4b804c874584a17499d9151eb",
+      "last_accessed_at": "2026-11-07T02:14:29.661080Z",
+      "created_at": "2026-11-07T01:23:46.785576Z",
+      "size_in_bytes": 1387
+    },
+    {
+      "id": 10146655583,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-10617015086416324766",
+      "version": "2e29824c63b1d3f8e980849671eb50d465a245748f37b25d3605b4a03ab887f1",
+      "last_accessed_at": "2026-11-07T00:44:29.922705Z",
+      "created_at": "2026-11-07T00:08:38.290785Z",
+      "size_in_bytes": 1294
+    },
+    {
+      "id": 10148584708,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-10617015086416324766",
+      "version": "2e29824c63b1d3f8e980849671eb50d465a245748f37b25d3605b4a03ab887f1",
+      "last_accessed_at": "2026-11-07T02:14:29.048022Z",
+      "created_at": "2026-11-07T01:23:46.067075Z",
+      "size_in_bytes": 1284
+    },
+    {
+      "id": 10149736988,
+      "ref": "refs/heads/main",
+      "key": "setup-uv-2-x86_64-unknown-linux-gnu-ubuntu-24.04-unknown-pruned-ce037c87251359d4dc7a489142ec650d4d32dfc45d91d10ae71c974ececa7ced",
+      "version": "6db063dfc25f608b072de08a569df17044985f859de13b9c8c29ef77309b9509",
+      "last_accessed_at": "2026-11-07T02:25:23.482004Z",
+      "created_at": "2026-11-07T02:15:29.282073Z",
+      "size_in_bytes": 1188
+    },
+    {
+      "id": 10135656116,
+      "ref": "refs/heads/main",
+      "key": "setup-uv-2-x86_64-unknown-linux-gnu-ubuntu-24.04-unknown-pruned-1cb373fda31a52eac07470f254f6011af909447a4acbf0d59cbd95502b32cf6f",
+      "version": "6db063dfc25f608b072de08a569df17044985f859de13b9c8c29ef77309b9509",
+      "last_accessed_at": "2026-11-07T01:24:30.981874Z",
+      "created_at": "2026-11-06T19:07:16.364615Z",
+      "size_in_bytes": 1134
+    },
+    {
+      "id": 10146498627,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-3933808937339735355",
+      "version": "cf194e8f1e2a746b756bdffc9a84ae774a937abca35a05dbb5a3ee05a7afd1e8",
+      "last_accessed_at": "2026-11-07T00:44:31.173856Z",
+      "created_at": "2026-11-07T00:03:12.449864Z",
+      "size_in_bytes": 1122
+    },
+    {
+      "id": 10148585789,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-3933808937339735355",
+      "version": "cf194e8f1e2a746b756bdffc9a84ae774a937abca35a05dbb5a3ee05a7afd1e8",
+      "last_accessed_at": "2026-11-07T02:14:30.242674Z",
+      "created_at": "2026-11-07T01:23:48.986001Z",
+      "size_in_bytes": 1108
+    },
+    {
+      "id": 10146521933,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-4779586466038876870",
+      "version": "37f92062e7a4d2a8fc4038e153d7b5f486ee7bcf3e79293a9438700fd50822f8",
+      "last_accessed_at": "2026-11-07T00:44:44.755997Z",
+      "created_at": "2026-11-07T00:04:01.186341Z",
+      "size_in_bytes": 1071
+    },
+    {
+      "id": 10148588311,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-4779586466038876870",
+      "version": "37f92062e7a4d2a8fc4038e153d7b5f486ee7bcf3e79293a9438700fd50822f8",
+      "last_accessed_at": "2026-11-07T02:14:34.498698Z",
+      "created_at": "2026-11-07T01:23:55.685663Z",
+      "size_in_bytes": 1056
+    },
+    {
+      "id": 10146551789,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-12967275097394553040",
+      "version": "62adf7e68b041bf145e8e84fc103e952abdbe23e79d44e481ff5fbbad5827305",
+      "last_accessed_at": "2026-11-07T00:45:57.651100Z",
+      "created_at": "2026-11-07T00:05:01.815285Z",
+      "size_in_bytes": 1049
+    },
+    {
+      "id": 10148586642,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-12967275097394553040",
+      "version": "62adf7e68b041bf145e8e84fc103e952abdbe23e79d44e481ff5fbbad5827305",
+      "last_accessed_at": "2026-11-07T02:14:42.310635Z",
+      "created_at": "2026-11-07T01:23:51.297878Z",
+      "size_in_bytes": 1046
+    },
+    {
+      "id": 10146529880,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-16263143747532770930",
+      "version": "3d5265d84b1e0e83cb1a4dbf5298302d37e6d625b532388f668003041b679afd",
+      "last_accessed_at": "2026-11-07T00:44:45.496761Z",
+      "created_at": "2026-11-07T00:04:16.203454Z",
+      "size_in_bytes": 802
+    },
+    {
+      "id": 10146809261,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-16128851066191902880",
+      "version": "c249905e35ec46fae9b79a037d485e51e746daf641a92efd22deda1d13cefa0f",
+      "last_accessed_at": "2026-11-07T00:46:03.267428Z",
+      "created_at": "2026-11-07T00:14:05.311916Z",
+      "size_in_bytes": 801
+    },
+    {
+      "id": 10148586863,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-16128851066191902880",
+      "version": "c249905e35ec46fae9b79a037d485e51e746daf641a92efd22deda1d13cefa0f",
+      "last_accessed_at": "2026-11-07T02:14:42.613257Z",
+      "created_at": "2026-11-07T01:23:51.866324Z",
+      "size_in_bytes": 797
+    },
+    {
+      "id": 10146354362,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-5535723990824200866",
+      "version": "48b524bf9ffc48ef06c57727ffdb875542b6d8678d6df7ca7be930a71d1b9798",
+      "last_accessed_at": "2026-11-07T00:44:31.813525Z",
+      "created_at": "2026-11-06T23:57:45.439265Z",
+      "size_in_bytes": 791
+    },
+    {
+      "id": 10148586082,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-5535723990824200866",
+      "version": "48b524bf9ffc48ef06c57727ffdb875542b6d8678d6df7ca7be930a71d1b9798",
+      "last_accessed_at": "2026-11-07T02:14:31.535328Z",
+      "created_at": "2026-11-07T01:23:49.788347Z",
+      "size_in_bytes": 791
+    },
+    {
+      "id": 10146511919,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-16272067018624780908",
+      "version": "b110ca21acbc7e15d0a53a3c0e834efee3316cbf85e9010d98f44d9a4c47186e",
+      "last_accessed_at": "2026-11-07T00:46:03.274053Z",
+      "created_at": "2026-11-07T00:03:40.141121Z",
+      "size_in_bytes": 790
+    },
+    {
+      "id": 10148588387,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-16263143747532770930",
+      "version": "3d5265d84b1e0e83cb1a4dbf5298302d37e6d625b532388f668003041b679afd",
+      "last_accessed_at": "2026-11-07T02:14:37.246562Z",
+      "created_at": "2026-11-07T01:23:55.875732Z",
+      "size_in_bytes": 790
+    },
+    {
+      "id": 10148587206,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-16272067018624780908",
+      "version": "b110ca21acbc7e15d0a53a3c0e834efee3316cbf85e9010d98f44d9a4c47186e",
+      "last_accessed_at": "2026-11-07T02:14:44.273273Z",
+      "created_at": "2026-11-07T01:23:52.820198Z",
+      "size_in_bytes": 786
+    },
+    {
+      "id": 10146797392,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-7213691990790229303",
+      "version": "b1577f778b3bc5051dbd1892acfd0fd060bfa15969f3431fb2671dd16fad4ce8",
+      "last_accessed_at": "2026-11-07T00:44:45.561658Z",
+      "created_at": "2026-11-07T00:13:38.994936Z",
+      "size_in_bytes": 772
+    },
+    {
+      "id": 10148588956,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-7213691990790229303",
+      "version": "b1577f778b3bc5051dbd1892acfd0fd060bfa15969f3431fb2671dd16fad4ce8",
+      "last_accessed_at": "2026-11-07T02:14:35.703889Z",
+      "created_at": "2026-11-07T01:23:57.410841Z",
+      "size_in_bytes": 761
+    },
+    {
+      "id": 10146500025,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-16494725473451325841",
+      "version": "78c4278bb9a5792aa0fe6cdcca44ac469863c7558ee5c480e75650a1c94f8db3",
+      "last_accessed_at": "2026-11-07T00:44:31.208777Z",
+      "created_at": "2026-11-07T00:03:15.037486Z",
+      "size_in_bytes": 744
+    },
+    {
+      "id": 10146735514,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-3477048049204119076",
+      "version": "1c7c6a98e649fe1bffea186d1b4b3870fc2584d2f8617945ff660e622dfb8839",
+      "last_accessed_at": "2026-11-07T00:44:30.207417Z",
+      "created_at": "2026-11-07T00:11:31.757619Z",
+      "size_in_bytes": 743
+    },
+    {
+      "id": 10148584886,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-3477048049204119076",
+      "version": "1c7c6a98e649fe1bffea186d1b4b3870fc2584d2f8617945ff660e622dfb8839",
+      "last_accessed_at": "2026-11-07T02:14:29.362346Z",
+      "created_at": "2026-11-07T01:23:46.534572Z",
+      "size_in_bytes": 733
+    },
+    {
+      "id": 10148585864,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-16494725473451325841",
+      "version": "78c4278bb9a5792aa0fe6cdcca44ac469863c7558ee5c480e75650a1c94f8db3",
+      "last_accessed_at": "2026-11-07T02:14:30.577731Z",
+      "created_at": "2026-11-07T01:23:49.171645Z",
+      "size_in_bytes": 732
+    },
+    {
+      "id": 10148706292,
+      "ref": "refs/pull/3918/merge",
+      "key": "nx-cache-2615132229521411814",
+      "version": "70c67c559ee75b2480fd3e95d1ee95fb2ce166f798ddf59d605f4487b385369a",
+      "last_accessed_at": "2026-11-07T01:28:50.102691Z",
+      "created_at": "2026-11-07T01:28:50.102691Z",
+      "size_in_bytes": 665
+    },
+    {
+      "id": 10146659554,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-12730480500059489723",
+      "version": "4abf4650fc82b96814ef6c9e6835b106d409fa49b0ab866a01d2a8a788bab55d",
+      "last_accessed_at": "2026-11-07T00:44:31.779680Z",
+      "created_at": "2026-11-07T00:08:47.146045Z",
+      "size_in_bytes": 656
+    },
+    {
+      "id": 10148594559,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-12730480500059489723",
+      "version": "4abf4650fc82b96814ef6c9e6835b106d409fa49b0ab866a01d2a8a788bab55d",
+      "last_accessed_at": "2026-11-07T01:24:09.977816Z",
+      "created_at": "2026-11-07T01:24:09.977816Z",
+      "size_in_bytes": 656
+    },
+    {
+      "id": 10149714066,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-2615132229521411814",
+      "version": "70c67c559ee75b2480fd3e95d1ee95fb2ce166f798ddf59d605f4487b385369a",
+      "last_accessed_at": "2026-11-07T02:14:28.762137Z",
+      "created_at": "2026-11-07T02:14:28.762137Z",
+      "size_in_bytes": 653
+    },
+    {
+      "id": 10146728692,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-13653212659487903083",
+      "version": "2d3d616cc08fc49b67162254152f55370851353ede31336d330047590e6c4cb6",
+      "last_accessed_at": "2026-11-07T00:44:45.546067Z",
+      "created_at": "2026-11-07T00:11:17.707018Z",
+      "size_in_bytes": 652
+    },
+    {
+      "id": 10146687165,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-7108968223570025213",
+      "version": "64f012bc09fa10ef946462a2ed17a41d4655d4f95f009563929ecdf2237bfe16",
+      "last_accessed_at": "2026-11-07T00:46:01.395571Z",
+      "created_at": "2026-11-07T00:09:48.549884Z",
+      "size_in_bytes": 647
+    },
+    {
+      "id": 10148586719,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-7108968223570025213",
+      "version": "64f012bc09fa10ef946462a2ed17a41d4655d4f95f009563929ecdf2237bfe16",
+      "last_accessed_at": "2026-11-07T02:14:43.234994Z",
+      "created_at": "2026-11-07T01:23:51.482290Z",
+      "size_in_bytes": 644
+    },
+    {
+      "id": 10148588890,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-13653212659487903083",
+      "version": "2d3d616cc08fc49b67162254152f55370851353ede31336d330047590e6c4cb6",
+      "last_accessed_at": "2026-11-07T02:14:34.782870Z",
+      "created_at": "2026-11-07T01:23:57.216416Z",
+      "size_in_bytes": 642
+    },
+    {
+      "id": 10146926110,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-11437699826621648848",
+      "version": "8f9b565c848d64a1fb404cd44de2302ef0a6c9c328d6b933b4651288a9d73ee6",
+      "last_accessed_at": "2026-11-07T00:44:47.089729Z",
+      "created_at": "2026-11-07T00:18:18.326862Z",
+      "size_in_bytes": 640
+    },
+    {
+      "id": 10148589172,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-11437699826621648848",
+      "version": "8f9b565c848d64a1fb404cd44de2302ef0a6c9c328d6b933b4651288a9d73ee6",
+      "last_accessed_at": "2026-11-07T02:14:38.144837Z",
+      "created_at": "2026-11-07T01:23:57.970331Z",
+      "size_in_bytes": 629
+    },
+    {
+      "id": 10146985308,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-13073813678945674903",
+      "version": "61a26a33592ff700b9de17a7e03aa556872088bc21148f9b8b3f898b2a900360",
+      "last_accessed_at": "2026-11-07T00:46:10.481392Z",
+      "created_at": "2026-11-07T00:20:37.285622Z",
+      "size_in_bytes": 625
+    },
+    {
+      "id": 10148587527,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-13073813678945674903",
+      "version": "61a26a33592ff700b9de17a7e03aa556872088bc21148f9b8b3f898b2a900360",
+      "last_accessed_at": "2026-11-07T02:14:46.092730Z",
+      "created_at": "2026-11-07T01:23:53.604322Z",
+      "size_in_bytes": 624
+    },
+    {
+      "id": 10147707914,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-4110387308789783973",
+      "version": "97b40386b189569c7650e627a4d877c22502d33599724c9caa6cb5d776f4329a",
+      "last_accessed_at": "2026-11-07T00:48:11.289690Z",
+      "created_at": "2026-11-07T00:48:11.289690Z",
+      "size_in_bytes": 584
+    },
+    {
+      "id": 10148586410,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-4110387308789783973",
+      "version": "97b40386b189569c7650e627a4d877c22502d33599724c9caa6cb5d776f4329a",
+      "last_accessed_at": "2026-11-07T01:23:50.700064Z",
+      "created_at": "2026-11-07T01:23:50.700064Z",
+      "size_in_bytes": 574
+    },
+    {
+      "id": 10149490168,
+      "ref": "refs/pull/3918/merge",
+      "key": "nx-cache-13243325192455168844",
+      "version": "1b29d7c7a85987f776484a5bb8be1f782e05bc40d8c89dc2ef108ff9e41c2fc3",
+      "last_accessed_at": "2026-11-07T02:04:53.819891Z",
+      "created_at": "2026-11-07T02:04:53.819891Z",
+      "size_in_bytes": 569
+    },
+    {
+      "id": 10147945917,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-989235316780744304",
+      "version": "e3c92d1e90d24f70a46cfb78c4825be2b6ef402ca468da4fc33d552b4e6ecacf",
+      "last_accessed_at": "2026-11-07T00:57:56.874697Z",
+      "created_at": "2026-11-07T00:57:56.874697Z",
+      "size_in_bytes": 566
+    },
+    {
+      "id": 10149718558,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-13243325192455168844",
+      "version": "1b29d7c7a85987f776484a5bb8be1f782e05bc40d8c89dc2ef108ff9e41c2fc3",
+      "last_accessed_at": "2026-11-07T02:14:40.585879Z",
+      "created_at": "2026-11-07T02:14:40.585879Z",
+      "size_in_bytes": 558
+    },
+    {
+      "id": 10146541370,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-11601590746736158790",
+      "version": "9f6c0a5835fde5b81ab21fefeb808189ad1fdd32ff849a885566669f7a82de21",
+      "last_accessed_at": "2026-11-07T00:46:03.262191Z",
+      "created_at": "2026-11-07T00:04:39.126996Z",
+      "size_in_bytes": 557
+    },
+    {
+      "id": 10146631827,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-8856074328374235771",
+      "version": "274bff4a367e5dbb50e2147f9ef24d5487d42d9d743e25106baf0178ac9f81db",
+      "last_accessed_at": "2026-11-07T00:46:03.254886Z",
+      "created_at": "2026-11-07T00:07:48.961512Z",
+      "size_in_bytes": 553
+    },
+    {
+      "id": 10148589769,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-989235316780744304",
+      "version": "e3c92d1e90d24f70a46cfb78c4825be2b6ef402ca468da4fc33d552b4e6ecacf",
+      "last_accessed_at": "2026-11-07T01:23:59.695528Z",
+      "created_at": "2026-11-07T01:23:59.695528Z",
+      "size_in_bytes": 552
+    },
+    {
+      "id": 10148587074,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-11601590746736158790",
+      "version": "9f6c0a5835fde5b81ab21fefeb808189ad1fdd32ff849a885566669f7a82de21",
+      "last_accessed_at": "2026-11-07T02:14:44.884827Z",
+      "created_at": "2026-11-07T01:23:52.439699Z",
+      "size_in_bytes": 552
+    },
+    {
+      "id": 10148586991,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-8856074328374235771",
+      "version": "274bff4a367e5dbb50e2147f9ef24d5487d42d9d743e25106baf0178ac9f81db",
+      "last_accessed_at": "2026-11-07T02:14:43.946493Z",
+      "created_at": "2026-11-07T01:23:52.257010Z",
+      "size_in_bytes": 550
+    },
+    {
+      "id": 10146626889,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-508162768305621275",
+      "version": "41bda4d4e978376eb4ff2da4a9d3b84f7c7143d8d64266caff4fb6857d59050c",
+      "last_accessed_at": "2026-11-07T00:44:45.491888Z",
+      "created_at": "2026-11-07T00:07:38.102789Z",
+      "size_in_bytes": 547
+    },
+    {
+      "id": 10146704282,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-6016667325524620977",
+      "version": "753963251fb69f30d0bfc712e71b01ec933f5273efdf9fbab5f9b0c83d1d393c",
+      "last_accessed_at": "2026-11-07T00:44:45.550979Z",
+      "created_at": "2026-11-07T00:10:24.854557Z",
+      "size_in_bytes": 545
+    },
+    {
+      "id": 10148588802,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-6016667325524620977",
+      "version": "753963251fb69f30d0bfc712e71b01ec933f5273efdf9fbab5f9b0c83d1d393c",
+      "last_accessed_at": "2026-11-07T02:14:36.360901Z",
+      "created_at": "2026-11-07T01:23:57.025597Z",
+      "size_in_bytes": 536
+    },
+    {
+      "id": 10148588457,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-508162768305621275",
+      "version": "41bda4d4e978376eb4ff2da4a9d3b84f7c7143d8d64266caff4fb6857d59050c",
+      "last_accessed_at": "2026-11-07T02:14:37.538502Z",
+      "created_at": "2026-11-07T01:23:56.084412Z",
+      "size_in_bytes": 534
+    },
+    {
+      "id": 10146781806,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-18153856275321415797",
+      "version": "114d5af5f95c61d0257bc0cf5ef5c7c6cf33a425d16748b3e85ad189a5ae6cca",
+      "last_accessed_at": "2026-11-07T00:46:03.266701Z",
+      "created_at": "2026-11-07T00:13:07.318423Z",
+      "size_in_bytes": 528
+    },
+    {
+      "id": 10148589034,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-13226967488997432166",
+      "version": "29236c7f616b8cf25c87bf9d5ea897cd54d025e2f08a6a330151d97e068403fc",
+      "last_accessed_at": "2026-11-07T02:14:35.383621Z",
+      "created_at": "2026-11-07T01:23:57.610723Z",
+      "size_in_bytes": 525
+    },
+    {
+      "id": 10148587364,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-18153856275321415797",
+      "version": "114d5af5f95c61d0257bc0cf5ef5c7c6cf33a425d16748b3e85ad189a5ae6cca",
+      "last_accessed_at": "2026-11-07T02:14:45.482893Z",
+      "created_at": "2026-11-07T01:23:53.219008Z",
+      "size_in_bytes": 524
+    },
+    {
+      "id": 10146808976,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-13226967488997432166",
+      "version": "29236c7f616b8cf25c87bf9d5ea897cd54d025e2f08a6a330151d97e068403fc",
+      "last_accessed_at": "2026-11-07T00:44:45.550973Z",
+      "created_at": "2026-11-07T00:14:04.628884Z",
+      "size_in_bytes": 522
+    },
+    {
+      "id": 10146632521,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-439722053424788056",
+      "version": "41d52a21a08d9c7337050096199e3f376c9e7c24aa0ac36b632c4b4245e4b659",
+      "last_accessed_at": "2026-11-07T00:44:45.532037Z",
+      "created_at": "2026-11-07T00:07:50.459243Z",
+      "size_in_bytes": 497
+    },
+    {
+      "id": 10146596023,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-12345234026263471250",
+      "version": "2e72848200e6a5bfc8839ba891dcb120e8cb30b9313d88bdc6a9f506f951f056",
+      "last_accessed_at": "2026-11-07T00:46:03.278763Z",
+      "created_at": "2026-11-07T00:06:30.682739Z",
+      "size_in_bytes": 496
+    },
+    {
+      "id": 10148587135,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-12345234026263471250",
+      "version": "2e72848200e6a5bfc8839ba891dcb120e8cb30b9313d88bdc6a9f506f951f056",
+      "last_accessed_at": "2026-11-07T02:14:44.578145Z",
+      "created_at": "2026-11-07T01:23:52.636875Z",
+      "size_in_bytes": 492
+    },
+    {
+      "id": 10146628547,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-3638452309799753201",
+      "version": "a853ab69c2c69ad26acdb001b3226b98a341b96d48d71edcf6bdf6f66822fa3f",
+      "last_accessed_at": "2026-11-07T00:44:45.507158Z",
+      "created_at": "2026-11-07T00:07:41.779564Z",
+      "size_in_bytes": 487
+    },
+    {
+      "id": 10146569093,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-3248003024454885088",
+      "version": "344aa04920c91a9371f88540772db7bdde37fc938faa1a1ec92591d0b18ffe81",
+      "last_accessed_at": "2026-11-07T00:46:03.249476Z",
+      "created_at": "2026-11-07T00:05:34.574383Z",
+      "size_in_bytes": 486
+    },
+    {
+      "id": 10146797980,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-9543813011388318672",
+      "version": "b7e7a5248d8d7847ad7ecf185a32bc51d507cc6602353225511f9e9012ac101d",
+      "last_accessed_at": "2026-11-07T00:47:19.466028Z",
+      "created_at": "2026-11-07T00:13:40.369335Z",
+      "size_in_bytes": 485
+    },
+    {
+      "id": 10148588671,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-439722053424788056",
+      "version": "41d52a21a08d9c7337050096199e3f376c9e7c24aa0ac36b632c4b4245e4b659",
+      "last_accessed_at": "2026-11-07T02:14:35.072614Z",
+      "created_at": "2026-11-07T01:23:56.627266Z",
+      "size_in_bytes": 485
+    },
+    {
+      "id": 10148587799,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-4318018177701031366",
+      "version": "5344380b84f30a6b4fcce9f93582ae1ac95b6fc6631a6be4726052f3afcf8319",
+      "last_accessed_at": "2026-11-07T02:14:46.694306Z",
+      "created_at": "2026-11-07T01:23:54.377771Z",
+      "size_in_bytes": 484
+    },
+    {
+      "id": 10148586930,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-3248003024454885088",
+      "version": "344aa04920c91a9371f88540772db7bdde37fc938faa1a1ec92591d0b18ffe81",
+      "last_accessed_at": "2026-11-07T02:14:45.191433Z",
+      "created_at": "2026-11-07T01:23:52.040371Z",
+      "size_in_bytes": 483
+    },
+    {
+      "id": 10146696582,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-10730516826680967028",
+      "version": "426393e5260ab25152406d20b349bd06cfec8d30d8ed6ff3e8dc2f9aca219c3f",
+      "last_accessed_at": "2026-11-07T00:44:45.523797Z",
+      "created_at": "2026-11-07T00:10:08.592814Z",
+      "size_in_bytes": 479
+    },
+    {
+      "id": 10148588604,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-3638452309799753201",
+      "version": "a853ab69c2c69ad26acdb001b3226b98a341b96d48d71edcf6bdf6f66822fa3f",
+      "last_accessed_at": "2026-11-07T02:14:37.847466Z",
+      "created_at": "2026-11-07T01:23:56.441788Z",
+      "size_in_bytes": 478
+    },
+    {
+      "id": 10146747047,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-4318018177701031366",
+      "version": "5344380b84f30a6b4fcce9f93582ae1ac95b6fc6631a6be4726052f3afcf8319",
+      "last_accessed_at": "2026-11-07T00:47:17.388497Z",
+      "created_at": "2026-11-07T00:11:55.958892Z",
+      "size_in_bytes": 476
+    },
+    {
+      "id": 10148589375,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-9543813011388318672",
+      "version": "b7e7a5248d8d7847ad7ecf185a32bc51d507cc6602353225511f9e9012ac101d",
+      "last_accessed_at": "2026-11-07T02:14:39.031710Z",
+      "created_at": "2026-11-07T01:23:58.526623Z",
+      "size_in_bytes": 475
+    },
+    {
+      "id": 10146622814,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-6779871542390769129",
+      "version": "ed94ba305f8474268a171a063c95ff36a7b2273065bc701f5759c88e0806af96",
+      "last_accessed_at": "2026-11-07T00:46:03.265114Z",
+      "created_at": "2026-11-07T00:07:29.139183Z",
+      "size_in_bytes": 474
+    },
+    {
+      "id": 10146437441,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-15992344161974045017",
+      "version": "8df8bf67a0e52d2136124d9c40e650b99544e5f8a03d4dcc17f51855061021b9",
+      "last_accessed_at": "2026-11-07T00:44:30.377941Z",
+      "created_at": "2026-11-07T00:00:59.781467Z",
+      "size_in_bytes": 473
+    },
+    {
+      "id": 10147262421,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-4424214436781824023",
+      "version": "07df295950e46f542306d28ebd3b484e63378d4570424b84ce0a24ebd3331fa7",
+      "last_accessed_at": "2026-11-07T00:47:17.394775Z",
+      "created_at": "2026-11-07T00:30:50.601003Z",
+      "size_in_bytes": 473
+    },
+    {
+      "id": 10149185032,
+      "ref": "refs/pull/3918/merge",
+      "key": "nx-cache-8925739721722182171",
+      "version": "fd2966db72c572495ec74c888a8d23049ee1f1979dd7dd4bf67f644b2b62d4ec",
+      "last_accessed_at": "2026-11-07T01:50:31.636418Z",
+      "created_at": "2026-11-07T01:50:31.636418Z",
+      "size_in_bytes": 473
+    },
+    {
+      "id": 10146921205,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-6517843439076024361",
+      "version": "41f99cbdbcaaf2ccd6bc563240c25b57b9b166aaaae10dec4b3c6cc02f6c01a7",
+      "last_accessed_at": "2026-11-07T00:47:19.463582Z",
+      "created_at": "2026-11-07T00:18:07.732971Z",
+      "size_in_bytes": 472
+    },
+    {
+      "id": 10146786736,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-11619039619521202603",
+      "version": "18d0ebfef3a7c77b3184e5801eaaeb0d4479a8ae36d0d1abe75630cc0e72fddf",
+      "last_accessed_at": "2026-11-07T00:46:03.268404Z",
+      "created_at": "2026-11-07T00:13:16.915547Z",
+      "size_in_bytes": 471
+    },
+    {
+      "id": 10148587274,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-6779871542390769129",
+      "version": "ed94ba305f8474268a171a063c95ff36a7b2273065bc701f5759c88e0806af96",
+      "last_accessed_at": "2026-11-07T02:14:43.598654Z",
+      "created_at": "2026-11-07T01:23:53.014236Z",
+      "size_in_bytes": 471
+    },
+    {
+      "id": 10149721320,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-8925739721722182171",
+      "version": "fd2966db72c572495ec74c888a8d23049ee1f1979dd7dd4bf67f644b2b62d4ec",
+      "last_accessed_at": "2026-11-07T02:14:48.737044Z",
+      "created_at": "2026-11-07T02:14:48.737044Z",
+      "size_in_bytes": 471
+    },
+    {
+      "id": 10148587645,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-4424214436781824023",
+      "version": "07df295950e46f542306d28ebd3b484e63378d4570424b84ce0a24ebd3331fa7",
+      "last_accessed_at": "2026-11-07T01:23:54.009976Z",
+      "created_at": "2026-11-07T01:23:54.009976Z",
+      "size_in_bytes": 468
+    },
+    {
+      "id": 10148588743,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-10730516826680967028",
+      "version": "426393e5260ab25152406d20b349bd06cfec8d30d8ed6ff3e8dc2f9aca219c3f",
+      "last_accessed_at": "2026-11-07T02:14:36.068337Z",
+      "created_at": "2026-11-07T01:23:56.806403Z",
+      "size_in_bytes": 468
+    },
+    {
+      "id": 10146905077,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-13525629399561570398",
+      "version": "17da25dcdb261346dd84665cf7c1ef0ecc763d53f1bf0c88386f179be870fdb3",
+      "last_accessed_at": "2026-11-07T00:47:17.386506Z",
+      "created_at": "2026-11-07T00:17:33.288259Z",
+      "size_in_bytes": 466
+    },
+    {
+      "id": 10148587445,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-11619039619521202603",
+      "version": "18d0ebfef3a7c77b3184e5801eaaeb0d4479a8ae36d0d1abe75630cc0e72fddf",
+      "last_accessed_at": "2026-11-07T02:14:45.801891Z",
+      "created_at": "2026-11-07T01:23:53.393957Z",
+      "size_in_bytes": 466
+    },
+    {
+      "id": 10148587725,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-13525629399561570398",
+      "version": "17da25dcdb261346dd84665cf7c1ef0ecc763d53f1bf0c88386f179be870fdb3",
+      "last_accessed_at": "2026-11-07T02:14:47.010575Z",
+      "created_at": "2026-11-07T01:23:54.195312Z",
+      "size_in_bytes": 463
+    },
+    {
+      "id": 10148589493,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-6517843439076024361",
+      "version": "41f99cbdbcaaf2ccd6bc563240c25b57b9b166aaaae10dec4b3c6cc02f6c01a7",
+      "last_accessed_at": "2026-11-07T02:14:38.739474Z",
+      "created_at": "2026-11-07T01:23:58.881211Z",
+      "size_in_bytes": 462
+    },
+    {
+      "id": 10146798089,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-15272049236692281838",
+      "version": "9e19e40bf17aac8e0270c119f072d86668c89754cb39886782261c93a80927e6",
+      "last_accessed_at": "2026-11-07T00:44:45.568567Z",
+      "created_at": "2026-11-07T00:13:40.599602Z",
+      "size_in_bytes": 460
+    },
+    {
+      "id": 10148585179,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-15992344161974045017",
+      "version": "8df8bf67a0e52d2136124d9c40e650b99544e5f8a03d4dcc17f51855061021b9",
+      "last_accessed_at": "2026-11-07T01:23:47.402191Z",
+      "created_at": "2026-11-07T01:23:47.402191Z",
+      "size_in_bytes": 459
+    },
+    {
+      "id": 10149517949,
+      "ref": "refs/pull/3918/merge",
+      "key": "nx-cache-10313726418545874556",
+      "version": "752ea1e3e28afb96f60e0cafbe0a5ef36373f09a6580cde54f6ef6aa794c06c4",
+      "last_accessed_at": "2026-11-07T02:06:06.391498Z",
+      "created_at": "2026-11-07T02:06:06.391498Z",
+      "size_in_bytes": 456
+    },
+    {
+      "id": 10147329772,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-466642419199942635",
+      "version": "84fcdf55698a1056feb73a11c06fe2aa399999e3c2718100c7ba55906550b544",
+      "last_accessed_at": "2026-11-07T00:47:19.472645Z",
+      "created_at": "2026-11-07T00:33:20.683617Z",
+      "size_in_bytes": 452
+    },
+    {
+      "id": 10146530736,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-5018301493224356171",
+      "version": "eb9d7d3329ccab0491815b00e4c0303b300c67f7e08437d45b68b5cc3848c4d3",
+      "last_accessed_at": "2026-11-07T00:44:45.514653Z",
+      "created_at": "2026-11-07T00:04:17.791806Z",
+      "size_in_bytes": 451
+    },
+    {
+      "id": 10148589108,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-15272049236692281838",
+      "version": "9e19e40bf17aac8e0270c119f072d86668c89754cb39886782261c93a80927e6",
+      "last_accessed_at": "2026-11-07T02:14:36.652816Z",
+      "created_at": "2026-11-07T01:23:57.793706Z",
+      "size_in_bytes": 450
+    },
+    {
+      "id": 10146431202,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-18109092760184337499",
+      "version": "735c85f0bb5dad4304e50247dc1d1de25714d7dc6be1a8ea45c987db3df9c819",
+      "last_accessed_at": "2026-11-07T00:46:03.255455Z",
+      "created_at": "2026-11-07T00:00:45.624174Z",
+      "size_in_bytes": 449
+    },
+    {
+      "id": 10148586796,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-18109092760184337499",
+      "version": "735c85f0bb5dad4304e50247dc1d1de25714d7dc6be1a8ea45c987db3df9c819",
+      "last_accessed_at": "2026-11-07T02:14:42.933555Z",
+      "created_at": "2026-11-07T01:23:51.686701Z",
+      "size_in_bytes": 444
+    },
+    {
+      "id": 10149718728,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-10313726418545874556",
+      "version": "752ea1e3e28afb96f60e0cafbe0a5ef36373f09a6580cde54f6ef6aa794c06c4",
+      "last_accessed_at": "2026-11-07T02:14:40.952742Z",
+      "created_at": "2026-11-07T02:14:40.952742Z",
+      "size_in_bytes": 443
+    },
+    {
+      "id": 10148588542,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-5018301493224356171",
+      "version": "eb9d7d3329ccab0491815b00e4c0303b300c67f7e08437d45b68b5cc3848c4d3",
+      "last_accessed_at": "2026-11-07T02:14:36.954814Z",
+      "created_at": "2026-11-07T01:23:56.269232Z",
+      "size_in_bytes": 440
+    },
+    {
+      "id": 10148589433,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-466642419199942635",
+      "version": "84fcdf55698a1056feb73a11c06fe2aa399999e3c2718100c7ba55906550b544",
+      "last_accessed_at": "2026-11-07T01:23:58.702418Z",
+      "created_at": "2026-11-07T01:23:58.702418Z",
+      "size_in_bytes": 439
+    },
+    {
+      "id": 10148703289,
+      "ref": "refs/pull/3918/merge",
+      "key": "nx-cache-13585364432578043003",
+      "version": "c5b48e0adf8bcb33d69bdd0a778718c4c56eed7e214187408382437fd6389946",
+      "last_accessed_at": "2026-11-07T01:28:42.951099Z",
+      "created_at": "2026-11-07T01:28:42.951099Z",
+      "size_in_bytes": 436
+    },
+    {
+      "id": 10148596263,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-1879778683290228266",
+      "version": "a53eda28d396e995ac78ce1a7eac2ba5a3e6f67ba1ab5d010b5fb0a4b7641cf6",
+      "last_accessed_at": "2026-11-07T02:14:19.277238Z",
+      "created_at": "2026-11-07T01:24:14.032378Z",
+      "size_in_bytes": 427
+    },
+    {
+      "id": 10148702657,
+      "ref": "refs/pull/3918/merge",
+      "key": "nx-cache-6020390992158037260",
+      "version": "bfe8e57a5392ced774182b0965a44810b45a9485e764f59abb8f1848e8bd67ef",
+      "last_accessed_at": "2026-11-07T01:28:41.421132Z",
+      "created_at": "2026-11-07T01:28:41.421132Z",
+      "size_in_bytes": 422
+    },
+    {
+      "id": 10149713759,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-13585364432578043003",
+      "version": "c5b48e0adf8bcb33d69bdd0a778718c4c56eed7e214187408382437fd6389946",
+      "last_accessed_at": "2026-11-07T02:14:27.887195Z",
+      "created_at": "2026-11-07T02:14:27.887195Z",
+      "size_in_bytes": 422
+    },
+    {
+      "id": 10146660082,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-9388137207417367336",
+      "version": "f717f8b0a66b8b3bb945d25d57d875a65a85a41844d8f54888a0af2c12e53a19",
+      "last_accessed_at": "2026-11-07T00:44:31.902119Z",
+      "created_at": "2026-11-07T00:08:48.824183Z",
+      "size_in_bytes": 421
+    },
+    {
+      "id": 10148594619,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-9388137207417367336",
+      "version": "f717f8b0a66b8b3bb945d25d57d875a65a85a41844d8f54888a0af2c12e53a19",
+      "last_accessed_at": "2026-11-07T02:14:20.808101Z",
+      "created_at": "2026-11-07T01:24:10.154648Z",
+      "size_in_bytes": 421
+    },
+    {
+      "id": 10146658566,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-14615505436238140725",
+      "version": "865b836d5dcc7aa90522ab28b6a45c470d8145299d746719433f08b12f325c7a",
+      "last_accessed_at": "2026-11-07T00:44:31.775376Z",
+      "created_at": "2026-11-07T00:08:44.831722Z",
+      "size_in_bytes": 420
+    },
+    {
+      "id": 10146538119,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-6426978065440280914",
+      "version": "887e023dcc8e9b686e9096704a8dff482cb429c98b2e5bcd2a1822eb0b4427b9",
+      "last_accessed_at": "2026-11-07T00:44:32.554945Z",
+      "created_at": "2026-11-07T00:04:32.869775Z",
+      "size_in_bytes": 420
+    },
+    {
+      "id": 10148594432,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-14615505436238140725",
+      "version": "865b836d5dcc7aa90522ab28b6a45c470d8145299d746719433f08b12f325c7a",
+      "last_accessed_at": "2026-11-07T01:24:09.645861Z",
+      "created_at": "2026-11-07T01:24:09.645861Z",
+      "size_in_bytes": 420
+    },
+    {
+      "id": 10149713002,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-6020390992158037260",
+      "version": "bfe8e57a5392ced774182b0965a44810b45a9485e764f59abb8f1848e8bd67ef",
+      "last_accessed_at": "2026-11-07T02:14:25.974014Z",
+      "created_at": "2026-11-07T02:14:25.974014Z",
+      "size_in_bytes": 420
+    },
+    {
+      "id": 10146573406,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-15055185215537034148",
+      "version": "689fe9b216e857bb9a82829ebff386672d36bab028b7e587fe155788f09ba1e5",
+      "last_accessed_at": "2026-11-07T00:44:29.942120Z",
+      "created_at": "2026-11-07T00:05:43.825483Z",
+      "size_in_bytes": 416
+    },
+    {
+      "id": 10146656124,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-1606020854894775554",
+      "version": "7cebc274c3972e1a84df6fa393d335c5c3e1c1273a648d1042cac9977d95d699",
+      "last_accessed_at": "2026-11-07T00:44:30.854870Z",
+      "created_at": "2026-11-07T00:08:39.392141Z",
+      "size_in_bytes": 415
+    },
+    {
+      "id": 10146529675,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-4328516340939823899",
+      "version": "6086d72cfeb29ab253c53e0684cff1d8ff1b5c3242c38be8bc7d7754357c755d",
+      "last_accessed_at": "2026-11-07T00:44:32.539607Z",
+      "created_at": "2026-11-07T00:04:16.088631Z",
+      "size_in_bytes": 415
+    },
+    {
+      "id": 10148593080,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-1606020854894775554",
+      "version": "7cebc274c3972e1a84df6fa393d335c5c3e1c1273a648d1042cac9977d95d699",
+      "last_accessed_at": "2026-11-07T02:14:16.889480Z",
+      "created_at": "2026-11-07T01:24:06.668898Z",
+      "size_in_bytes": 415
+    },
+    {
+      "id": 10147667588,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-12718864904542149634",
+      "version": "63d98aee5e478c9df0187ddac6712018fc325f05d6e89bbade1dfbd8627f1687",
+      "last_accessed_at": "2026-11-07T00:46:31.844101Z",
+      "created_at": "2026-11-07T00:46:31.844101Z",
+      "size_in_bytes": 414
+    },
+    {
+      "id": 10147677180,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-1879778683290228266",
+      "version": "a53eda28d396e995ac78ce1a7eac2ba5a3e6f67ba1ab5d010b5fb0a4b7641cf6",
+      "last_accessed_at": "2026-11-07T00:46:55.124009Z",
+      "created_at": "2026-11-07T00:46:55.124009Z",
+      "size_in_bytes": 414
+    },
+    {
+      "id": 10147684088,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-5048018838831677053",
+      "version": "09d5924424d0279c6d79492edd2bd0b205fafa96df921950c762d9fb2f1f0554",
+      "last_accessed_at": "2026-11-07T00:47:12.068946Z",
+      "created_at": "2026-11-07T00:47:12.068946Z",
+      "size_in_bytes": 414
+    },
+    {
+      "id": 10146648634,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-10210952065892287360",
+      "version": "f00eda5589f7e86355f71d33023e925a600c55023704d2cebd662c531777a65a",
+      "last_accessed_at": "2026-11-07T00:44:32.286542Z",
+      "created_at": "2026-11-07T00:08:22.721055Z",
+      "size_in_bytes": 413
+    },
+    {
+      "id": 10148594947,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-10210952065892287360",
+      "version": "f00eda5589f7e86355f71d33023e925a600c55023704d2cebd662c531777a65a",
+      "last_accessed_at": "2026-11-07T02:14:19.587890Z",
+      "created_at": "2026-11-07T01:24:10.967328Z",
+      "size_in_bytes": 413
+    },
+    {
+      "id": 10146661169,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-2860543788252976743",
+      "version": "4c3536a9f76ec457537c4ffe21cd142c13a9adcebc0dff2f36d7f6b863659a80",
+      "last_accessed_at": "2026-11-07T00:44:32.456568Z",
+      "created_at": "2026-11-07T00:08:51.378810Z",
+      "size_in_bytes": 412
+    },
+    {
+      "id": 10148702686,
+      "ref": "refs/pull/3918/merge",
+      "key": "nx-cache-13813167250680721306",
+      "version": "4469be5e55f4faa01684d5f189463a5cb62500f87862fc340ed51ae50860643d",
+      "last_accessed_at": "2026-11-07T01:28:41.479957Z",
+      "created_at": "2026-11-07T01:28:41.479957Z",
+      "size_in_bytes": 412
+    },
+    {
+      "id": 10028992454,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-1548285517591697414",
+      "version": "aaf89e617ca9dca3a04230c084f211b9bfa155745a74879d3eff2c1eecb0a3f3",
+      "last_accessed_at": "2026-11-07T02:14:12.704018Z",
+      "created_at": "2026-11-04T23:20:37.917765Z",
+      "size_in_bytes": 412
+    },
+    {
+      "id": 10148595425,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-2860543788252976743",
+      "version": "4c3536a9f76ec457537c4ffe21cd142c13a9adcebc0dff2f36d7f6b863659a80",
+      "last_accessed_at": "2026-11-07T02:14:22.595231Z",
+      "created_at": "2026-11-07T01:24:12.061247Z",
+      "size_in_bytes": 412
+    },
+    {
+      "id": 10146548522,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-1744905693553873631",
+      "version": "0c11b11d684a80f27d0d7c13fd6f32706c1313233b8e4fdd09f8d49befe955d0",
+      "last_accessed_at": "2026-11-07T00:44:29.762984Z",
+      "created_at": "2026-11-07T00:04:55.162945Z",
+      "size_in_bytes": 411
+    },
+    {
+      "id": 10146566426,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-18103339469161328203",
+      "version": "6e03b70237c3dd1f8b7b323d521edcfc7a43205c13932edd1e39379e2f6ca9d5",
+      "last_accessed_at": "2026-11-07T00:44:29.793167Z",
+      "created_at": "2026-11-07T00:05:29.199266Z",
+      "size_in_bytes": 411
+    },
+    {
+      "id": 10148590528,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-1744905693553873631",
+      "version": "0c11b11d684a80f27d0d7c13fd6f32706c1313233b8e4fdd09f8d49befe955d0",
+      "last_accessed_at": "2026-11-07T02:14:08.893808Z",
+      "created_at": "2026-11-07T01:24:01.163835Z",
+      "size_in_bytes": 411
+    },
+    {
+      "id": 10146618664,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-3115313461151570053",
+      "version": "8e1a4c78fc1ef12ddaaa7703ed4c76be85439916861d86aa433459fd9ac8b8d8",
+      "last_accessed_at": "2026-11-07T00:44:30.677188Z",
+      "created_at": "2026-11-07T00:07:19.797630Z",
+      "size_in_bytes": 410
+    },
+    {
+      "id": 10148592803,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-3115313461151570053",
+      "version": "8e1a4c78fc1ef12ddaaa7703ed4c76be85439916861d86aa433459fd9ac8b8d8",
+      "last_accessed_at": "2026-11-07T01:24:06.109394Z",
+      "created_at": "2026-11-07T01:24:06.109394Z",
+      "size_in_bytes": 410
+    },
+    {
+      "id": 10146659926,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-7397277040762417949",
+      "version": "68cf7b4209bba5f42119ded6a636fd7ada342fd334785d31341d2247c94beca1",
+      "last_accessed_at": "2026-11-07T00:44:31.882954Z",
+      "created_at": "2026-11-07T00:08:48.145493Z",
+      "size_in_bytes": 409
+    },
+    {
+      "id": 10146661648,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-17807342443518361966",
+      "version": "30caa13f36faded419391a84086a1efa4d958183e376ae36967a44a0c85a8971",
+      "last_accessed_at": "2026-11-07T00:44:32.478620Z",
+      "created_at": "2026-11-07T00:08:52.540525Z",
+      "size_in_bytes": 409
+    },
+    {
+      "id": 10148595855,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-6426978065440280914",
+      "version": "887e023dcc8e9b686e9096704a8dff482cb429c98b2e5bcd2a1822eb0b4427b9",
+      "last_accessed_at": "2026-11-07T02:14:05.251385Z",
+      "created_at": "2026-11-07T01:24:13.051766Z",
+      "size_in_bytes": 409
+    },
+    {
+      "id": 10148595164,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-8264316889167177373",
+      "version": "c8f3612100c1bc4998a466faa74a844613eb53d10f751e6b3267981c4051b415",
+      "last_accessed_at": "2026-11-07T02:14:05.885176Z",
+      "created_at": "2026-11-07T01:24:11.455877Z",
+      "size_in_bytes": 409
+    },
+    {
+      "id": 10148591094,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-18103339469161328203",
+      "version": "6e03b70237c3dd1f8b7b323d521edcfc7a43205c13932edd1e39379e2f6ca9d5",
+      "last_accessed_at": "2026-11-07T02:14:10.736457Z",
+      "created_at": "2026-11-07T01:24:02.322466Z",
+      "size_in_bytes": 409
+    },
+    {
+      "id": 10148594491,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-7397277040762417949",
+      "version": "68cf7b4209bba5f42119ded6a636fd7ada342fd334785d31341d2247c94beca1",
+      "last_accessed_at": "2026-11-07T02:14:20.198441Z",
+      "created_at": "2026-11-07T01:24:09.813118Z",
+      "size_in_bytes": 409
+    },
+    {
+      "id": 10148595578,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-17807342443518361966",
+      "version": "30caa13f36faded419391a84086a1efa4d958183e376ae36967a44a0c85a8971",
+      "last_accessed_at": "2026-11-07T02:14:23.779089Z",
+      "created_at": "2026-11-07T01:24:12.408389Z",
+      "size_in_bytes": 409
+    },
+    {
+      "id": 10146569603,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-18190879519810698041",
+      "version": "57d0df695d8ab364913da6750bfe6fa39cbdee77f39b7793804b7f010edd96ec",
+      "last_accessed_at": "2026-11-07T00:44:29.826884Z",
+      "created_at": "2026-11-07T00:05:35.742719Z",
+      "size_in_bytes": 408
+    },
+    {
+      "id": 10146615145,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-5739811853956664041",
+      "version": "6065e337e77607ca1c122bf572fe6c7d6eebc9e96335e1561ec6e225783e9d0b",
+      "last_accessed_at": "2026-11-07T00:44:30.188391Z",
+      "created_at": "2026-11-07T00:07:11.933587Z",
+      "size_in_bytes": 408
+    },
+    {
+      "id": 10146653147,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-8264316889167177373",
+      "version": "c8f3612100c1bc4998a466faa74a844613eb53d10f751e6b3267981c4051b415",
+      "last_accessed_at": "2026-11-07T00:44:32.363318Z",
+      "created_at": "2026-11-07T00:08:32.503322Z",
+      "size_in_bytes": 408
+    },
+    {
+      "id": 10148590041,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-3295044017086609245",
+      "version": "aea60f4595c641a4a05c9f2a27760b29bbdcc86ab91b4d7339392afdcc6862e8",
+      "last_accessed_at": "2026-11-07T02:14:03.502165Z",
+      "created_at": "2026-11-07T01:24:00.260268Z",
+      "size_in_bytes": 408
+    },
+    {
+      "id": 10148592346,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-5739811853956664041",
+      "version": "6065e337e77607ca1c122bf572fe6c7d6eebc9e96335e1561ec6e225783e9d0b",
+      "last_accessed_at": "2026-11-07T02:14:12.993768Z",
+      "created_at": "2026-11-07T01:24:05.147294Z",
+      "size_in_bytes": 408
+    },
+    {
+      "id": 10148592607,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-10695186440539340940",
+      "version": "7a8c488ae3c0aae460031600302784d3dd8f2101156159539898d71c40a69479",
+      "last_accessed_at": "2026-11-07T02:14:15.089869Z",
+      "created_at": "2026-11-07T01:24:05.720646Z",
+      "size_in_bytes": 408
+    },
+    {
+      "id": 10146529247,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-3295044017086609245",
+      "version": "aea60f4595c641a4a05c9f2a27760b29bbdcc86ab91b4d7339392afdcc6862e8",
+      "last_accessed_at": "2026-11-07T00:44:29.766982Z",
+      "created_at": "2026-11-07T00:04:15.335054Z",
+      "size_in_bytes": 407
+    },
+    {
+      "id": 10146661444,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-10695186440539340940",
+      "version": "7a8c488ae3c0aae460031600302784d3dd8f2101156159539898d71c40a69479",
+      "last_accessed_at": "2026-11-07T00:44:30.454829Z",
+      "created_at": "2026-11-07T00:08:52.041695Z",
+      "size_in_bytes": 407
+    },
+    {
+      "id": 10148591333,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-18190879519810698041",
+      "version": "57d0df695d8ab364913da6750bfe6fa39cbdee77f39b7793804b7f010edd96ec",
+      "last_accessed_at": "2026-11-07T02:14:11.722748Z",
+      "created_at": "2026-11-07T01:24:02.885824Z",
+      "size_in_bytes": 407
+    },
+    {
+      "id": 10148591571,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-15055185215537034148",
+      "version": "689fe9b216e857bb9a82829ebff386672d36bab028b7e587fe155788f09ba1e5",
+      "last_accessed_at": "2026-11-07T02:14:06.174792Z",
+      "created_at": "2026-11-07T01:24:03.457183Z",
+      "size_in_bytes": 406
+    },
+    {
+      "id": 10146529947,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-16927461946280388693",
+      "version": "f0941af0b4bf4326827fae673a58b5d86ebea80f0da9403b8b80bd27f38f8b31",
+      "last_accessed_at": "2026-11-07T00:44:32.525299Z",
+      "created_at": "2026-11-07T00:04:16.484831Z",
+      "size_in_bytes": 404
+    },
+    {
+      "id": 10148596195,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-12718864904542149634",
+      "version": "63d98aee5e478c9df0187ddac6712018fc325f05d6e89bbade1dfbd8627f1687",
+      "last_accessed_at": "2026-11-07T02:14:14.171684Z",
+      "created_at": "2026-11-07T01:24:13.868924Z",
+      "size_in_bytes": 404
+    },
+    {
+      "id": 10028994472,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-3609935309536540477",
+      "version": "9c1923eca95f7866ac3f4aa8ef3ceae9dd0fd4f5ca6829efa1561cb78d452fe8",
+      "last_accessed_at": "2026-11-07T02:14:24.609070Z",
+      "created_at": "2026-11-04T23:20:41.240839Z",
+      "size_in_bytes": 404
+    },
+    {
+      "id": 10146655850,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-15409863731282745754",
+      "version": "9deb506ae142cdf4a916adb37237aedc1a90c3d1dba25e1fcebe95de5070c8cb",
+      "last_accessed_at": "2026-11-07T00:44:30.736014Z",
+      "created_at": "2026-11-07T00:08:38.721917Z",
+      "size_in_bytes": 403
+    },
+    {
+      "id": 10148595914,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-4328516340939823899",
+      "version": "6086d72cfeb29ab253c53e0684cff1d8ff1b5c3242c38be8bc7d7754357c755d",
+      "last_accessed_at": "2026-11-07T02:14:04.391846Z",
+      "created_at": "2026-11-07T01:24:13.208352Z",
+      "size_in_bytes": 403
+    },
+    {
+      "id": 10148592899,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-15409863731282745754",
+      "version": "9deb506ae142cdf4a916adb37237aedc1a90c3d1dba25e1fcebe95de5070c8cb",
+      "last_accessed_at": "2026-11-07T02:14:16.292860Z",
+      "created_at": "2026-11-07T01:24:06.301603Z",
+      "size_in_bytes": 403
+    },
+    {
+      "id": 10146560095,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-5363432003616804740",
+      "version": "6fe7b1409fbc37793ad8ad000328e9cd1fa21b906124f23b1bb067eba5d2038e",
+      "last_accessed_at": "2026-11-07T00:44:29.779170Z",
+      "created_at": "2026-11-07T00:05:17.197294Z",
+      "size_in_bytes": 402
+    },
+    {
+      "id": 10146563069,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-1439720254541024628",
+      "version": "60409b50a5f416eb44860b92e0442b153723b9fd59a3cb03a43913981a319103",
+      "last_accessed_at": "2026-11-07T00:44:29.781235Z",
+      "created_at": "2026-11-07T00:05:22.512434Z",
+      "size_in_bytes": 402
+    },
+    {
+      "id": 10146588065,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-4580911614185359624",
+      "version": "ad2d850f507722ffeec92272490a498c6dc6cfc76a33812dfa73b0ff4ad06aec",
+      "last_accessed_at": "2026-11-07T00:44:30.033359Z",
+      "created_at": "2026-11-07T00:06:14.048901Z",
+      "size_in_bytes": 402
+    },
+    {
+      "id": 10148591823,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-4580911614185359624",
+      "version": "ad2d850f507722ffeec92272490a498c6dc6cfc76a33812dfa73b0ff4ad06aec",
+      "last_accessed_at": "2026-11-07T02:14:07.096285Z",
+      "created_at": "2026-11-07T01:24:04.032524Z",
+      "size_in_bytes": 402
+    },
+    {
+      "id": 10148590805,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-5363432003616804740",
+      "version": "6fe7b1409fbc37793ad8ad000328e9cd1fa21b906124f23b1bb067eba5d2038e",
+      "last_accessed_at": "2026-11-07T02:14:09.744904Z",
+      "created_at": "2026-11-07T01:24:01.740963Z",
+      "size_in_bytes": 402
+    },
+    {
+      "id": 10148596337,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-5048018838831677053",
+      "version": "09d5924424d0279c6d79492edd2bd0b205fafa96df921950c762d9fb2f1f0554",
+      "last_accessed_at": "2026-11-07T02:14:19.903196Z",
+      "created_at": "2026-11-07T01:24:14.191807Z",
+      "size_in_bytes": 402
+    },
+    {
+      "id": 10146604196,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-14767695748458673129",
+      "version": "6270926c221c1f387c1d87e77005cf251d83fbd5777f41df4dc637045b09fc4d",
+      "last_accessed_at": "2026-11-07T00:44:30.062252Z",
+      "created_at": "2026-11-07T00:06:49.144056Z",
+      "size_in_bytes": 401
+    },
+    {
+      "id": 10148592068,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-14767695748458673129",
+      "version": "6270926c221c1f387c1d87e77005cf251d83fbd5777f41df4dc637045b09fc4d",
+      "last_accessed_at": "2026-11-07T02:14:07.979538Z",
+      "created_at": "2026-11-07T01:24:04.575606Z",
+      "size_in_bytes": 401
+    },
+    {
+      "id": 10146648685,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-16195408263015154986",
+      "version": "f9d9b7a760eb1b5c835dd1e0741e4f7f2d9312259c36b8129f3211e6aebb52a5",
+      "last_accessed_at": "2026-11-07T00:44:32.301704Z",
+      "created_at": "2026-11-07T00:08:22.853332Z",
+      "size_in_bytes": 400
+    },
+    {
+      "id": 10149713197,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-13813167250680721306",
+      "version": "4469be5e55f4faa01684d5f189463a5cb62500f87862fc340ed51ae50860643d",
+      "last_accessed_at": "2026-11-07T02:14:26.443714Z",
+      "created_at": "2026-11-07T02:14:26.443714Z",
+      "size_in_bytes": 400
+    },
+    {
+      "id": 10146554523,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-16051700814481228354",
+      "version": "3c612f050882964d1025ec2ae69ee9962cf92bcd4475347d11cd270c250a392d",
+      "last_accessed_at": "2026-11-07T00:44:29.748007Z",
+      "created_at": "2026-11-07T00:05:07.073293Z",
+      "size_in_bytes": 399
+    },
+    {
+      "id": 10146911078,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-17836832960813399365",
+      "version": "73e188a1f6180286c6a9131fe292556f04a5e3c5d4a33ed8d423a8c76f6a881e",
+      "last_accessed_at": "2026-11-07T00:44:30.984450Z",
+      "created_at": "2026-11-07T00:17:46.689442Z",
+      "size_in_bytes": 399
+    },
+    {
+      "id": 10148592512,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-1821359442177009242",
+      "version": "01045da8eb573a227f3183db64583f797db2b78a88715eb7191f4886f770bc5a",
+      "last_accessed_at": "2026-11-07T01:24:05.544235Z",
+      "created_at": "2026-11-07T01:24:05.544235Z",
+      "size_in_bytes": 399
+    },
+    {
+      "id": 10148702743,
+      "ref": "refs/pull/3918/merge",
+      "key": "nx-cache-14923396175534184992",
+      "version": "971ee1dd4afc073621f035c8c9d98e9f16bd3b77b0818abd14bb05287762eb08",
+      "last_accessed_at": "2026-11-07T01:28:41.755159Z",
+      "created_at": "2026-11-07T01:28:41.755159Z",
+      "size_in_bytes": 399
+    },
+    {
+      "id": 10148590610,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-16051700814481228354",
+      "version": "3c612f050882964d1025ec2ae69ee9962cf92bcd4475347d11cd270c250a392d",
+      "last_accessed_at": "2026-11-07T02:14:09.175558Z",
+      "created_at": "2026-11-07T01:24:01.350058Z",
+      "size_in_bytes": 399
+    },
+    {
+      "id": 10148595022,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-16195408263015154986",
+      "version": "f9d9b7a760eb1b5c835dd1e0741e4f7f2d9312259c36b8129f3211e6aebb52a5",
+      "last_accessed_at": "2026-11-07T02:14:23.488515Z",
+      "created_at": "2026-11-07T01:24:11.134706Z",
+      "size_in_bytes": 399
+    },
+    {
+      "id": 10149713386,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-14923396175534184992",
+      "version": "971ee1dd4afc073621f035c8c9d98e9f16bd3b77b0818abd14bb05287762eb08",
+      "last_accessed_at": "2026-11-07T02:14:26.940560Z",
+      "created_at": "2026-11-07T02:14:26.940560Z",
+      "size_in_bytes": 399
+    },
+    {
+      "id": 10028992297,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-1767859343213122170",
+      "version": "1f7965f68ca64d8325c702e55d9622c2b0bb41c17544b92c216a49520d7bf70f",
+      "last_accessed_at": "2026-11-07T02:14:17.806132Z",
+      "created_at": "2026-11-04T23:20:37.664343Z",
+      "size_in_bytes": 398
+    },
+    {
+      "id": 10148595368,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-2332654493559003770",
+      "version": "84fab097431e031e881dc63152fd8aa30b25b359ba2c3206faddec7a74251ee2",
+      "last_accessed_at": "2026-11-07T02:14:22.004273Z",
+      "created_at": "2026-11-07T01:24:11.907948Z",
+      "size_in_bytes": 398
+    },
+    {
+      "id": 10146568966,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-14069699130259870690",
+      "version": "543ae8af3f8a9e0686e98cc54296b55cc96666a1fe8fcaf49d95ebd96d9e6d32",
+      "last_accessed_at": "2026-11-07T00:44:29.793039Z",
+      "created_at": "2026-11-07T00:05:34.271259Z",
+      "size_in_bytes": 397
+    },
+    {
+      "id": 10146570086,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-17675406706161239123",
+      "version": "f7df63c3e8e336d8b4623b9b217276c25a21fe78f6fe48a1344b50683c178c57",
+      "last_accessed_at": "2026-11-07T00:44:29.883769Z",
+      "created_at": "2026-11-07T00:05:36.722307Z",
+      "size_in_bytes": 397
+    },
+    {
+      "id": 10148591163,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-14069699130259870690",
+      "version": "543ae8af3f8a9e0686e98cc54296b55cc96666a1fe8fcaf49d95ebd96d9e6d32",
+      "last_accessed_at": "2026-11-07T02:14:11.084388Z",
+      "created_at": "2026-11-07T01:24:02.510671Z",
+      "size_in_bytes": 397
+    },
+    {
+      "id": 10146525644,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-18326422790627061401",
+      "version": "2e77ea621d97f223cc631523f494bbc0cdc3b84a8001fd26bf357433956acc0b",
+      "last_accessed_at": "2026-11-07T00:44:29.765388Z",
+      "created_at": "2026-11-07T00:04:08.576385Z",
+      "size_in_bytes": 396
+    },
+    {
+      "id": 10146618088,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-3180585670977026645",
+      "version": "8105d386dcb85b876fea9e5410a99d28e72fe72181a2f151c900df196b323aa2",
+      "last_accessed_at": "2026-11-07T00:44:30.262365Z",
+      "created_at": "2026-11-07T00:07:18.493112Z",
+      "size_in_bytes": 396
+    },
+    {
+      "id": 10146665462,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-11075388549533157635",
+      "version": "0550076778e05479f80cb2155fe486fc4283db6bcbd685dc7d648c84cd864e99",
+      "last_accessed_at": "2026-11-07T00:44:30.525329Z",
+      "created_at": "2026-11-07T00:09:02.052506Z",
+      "size_in_bytes": 396
+    },
+    {
+      "id": 10146910972,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-747838690555028417",
+      "version": "c5ed508945e2d97739ef23e56d08da104e0d54c5d22e094d069ff740245b137e",
+      "last_accessed_at": "2026-11-07T00:44:31.144032Z",
+      "created_at": "2026-11-07T00:17:46.448748Z",
+      "size_in_bytes": 396
+    },
+    {
+      "id": 10146660971,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-2332654493559003770",
+      "version": "84fab097431e031e881dc63152fd8aa30b25b359ba2c3206faddec7a74251ee2",
+      "last_accessed_at": "2026-11-07T00:44:32.442066Z",
+      "created_at": "2026-11-07T00:08:50.855802Z",
+      "size_in_bytes": 396
+    },
+    {
+      "id": 10148590145,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-18326422790627061401",
+      "version": "2e77ea621d97f223cc631523f494bbc0cdc3b84a8001fd26bf357433956acc0b",
+      "last_accessed_at": "2026-11-07T02:14:03.796587Z",
+      "created_at": "2026-11-07T01:24:00.454927Z",
+      "size_in_bytes": 396
+    },
+    {
+      "id": 10148590336,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-3853569039222750803",
+      "version": "6b24d245f0524aca7fbe9467864f91e6e078c3d67bc99757b0d4f04075401e66",
+      "last_accessed_at": "2026-11-07T02:14:08.272556Z",
+      "created_at": "2026-11-07T01:24:00.806449Z",
+      "size_in_bytes": 396
+    },
+    {
+      "id": 10148591403,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-17675406706161239123",
+      "version": "f7df63c3e8e336d8b4623b9b217276c25a21fe78f6fe48a1344b50683c178c57",
+      "last_accessed_at": "2026-11-07T02:14:12.048421Z",
+      "created_at": "2026-11-07T01:24:03.077575Z",
+      "size_in_bytes": 396
+    },
+    {
+      "id": 10148592428,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-3180585670977026645",
+      "version": "8105d386dcb85b876fea9e5410a99d28e72fe72181a2f151c900df196b323aa2",
+      "last_accessed_at": "2026-11-07T02:14:13.283049Z",
+      "created_at": "2026-11-07T01:24:05.338917Z",
+      "size_in_bytes": 396
+    },
+    {
+      "id": 10148595228,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-5342008165192523968",
+      "version": "81e896d44b4a27810352ad9ce7f40c6c0624d47dd8b28fa0f5c3c8e5ec413bed",
+      "last_accessed_at": "2026-11-07T02:14:13.862481Z",
+      "created_at": "2026-11-07T01:24:11.601135Z",
+      "size_in_bytes": 396
+    },
+    {
+      "id": 10148592704,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-11075388549533157635",
+      "version": "0550076778e05479f80cb2155fe486fc4283db6bcbd685dc7d648c84cd864e99",
+      "last_accessed_at": "2026-11-07T02:14:15.384826Z",
+      "created_at": "2026-11-07T01:24:05.914951Z",
+      "size_in_bytes": 396
+    },
+    {
+      "id": 10148593701,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-9033373094738145584",
+      "version": "fafdc9007c533f99036b4937c7850e26fcdff91062d62fea236135863071abce",
+      "last_accessed_at": "2026-11-07T02:14:15.690148Z",
+      "created_at": "2026-11-07T01:24:07.969314Z",
+      "size_in_bytes": 396
+    },
+    {
+      "id": 10146574872,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-15125409216212788676",
+      "version": "f78c1b44ba022a99d136de9dcec848dec9e47c6738d58f50a7b1220a42346f43",
+      "last_accessed_at": "2026-11-07T00:44:29.960497Z",
+      "created_at": "2026-11-07T00:05:46.926023Z",
+      "size_in_bytes": 395
+    },
+    {
+      "id": 10146618389,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-1821359442177009242",
+      "version": "01045da8eb573a227f3183db64583f797db2b78a88715eb7191f4886f770bc5a",
+      "last_accessed_at": "2026-11-07T00:44:30.446516Z",
+      "created_at": "2026-11-07T00:07:19.061490Z",
+      "size_in_bytes": 395
+    },
+    {
+      "id": 10146661402,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-7663665205346995024",
+      "version": "91e11b8491d6764f3f0370c16c87cd46744d34469989d97a53cb43e48aedc35c",
+      "last_accessed_at": "2026-11-07T00:44:32.484539Z",
+      "created_at": "2026-11-07T00:08:51.933616Z",
+      "size_in_bytes": 395
+    },
+    {
+      "id": 10148591654,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-15125409216212788676",
+      "version": "f78c1b44ba022a99d136de9dcec848dec9e47c6738d58f50a7b1220a42346f43",
+      "last_accessed_at": "2026-11-07T02:14:06.478305Z",
+      "created_at": "2026-11-07T01:24:03.662436Z",
+      "size_in_bytes": 395
+    },
+    {
+      "id": 10146538251,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-3853569039222750803",
+      "version": "6b24d245f0524aca7fbe9467864f91e6e078c3d67bc99757b0d4f04075401e66",
+      "last_accessed_at": "2026-11-07T00:44:29.757859Z",
+      "created_at": "2026-11-07T00:04:33.141998Z",
+      "size_in_bytes": 394
+    },
+    {
+      "id": 10146656974,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-9033373094738145584",
+      "version": "fafdc9007c533f99036b4937c7850e26fcdff91062d62fea236135863071abce",
+      "last_accessed_at": "2026-11-07T00:44:31.415488Z",
+      "created_at": "2026-11-07T00:08:41.171036Z",
+      "size_in_bytes": 394
+    },
+    {
+      "id": 10146655616,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-5342008165192523968",
+      "version": "81e896d44b4a27810352ad9ce7f40c6c0624d47dd8b28fa0f5c3c8e5ec413bed",
+      "last_accessed_at": "2026-11-07T00:44:32.395578Z",
+      "created_at": "2026-11-07T00:08:38.097503Z",
+      "size_in_bytes": 394
+    },
+    {
+      "id": 10028994995,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-6204932867580553257",
+      "version": "fa3bc199793101ecdcd8bbb7303f970880e6ee1e2e0491e4e7fcd600ff258012",
+      "last_accessed_at": "2026-11-07T02:14:02.857464Z",
+      "created_at": "2026-11-04T23:20:42.011892Z",
+      "size_in_bytes": 393
+    },
+    {
+      "id": 10147621106,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-13031540494298750446",
+      "version": "abdf149f91359ef49c4af3d3da8faadf918ec837aec63d26bb0b2335a5e52744",
+      "last_accessed_at": "2026-11-07T00:44:37.507747Z",
+      "created_at": "2026-11-07T00:44:37.507747Z",
+      "size_in_bytes": 392
+    },
+    {
+      "id": 10148703190,
+      "ref": "refs/pull/3918/merge",
+      "key": "nx-cache-2220590034300644142",
+      "version": "d194e5d5fea8f5b70b9102d09a661a6bcba93f11de24e32a65f0e641762594bb",
+      "last_accessed_at": "2026-11-07T01:28:42.694404Z",
+      "created_at": "2026-11-07T01:28:42.694404Z",
+      "size_in_bytes": 392
+    },
+    {
+      "id": 10148595715,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-16927461946280388693",
+      "version": "f0941af0b4bf4326827fae673a58b5d86ebea80f0da9403b8b80bd27f38f8b31",
+      "last_accessed_at": "2026-11-07T02:14:04.685450Z",
+      "created_at": "2026-11-07T01:24:12.713130Z",
+      "size_in_bytes": 392
+    },
+    {
+      "id": 10148595500,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-7663665205346995024",
+      "version": "91e11b8491d6764f3f0370c16c87cd46744d34469989d97a53cb43e48aedc35c",
+      "last_accessed_at": "2026-11-07T02:14:23.191983Z",
+      "created_at": "2026-11-07T01:24:12.231420Z",
+      "size_in_bytes": 392
+    },
+    {
+      "id": 10148590886,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-1439720254541024628",
+      "version": "60409b50a5f416eb44860b92e0442b153723b9fd59a3cb03a43913981a319103",
+      "last_accessed_at": "2026-11-07T02:14:10.057103Z",
+      "created_at": "2026-11-07T01:24:01.927535Z",
+      "size_in_bytes": 391
+    },
+    {
+      "id": 10147649363,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-8231653725281739905",
+      "version": "cdc0495a7d8c89db60f27ca30d5c1a1f8802bc9d575915d10213dbcd8354d561",
+      "last_accessed_at": "2026-11-07T00:45:48.387336Z",
+      "created_at": "2026-11-07T00:45:48.387336Z",
+      "size_in_bytes": 390
+    },
+    {
+      "id": 10148596115,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-8231653725281739905",
+      "version": "cdc0495a7d8c89db60f27ca30d5c1a1f8802bc9d575915d10213dbcd8354d561",
+      "last_accessed_at": "2026-11-07T02:14:14.800235Z",
+      "created_at": "2026-11-07T01:24:13.715094Z",
+      "size_in_bytes": 390
+    },
+    {
+      "id": 10146533014,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-7877487971630662617",
+      "version": "a29aa25c9c261063bedce86a0e7c2d9ad515412c517d657626217c3fac76db4f",
+      "last_accessed_at": "2026-11-07T00:44:29.772063Z",
+      "created_at": "2026-11-07T00:04:22.616016Z",
+      "size_in_bytes": 389
+    },
+    {
+      "id": 10146348539,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-6268721697832387570",
+      "version": "ffb21b420902f2586ad1cfe24d96c83a77fbb4542977cee701b70c6d62f59bef",
+      "last_accessed_at": "2026-11-07T00:44:29.763850Z",
+      "created_at": "2026-11-06T23:57:31.474270Z",
+      "size_in_bytes": 388
+    },
+    {
+      "id": 10146610755,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-9899326922802054546",
+      "version": "602ba0422e5df371cf22ea3a016b13e5d18028cc439168e118c9d308d0bb451e",
+      "last_accessed_at": "2026-11-07T00:44:30.057879Z",
+      "created_at": "2026-11-07T00:07:03.264902Z",
+      "size_in_bytes": 388
+    },
+    {
+      "id": 10146529723,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-4772045613917699584",
+      "version": "3cadc6744578f463b93d531b6cc4b5e6271d4b03626ef51a4cda15bae0c68bf3",
+      "last_accessed_at": "2026-11-07T00:44:32.535432Z",
+      "created_at": "2026-11-07T00:04:16.243386Z",
+      "size_in_bytes": 388
+    },
+    {
+      "id": 10148592170,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-9899326922802054546",
+      "version": "602ba0422e5df371cf22ea3a016b13e5d18028cc439168e118c9d308d0bb451e",
+      "last_accessed_at": "2026-11-07T02:14:12.405358Z",
+      "created_at": "2026-11-07T01:24:04.754122Z",
+      "size_in_bytes": 388
+    },
+    {
+      "id": 10148593171,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-17836832960813399365",
+      "version": "73e188a1f6180286c6a9131fe292556f04a5e3c5d4a33ed8d423a8c76f6a881e",
+      "last_accessed_at": "2026-11-07T01:24:06.819266Z",
+      "created_at": "2026-11-07T01:24:06.819266Z",
+      "size_in_bytes": 387
+    },
+    {
+      "id": 10148591897,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-941894610670441094",
+      "version": "343accfb6894fb36422714823eac253d0b285e4d13ab714060c8bbce99d7c828",
+      "last_accessed_at": "2026-11-07T02:14:07.386856Z",
+      "created_at": "2026-11-07T01:24:04.201405Z",
+      "size_in_bytes": 387
+    },
+    {
+      "id": 10028995967,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-593715106417334273",
+      "version": "e6aa485ec33e0754c682b66ba2e335bf475281f36b6648b10d6527fb55a98700",
+      "last_accessed_at": "2026-11-07T02:14:22.880564Z",
+      "created_at": "2026-11-04T23:20:43.523277Z",
+      "size_in_bytes": 387
+    },
+    {
+      "id": 10146595493,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-941894610670441094",
+      "version": "343accfb6894fb36422714823eac253d0b285e4d13ab714060c8bbce99d7c828",
+      "last_accessed_at": "2026-11-07T00:44:30.032173Z",
+      "created_at": "2026-11-07T00:06:29.687402Z",
+      "size_in_bytes": 386
+    },
+    {
+      "id": 10146658172,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-13792066785070342027",
+      "version": "af1014618fad2d11cbfbab4a00e0aba010c39ac4c14a7283e10f04cdae9f4946",
+      "last_accessed_at": "2026-11-07T00:44:31.612938Z",
+      "created_at": "2026-11-07T00:08:43.836961Z",
+      "size_in_bytes": 386
+    },
+    {
+      "id": 10148594184,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-13792066785070342027",
+      "version": "af1014618fad2d11cbfbab4a00e0aba010c39ac4c14a7283e10f04cdae9f4946",
+      "last_accessed_at": "2026-11-07T02:14:18.088904Z",
+      "created_at": "2026-11-07T01:24:09.089740Z",
+      "size_in_bytes": 386
+    },
+    {
+      "id": 10146911582,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-4285056376153446636",
+      "version": "91dfcd717d1036524be74bfaa11787c8ba677df23c1fa553c70ecaabacb74413",
+      "last_accessed_at": "2026-11-07T00:44:32.040921Z",
+      "created_at": "2026-11-07T00:17:47.816328Z",
+      "size_in_bytes": 385
+    },
+    {
+      "id": 10148594829,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-4285056376153446636",
+      "version": "91dfcd717d1036524be74bfaa11787c8ba677df23c1fa553c70ecaabacb74413",
+      "last_accessed_at": "2026-11-07T02:14:18.378318Z",
+      "created_at": "2026-11-07T01:24:10.643422Z",
+      "size_in_bytes": 385
+    },
+    {
+      "id": 10148593292,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-747838690555028417",
+      "version": "c5ed508945e2d97739ef23e56d08da104e0d54c5d22e094d069ff740245b137e",
+      "last_accessed_at": "2026-11-07T01:24:07.135393Z",
+      "created_at": "2026-11-07T01:24:07.135393Z",
+      "size_in_bytes": 384
+    },
+    {
+      "id": 10146569370,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-7842230875130030353",
+      "version": "03ae457a2b64054b927b711c4c38b0f5351e4405633e2ea591e8869ee122cb10",
+      "last_accessed_at": "2026-11-07T00:44:29.902710Z",
+      "created_at": "2026-11-07T00:05:35.112771Z",
+      "size_in_bytes": 383
+    },
+    {
+      "id": 10146911523,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-2455029376282575570",
+      "version": "6fbe924646949762f8c489776e081cccb0b4e530d895a89b9e211b294deda36b",
+      "last_accessed_at": "2026-11-07T00:44:32.006868Z",
+      "created_at": "2026-11-07T00:17:47.706105Z",
+      "size_in_bytes": 383
+    },
+    {
+      "id": 10148592998,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-14050202578685889932",
+      "version": "9568178186240d3d4127eacabb66a0b294a64ddb9ea974c1bad51e55c89b53dc",
+      "last_accessed_at": "2026-11-07T02:14:24.333249Z",
+      "created_at": "2026-11-07T01:24:06.494861Z",
+      "size_in_bytes": 383
+    },
+    {
+      "id": 10146538884,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-11294154455624074248",
+      "version": "87d351de3bc1d88ae28f6992b94455f779225a3070b8be9099c614bffb0451e9",
+      "last_accessed_at": "2026-11-07T00:44:29.746698Z",
+      "created_at": "2026-11-07T00:04:34.396798Z",
+      "size_in_bytes": 382
+    },
+    {
+      "id": 10146621143,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-14050202578685889932",
+      "version": "9568178186240d3d4127eacabb66a0b294a64ddb9ea974c1bad51e55c89b53dc",
+      "last_accessed_at": "2026-11-07T00:44:30.838242Z",
+      "created_at": "2026-11-07T00:07:25.480364Z",
+      "size_in_bytes": 382
+    },
+    {
+      "id": 10149713575,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-2220590034300644142",
+      "version": "d194e5d5fea8f5b70b9102d09a661a6bcba93f11de24e32a65f0e641762594bb",
+      "last_accessed_at": "2026-11-07T02:14:27.403015Z",
+      "created_at": "2026-11-07T02:14:27.403015Z",
+      "size_in_bytes": 382
+    },
+    {
+      "id": 10146635315,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-13037708900038248516",
+      "version": "51eea4edb4d8a0dd8e9204f28679738be3391b926f83bde83a34d1aeba5e4b27",
+      "last_accessed_at": "2026-11-07T00:44:32.244564Z",
+      "created_at": "2026-11-07T00:07:56.607106Z",
+      "size_in_bytes": 381
+    },
+    {
+      "id": 10148703750,
+      "ref": "refs/pull/3918/merge",
+      "key": "nx-cache-17067418711823951361",
+      "version": "4cfab18425465f3634febed5e9d2fbcece2018be74680cefe71e951c22103268",
+      "last_accessed_at": "2026-11-07T01:28:44.100302Z",
+      "created_at": "2026-11-07T01:28:44.100302Z",
+      "size_in_bytes": 381
+    },
+    {
+      "id": 10148596050,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-13031540494298750446",
+      "version": "abdf149f91359ef49c4af3d3da8faadf918ec837aec63d26bb0b2335a5e52744",
+      "last_accessed_at": "2026-11-07T02:14:18.955890Z",
+      "created_at": "2026-11-07T01:24:13.521336Z",
+      "size_in_bytes": 381
+    },
+    {
+      "id": 10148594892,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-13037708900038248516",
+      "version": "51eea4edb4d8a0dd8e9204f28679738be3391b926f83bde83a34d1aeba5e4b27",
+      "last_accessed_at": "2026-11-07T02:14:20.512894Z",
+      "created_at": "2026-11-07T01:24:10.802855Z",
+      "size_in_bytes": 381
+    },
+    {
+      "id": 10146660746,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-14318519303676674368",
+      "version": "5a0f476ddf3476db430106005eb91bd963a4cccdd65224177cf44e396c27d417",
+      "last_accessed_at": "2026-11-07T00:44:32.038668Z",
+      "created_at": "2026-11-07T00:08:50.347394Z",
+      "size_in_bytes": 379
+    },
+    {
+      "id": 10146662063,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-9292089739421331923",
+      "version": "e2605da6dfb8b96cc838e892a9e10e290361af35fbe296d9504e3a10fc89251d",
+      "last_accessed_at": "2026-11-07T00:44:32.544506Z",
+      "created_at": "2026-11-07T00:08:53.583942Z",
+      "size_in_bytes": 379
+    },
+    {
+      "id": 10148590427,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-7877487971630662617",
+      "version": "a29aa25c9c261063bedce86a0e7c2d9ad515412c517d657626217c3fac76db4f",
+      "last_accessed_at": "2026-11-07T02:14:08.561785Z",
+      "created_at": "2026-11-07T01:24:00.987383Z",
+      "size_in_bytes": 379
+    },
+    {
+      "id": 10146554971,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-10840886980853649193",
+      "version": "9b362879b24c6b9cc313042baba6beacc48deae28c689a110bd6aeccd8df57fd",
+      "last_accessed_at": "2026-11-07T00:44:29.790861Z",
+      "created_at": "2026-11-07T00:05:07.931023Z",
+      "size_in_bytes": 378
+    },
+    {
+      "id": 10146657367,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-8735369355319162741",
+      "version": "bb865ce33b3fdf08872f664b07bf53cfa688e97fdd70c7e84c6864fbed79cb29",
+      "last_accessed_at": "2026-11-07T00:44:31.607477Z",
+      "created_at": "2026-11-07T00:08:42.045710Z",
+      "size_in_bytes": 378
+    },
+    {
+      "id": 10146648837,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-16545072518332562416",
+      "version": "1df7f178d46ce331441618268e553643381235520f187e42eeb550c196473511",
+      "last_accessed_at": "2026-11-07T00:44:32.326685Z",
+      "created_at": "2026-11-07T00:08:23.346044Z",
+      "size_in_bytes": 378
+    },
+    {
+      "id": 10148591004,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-10840886980853649193",
+      "version": "9b362879b24c6b9cc313042baba6beacc48deae28c689a110bd6aeccd8df57fd",
+      "last_accessed_at": "2026-11-07T02:14:10.407064Z",
+      "created_at": "2026-11-07T01:24:02.129802Z",
+      "size_in_bytes": 378
+    },
+    {
+      "id": 10148595084,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-16545072518332562416",
+      "version": "1df7f178d46ce331441618268e553643381235520f187e42eeb550c196473511",
+      "last_accessed_at": "2026-11-07T02:14:24.055816Z",
+      "created_at": "2026-11-07T01:24:11.302323Z",
+      "size_in_bytes": 378
+    },
+    {
+      "id": 10148594102,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-8735369355319162741",
+      "version": "bb865ce33b3fdf08872f664b07bf53cfa688e97fdd70c7e84c6864fbed79cb29",
+      "last_accessed_at": "2026-11-07T02:14:25.214840Z",
+      "created_at": "2026-11-07T01:24:08.922827Z",
+      "size_in_bytes": 378
+    },
+    {
+      "id": 10148595778,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-4772045613917699584",
+      "version": "3cadc6744578f463b93d531b6cc4b5e6271d4b03626ef51a4cda15bae0c68bf3",
+      "last_accessed_at": "2026-11-07T02:14:04.963164Z",
+      "created_at": "2026-11-07T01:24:12.880028Z",
+      "size_in_bytes": 377
+    },
+    {
+      "id": 10146563408,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-17214136552753051457",
+      "version": "d0742053dfc60f0926e59e9d1f85c3a3b2bc454c43c8ea261921d225e14a9eaf",
+      "last_accessed_at": "2026-11-07T00:44:29.827360Z",
+      "created_at": "2026-11-07T00:05:23.076851Z",
+      "size_in_bytes": 376
+    },
+    {
+      "id": 10146575201,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-3814299612865592978",
+      "version": "3c86b6c1da38cf501729d53182190424f989be372e7476b779043d632657630b",
+      "last_accessed_at": "2026-11-07T00:44:30.021261Z",
+      "created_at": "2026-11-07T00:05:47.899669Z",
+      "size_in_bytes": 376
+    },
+    {
+      "id": 10146596030,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-4263216088977255944",
+      "version": "733ad5b0a5aa2792f1ac709065174c77a0297579c60898c0f619d2635d4daa91",
+      "last_accessed_at": "2026-11-07T00:44:30.097165Z",
+      "created_at": "2026-11-07T00:06:30.661332Z",
+      "size_in_bytes": 376
+    },
+    {
+      "id": 10148591264,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-17214136552753051457",
+      "version": "d0742053dfc60f0926e59e9d1f85c3a3b2bc454c43c8ea261921d225e14a9eaf",
+      "last_accessed_at": "2026-11-07T02:14:11.429026Z",
+      "created_at": "2026-11-07T01:24:02.710857Z",
+      "size_in_bytes": 376
+    },
+    {
+      "id": 10148592257,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-4263216088977255944",
+      "version": "733ad5b0a5aa2792f1ac709065174c77a0297579c60898c0f619d2635d4daa91",
+      "last_accessed_at": "2026-11-07T02:14:25.504721Z",
+      "created_at": "2026-11-07T01:24:04.955791Z",
+      "size_in_bytes": 376
+    },
+    {
+      "id": 10146649422,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-4569785976681604752",
+      "version": "060a2485adc73adc665fb07b811172f626e2348ce61f5ea9a90a4208f0edd379",
+      "last_accessed_at": "2026-11-07T00:44:32.453137Z",
+      "created_at": "2026-11-07T00:08:24.393402Z",
+      "size_in_bytes": 375
+    },
+    {
+      "id": 10148589948,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-6268721697832387570",
+      "version": "ffb21b420902f2586ad1cfe24d96c83a77fbb4542977cee701b70c6d62f59bef",
+      "last_accessed_at": "2026-11-07T02:14:03.183691Z",
+      "created_at": "2026-11-07T01:24:00.066942Z",
+      "size_in_bytes": 375
+    },
+    {
+      "id": 10148595307,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-4569785976681604752",
+      "version": "060a2485adc73adc665fb07b811172f626e2348ce61f5ea9a90a4208f0edd379",
+      "last_accessed_at": "2026-11-07T02:14:14.468185Z",
+      "created_at": "2026-11-07T01:24:11.751454Z",
+      "size_in_bytes": 375
+    },
+    {
+      "id": 10148590710,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-11294154455624074248",
+      "version": "87d351de3bc1d88ae28f6992b94455f779225a3070b8be9099c614bffb0451e9",
+      "last_accessed_at": "2026-11-07T02:14:09.459507Z",
+      "created_at": "2026-11-07T01:24:01.551517Z",
+      "size_in_bytes": 373
+    },
+    {
+      "id": 10148591480,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-7842230875130030353",
+      "version": "03ae457a2b64054b927b711c4c38b0f5351e4405633e2ea591e8869ee122cb10",
+      "last_accessed_at": "2026-11-07T02:14:05.554190Z",
+      "created_at": "2026-11-07T01:24:03.277835Z",
+      "size_in_bytes": 372
+    },
+    {
+      "id": 10146570967,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-9334588707839116841",
+      "version": "25a0202874fdab14d7c5e02e31ab8a5f733da6dee8249d8e2a94eb15e07b6221",
+      "last_accessed_at": "2026-11-07T00:44:29.944265Z",
+      "created_at": "2026-11-07T00:05:38.539779Z",
+      "size_in_bytes": 371
+    },
+    {
+      "id": 10148591739,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-9334588707839116841",
+      "version": "25a0202874fdab14d7c5e02e31ab8a5f733da6dee8249d8e2a94eb15e07b6221",
+      "last_accessed_at": "2026-11-07T02:14:06.788585Z",
+      "created_at": "2026-11-07T01:24:03.858792Z",
+      "size_in_bytes": 371
+    },
+    {
+      "id": 10149713917,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-17067418711823951361",
+      "version": "4cfab18425465f3634febed5e9d2fbcece2018be74680cefe71e951c22103268",
+      "last_accessed_at": "2026-11-07T02:14:28.257664Z",
+      "created_at": "2026-11-07T02:14:28.257664Z",
+      "size_in_bytes": 371
+    },
+    {
+      "id": 10147620329,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-9780769160377955884",
+      "version": "2835447dab7b4777b44837e45c235702f969fb5333db63cd9e4f6a956d0669ca",
+      "last_accessed_at": "2026-11-07T00:44:35.340970Z",
+      "created_at": "2026-11-07T00:44:35.340970Z",
+      "size_in_bytes": 370
+    },
+    {
+      "id": 10148594693,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-2455029376282575570",
+      "version": "6fbe924646949762f8c489776e081cccb0b4e530d895a89b9e211b294deda36b",
+      "last_accessed_at": "2026-11-07T01:24:10.335409Z",
+      "created_at": "2026-11-07T01:24:10.335409Z",
+      "size_in_bytes": 370
+    },
+    {
+      "id": 10148595984,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-9780769160377955884",
+      "version": "2835447dab7b4777b44837e45c235702f969fb5333db63cd9e4f6a956d0669ca",
+      "last_accessed_at": "2026-11-07T02:14:13.559972Z",
+      "created_at": "2026-11-07T01:24:13.360197Z",
+      "size_in_bytes": 370
+    },
+    {
+      "id": 10146349069,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-8504192385035217810",
+      "version": "f4466562d653e3f3e0415be7f3d195fd9a1c264e6c79779005c6e000f8be1781",
+      "last_accessed_at": "2026-11-07T00:44:29.772150Z",
+      "created_at": "2026-11-06T23:57:32.511244Z",
+      "size_in_bytes": 369
+    },
+    {
+      "id": 10148590235,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-8504192385035217810",
+      "version": "f4466562d653e3f3e0415be7f3d195fd9a1c264e6c79779005c6e000f8be1781",
+      "last_accessed_at": "2026-11-07T02:14:04.093567Z",
+      "created_at": "2026-11-07T01:24:00.635500Z",
+      "size_in_bytes": 369
+    },
+    {
+      "id": 10146925815,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-15749328912956108328",
+      "version": "5bbcb6c264fb037c8c5cdc72184c3fb99976a3e78bdaadd3a3db4dd982d1f395",
+      "last_accessed_at": "2026-11-07T00:44:30.162898Z",
+      "created_at": "2026-11-07T00:18:17.956393Z",
+      "size_in_bytes": 368
+    },
+    {
+      "id": 10148591978,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-3814299612865592978",
+      "version": "3c86b6c1da38cf501729d53182190424f989be372e7476b779043d632657630b",
+      "last_accessed_at": "2026-11-07T02:14:07.687606Z",
+      "created_at": "2026-11-07T01:24:04.368382Z",
+      "size_in_bytes": 367
+    },
+    {
+      "id": 10148594763,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-14318519303676674368",
+      "version": "5a0f476ddf3476db430106005eb91bd963a4cccdd65224177cf44e396c27d417",
+      "last_accessed_at": "2026-11-07T02:14:21.426834Z",
+      "created_at": "2026-11-07T01:24:10.498296Z",
+      "size_in_bytes": 367
+    },
+    {
+      "id": 10148584791,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-15749328912956108328",
+      "version": "5bbcb6c264fb037c8c5cdc72184c3fb99976a3e78bdaadd3a3db4dd982d1f395",
+      "last_accessed_at": "2026-11-07T02:14:29.953256Z",
+      "created_at": "2026-11-07T01:23:46.314850Z",
+      "size_in_bytes": 367
+    },
+    {
+      "id": 10148595647,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-9292089739421331923",
+      "version": "e2605da6dfb8b96cc838e892a9e10e290361af35fbe296d9504e3a10fc89251d",
+      "last_accessed_at": "2026-11-07T02:14:17.200266Z",
+      "created_at": "2026-11-07T01:24:12.566236Z",
+      "size_in_bytes": 366
+    },
+    {
+      "id": 10148593768,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-8406492972659706122",
+      "version": "184fef2d8bad103862f698e4dbaa482853ceb377478f8b4e2329cf8adc5b323d",
+      "last_accessed_at": "2026-11-07T02:14:21.107677Z",
+      "created_at": "2026-11-07T01:24:08.148255Z",
+      "size_in_bytes": 364
+    },
+    {
+      "id": 10146657763,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-8406492972659706122",
+      "version": "184fef2d8bad103862f698e4dbaa482853ceb377478f8b4e2329cf8adc5b323d",
+      "last_accessed_at": "2026-11-07T00:44:31.469517Z",
+      "created_at": "2026-11-07T00:08:42.918279Z",
+      "size_in_bytes": 362
+    },
+    {
+      "id": 10146868014,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-5045771425683942306",
+      "version": "f508195e5bfc1a0aaca6fdcf7fd546f73eb09c008d1385ef14facee30f44c52b",
+      "last_accessed_at": "2026-11-07T00:44:30.404266Z",
+      "created_at": "2026-11-07T00:16:11.823730Z",
+      "size_in_bytes": 325
+    },
+    {
+      "id": 10146343353,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-11599991147899692619",
+      "version": "98c4d41e4a698c041b0b51dbd0f0ad5e52de4be68c87170bdd10f385634f9064",
+      "last_accessed_at": "2026-11-07T00:44:30.425713Z",
+      "created_at": "2026-11-06T23:57:19.273735Z",
+      "size_in_bytes": 323
+    },
+    {
+      "id": 10146860154,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-6367992113401708978",
+      "version": "7643a619f5bd0673b2094802b71de47c30c9c60b9af9a4c224988dad3281bf67",
+      "last_accessed_at": "2026-11-07T00:44:30.438877Z",
+      "created_at": "2026-11-07T00:15:54.979914Z",
+      "size_in_bytes": 323
+    },
+    {
+      "id": 10146867224,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-15867184910202250034",
+      "version": "4258b400a7392f3b595af2a723d7845605d45be4cc721368d7e44b4ae6bce7cb",
+      "last_accessed_at": "2026-11-07T00:44:30.463261Z",
+      "created_at": "2026-11-07T00:16:10.067961Z",
+      "size_in_bytes": 323
+    },
+    {
+      "id": 10148593573,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-7992209924304865028",
+      "version": "de60f7ac0bbcc78b0638a6d27ff6e5b25ef111a2d3fd42b830de969166e56805",
+      "last_accessed_at": "2026-11-07T02:14:16.593740Z",
+      "created_at": "2026-11-07T01:24:07.688953Z",
+      "size_in_bytes": 323
+    },
+    {
+      "id": 10146867621,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-13196012195910237145",
+      "version": "d452fbf50954c2c11442557b661c5e65595559c9ed1ee0ee0efb6fa439d9a359",
+      "last_accessed_at": "2026-11-07T00:44:30.388699Z",
+      "created_at": "2026-11-07T00:16:10.948633Z",
+      "size_in_bytes": 322
+    },
+    {
+      "id": 10146860524,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-7417681255989439977",
+      "version": "7aeee6b0a90128caf473bf8177bfdfa48f0517a79a23e64518f3ca3b022db471",
+      "last_accessed_at": "2026-11-07T00:44:30.453313Z",
+      "created_at": "2026-11-07T00:15:55.854332Z",
+      "size_in_bytes": 322
+    },
+    {
+      "id": 10148585036,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-4926634916672251375",
+      "version": "2d3e908e86a5c66f085f77278aff5d0cd06507b56dbad62c5b3b252d15ffcf9a",
+      "last_accessed_at": "2026-11-07T01:23:47.017934Z",
+      "created_at": "2026-11-07T01:23:47.017934Z",
+      "size_in_bytes": 322
+    },
+    {
+      "id": 10146658347,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-11624756485770337523",
+      "version": "825633fca6bd355bf654dc30514cffcc4166826e30e5b1ef7e82cf8d32f8757e",
+      "last_accessed_at": "2026-11-07T00:44:31.761733Z",
+      "created_at": "2026-11-07T00:08:44.280436Z",
+      "size_in_bytes": 319
+    },
+    {
+      "id": 10146860877,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-4926634916672251375",
+      "version": "2d3e908e86a5c66f085f77278aff5d0cd06507b56dbad62c5b3b252d15ffcf9a",
+      "last_accessed_at": "2026-11-07T00:44:30.301973Z",
+      "created_at": "2026-11-07T00:15:56.735908Z",
+      "size_in_bytes": 318
+    },
+    {
+      "id": 10146859808,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-1166157195988999590",
+      "version": "dda8d8aa2165b3678c0d4f8f71b49a5e54d50ae42e5e4d193b5f795cf516c0a3",
+      "last_accessed_at": "2026-11-07T00:44:30.306060Z",
+      "created_at": "2026-11-07T00:15:54.047922Z",
+      "size_in_bytes": 318
+    },
+    {
+      "id": 10146656405,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-8776735058940944452",
+      "version": "fc96129c506c65c7d2a948528fa47fea19e06ce1b316b4674075df6638208c8f",
+      "last_accessed_at": "2026-11-07T00:44:31.088806Z",
+      "created_at": "2026-11-07T00:08:39.853396Z",
+      "size_in_bytes": 318
+    },
+    {
+      "id": 10146657946,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-9554532287864074343",
+      "version": "256c39c81756dddc681c102ad0d1d2e4f2a1f997050e9f685b61ed42dfa1ff9d",
+      "last_accessed_at": "2026-11-07T00:44:31.517518Z",
+      "created_at": "2026-11-07T00:08:43.366583Z",
+      "size_in_bytes": 318
+    },
+    {
+      "id": 10148585110,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-1166157195988999590",
+      "version": "dda8d8aa2165b3678c0d4f8f71b49a5e54d50ae42e5e4d193b5f795cf516c0a3",
+      "last_accessed_at": "2026-11-07T01:23:47.201814Z",
+      "created_at": "2026-11-07T01:23:47.201814Z",
+      "size_in_bytes": 318
+    },
+    {
+      "id": 10148585336,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-5045771425683942306",
+      "version": "f508195e5bfc1a0aaca6fdcf7fd546f73eb09c008d1385ef14facee30f44c52b",
+      "last_accessed_at": "2026-11-07T01:23:47.818263Z",
+      "created_at": "2026-11-07T01:23:47.818263Z",
+      "size_in_bytes": 318
+    },
+    {
+      "id": 10148593228,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-8776735058940944452",
+      "version": "fc96129c506c65c7d2a948528fa47fea19e06ce1b316b4674075df6638208c8f",
+      "last_accessed_at": "2026-11-07T02:14:17.527289Z",
+      "created_at": "2026-11-07T01:24:06.978815Z",
+      "size_in_bytes": 318
+    },
+    {
+      "id": 10148585629,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-15867184910202250034",
+      "version": "4258b400a7392f3b595af2a723d7845605d45be4cc721368d7e44b4ae6bce7cb",
+      "last_accessed_at": "2026-11-07T01:23:48.587870Z",
+      "created_at": "2026-11-07T01:23:48.587870Z",
+      "size_in_bytes": 317
+    },
+    {
+      "id": 10148585712,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-10122139880271091674",
+      "version": "f2b3f81e04d8660aaa0ae819ad3db2d8b9a558605acfbe32b78e7bd7fe19a9d3",
+      "last_accessed_at": "2026-11-07T01:23:48.798978Z",
+      "created_at": "2026-11-07T01:23:48.798978Z",
+      "size_in_bytes": 317
+    },
+    {
+      "id": 10146656792,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-7992209924304865028",
+      "version": "de60f7ac0bbcc78b0638a6d27ff6e5b25ef111a2d3fd42b830de969166e56805",
+      "last_accessed_at": "2026-11-07T00:44:31.346186Z",
+      "created_at": "2026-11-07T00:08:40.704899Z",
+      "size_in_bytes": 316
+    },
+    {
+      "id": 10146657170,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-1044173527847945808",
+      "version": "e68a822baa64089547058b36417ab31c19235dd573603eca004a1359269b9fdd",
+      "last_accessed_at": "2026-11-07T00:44:31.483355Z",
+      "created_at": "2026-11-07T00:08:41.617574Z",
+      "size_in_bytes": 316
+    },
+    {
+      "id": 10148585548,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-7417681255989439977",
+      "version": "7aeee6b0a90128caf473bf8177bfdfa48f0517a79a23e64518f3ca3b022db471",
+      "last_accessed_at": "2026-11-07T01:23:48.381698Z",
+      "created_at": "2026-11-07T01:23:48.381698Z",
+      "size_in_bytes": 316
+    },
+    {
+      "id": 10146343682,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-10122139880271091674",
+      "version": "f2b3f81e04d8660aaa0ae819ad3db2d8b9a558605acfbe32b78e7bd7fe19a9d3",
+      "last_accessed_at": "2026-11-07T00:44:30.457411Z",
+      "created_at": "2026-11-06T23:57:20.026411Z",
+      "size_in_bytes": 314
+    },
+    {
+      "id": 10146656601,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-12105575886108956899",
+      "version": "afc0fa788eacd5bea2da990eee58ae0ae616ef60fb4a04839fa668761f524ab6",
+      "last_accessed_at": "2026-11-07T00:44:31.291458Z",
+      "created_at": "2026-11-07T00:08:40.290524Z",
+      "size_in_bytes": 314
+    },
+    {
+      "id": 10148593494,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-12105575886108956899",
+      "version": "afc0fa788eacd5bea2da990eee58ae0ae616ef60fb4a04839fa668761f524ab6",
+      "last_accessed_at": "2026-11-07T02:14:15.986307Z",
+      "created_at": "2026-11-07T01:24:07.528289Z",
+      "size_in_bytes": 314
+    },
+    {
+      "id": 10146657552,
+      "ref": "refs/pull/3917/merge",
+      "key": "nx-cache-16015123646031677122",
+      "version": "84b46895124d440fe0c9d03f0a7fe5105062ee006e20892dd78b3fc44bc79d0c",
+      "last_accessed_at": "2026-11-07T00:44:31.676117Z",
+      "created_at": "2026-11-07T00:08:42.454359Z",
+      "size_in_bytes": 313
+    },
+    {
+      "id": 10148593915,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-9554532287864074343",
+      "version": "256c39c81756dddc681c102ad0d1d2e4f2a1f997050e9f685b61ed42dfa1ff9d",
+      "last_accessed_at": "2026-11-07T02:14:22.299314Z",
+      "created_at": "2026-11-07T01:24:08.480040Z",
+      "size_in_bytes": 313
+    },
+    {
+      "id": 10148585404,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-11599991147899692619",
+      "version": "98c4d41e4a698c041b0b51dbd0f0ad5e52de4be68c87170bdd10f385634f9064",
+      "last_accessed_at": "2026-11-07T01:23:48.008153Z",
+      "created_at": "2026-11-07T01:23:48.008153Z",
+      "size_in_bytes": 312
+    },
+    {
+      "id": 10148594322,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-11624756485770337523",
+      "version": "825633fca6bd355bf654dc30514cffcc4166826e30e5b1ef7e82cf8d32f8757e",
+      "last_accessed_at": "2026-11-07T02:14:18.665727Z",
+      "created_at": "2026-11-07T01:24:09.440780Z",
+      "size_in_bytes": 312
+    },
+    {
+      "id": 10148585485,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-6367992113401708978",
+      "version": "7643a619f5bd0673b2094802b71de47c30c9c60b9af9a4c224988dad3281bf67",
+      "last_accessed_at": "2026-11-07T01:23:48.188922Z",
+      "created_at": "2026-11-07T01:23:48.188922Z",
+      "size_in_bytes": 311
+    },
+    {
+      "id": 10148594261,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-16015123646031677122",
+      "version": "84b46895124d440fe0c9d03f0a7fe5105062ee006e20892dd78b3fc44bc79d0c",
+      "last_accessed_at": "2026-11-07T02:14:21.722241Z",
+      "created_at": "2026-11-07T01:24:09.267132Z",
+      "size_in_bytes": 311
+    },
+    {
+      "id": 10148593845,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-1044173527847945808",
+      "version": "e68a822baa64089547058b36417ab31c19235dd573603eca004a1359269b9fdd",
+      "last_accessed_at": "2026-11-07T02:14:24.905881Z",
+      "created_at": "2026-11-07T01:24:08.312761Z",
+      "size_in_bytes": 311
+    },
+    {
+      "id": 10148585258,
+      "ref": "refs/heads/main",
+      "key": "nx-cache-13196012195910237145",
+      "version": "d452fbf50954c2c11442557b661c5e65595559c9ed1ee0ee0efb6fa439d9a359",
+      "last_accessed_at": "2026-11-07T01:23:47.603169Z",
+      "created_at": "2026-11-07T01:23:47.603169Z",
+      "size_in_bytes": 310
+    }
+  ]
+}

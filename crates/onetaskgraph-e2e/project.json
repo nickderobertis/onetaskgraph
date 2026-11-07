@@ -13,6 +13,11 @@
     "onetaskgraph-status-options"
   ],
   "namedInputs": {
+    "cargoInputs": [
+      {
+        "runtime": "node scripts/nx-cargo-closure.mjs --crate onetaskgraph-e2e --crate onetaskgraph"
+      }
+    ],
     "default": [
       "{projectRoot}/**/*",
       "!{projectRoot}/Cargo.toml",
@@ -21,7 +26,7 @@
       "!{workspaceRoot}/crates/onetaskgraph/CHANGELOG.md",
       "!{workspaceRoot}/crates/onetaskgraph/Cargo.toml",
       "{workspaceRoot}/README.md",
-      "versionFreeCargo"
+      "cargoInputs"
     ]
   },
   "targets": {

@@ -450,7 +450,9 @@ test("the Rust cache warmer parting from the key a test job restores is refused"
     delete all["rust-cache-warm.yml"].jobs["warm-macos"];
   }, /no macos-latest leg saving test-macos's cache/);
   refuses((all) => {
-    all["rust-cache-warm.yml"].jobs["warm-macos"].steps.at(-1).run = "cargo build";
+    all["rust-cache-warm.yml"].jobs["warm-macos"].steps.find((step) =>
+      step.run?.includes("scripts/warm-rust-cache.sh"),
+    ).run = "cargo build";
   }, /macOS leg does not build through scripts\/warm-rust-cache.sh/);
   refuses((all) => {
     all["rust-cache-warm.yml"].on = { push: { branches: ["main"] }, pull_request: null };

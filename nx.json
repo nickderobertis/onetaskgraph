@@ -6,7 +6,8 @@
       "{projectRoot}/**/*",
       "!{projectRoot}/Cargo.toml",
       "!{projectRoot}/CHANGELOG.md",
-      "sharedGlobals"
+      "sharedGlobals",
+      "cargoInputs"
     ],
     "sharedGlobals": [
       "{workspaceRoot}/.python-version",
@@ -17,9 +18,9 @@
       "{workspaceRoot}/rustfmt.toml",
       "{workspaceRoot}/deny.toml",
       "{workspaceRoot}/biome.json",
-      "versionFreeCargo",
       "versionFreeNpm"
     ],
+    "cargoInputs": [],
     "versionFreeCargo": [
       {
         "runtime": "node scripts/nx-version-free-inputs.mjs --ecosystem cargo"

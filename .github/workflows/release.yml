@@ -7,7 +7,9 @@ permissions:
 # Every run step is one phase of the job's justfile recipe (scripts/release_cd.py). The build
 # jobs do not wait on one another, and `publish` publishes nothing until all four have: a
 # failed build leaves the other platforms published and the platform-independent packages
-# unpublished until it is re-run, and a re-run sends only what is missing.
+# unpublished until it is re-run, and a re-run sends only what is missing. No Rust step saves:
+# no first attempt of a release job ever restored a tag's copy, whose 3.2 GB pushed proven test
+# results out of the Actions cache (.github/workflows/rust-cache-warm.yml is the one saver).
 #
 # llmlint: ignore-block[changed_behavior_has_e2e] Every run step below but publish's release tail calls a recipe that .github/tests/release-cd.test.mjs drives on Linux against loopback registries, and .github/policy/tests/release-tail.test.mjs runs the tail's two steps as written over recorded GitHub answers; what is left is GitHub's own scheduling of these jobs on a published release, which a pre-publication dispatch cannot trigger.
 jobs:
@@ -19,7 +21,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-        with: { target: x86_64-unknown-linux-gnu }
+        with: { target: x86_64-unknown-linux-gnu, cache-save-if: false }
       - name: Read the pinned bootstrap tool versions
         id: pins
         shell: bash
@@ -61,7 +63,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-        with: { target: aarch64-unknown-linux-gnu }
+        with: { target: aarch64-unknown-linux-gnu, cache-save-if: false }
       - name: Read the pinned bootstrap tool versions
         id: pins
         shell: bash
@@ -103,7 +105,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-        with: { target: aarch64-apple-darwin }
+        with: { target: aarch64-apple-darwin, cache-save-if: false }
       - name: Read the pinned bootstrap tool versions
         id: pins
         shell: bash
@@ -145,7 +147,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v1
-        with: { target: x86_64-pc-windows-msvc }
+        with: { target: x86_64-pc-windows-msvc, cache-save-if: false }
       - name: Read the pinned bootstrap tool versions
         id: pins
         shell: bash
@@ -193,6 +195,7 @@ jobs:
         with:
           fetch-depth: 0
       - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with: { cache-save-if: false }
       - name: Read the pinned bootstrap tool versions
         id: pins
         shell: bash

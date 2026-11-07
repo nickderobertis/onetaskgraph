@@ -133,7 +133,8 @@ test("source edits select CD journeys and project definitions also select cache 
     [".github/tests/release-cd.test.mjs", true, true],
     [".github/workflows/ci.yml", true, true, true],
     [".github/cache-policy/tests/cache.test.mjs", false, true, true],
-    ["scripts/nx-remote-cache.mjs", false, false, true],
+    ["scripts/nx-remote-cache.mjs", false, true, true],
+    ["scripts/actions-cache-prune.mjs", false, true],
   ]) {
     const projects = selected(file);
     assert.equal(projects.includes("github-workflows"), workflows, `${file}: github-workflows`);

@@ -9,6 +9,11 @@
     "onetaskgraph-linear",
     "onetaskgraph-plugin-api"
   ],
+  "namedInputs": {
+    "cargoInputs": [
+      { "runtime": "node scripts/nx-cargo-closure.mjs --crate onetaskgraph-e2e-support" }
+    ]
+  },
   "targets": {
     "bootstrap": {
       "executor": "nx:run-commands",

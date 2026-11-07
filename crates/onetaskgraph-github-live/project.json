@@ -4,6 +4,11 @@
   "projectType": "library",
   "tags": ["lang:rust", "layer:testing", "test-in-coverage:crate"],
   "//": "The GitHub Projects lane's own names, which its tests and the scheduled janitor read. It depends only on onetaskgraph-live; the GitHub Projects plugin names it as a dev-dependency, so editing it selects that plugin and the janitor and nothing of Linear.",
+  "namedInputs": {
+    "cargoInputs": [
+      { "runtime": "node scripts/nx-cargo-closure.mjs --crate onetaskgraph-github-live" }
+    ]
+  },
   "targets": {
     "bootstrap": {
       "executor": "nx:run-commands",

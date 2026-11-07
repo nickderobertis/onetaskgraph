@@ -1,7 +1,7 @@
 # This repository's CI, CD and local-gate budgets. Every figure is read from telemetry, never
 # measured afresh, and each is checked at one place:
 #
-# - `release-tail`: the eight GitHub Actions figures, measured by scripts/actions-budget-figures.sh
+# - `release-tail`: the nine GitHub Actions figures, measured by scripts/actions-budget-figures.sh
 #   (dero-skills' create-repo copy, edited only there) from onevcs's read-only host answers. The
 #   last step of release.yml's `publish` checks them, reporting only: nothing reads its result.
 #   The CD figures leave out the main-push Rust cache warmer (`--exclude-workflow`, its workflow
@@ -143,18 +143,41 @@ budgets:
     direction: max
     threshold: 1800
     timeout_seconds: 30
-  # Design target; the first published release after adoption supplies the first real figure.
-  # Workload: all three pushes per PR change crate inputs, five concurrent PRs, four jobs per
-  # push, up to 127 cacheable tasks per push; promotion adds a base-scope copy without deleting
-  # source scopes. About 29 merged PRs fit GitHub's seven-day unused-entry window.
+  # Design target, revisited after release-tail observations (manager ruling
+  # c-3139a3760ceeae629b02b38b72219f14). Workload: the newest release with evidence when the
+  # command runs, carrying 1 to 9 merged pull requests at 3 pushes each and 4 CI jobs per push,
+  # with 1,299 minutes at p90 from promotion to the release pull request. Over 30 days to
+  # 2026-11-06 a non-release merge moved the base under 12 of 99 pull requests, so a reading
+  # under 100 is expected and not alarming.
   - id: onetaskgraph-nx-cache-use
     description: >-
-      Remote hits among attempt-qualified cacheable task/OS/hash executions, excluding local
-      hits, protect contributor and release turnaround when unchanged work is already proven.
+      Remote hits as a percentage of attempt-qualified cacheable task/OS/hash executions, excluding
+      local hits, with a task whose base moved under it counted as a miss. It protects contributor
+      and release turnaround when unchanged work is already proven, and its detail names each miss
+      by class (throttled, failed, evicted, never_promoted, base_moved).
     labels: [release-tail]
     measure: reported
     command: [bash, scripts/actions-budget-figures.sh, cache-use]
     unit: percent
     direction: min
     threshold: 100
+    timeout_seconds: 300
+  # Workload: one reading of this repository's real listing as it stands when the command runs,
+  # about 1,900 entries on 2026-11-07. The threshold is arithmetic: one warm run saves C = 2.554 GB
+  # (test-linux 1.306, test-windows 0.635, test-macos 0.613), plus g = 0.449 from each family's
+  # largest growth, R = 0.05 for results and 0.32 for lint's lines, 3.37 GB. A family's cleanup runs
+  # before its save and keeps the newest copy, so it holds at most two copies at any moment.
+  # llmlint: ignore[budgets_track_product_owner_outcomes] The outer figures, nx-cache-use and release-cycle-time, fall only after results are lost; this inner measure shows the cause before that and names the family responsible.
+  - id: onetaskgraph-cache-headroom
+    description: >-
+      The room left under GitHub's Actions cache allowance for one warm run's saves and test
+      results, in gigabytes of 10^9 bytes, negative over the line. GitHub removes whatever was read
+      longest ago once a save finds the listing over it, so this protects the proven results a
+      coming release pull request replays from being pushed out by this repository's own builds.
+    labels: [release-tail]
+    measure: reported
+    command: [bash, scripts/actions-budget-figures.sh, cache-headroom, --family, v0-rust-test-linux-Linux-x64-, --family, v0-rust-test-windows-Windows_NT-x64-, --family, v0-rust-test-macos-Darwin-arm64-, --family, v0-rust-release-plz-Linux-x64-]
+    unit: gigabytes
+    direction: min
+    threshold: 3.37
     timeout_seconds: 300

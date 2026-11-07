@@ -11,6 +11,9 @@
     "onetaskgraph-local-md",
     "onetaskgraph-plugin-api"
   ],
+  "namedInputs": {
+    "cargoInputs": [{ "runtime": "node scripts/nx-cargo-closure.mjs --crate onetaskgraph-core" }]
+  },
   "targets": {
     "bootstrap": {
       "executor": "nx:run-commands",
