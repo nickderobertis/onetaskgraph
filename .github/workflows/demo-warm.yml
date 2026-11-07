@@ -1,0 +1,47 @@
+# DO NOT MERGE. A throwaway demonstration: build the altered Linux warm leg over main's test-linux
+# family, measure the archive rust-cache would save with rust-cache's own post step, and time
+# lint's compile lines from cold and over that tree. It runs no test and saves nothing: this
+# step's cache service is a loopback that answers nothing, and no run step holds a runtime token.
+name: demo warm
+on:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Read the pinned bootstrap tool versions
+        id: pins
+        shell: bash
+        run: bash scripts/ci-tool-pins.sh
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: ${{ steps.pins.outputs.uv }}
+          save-cache: false
+      - name: Free disk
+        shell: bash
+        run: |
+          df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h /
+      - name: Exclude the unused floating compiler from the build cache
+        shell: bash
+        run: rustup toolchain uninstall stable
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache-shared-key: test-linux
+          cache-save-if: false
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov@${{ steps.pins.outputs.cargo-llvm-cov }},cargo-nextest@${{ steps.pins.outputs.cargo-nextest }}
+      - uses: extractions/setup-just@v4
+        with:
+          just-version: ${{ steps.pins.outputs.just }}
+      - name: Measure
+        shell: bash
+        run: bash scripts/demo-warm-measure.sh

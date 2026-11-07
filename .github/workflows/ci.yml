@@ -21,10 +21,9 @@
 
 name: ci
 
+# Disabled on this throwaway demonstration branch: .github/workflows/demo-warm.yml is all it runs.
 on:
-  pull_request:
-  push:
-    branches: [main]
+  workflow_dispatch:
 
 # Least privilege: the token is read-only by default and widened per job only where a job
 # genuinely needs more.
