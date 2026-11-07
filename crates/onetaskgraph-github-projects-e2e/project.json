@@ -196,9 +196,6 @@
           "env": "GH_PROJECTS_TOKEN"
         },
         {
-          "env": "GITHUB_BUDGET_RESULTS_FILE"
-        },
-        {
           "dependentTasksOutputFiles": "**/telemetry/github-live-session/**/*.json"
         },
         {
