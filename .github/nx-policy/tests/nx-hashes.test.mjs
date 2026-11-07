@@ -390,7 +390,13 @@ test("a release's version bump keeps every crate's Cargo closure", () => {
   const run = (crate) =>
     command(dir, process.execPath, ["scripts/nx-cargo-closure.mjs", "--crate", crate]).trim();
   const crates = [...cargoClosures(dir).keys()];
-  assert.equal(crates.length, readdirSync(join(dir, "crates")).length, "every workspace crate");
+  assert.equal(
+    crates.length,
+    readdirSync(join(dir, "crates")).filter((name) =>
+      existsSync(join(dir, "crates", name, "Cargo.toml")),
+    ).length,
+    "every workspace crate",
+  );
   const before = crates.map(run);
   const version = readFileSync(join(dir, "Cargo.toml"), "utf8").match(/^version = "([^"]+)"$/m)[1];
   // As release-plz writes it: the workspace's version, the exact sibling pins beside each `path`,
