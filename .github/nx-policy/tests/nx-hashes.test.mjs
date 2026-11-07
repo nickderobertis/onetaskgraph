@@ -355,7 +355,7 @@ test("a Cargo edit moves exactly the tasks reading it, and a tool version moves 
       assert.equal(moved[id], false, `${crate} manifest: ${id} keeps its hash`);
   }
 
-  // A lock entry a suite reaches and the plugin API does not, and one every crate reaches.
+  // A lock entry a suite reaches and the plugin API does not.
   const lock = "Cargo.lock";
   const entry = (name, body) =>
     new RegExp(`(\\[\\[package\\]\\]\\nname = "${name}"\\nversion = "[^"]+"\\n)`).exec(body);
