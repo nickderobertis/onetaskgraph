@@ -1322,9 +1322,9 @@ came, and a copy's `onetaskgraph.copied_destination_version` — and writes the 
 back once, beside them, as its own request. That follow-up's own answer has to report the same
 content again; a destination that stores it otherwise is refused as `stored-content-diverged`,
 naming the item and the first line that moved. A follow-up that also finishes a link holds text
-Linear has not seen, so an answer differing only as Linear autolinks a URL, escapes a bracket or a
-tilde, or puts a destination in angle brackets is no divergence: that answer is written back the
-same way, and has to come back unchanged. Other text in the answer, such as a person's edit it
+Linear has not seen, so an answer differing only as Linear autolinks a URL (a bare issue URL under
+the issue's identifier), escapes a bracket or a tilde, or puts a destination in angle brackets is no
+divergence: that answer is written back the same way, and has to come back unchanged. Other text in the answer, such as a person's edit it
 reports, is refused. An edit made before the follow-up and absent from its answer is overwritten
 unseen, since no read precedes it. No read of the item follows either write. So
 every item a copy lands records a `body_digest` that a read of it verifies, whatever Markdown its

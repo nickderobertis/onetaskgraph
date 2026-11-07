@@ -3795,21 +3795,7 @@ fn publish_target(sandbox: &Sandbox, kind: &str) -> Landed {
 }
 
 fn copy_design(sandbox: &Sandbox) -> (Landed, [u64; 3]) {
-    let rendered = ok(
-        sandbox,
-        &["document", "copy", "plans:D", "--to", "public", "--json"],
-    );
-    let id = outcomes(&rendered)["plans:D"]["destination"]
-        .as_str()
-        .expect("the document landed")
-        .to_owned();
-    (
-        Landed {
-            verb: "document",
-            id,
-        },
-        reference_figures(&rendered),
-    )
+    copy_to(sandbox, "public")
 }
 
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: local Markdown and loopback stand-ins exercise the engine's cross-plugin public-copy screen, so this journey belongs in the engine e2e suite.
@@ -4690,7 +4676,7 @@ fn budget_table_in_linear(
         )
     };
     format!(
-        "## Budgets\n\n| Budget | Limit |\n| -- | -- |\n| [requests]({}) | 20 |\n| [seconds]({}) | 30 |\n",
+        "## Budgets\n\n| Budget | Limit |\n| -- | -- |\n| [requests](<{}>) | 20 |\n| [seconds](<{}>) | 30 |\n",
         link("first", "Budget requests", "budget-requests"),
         link("second", "Budget seconds", "budget-seconds"),
     )
@@ -4777,7 +4763,7 @@ fn a_private_folders_budget_table_lands_on_a_public_linear_as_links_or_as_text_a
     assert_eq!(
         linear.raw(&design).trim_end(),
         format!(
-            "## Budgets\n\n| Budget | Limit |\n| -- | -- |\n| [requests]({}#heading-budget-requests-{}) | 20 |\n| seconds | 30 |",
+            "## Budgets\n\n| Budget | Limit |\n| -- | -- |\n| [requests](<{}#heading-budget-requests-{}>) | 20 |\n| seconds | 30 |",
             first.location(&sandbox),
             stored_id8(workspace, &first, "Budget requests", 0),
         ),
@@ -4813,7 +4799,7 @@ fn a_budget_link_through_a_private_linear_comes_back_to_a_folder_as_a_relative_p
     assert_eq!(
         at_last["D"].content(&sandbox).trim_end(),
         format!(
-            "## Budgets\n\n| Budget | Limit |\n| -- | -- |\n| [requests]({}#budget-requests) | 20 |\n| [seconds]({}#budget-seconds) | 30 |",
+            "## Budgets\n\n| Budget | Limit |\n| -- | -- |\n| [requests](<{}#budget-requests>) | 20 |\n| [seconds](<{}#budget-seconds>) | 30 |",
             path("first"),
             path("second"),
         ),
@@ -4841,7 +4827,7 @@ fn mutually_linked(sandbox: &Sandbox) -> Store {
     std::fs::write(
         root.join("tasks/first-task.md"),
         "---\ntitle: First\nstatus: todo\nproject: P\n---\n## Budget requests\n\n\
-         | Second | second-task.md |\n",
+         | Second | second-task.md |\n| Heading | second-task.md#budget-seconds |\n",
     )
     .expect("the task");
     std::fs::write(
@@ -4875,18 +4861,30 @@ fn a_url_a_follow_up_finished_and_linear_autolinked_is_recorded_rather_than_refu
     };
     let (one, two) = (task("plans:first-task"), task("plans:second-task"));
     let url = two.location(&sandbox);
+    let identifier = url.rsplit('/').next().expect("an issue URL");
     assert!(
         linear
             .raw(&one)
-            .contains(&format!("| Second | [{url}](<{url}>) |")),
+            .contains(&format!("| Second | [{identifier}]({url}) |")),
         "Linear's autolink of the URL the follow-up wrote: {}",
         linear.raw(&one)
     );
     let Store::Linear(workspace) = &linear else {
         unreachable!("a workspace")
     };
+    let heading = format!(
+        "{url}#heading-budget-seconds-{}",
+        stored_id8(workspace, &two, "Budget seconds", 0)
+    );
+    assert!(
+        linear
+            .raw(&one)
+            .contains(&format!("| Heading | [{identifier}]({heading}) |")),
+        "the word Linear linked as an address when first written is a link to the heading: {}",
+        linear.raw(&one)
+    );
     let inline = format!(
-        "See [the first]({}#heading-budget-requests-{})",
+        "See [the first](<{}#heading-budget-requests-{}>)",
         one.location(&sandbox),
         stored_id8(workspace, &one, "Budget requests", 0)
     );
@@ -5016,4 +5014,159 @@ fn a_comment_carried_to_linear_has_its_reference_link_written_inline() {
     let held = listed["comments"][0]["body"].as_str().expect("a comment");
     assert!(held.contains(&inline), "{held}");
     assert!(!held.contains("[b]"), "{held}");
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace exercise the engine's copy across two plugins.
+#[test]
+fn a_budget_table_copied_before_its_tasks_and_with_no_stored_heading_ids_still_links() {
+    // Copied first, each cell is an inline link naming a task with no counterpart yet, as
+    // authored; the copy after its tasks landed points it at them, and a repeat writes nothing.
+    let sandbox = Sandbox::new();
+    let plans = budget_plan(&sandbox, "plans");
+    let (linear, mut config) = store(&sandbox, "linear", "linear", None);
+    config["visibility"] = json!("private");
+    configure(&sandbox, &[("plans", &plans), ("linear", &config)]);
+    let Store::Linear(workspace) = &linear else {
+        unreachable!("a workspace")
+    };
+    workspace.rewrite_markdown_on_write(crate::fixtures::LinearMarkdown::Measured);
+    let (design, _) = copy_to(&sandbox, "linear");
+    assert!(
+        linear
+            .raw(&design)
+            .contains("| [requests](<../tasks/first-task.md#budget-requests>) | 20 |"),
+        "{}",
+        linear.raw(&design)
+    );
+    let landed = copy_budget_plan(&sandbox, "plans", "linear");
+    assert_eq!(landed["D"].id, design.id);
+    assert_eq!(
+        linear.raw(&design).trim_end(),
+        budget_table_in_linear(&sandbox, workspace, &landed).trim_end(),
+    );
+    let mark = linear.mark(None);
+    copy_budget_plan(&sandbox, "plans", "linear");
+    assert_eq!(linear.writes_since(&mark, None), Vec::<String>::new());
+
+    // A workspace whose answers carry no editor state: the cell opens the task, and is counted.
+    let sandbox = Sandbox::new();
+    let plans = budget_plan(&sandbox, "plans");
+    let (linear, mut config) = store(&sandbox, "linear", "linear", None);
+    config["visibility"] = json!("private");
+    configure(&sandbox, &[("plans", &plans), ("linear", &config)]);
+    let Store::Linear(workspace) = &linear else {
+        unreachable!("a workspace")
+    };
+    workspace.rewrite_markdown_on_write(crate::fixtures::LinearMarkdown::Measured);
+    workspace.answer_no_editor_state();
+    let landed = copy_budget_plan(&sandbox, "plans", "linear");
+    assert_eq!(
+        linear.raw(&landed["D"]).trim_end(),
+        format!(
+            "## Budgets\n\n| Budget | Limit |\n| -- | -- |\n| [requests](<{}>) | 20 |\n| [seconds](<{}>) | 30 |",
+            landed["first"].location(&sandbox),
+            landed["second"].location(&sandbox),
+        ),
+    );
+    let mark = linear.mark(None);
+    copy_budget_plan(&sandbox, "plans", "linear");
+    assert_eq!(linear.writes_since(&mark, None), Vec::<String>::new());
+}
+
+/// Copy the document `plans:D` alone into `to`, answering where it landed and its figures.
+fn copy_to(sandbox: &Sandbox, to: &str) -> (Landed, [u64; 3]) {
+    let rendered = ok(
+        sandbox,
+        &["document", "copy", "plans:D", "--to", to, "--json"],
+    );
+    let id = outcomes(&rendered)["plans:D"]["destination"]
+        .as_str()
+        .expect("the document landed")
+        .to_owned();
+    (
+        Landed {
+            verb: "document",
+            id,
+        },
+        reference_figures(&rendered),
+    )
+}
+
+/// [`budget_plan`], its design document also naming a Linear issue by its URL alone.
+fn budget_plan_naming_an_issue(sandbox: &Sandbox) -> (Value, String) {
+    let plans = budget_plan(sandbox, "plans");
+    let url = "https://linear.app/elsewhere/issue/OPS-7";
+    std::fs::write(
+        root_of(sandbox, "plans").join("documents/D.md"),
+        format!("---\ntitle: Design\nproject: P\n---\nTracked in {url} today.\n\n{BUDGET_TABLE}"),
+    )
+    .expect("the design document");
+    (plans, url.to_owned())
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace exercise the engine's copy across two plugins.
+#[test]
+fn a_design_document_naming_an_issue_by_url_beside_its_budget_table_lands_and_a_repeat_writes_nothing()
+ {
+    let sandbox = Sandbox::new();
+    let (plans, url) = budget_plan_naming_an_issue(&sandbox);
+    let (linear, mut config) = store(&sandbox, "linear", "linear", None);
+    config["visibility"] = json!("private");
+    configure(&sandbox, &[("plans", &plans), ("linear", &config)]);
+    let Store::Linear(workspace) = &linear else {
+        unreachable!("a workspace")
+    };
+    workspace.rewrite_markdown_on_write(crate::fixtures::LinearMarkdown::Measured);
+    let landed = copy_budget_plan(&sandbox, "plans", "linear");
+    assert_eq!(
+        linear.raw(&landed["D"]).trim_end(),
+        format!(
+            "Tracked in [OPS-7]({url}) today.\n\n{}",
+            budget_table_in_linear(&sandbox, workspace, &landed).trim_end()
+        ),
+    );
+    let mark = linear.mark(None);
+    copy_budget_plan(&sandbox, "plans", "linear");
+    assert_eq!(linear.writes_since(&mark, None), Vec::<String>::new());
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace exercise the engine's copy across two plugins.
+#[test]
+fn a_persons_change_to_a_design_document_after_its_first_write_is_refused() {
+    let sandbox = Sandbox::new();
+    let (plans, _) = budget_plan_naming_an_issue(&sandbox);
+    let (linear, mut config) = store(&sandbox, "linear", "linear", None);
+    config["visibility"] = json!("private");
+    configure(&sandbox, &[("plans", &plans), ("linear", &config)]);
+    let Store::Linear(workspace) = &linear else {
+        unreachable!("a workspace")
+    };
+    workspace.rewrite_markdown_on_write(crate::fixtures::LinearMarkdown::Measured);
+    ok(
+        &sandbox,
+        &["project", "copy", "plans:P", "--to", "linear", "--json"],
+    );
+    // A person edits once the copy's first write of the document has been answered.
+    workspace.after_request(
+        |query, _| query.contains("documentCreate("),
+        0,
+        |workspace| {
+            workspace.rewrite_markdown_on_write(crate::fixtures::LinearMarkdown::PersonEdited);
+        },
+    );
+    let output = sandbox
+        .command()
+        .args(["document", "copy", "plans:D", "--to", "linear", "--json"])
+        .output()
+        .expect("the binary runs");
+    assert_eq!(output.status.code(), Some(4), "{}", stderr(&output));
+    let report: Value = serde_json::from_str(&stdout(&output)).expect("a copy emits JSON");
+    let item = &report["items"][0];
+    assert_eq!(item["action"], "failed", "{item}");
+    assert_eq!(item["error"]["kind"], "stored-content-diverged", "{item}");
+    let message = item["error"]["message"].as_str().expect("a message");
+    assert!(
+        message.contains(crate::fixtures::PERSON_EDIT),
+        "names the person's line: {message}"
+    );
 }

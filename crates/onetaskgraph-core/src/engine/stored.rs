@@ -129,7 +129,8 @@ pub(super) fn normalized(
         return Normalized::Kept;
     };
     let reads_as_sent = |sent_line: &str, stored_line: &str| {
-        sent_line == stored_line || denormalized(sent_line) == denormalized(stored_line)
+        let plain = denormalized(sent_line, None);
+        sent_line == stored_line || plain == denormalized(stored_line, Some(&plain))
     };
     let differs = first_difference_by(sent, &again, reads_as_sent);
     match differs {
@@ -140,9 +141,11 @@ pub(super) fn normalized(
 }
 
 /// `line` with what Linear does to text it is written undone: `\\[`, `\\]` and `\\~` unescaped, a
-/// destination taken out of its angle brackets, and an autolink — a link whose destination is its
-/// text, or its text under `http://` — back to that text. Text a person changed reads otherwise.
-fn denormalized(line: &str) -> String {
+/// destination taken out of its angle brackets, and an autolink back to what was written. That is
+/// a link whose destination is its text, or its text under `http://`, or, when `sent` is the line
+/// as it was sent, a link whose destination `sent` holds bare, whatever its text: Linear links a
+/// bare issue URL under the issue's identifier. Text a person changed reads otherwise.
+fn denormalized(line: &str, sent: Option<&str>) -> String {
     let unescaped = line
         .replace("\\[", "[")
         .replace("\\]", "]")
@@ -159,6 +162,8 @@ fn denormalized(line: &str) -> String {
         };
         if target == text || target.strip_prefix("http://") == Some(text) {
             plain.push_str(text);
+        } else if sent.is_some_and(|sent| holds_bare(sent, target)) {
+            plain.push_str(target);
         } else {
             plain.push_str(&format!("[{text}]({target})"));
         }
@@ -166,6 +171,12 @@ fn denormalized(line: &str) -> String {
     }
     plain.push_str(rest);
     plain
+}
+
+/// Whether `line` holds `target` other than as a link's destination.
+fn holds_bare(line: &str, target: &str) -> bool {
+    line.match_indices(target)
+        .any(|(at, _)| !line[..at].ends_with('('))
 }
 
 /// The inline link `text` opens with: its length, its text and its destination out of any angle
@@ -499,6 +510,26 @@ mod tests {
                 "a.io"
             ),
             Normalized::Stored(_)
+        ));
+        // A bare issue URL linked under its identifier, as real Linear links one.
+        assert!(matches!(
+            normalized(
+                &answering(Some("| [TES2-1](https://linear.app/w/issue/TES2-1) |")),
+                MetadataRecord::Task,
+                &id,
+                "| https://linear.app/w/issue/TES2-1 |"
+            ),
+            Normalized::Stored(_)
+        ));
+        // A link the store wrote keeps its text: a person's change of it is a change.
+        assert!(matches!(
+            normalized(
+                &answering(Some("| [changed](<https://linear.app/w/issue/TES2-1>) |")),
+                MetadataRecord::Task,
+                &id,
+                "| [budget](https://linear.app/w/issue/TES2-1) |"
+            ),
+            Normalized::Diverged(_)
         ));
         // A person's change is refused at its own line, past the autolink before it.
         let edited = format!("Intro\n| [{url}](<{url}>) |\n\\[1\\]: [x](<z>) \\~");

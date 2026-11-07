@@ -1494,9 +1494,11 @@ them do; this is the inventory of what is owed, not a status board.
      writes nothing; a private folder's table copied to a public Linear holds each cell as a link or
      as its text alone; a carried comment and a public view are written inline too; and through a
      private Linear back to a folder each is a relative path with the authored `#<slug>`.
-149. A follow-up finishing a link in a copy to Linear, answered with its own URL autolinked, is
-     not refused: the answer is written back with what the copy records, and a repeat writes nothing;
-     an answer also holding a line a person added is refused as `stored-content-diverged`, naming it.
+149. A follow-up finishing a link in a copy to Linear, answered with its own URL autolinked under the
+     issue's identifier, is not refused: the answer is written back with what the copy records, a word
+     Linear linked as an address when first written ends a link to the heading, and a repeat writes
+     nothing; a design document naming an issue by its URL beside its budget table lands the same way;
+     and an answer also holding a line a person added is refused as `stored-content-diverged`, naming it.
 
 ## The public boundary
 
