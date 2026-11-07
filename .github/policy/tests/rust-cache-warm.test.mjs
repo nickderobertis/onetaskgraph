@@ -388,8 +388,8 @@ const COPIES = {
   },
   "scripts/nx-remote-cache.mjs": {
     source: "assets/ci/nx-remote-cache.mjs",
-    version: 8,
-    sha256: "e35435fb6ffde524af3d4244dcd67c115fc9d3f350ab3d535124dbcc07518bd0",
+    version: 10,
+    sha256: "f8ee98c7b95c9e2afe7cab4539183dabce85d92c67506215b052782d849923e8",
   },
 };
 const versionsOf = (file) => file.replace(/\.[^.]+$/, ".versions");
@@ -655,11 +655,11 @@ test("each way of losing the copies, the cleanup, the saves or the guards is ref
       },
     ],
     "another version of a copy": [
-      /nx-remote-cache\.mjs is not version 8/,
+      /nx-remote-cache\.mjs is not version 10/,
       (all) => {
         all.copies["scripts/nx-remote-cache.mjs"] = all.copies[
           "scripts/nx-remote-cache.mjs"
-        ].replace("// version: 8", "// version: 7");
+        ].replace("// version: 10", "// version: 7");
       },
     ],
     "a versions file behind": [
@@ -1011,6 +1011,88 @@ test("the registered headroom command reads the recorded listing as budgets.yaml
       Math.abs(JSON.parse(readFileSync(result, "utf8")).value - expected) < 0.001,
       `${readFileSync(result, "utf8")} against ${expected}`,
     );
+  } finally {
+    server.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// What a pull request's `budgets` job meets: its token may read the listing but not the storage
+// limit, and GitHub reorders entries of one size between pages of a listing sorted by size. So
+// this double orders ties afresh on every page of that sort, and keeps created_at stable.
+async function readOnlyTokenTiedListing(count, size) {
+  const entries = Array.from({ length: count }, (_, at) => ({
+    id: at + 1,
+    key: `nx-cache-${at}`,
+    size_in_bytes: size,
+    created_at: new Date(Date.UTC(2026, 10, 1, 0, 0, at)).toISOString(),
+  }));
+  const served = new Map();
+  const listingReads = [];
+  const scatter = (id, page) => createHash("sha256").update(`${id}/${page}`).digest("hex");
+  const server = createServer((request, response) => {
+    const url = new URL(request.url, "http://127.0.0.1");
+    const send = (status, body) => {
+      response.writeHead(status, { "content-type": "application/json" });
+      response.end(JSON.stringify(body));
+    };
+    if (url.pathname.endsWith("/actions/cache/storage-limit"))
+      return send(403, { message: "Resource not accessible by integration" });
+    if (!url.pathname.endsWith("/actions/caches")) return send(404, { message: "Not Found" });
+    listingReads.push(url.search);
+    const perPage = Number(url.searchParams.get("per_page"));
+    const page = Number(url.searchParams.get("page") ?? 1);
+    if (![perPage, page].every((value) => Number.isSafeInteger(value) && value > 0))
+      return send(422, { message: `malformed paging: ${url.search}` });
+    const ordered =
+      url.searchParams.get("sort") === "size_in_bytes"
+        ? [...entries].sort((a, b) => (scatter(a.id, page) < scatter(b.id, page) ? -1 : 1))
+        : [...entries].sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+    const answer = ordered.slice((page - 1) * perPage, page * perPage);
+    for (const entry of answer) served.set(entry.id, (served.get(entry.id) ?? 0) + 1);
+    return send(200, { total_count: entries.length, actions_caches: answer });
+  });
+  await new Promise((done) => server.listen(0, "127.0.0.1", done));
+  return {
+    url: `http://127.0.0.1:${server.address().port}`,
+    served,
+    listingReads,
+    close: () => server.close(),
+  };
+}
+
+test("the registered headroom command writes a figure when the limit read is refused and every size ties", async () => {
+  const budget = parse(read("budgets.yaml")).budgets.find(
+    (entry) => entry.id === "onetaskgraph-cache-headroom",
+  );
+  assert.ok(
+    Array.isArray(budget?.command) &&
+      budget.command.length > 0 &&
+      budget.command.every((word) => typeof word === "string"),
+    "budgets.yaml registers onetaskgraph-cache-headroom with a command",
+  );
+  const count = 250;
+  const size = 8_000_000;
+  const server = await readOnlyTokenTiedListing(count, size);
+  const dir = mkdtempSync(join(tmpdir(), "cache-headroom-"));
+  const result = join(dir, "result.json");
+  try {
+    const run = await runCommand(budget.command, server.url, { ONEBUDGETSPEC_RESULT: result });
+    assert.equal(run.status, 0, run.output);
+    assert.equal(JSON.parse(readFileSync(result, "utf8")).value, 8.737, run.output);
+    assert.match(
+      run.output,
+      /allowance: 10737418240 bytes \(GitHub's stated 10 GiB allowance; actions\/cache\/storage-limit answered HTTP 403\)/,
+    );
+    assert.match(run.output, new RegExp(`counted ${count * size} bytes`));
+    assert.match(run.output, new RegExp(`results: ${count} entries, ${count * size} bytes`));
+    assert.equal(server.served.size, count, "every entry was read");
+    assert.deepEqual(
+      [...server.served].filter(([, reads]) => reads !== 1),
+      [],
+      "no entry was read more than once",
+    );
+    assert.equal(server.listingReads.length, 3, server.listingReads.join("\n"));
   } finally {
     server.close();
     rmSync(dir, { recursive: true, force: true });

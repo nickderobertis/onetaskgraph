@@ -194,6 +194,7 @@ fn budget_adapter_uses_the_real_checker_and_never_substitutes_missing_live_evide
     let sandbox = Sandbox::new();
     let root = sandbox.subdirectory("budget-adapter");
     std::fs::create_dir_all(&root).unwrap();
+    let results = root.join("budget-results.json");
     let runner = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("lane_runner.py");
     for (selection, credential, unavailable) in [
         ("run", true, false),
@@ -210,6 +211,7 @@ fn budget_adapter_uses_the_real_checker_and_never_substitutes_missing_live_evide
                 "github-live-session-points",
             ])
             .env("GITHUB_ASSET_TELEMETRY_DIR", root.join("missing-offline"))
+            .env("GITHUB_BUDGET_RESULTS_FILE", &results)
             .env("GITHUB_LIVE_SESSION_DIR", root.join("missing-live"))
             .env("GITHUB_LIVE_SESSION_ID", "adapter-fixture")
             .env("GITHUB_LIVE_SOURCE_REVISION", "a".repeat(40))
@@ -218,10 +220,19 @@ fn budget_adapter_uses_the_real_checker_and_never_substitutes_missing_live_evide
         if credential {
             command.env("GH_PROJECTS_TOKEN", "fixture-token");
         }
+        let _ = std::fs::remove_file(&results);
         let output = command.output().unwrap();
         assert!(
             !output.status.success(),
             "missing telemetry must never produce a successful measurement"
+        );
+        // The fixture's verdicts land in its sandbox, never over the workspace's saved
+        // results, which a replayed `budgets` restores and the CI report job reads.
+        let saved = std::fs::read_to_string(&results)
+            .unwrap_or_else(|error| panic!("no results saved at {}: {error}", results.display()));
+        assert!(
+            saved.contains("github-asset-requests-per-new-asset"),
+            "{saved}"
         );
         let received = String::from_utf8_lossy(&output.stdout);
         assert!(

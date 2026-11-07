@@ -22,6 +22,10 @@ SessionId = NewType("SessionId", str)
 # Repeats of this step within one job (the gate's own recipe checks drive `just check` and
 # `just gate` again) each take a fresh sibling of the job's location rather than refusing.
 MAX_INVOCATIONS = 100
+# What the `budgets` target saves and declares as its output. A caller exercising this step
+# (the lane-wiring fixture) moves it into its own sandbox, so a fixture run never replaces
+# the results a replayed `budgets` restored, which the CI report job reads.
+RESULTS_FILE = "target/budget-results/onetaskgraph-github-projects-e2e-budget-results.json"
 
 
 class Selection(StrEnum):
@@ -146,7 +150,7 @@ async def budgets(root: Path, ids: list[str]) -> int:
     arguments = ["bun", "run", "onebudgetspec", "check",
                  "crates/onetaskgraph-github-projects-e2e/budgets.yaml",
                  "--exclude-label", HOST_LABEL,
-                 "--save-results", "target/budget-results/onetaskgraph-github-projects-e2e-budget-results.json"]
+                 "--save-results", os.environ.get("GITHUB_BUDGET_RESULTS_FILE", RESULTS_FILE)]
     # Delegate ID validation and selection to the same checker. With no operands the
     # gate still measures every budget; callers can ask about a specific recording.
     arguments.extend(f"--id={budget}" for budget in ids)
