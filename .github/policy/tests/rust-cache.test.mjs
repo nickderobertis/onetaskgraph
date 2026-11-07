@@ -331,6 +331,15 @@ test("the real cache action ignores floating stable but tracks the pin and lockf
     assert.doesNotMatch(stdout + stderr, /::error::/);
     assert.ok(stdout.match(/Cache Key:\r?\n\s+(\S+)/), stdout + stderr);
     assert.notEqual(corrected, stdout.match(/Cache Key:\r?\n\s+(\S+)/)?.[1]);
+    // The family the real action names under this platform's shared key is the one the warm leg's
+    // cleanup and the headroom budget name, up to the architecture, which is the host's own here.
+    env["INPUT_SHARED-KEY"] = { linux: "test-linux", win32: "test-windows", darwin: "test-macos" }[
+      process.platform
+    ];
+    const named = (await key(other, pin, true)).match(/^v0-rust-test-[a-z]+-[A-Za-z_]+-/)?.[0];
+    assert.ok(named, "the real action's key names a family under the shared key");
+    assert.ok(read(".github/workflows/rust-cache-warm.yml").includes(`--family ${named}`), named);
+    assert.ok(read("budgets.yaml").includes(`--family, ${named}`), named);
   } finally {
     await new Promise((resolve) => server.close(resolve));
     rmSync(scratch, { recursive: true, force: true });
