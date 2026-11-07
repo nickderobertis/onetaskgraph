@@ -15,8 +15,8 @@
 # about a line rather than about a file, and any question this cannot answer is `run`,
 # because it fails toward spending the budget rather than toward skipping the lane. What
 # is written below is why each of those is spelled the way the code spells it. Result replay
-# does not replace this: a live test's hash carries the run's own nonces, so it never replays,
-# and retiring this exclusion would be a coverage decision that spends the shared allowance.
+# does not replace this: retiring it would make a version bump's live session a matter of what a
+# cache still holds, and that is a coverage decision spending the shared allowance, not this file's.
 #
 # Usage:
 #
