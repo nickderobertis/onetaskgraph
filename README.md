@@ -1323,9 +1323,11 @@ back once, beside them, as its own request. That follow-up's own answer has to r
 content again; a destination that stores it otherwise is refused as `stored-content-diverged`,
 naming the item and the first line that moved. A follow-up that also finishes a link holds text
 Linear has not seen, so an answer differing only as Linear autolinks a URL (a bare issue URL under
-the issue's identifier, a bare document's or project's under its title), escapes a bracket or a tilde, or puts a destination in angle brackets is no
+the issue's identifier, a bare document's or project's under the title the copy wrote it with, any
+other under itself), escapes a bracket or a tilde, or puts a destination in angle brackets is no
 divergence: that answer is written back the same way, and has to come back unchanged. An edit to
-the item that the follow-up's answer reports, and that those rewrites do not explain, is refused. An
+the item that the follow-up's answer reports, and that those rewrites do not explain, is refused:
+such a link under any other text among them. An
 edit made before the follow-up write and absent from its answer is overwritten, because that write
 replaces the whole content and no read precedes it. No read of the item follows either write. So
 every item a copy lands records a `body_digest` that a read of it verifies, whatever Markdown its

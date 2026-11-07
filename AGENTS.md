@@ -1497,8 +1497,10 @@ them do; this is the inventory of what is owed, not a status board.
 149. A follow-up finishing a link in a copy to Linear, answered with its own URL autolinked under the
      issue's identifier, is not refused: the answer is written back with what the copy records, a word
      Linear linked as an address when first written ends a link to the heading, and a repeat writes
-     nothing; a design document naming an issue by its URL beside its budget table lands the same way;
-     and an answer also holding a line a person added is refused as `stored-content-diverged`, naming it.
+     nothing; a design document naming an issue by its URL beside its budget table lands the same way,
+     and two naming each other by a bare path each land the other's address under its title; and an
+     answer also holding a line a person added, or such a link under any other text, is refused as
+     `stored-content-diverged`, naming it.
 150. A `related` relation Linear adds between two tasks of one copy, whose sent bodies link one from
      the other on either end, is no change, so a repeat writes nothing; one between two tasks whose
      bodies do not link each other is still reported `updated`.

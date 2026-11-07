@@ -25,6 +25,7 @@
 //! and Linear differ. The README's "Section links" is where these forms are stated for a
 //! consumer.
 
+use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
@@ -493,14 +494,21 @@ impl SectionForm {
 
     /// Whether a line this kind answered a follow-up write with reads as the line it was sent,
     /// differing only as the kind rewrites text it had not seen before: Linear's autolinks and
-    /// escapes, by [`linear_written`]. Any other kind holds to bytes.
+    /// escapes, by [`linear_written`]. `titles` holds the title of each record the copy wrote there,
+    /// by its address, which is what Linear links that record's bare address under. Any other kind
+    /// holds to bytes.
     #[must_use]
-    pub fn reads_as_sent(self, sent: &str, stored: &str) -> bool {
+    pub fn reads_as_sent(
+        self,
+        sent: &str,
+        stored: &str,
+        titles: &BTreeMap<String, String>,
+    ) -> bool {
         if !matches!(self, Self::Linear(_)) {
             return false;
         }
         let plain = linear_written(sent, None);
-        plain == linear_written(stored, Some(&plain))
+        plain == linear_written(stored, Some((&plain, titles)))
     }
 
     /// Whether this kind relates two records of its own by itself when a body links one from the
@@ -894,12 +902,16 @@ impl BodyMarkup for GithubAnchors {
 }
 /// `line` with what Linear does to text it is written undone: `\\[`, `\\]` and `\\~` unescaped, a
 /// destination taken out of its angle brackets, and an autolink back to what was written. That is
-/// a link whose destination is its text, or its text under `http://`, or, when `sent` is the line
-/// as it was sent, a link to a Linear record whose address `sent` holds bare. Linear titles that
-/// link itself, by an issue's identifier or a document's or a project's title, so its text is
-/// Linear's and says nothing about who changed it. Text a person changed reads otherwise.
-fn linear_written(line: &str, sent: Option<&str>) -> String {
-    let unescaped = line
+/// a link whose text is its destination, percent-decoded or under `http://` or not, or, given what
+/// was sent, a link to an address that line holds bare under exactly what Linear titles that address
+/// with: an issue's identifier, or the title of the document or project the address is in `titles`.
+/// Any other text on such a link is not Linear's, and reads as the link it is.
+fn linear_written(line: &str, sent: Option<(&str, &BTreeMap<String, String>)>) -> String {
+    let untitled = sent.map_or_else(
+        || line.to_owned(),
+        |(sent, titles)| without_titles(line, sent, titles),
+    );
+    let unescaped = untitled
         .replace("\\[", "[")
         .replace("\\]", "]")
         .replace("\\~", "~");
@@ -913,9 +925,14 @@ fn linear_written(line: &str, sent: Option<&str>) -> String {
             rest = &rest[1..];
             continue;
         };
-        if target == text || target.strip_prefix("http://") == Some(text) {
+        if target == text
+            || target.strip_prefix("http://") == Some(text)
+            || percent_decoded(target).as_deref() == Some(text)
+        {
             plain.push_str(text);
-        } else if names_linear_record(target) && sent.is_some_and(|sent| holds_bare(sent, target)) {
+        } else if issue_identifier(target) == Some(text)
+            && sent.is_some_and(|(sent, _)| holds_bare(sent, target))
+        {
             plain.push_str(target);
         } else {
             plain.push_str(&format!("[{text}]({target})"));
@@ -926,21 +943,47 @@ fn linear_written(line: &str, sent: Option<&str>) -> String {
     plain
 }
 
+/// `line` with each link under the title `titles` holds for its address, as Linear stores a bare
+/// document's or project's address, back to that address where `sent` holds it bare. It is taken
+/// off before anything is unescaped because Linear stores a title as it is, brackets and all.
+fn without_titles(line: &str, sent: &str, titles: &BTreeMap<String, String>) -> String {
+    let mut plain = line.to_owned();
+    for (address, title) in titles {
+        let opening = format!("[{title}]({address}");
+        let mut from = 0;
+        while let Some(at) = plain[from..].find(&opening).map(|at| from + at) {
+            let target = at + 1 + title.len() + 2;
+            let close = plain[target..].find(')').map(|end| target + end);
+            match close.filter(|close| {
+                let target = &plain[target..*close];
+                (target == address || target[address.len()..].starts_with('#'))
+                    && holds_bare(sent, target)
+            }) {
+                Some(close) => {
+                    let bare = plain[target..close].to_owned();
+                    plain.replace_range(at..=close, &bare);
+                    from = at + bare.len();
+                }
+                None => from = at + opening.len(),
+            }
+        }
+    }
+    plain
+}
+
 /// Whether `line` holds `target` other than as a link's destination.
 fn holds_bare(line: &str, target: &str) -> bool {
     line.match_indices(target)
         .any(|(at, _)| !line[..at].ends_with(['(', '<']))
 }
 
-/// Whether `target` is the address of an issue, a document or a project of a Linear workspace.
-fn names_linear_record(target: &str) -> bool {
-    target
-        .strip_prefix("https://linear.app/")
-        .is_some_and(|path| {
-            ["/issue/", "/document/", "/project/"]
-                .iter()
-                .any(|kind| path.contains(kind))
-        })
+/// The identifier in the address of a Linear issue: `TES2-1` of
+/// `https://linear.app/<workspace>/issue/TES2-1/its-title#heading-a-12345678`.
+fn issue_identifier(target: &str) -> Option<&str> {
+    let (_, issue) = target
+        .strip_prefix("https://linear.app/")?
+        .split_once("/issue/")?;
+    issue.split(['/', '#']).next()
 }
 
 /// The inline link `text` opens with: its length, its text and its destination out of any angle

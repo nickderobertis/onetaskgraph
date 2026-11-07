@@ -5446,6 +5446,129 @@ fn every_reference_style_spelling_is_written_inline_on_linear_and_left_elsewhere
     );
 }
 
+/// Two design documents of one plan naming each other by a bare path, so the first to land has
+/// the other's address finished by a follow-up.
+fn designs_naming_each_other(sandbox: &Sandbox) -> Store {
+    let plans = budget_plan(sandbox, "plans");
+    let (linear, mut config) = store(sandbox, "linear", "linear", None);
+    config["visibility"] = json!("private");
+    configure(sandbox, &[("plans", &plans), ("linear", &config)]);
+    let root = root_of(sandbox, "plans");
+    for (file, title, other) in [("D", "Design [v2]", "E"), ("E", "Second design", "D")] {
+        std::fs::write(
+            root.join(format!("documents/{file}.md")),
+            format!("---\ntitle: {title}\nproject: P\n---\n| Other | {other}.md |\n"),
+        )
+        .expect("a design document");
+    }
+    let Store::Linear(workspace) = &linear else {
+        unreachable!("a workspace")
+    };
+    workspace.rewrite_markdown_on_write(crate::fixtures::LinearMarkdown::Measured);
+    linear
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace exercise the engine's copy across two plugins.
+#[test]
+fn a_follow_up_finishing_a_documents_address_stored_under_its_title_is_no_change() {
+    let sandbox = Sandbox::new();
+    let linear = designs_naming_each_other(&sandbox);
+    ok(
+        &sandbox,
+        &["project", "copy", "plans:P", "--to", "linear", "--json"],
+    );
+    let copy = [
+        "document", "copy", "plans:D", "plans:E", "--to", "linear", "--json",
+    ];
+    ok(&sandbox, &copy);
+    let Store::Linear(workspace) = &linear else {
+        unreachable!("a workspace")
+    };
+    for (title, other) in [
+        ("Design [v2]", "Second design"),
+        ("Second design", "Design [v2]"),
+    ] {
+        let id = workspace.document_titled(title).expect("the design landed");
+        let held = workspace.long_form("documents", &id).expect("its content");
+        assert!(
+            held.contains(&format!("| Other | [{other}](https://")),
+            "{title} names {other} under its title: {held}"
+        );
+    }
+    // A source that gives a document no change token versions what the copy composed, which the
+    // first copy of the first to land composed before the other's address was known: the next copy
+    // rewrites it once, and it keeps the title Linear gave the address.
+    ok(&sandbox, &copy);
+    let mark = linear.mark(None);
+    ok(&sandbox, &copy);
+    assert_eq!(linear.writes_since(&mark, None), Vec::<String>::new());
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace exercise the engine's copy across two plugins.
+#[test]
+fn a_person_relabelling_an_address_linear_titled_is_refused() {
+    // A document's address under anything but its title, and an issue's under anything but its
+    // identifier, is no autolink of Linear's: the follow-up's answer reports a person's edit.
+    for (issue, label) in [(false, "edited"), (true, "edited"), (true, "TES2-99999")] {
+        let sandbox = Sandbox::new();
+        let linear = if issue {
+            mutually_linked(&sandbox)
+        } else {
+            designs_naming_each_other(&sandbox)
+        };
+        let Store::Linear(workspace) = &linear else {
+            unreachable!("a workspace")
+        };
+        let (matching, member): (fn(&str, &Value) -> bool, &str) = if issue {
+            (finishes_the_bare_address, "issueUpdate")
+        } else {
+            (
+                |query, variables| {
+                    query.contains("documentUpdate(")
+                        && variables["input"]["content"]
+                            .as_str()
+                            .is_some_and(|text| text.contains("| Other | https://"))
+                },
+                "documentUpdate",
+            )
+        };
+        workspace.bend_answers(matching, 1, move |_, body| {
+            let answered = &mut body[member];
+            let held = if issue {
+                &mut answered["issue"]["description"]
+            } else {
+                &mut answered["document"]["content"]
+            };
+            let text = held.as_str().expect("a body").to_owned();
+            let row = if issue { "| Second | [" } else { "| Other | [" };
+            let at = text.find(row).expect("the address was linked") + row.len();
+            let end = at + text[at..].find("](").expect("a link");
+            *held = json!(format!("{}{label}{}", &text[..at], &text[end..]));
+        });
+        let mut command = sandbox.command();
+        if issue {
+            command.args(["project", "copy", "plans:P"]);
+        } else {
+            ok(
+                &sandbox,
+                &["project", "copy", "plans:P", "--to", "linear", "--json"],
+            );
+            command.args(["document", "copy", "plans:D", "plans:E"]);
+        }
+        let output = command
+            .args(["--to", "linear", "--json"])
+            .output()
+            .expect("the binary runs");
+        assert_eq!(output.status.code(), Some(4), "{}", stderr(&output));
+        assert!(
+            stderr(&output).contains("did not keep the content")
+                && stderr(&output).contains(&format!("[{label}](https://")),
+            "{}",
+            stderr(&output)
+        );
+    }
+}
+
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace exercise the engine's copy across two plugins.
 #[test]
 fn a_follow_ups_answer_changing_a_links_text_or_target_is_refused() {

@@ -119,12 +119,14 @@ pub(super) enum Normalized {
 }
 
 /// [`unstable`] for a follow-up whose `sent` holds text the backend had not seen before, where
-/// Linear's autolinking or escaping of that text is told from a person's change.
+/// Linear's autolinking or escaping of that text is told from a person's change. `titles` holds
+/// the title of each record the copy wrote at `destination`, by its address.
 pub(super) fn normalized(
     destination: &ResolvedSource,
     record: MetadataRecord,
     id: &NativeId,
     sent: &str,
+    titles: &BTreeMap<String, String>,
 ) -> Normalized {
     let Some(again) = destination.source().stored_content(record, id) else {
         return Normalized::Kept;
@@ -132,7 +134,7 @@ pub(super) fn normalized(
     let form = SectionForm::for_kind(destination.kind());
     let reads_as_sent = |sent_line: &str, stored_line: &str| {
         sent_line == stored_line
-            || form.is_some_and(|form| form.reads_as_sent(sent_line, stored_line))
+            || form.is_some_and(|form| form.reads_as_sent(sent_line, stored_line, titles))
     };
     let differs = first_difference_by(sent, &again, reads_as_sent);
     match differs {
@@ -438,123 +440,120 @@ mod tests {
     #[test]
     fn a_follow_up_answered_with_its_own_text_autolinked_is_told_from_a_change() {
         let id = NativeId("T-1".to_owned());
+        let design = "https://linear.app/w/document/design-1a2b";
+        let titles = BTreeMap::from([(design.to_owned(), "Design [v2]".to_owned())]);
+        let answer_on = |kind, sent: &str, stored: Option<&str>| {
+            normalized(
+                &answering_as(kind, stored),
+                MetadataRecord::Task,
+                &id,
+                sent,
+                &titles,
+            )
+        };
+        let answer = |sent: &str, stored: &str| answer_on("linear", sent, Some(stored));
         let url = "https://linear.app/w/document/d#heading-a-12345678";
         let sent = format!("Intro\n| {url} |\n\\[1\\]: [x](y) ~");
         let stored = format!("Intro\n| [{url}](<{url}>) |\n\\[1\\]: [x](<y>) \\~");
-        let answer = |stored: &str| {
-            normalized(
-                &answering_as("linear", Some(stored)),
-                MetadataRecord::Task,
-                &id,
-                &sent,
-            )
-        };
-        assert!(matches!(answer(&sent), Normalized::Kept));
-        assert!(matches!(
-            normalized(
-                &answering_as("linear", None),
-                MetadataRecord::Task,
-                &id,
-                &sent
+        assert!(matches!(answer(&sent, &sent), Normalized::Kept));
+        assert!(matches!(answer_on("linear", &sent, None), Normalized::Kept));
+        assert!(matches!(answer(&sent, &stored), Normalized::Stored(held) if held == stored));
+        // What Linear does to an address it was sent bare, every form of it observed.
+        for (sent, stored) in [
+            ("a.io", "[a.io](<http://a.io>)"),
+            (
+                "| https://linear.app/w/issue/TES2-1 |",
+                "| [TES2-1](https://linear.app/w/issue/TES2-1) |",
             ),
-            Normalized::Kept
-        ));
-        assert!(matches!(answer(&stored), Normalized::Stored(held) if held == stored));
-        // A bare domain Linear links under `http://` reads as the domain.
-        assert!(matches!(
-            normalized(
-                &answering_as("linear", Some("[a.io](<http://a.io>)")),
-                MetadataRecord::Task,
-                &id,
-                "a.io"
+            (
+                "| https://linear.app/w/issue/TES2-1/its-title#heading-a-12345678 |",
+                "| [TES2-1](https://linear.app/w/issue/TES2-1/its-title#heading-a-12345678) |",
             ),
-            Normalized::Stored(_)
-        ));
-        // A bare issue URL linked under its identifier, as real Linear links one.
-        assert!(matches!(
-            normalized(
-                &answering_as(
-                    "linear",
-                    Some("| [TES2-1](https://linear.app/w/issue/TES2-1) |")
-                ),
-                MetadataRecord::Task,
-                &id,
-                "| https://linear.app/w/issue/TES2-1 |"
+            (
+                design,
+                "[Design [v2]](https://linear.app/w/document/design-1a2b)",
             ),
-            Normalized::Stored(_)
-        ));
-        // A bare document's address linked under its title, as real Linear links one.
-        assert!(matches!(
-            normalized(
-                &answering_as(
-                    "linear",
-                    Some("[Design](https://linear.app/w/document/design-1a2b)")
-                ),
-                MetadataRecord::Task,
-                &id,
-                "https://linear.app/w/document/design-1a2b"
+            (
+                "https://linear.app/w/document/design-1a2b#heading-a-12345678",
+                "[Design [v2]](https://linear.app/w/document/design-1a2b#heading-a-12345678)",
             ),
-            Normalized::Stored(_)
-        ));
-        // Elsewhere, a link under another text is no autolink, and nor is one in angle brackets.
+            (
+                "https://linear.app/w/document/日本語-c58f",
+                "[https://linear.app/w/document/日本語-c58f](<https://linear.app/w/document/%E6%97%A5%E6%9C%AC%E8%AA%9E-c58f>)",
+            ),
+        ] {
+            assert!(
+                matches!(answer(sent, stored), Normalized::Stored(_)),
+                "{stored}"
+            );
+        }
+        // Any other text on such a link is a change: only what Linear titles it with is Linear's.
         for (sent, stored) in [
             ("https://a.example/x", "[changed](https://a.example/x)"),
             (
                 "[a](<https://linear.app/w/issue/T-1>)",
                 "[b](https://linear.app/w/issue/T-1)",
             ),
-        ] {
-            assert!(matches!(
-                normalized(
-                    &answering_as("linear", Some(stored)),
-                    MetadataRecord::Task,
-                    &id,
-                    sent
-                ),
-                Normalized::Diverged(_)
-            ));
-        }
-        // A link the store wrote keeps its text: a person's change of it is a change.
-        assert!(matches!(
-            normalized(
-                &answering_as(
-                    "linear",
-                    Some("| [changed](<https://linear.app/w/issue/TES2-1>) |")
-                ),
-                MetadataRecord::Task,
-                &id,
-                "| [budget](https://linear.app/w/issue/TES2-1) |"
+            (
+                "| https://linear.app/w/issue/TES2-1 |",
+                "| [edited](https://linear.app/w/issue/TES2-1) |",
             ),
-            Normalized::Diverged(_)
-        ));
+            (
+                "| https://linear.app/w/issue/TES2-1 |",
+                "| [TES2-2](https://linear.app/w/issue/TES2-1) |",
+            ),
+            (
+                design,
+                "[edited](https://linear.app/w/document/design-1a2b)",
+            ),
+            (
+                "https://linear.app/w/document/design-1a2bcd",
+                "[Design [v2]](https://linear.app/w/document/design-1a2bcd)",
+            ),
+            (
+                "https://linear.app/w/project/plan-9f",
+                "[Plan](https://linear.app/w/project/plan-9f)",
+            ),
+            (
+                "https://a.example/x",
+                "[https://a.example/x](<https://a.example/%79>)",
+            ),
+            // A link the store wrote keeps its text: a person's change of it is a change.
+            (
+                "| [budget](https://linear.app/w/issue/TES2-1) |",
+                "| [changed](<https://linear.app/w/issue/TES2-1>) |",
+            ),
+            (
+                "[Design](https://linear.app/w/document/design-1a2b)",
+                "[Design [v2]](https://linear.app/w/document/design-1a2b)",
+            ),
+            // A link to elsewhere is no autolink.
+            ("a.io", "[a.io](<http://b.io>)"),
+        ] {
+            assert!(
+                matches!(answer(sent, stored), Normalized::Diverged(_)),
+                "{stored}"
+            );
+        }
         // A person's change is refused at its own line, past the autolink before it.
         let edited = format!("Intro\n| [{url}](<{url}>) |\n\\[1\\]: [x](<z>) \\~");
-        let Normalized::Diverged(EngineError::StoredContentDiverged { line, .. }) = answer(&edited)
+        let Normalized::Diverged(EngineError::StoredContentDiverged { line, .. }) =
+            answer(&sent, &edited)
         else {
             panic!("a change is refused");
         };
         assert_eq!(line, 3);
-        // A link to elsewhere is no autolink, and a line more is no normalization.
+        // A line more is no normalization.
         assert!(matches!(
-            normalized(
-                &answering_as("linear", Some("[a.io](<http://b.io>)")),
-                MetadataRecord::Task,
-                &id,
-                "a.io"
-            ),
-            Normalized::Diverged(_)
-        ));
-        assert!(matches!(
-            answer(&format!("{stored}\nA person's line.")),
+            answer(&sent, &format!("{stored}\nA person's line.")),
             Normalized::Diverged(_)
         ));
         // A kind with no section form says nothing of what its backend does: bytes alone.
         assert!(matches!(
-            normalized(
-                &answering(Some("[https://a.io](<https://a.io>)")),
-                MetadataRecord::Task,
-                &id,
-                "https://a.io"
+            answer_on(
+                "answering",
+                "https://a.io",
+                Some("[https://a.io](<https://a.io>)")
             ),
             Normalized::Diverged(_)
         ));

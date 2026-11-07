@@ -21,12 +21,13 @@
 //! Applying it to its own output changes nothing, which is what the spike measured of Linear: a
 //! follow-up write of what Linear stored is stored as it was sent. The samples each rewrite is
 //! held to are `crates/onetaskgraph-linear-e2e/tests/fixtures/linear_rewrites/`, whose README
-//! names the spike report each comes from. Four more were observed of a copy to `TES2` on
+//! names the spike report each comes from. Five more were observed of writes to `TES2` on
 //! 2026-11-07, and are held by the module's tests: a bare Linear issue URL is stored under the
 //! issue's identifier, fragment kept, as `[TES2-1766](https://linear.app/<workspace>/issue/TES2-1766)`;
+//! a bare address with a non-ASCII character is linked under itself, its destination percent-encoded;
 //! a word under `.md` with a fragment is linked under `http://` as a domain is; and every other link's
 //! destination is stored in angle brackets. A bare document's or project's address stored under its
-//! title is `fixtures::linear_titled`'s, and the `related` relation between two issues one of which
+//! title, verbatim, is `fixtures::linear_titled`'s, and the `related` relation between two issues one of which
 //! links the other is `fixtures::linear_derive_relations`'s. The plugin predicts none of this; it is the loopback's
 //! alone, so the store's follow-up path runs on every gate at no Linear quota.
 
@@ -354,8 +355,18 @@ fn code_span_end(text: &str, at: usize, run: usize) -> Option<usize> {
 /// Where the Markdown link whose `[` is at `at` ends — `[text](target)`, the target bare or in
 /// angle brackets — or `None` when no link starts there.
 fn link_end(text: &str, at: usize) -> Option<usize> {
-    let close = at + 1 + text[at + 1..].find(']')?;
-    if text[at + 1..close].contains(['[', '`', '\\']) {
+    // A link's text holds balanced brackets: Linear stores a title holding some as it is.
+    let mut depth = 0_usize;
+    let close = at
+        + text[at..].find(|c: char| {
+            depth = match c {
+                '[' => depth + 1,
+                ']' => depth - 1,
+                _ => depth,
+            };
+            depth == 0
+        })?;
+    if text[at + 1..close].contains(['`', '\\']) {
         return None;
     }
     let target = close + 1;
@@ -413,7 +424,7 @@ fn autolink(text: &str, at: usize, previous: Option<char>) -> Option<(&str, Stri
         let scheme = rest.find("://").expect("checked just now") + 3;
         let end = rest.find(stops).unwrap_or(rest.len());
         let token = rest[..end].trim_end_matches(trailing);
-        return (token.len() > scheme).then(|| (token, token.to_owned()));
+        return (token.len() > scheme).then(|| (token, percent_encoded(token)));
     }
     let host_end = rest
         .find(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '.'))
@@ -446,14 +457,30 @@ fn autolink(text: &str, at: usize, previous: Option<char>) -> Option<(&str, Stri
     Some((token, format!("http://{token}")))
 }
 
+/// `token` with each non-ASCII byte percent-encoded, as Linear writes the destination of an address
+/// it autolinks under itself.
+fn percent_encoded(token: &str) -> String {
+    let mut encoded = String::with_capacity(token.len());
+    for c in token.chars() {
+        if c.is_ascii() {
+            encoded.push(c);
+        } else {
+            let mut bytes = [0; 4];
+            for byte in c.encode_utf8(&mut bytes).bytes() {
+                encoded.push_str(&format!("%{byte:02X}"));
+            }
+        }
+    }
+    encoded
+}
+
 /// The identifier a bare Linear issue URL names, a fragment after it or not: `TES2-1766` of
 /// `https://linear.app/<workspace>/issue/TES2-1766`.
 fn issue_identifier(url: &str) -> Option<&str> {
     let (_, identifier) = url
         .strip_prefix("https://linear.app/")?
         .split_once("/issue/")?;
-    let identifier = identifier.split('#').next()?;
-    (!identifier.contains('/')).then_some(identifier)
+    identifier.split(['/', '#']).next()
 }
 
 /// Where an ordered list item's number ends in `text`, a line with its indentation taken off —
@@ -684,6 +711,18 @@ mod tests {
             (
                 "| https://linear.app/w/issue/TES2-1#heading-a-12345678 |\n",
                 "| [TES2-1](https://linear.app/w/issue/TES2-1#heading-a-12345678) |\n",
+            ),
+            (
+                "[Design [v2]](<https://linear.app/w/document/d-1>)",
+                "[Design [v2]](<https://linear.app/w/document/d-1>)",
+            ),
+            (
+                "| https://linear.app/w/issue/TES2-1/its-title |\n",
+                "| [TES2-1](https://linear.app/w/issue/TES2-1/its-title) |\n",
+            ),
+            (
+                "See https://linear.app/w/document/日本語-c58f now.",
+                "See [https://linear.app/w/document/日本語-c58f](<https://linear.app/w/document/%E6%97%A5%E6%9C%AC%E8%AA%9E-c58f>) now.",
             ),
             (
                 "| second-task.md#budget | second-task.md |\n",

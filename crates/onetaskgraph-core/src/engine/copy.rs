@@ -1291,6 +1291,9 @@ struct Journal {
     /// Every item this copy landed, by interface and source id, and the id it landed under —
     /// which a later body's link to it names.
     landed: HashMap<(Level, GlobalId), NativeId>,
+    /// The title of each project and document this copy wrote, by destination and by its address
+    /// there: what a destination that titles a bare link to one links it under.
+    titles: HashMap<SourceName, BTreeMap<String, String>>,
     /// Each item written with links not addressable yet, its latest write alone.
     sections_pending: Vec<SectionsPending>,
     /// Each copied item's section-link figures, as its last rendering left them.
@@ -9424,6 +9427,21 @@ impl Engine {
         journal
             .landed
             .insert((created_kind, item.source.clone()), landed.clone());
+        if created_kind != Level::Task
+            && let Some(address) = located(
+                destination
+                    .source()
+                    .written_location(created_kind.record(), &landed)
+                    .as_ref(),
+            )
+            .or_else(|| prior_location.clone())
+        {
+            journal
+                .titles
+                .entry(destination.name().clone())
+                .or_default()
+                .insert(address, described(&composed).0.to_owned());
+        }
         journal
             .sections_pending
             .retain(|held| !(&held.at == destination.name() && held.id == landed));
@@ -9766,7 +9784,8 @@ impl Engine {
                 }
                 continue;
             }
-            match stored::normalized(destination, kind, &follow.id, &follow.stored) {
+            let titles = journal.titles.get(&follow.at).cloned().unwrap_or_default();
+            match stored::normalized(destination, kind, &follow.id, &follow.stored, &titles) {
                 stored::Normalized::Kept => {}
                 stored::Normalized::Diverged(error) => diverged.push((follow.source, error)),
                 // What the destination made of text of this copy's own, which a read now reports:
