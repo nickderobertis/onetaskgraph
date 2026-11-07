@@ -17,6 +17,8 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 
+// What `cargo` writes inside a package entry; anything else is refused rather than half-read.
+const LOCK_LINE = /^(|#.*|(name|version|source|checksum) = ".*"|dependencies = \[.*| ".*",|\])$/;
 const MEMBER = /^crates\/[^/]+\/Cargo\.toml$/;
 
 function requested(args) {
@@ -53,6 +55,8 @@ function lockDependencies(block, name) {
 function lockPackages(text) {
   const packages = new Map();
   for (const block of text.split("[[package]]\n").slice(1)) {
+    const unknown = block.split("\n").find((line) => !LOCK_LINE.test(line));
+    if (unknown !== undefined) throw new Error(`Cargo.lock holds an unexpected line: ${unknown}`);
     const name = lockField(block, "name");
     const version = lockField(block, "version");
     if (!name || !version) throw new Error("Cargo.lock holds a package with no name or version");
