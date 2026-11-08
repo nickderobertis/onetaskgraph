@@ -144,12 +144,10 @@ done
 # Its `update` logs `local version (X) > registry version (Y)` for a package it walked back
 # through — but it walks from the last commit touching that package and stops at the commit
 # that package's version tag names, before it compares versions. So when nothing since the
-# tag touched a crate, it says `already up to date` however far crates.io is behind: v0.14.8
-# was tagged, crates.io kept serving 0.14.7, and the fix to the publish pipeline that landed
-# next (#3937, scripts/release_cd.py alone) never reached this branch. Ask crates.io directly
-# in that case, through the one probe this repository keeps for "what does a registry serve
-# now". It names the binary crate, which the publish job publishes last of all
-# (CRATE_PUBLICATION_ORDER in scripts/release_cd.py), so it lags whenever any crate does.
+# tag touched a crate, it says `already up to date` however far crates.io is behind. Ask
+# crates.io directly in that case, through the one probe this repository keeps for "what does
+# a registry serve now". It names the binary crate, which the publish job publishes last of
+# all (CRATE_PUBLICATION_ORDER in scripts/release_cd.py), so it lags whenever any crate does.
 # Only an eligible commit makes the answer matter, so nothing else asks.
 registry_lags=no
 if grep -qF "local version ($before) > registry version (" <<<"$update_output"; then
@@ -164,18 +162,15 @@ elif [ "$eligible" = yes ]; then
     registry_lags=yes
   elif [ "$served" != "$before" ]; then
     # The probe answers crates.io's max_stable_version, a plain X.Y.Z, as $before is; anything
-    # else is a document this cannot order, and is refused rather than guessed at.
-    [[ $served =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]] || fail \
+    # else is a document this cannot order, and is refused rather than guessed at. Each part,
+    # zero-padded to one width, orders the two versions as one string comparison.
+    number='(0|[1-9][0-9]{0,8})'
+    [[ $served =~ ^$number\.$number\.$number$ ]] || fail \
       "crates.io answered '$served' for onetaskgraph, which is not a plain X.Y.Z version" \
       "rerun once crates.io answers a released version; nothing about $tag has been established"
-    served_is_earlier=no
-    if [ "${BASH_REMATCH[1]}" -lt "$major" ] ||
-      { [ "${BASH_REMATCH[1]}" -eq "$major" ] && [ "${BASH_REMATCH[2]}" -lt "$minor" ]; } ||
-      { [ "${BASH_REMATCH[1]}" -eq "$major" ] && [ "${BASH_REMATCH[2]}" -eq "$minor" ] &&
-        [ "${BASH_REMATCH[3]}" -lt "$patch" ]; }; then
-      served_is_earlier=yes
-    fi
-    [ "$served_is_earlier" = yes ] || fail \
+    served_key="$(printf '%09d%09d%09d' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}")"
+    before_key="$(printf '%09d%09d%09d' "$major" "$minor" "$patch")"
+    [[ $served_key < $before_key ]] || fail \
       "crates.io serves onetaskgraph $served, later than this checkout's $before" \
       "bring this checkout up to the released history, or restore the manifest version release-plz last released, then rerun"
     registry_lags=yes

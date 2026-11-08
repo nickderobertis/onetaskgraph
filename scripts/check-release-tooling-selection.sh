@@ -322,8 +322,8 @@ run_case "fix: adjust release preparation" "scripts/prepare-release-pr.sh" "$maj
 run_case "fix: adjust version sync" "scripts/set-version.sh" "$major.$minor.$((patch + 1))"
 # What every Release job runs is release tooling too: the one implementation each CD recipe
 # calls, the modules and scripts it reads to package and publish, its loopback registries and
-# the recipes themselves. Missing them is what left v0.14.8 unpublished after #3937, a fix
-# to scripts/release_cd.py alone, landed and selected nothing.
+# the recipes themselves. A fix to any of them is how a partly failed publish is resumed, so
+# each has to be able to select a release on its own.
 run_case "fix: let a release re-run finish" "scripts/release_cd.py" "$major.$minor.$((patch + 1))"
 run_case "fix: adjust release loopback registries" "scripts/loopback-release-registries.py" "$major.$minor.$((patch + 1))"
 run_case "fix: adjust the wheel lock" "scripts/cli_wheel_lock.py" "$major.$minor.$((patch + 1))"
@@ -411,10 +411,9 @@ commit_since_boundary "docs: describe the release" docs/task-projection.md
 [ ! -s "$CRATES_IO_ASKED" ] || finding \
   "the selector asked crates.io with no eligible commit since the boundary" "ask only when an eligible commit makes the answer matter"
 
-# This repository's present state, as the release-plz run after #3937 saw it: v0.14.8 tagged,
-# crates.io still serving 0.14.7, and since the tag only a fix to the release pipeline
-# (1dbcbb26) — then this change's own commit beside it. Each head proposes the next patch,
-# and neither proposes more than one.
+# A partly published release resumed by fixing the publish pipeline: crates.io one patch
+# behind the tag, and since it a fix to scripts/release_cd.py alone — then a second fix to the
+# selector and its inventory beside it. Each head proposes the next patch, and neither more.
 from_boundary
 commit_since_boundary "fix: let a release re-run finish when a registry already holds a rebuilt file (#3937)" \
   scripts/release_cd.py
@@ -425,6 +424,14 @@ commit_since_boundary "fix: let a release re-run finish when a registry already 
 commit_since_boundary "fix: make a fix to the release pipeline cut a release" \
   scripts/select-release-version.sh config/release-tooling-paths.txt scripts/check-release-tooling-selection.sh
 expect_recovery "a partly published release followed by the release-pipeline fix and this change" "$earlier"
+
+# Versions order part by part, not by their last part or as text: an earlier minor with a
+# larger patch is behind the tag, and a later minor with a smaller patch is ahead of it.
+if [ "$minor" -gt 0 ]; then
+  from_boundary
+  commit_since_boundary "fix: unrelated documentation" docs/task-projection.md
+  expect_recovery "an eligible commit under a tag crates.io serves an earlier minor of" "$major.$((minor - 1)).$((patch + 10))"
+fi
 
 # A registry that did not answer, or answered something the boundary cannot be ordered
 # against, decides nothing: the selector refuses rather than reading either as no lag.
@@ -444,6 +451,7 @@ expect_registry_refusal() {
 }
 expect_registry_refusal "could not read the version crates.io serves for onetaskgraph" unreachable
 expect_registry_refusal "later than this checkout's $version" "$((major + 1)).0.0"
+expect_registry_refusal "later than this checkout's $version" "$major.$((minor + 1)).0"
 expect_registry_refusal "which is not a plain X.Y.Z version" "$major.$minor.$patch.1"
 
 # Two real commits prove aggregation: a later feature dominates the earlier patch bump.
