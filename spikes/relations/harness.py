@@ -798,8 +798,7 @@ def stage_gh_parents(run: Run) -> None:
         answers["depth"] = prior["depth"]
         children = prior["children"]
         data, _, seq = run.gh_read(
-            'query{repository(owner:"%s",name:"%s"){issue(number:%d){subIssuesSummary{total} subIssues(first:100){totalCount}}}}'
-            % (OWNER, REPO1, prior["children_parent_number"]),
+            f'query{{repository(owner:"{OWNER}",name:"{REPO1}"){{issue(number:{prior["children_parent_number"]}){{subIssuesSummary{{total}} subIssues(first:100){{totalCount}}}}}}}}',
             "q1.gh.children.read",
         )
         children["read"] = {"seq": seq, **(data.get("repository") or {}).get("issue", {})}
@@ -1664,8 +1663,9 @@ def stage_budget_linear(run: Run) -> None:
     read_doc = (
         "query{"
         + " ".join(
-            'i%d:issue(id:"%s"){id identifier description updatedAt parent{id} children(first:50){nodes{id}} relations(first:50){nodes{id type relatedIssue{id}}} inverseRelations(first:50){nodes{id type issue{id}}}}'
-            % (n, t["id"])
+            'i{}:issue(id:"{}"){{id identifier description updatedAt parent{{id}} children(first:50){{nodes{{id}}}} relations(first:50){{nodes{{id type relatedIssue{{id}}}}}} inverseRelations(first:50){{nodes{{id type issue{{id}}}}}}}}'.format(
+                n, t["id"]
+            )
             for n, t in enumerate(tickets)
         )
         + "}"
@@ -1787,8 +1787,9 @@ def stage_budget_github(run: Run) -> None:
     read_doc = (
         "query{"
         + " ".join(
-            'i%d:node(id:"%s"){... on Issue{id number body updatedAt parent{id} subIssues(first:50){nodes{id}} relatesTo(first:50){nodes{id}}}}'
-            % (n, t["id"])
+            'i{}:node(id:"{}"){{... on Issue{{id number body updatedAt parent{{id}} subIssues(first:50){{nodes{{id}}}} relatesTo(first:50){{nodes{{id}}}}}}}}'.format(
+                n, t["id"]
+            )
             for n, t in enumerate(tickets)
         )
         + "}"
