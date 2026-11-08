@@ -21,7 +21,10 @@ use std::process::Output;
 use serde_json::{Value, json};
 
 use crate::common::{Sandbox, stderr, stdout};
-use crate::fixtures::{LinearWorkspace, document, linear_workspace_with};
+use crate::fixtures::{
+    LINEAR_REFUSED_WRITE, LinearWorkspace, document, linear_states, linear_statuses,
+    linear_workspace_failing,
+};
 
 const TEAM_STATES: &[(&str, &str, &str)] = &[
     ("S-ready", "Ready", "unstarted"),
@@ -49,11 +52,20 @@ struct Plan {
 
 impl Plan {
     fn new() -> Self {
+        Self::over(Vec::new(), &[], true)
+    }
+
+    /// The plan, over a workspace already holding `issues`, refusing each operation `failing`
+    /// names once, with `dest` declared private when `private` says so — and otherwise not, so a
+    /// copy into it records its link and its intent in the folder, and its create carries the
+    /// engine's own create key.
+    fn over(issues: Vec<Value>, failing: &[&str], private: bool) -> Self {
         let sandbox = Sandbox::new();
-        let held = json!({"tasks": [], "projects": [], "documents": [], "labels": [],
-                          "task_dependencies": [], "project_dependencies": []});
-        let (mut config, workspace) =
-            linear_workspace_with(&sandbox, held, TEAM_STATES, PROJECT_STATUSES);
+        let mut held = json!({"tasks": issues, "projects": [], "documents": [], "labels": [],
+                              "task_dependencies": [], "project_dependencies": []});
+        held["_linear_states"] = linear_states(TEAM_STATES);
+        held["_linear_project_statuses"] = linear_statuses(PROJECT_STATUSES);
+        let (mut config, workspace) = linear_workspace_failing(&sandbox, held, failing);
         config["status_mapping"] = json!({
             "todo": {"task": "Ready", "project": "Scheduled"},
             "done": {"task": "Finished", "project": "Shipped"},
@@ -92,7 +104,11 @@ impl Plan {
         }
         sandbox.project_document(&document(&json!({
             "notes": {"plugin": "local-md", "config": {"root": notes}},
-            "dest": {"plugin": "linear", "config": config, "visibility": "private"},
+            "dest": if private {
+                json!({"plugin": "linear", "config": config, "visibility": "private"})
+            } else {
+                json!({"plugin": "linear", "config": config})
+            },
         })));
         Self {
             sandbox,
@@ -352,26 +368,137 @@ fn a_repeat_on_a_host_holding_nothing_of_the_earlier_copy_creates_nothing_while_
     }
 }
 
-/// The issue a copy creates of `origin` into the source `dest` is sent under the id the store's
-/// create key for that origin derives — the README's rule — whether or not the copy recorded an
-/// intent, so a later copy reads it by that id.
+/// The id a create of one origin lands under is the same whichever implementation of the
+/// store's create key chose it: the engine's, which a copy recording an intent carries as the
+/// item's create key, and the Linear plugin's own, which a copy into a source declared private —
+/// recording nothing in the folder — is sent under. Every kind, held both ways: the drift gate
+/// between the two spellings of the README's one rule.
 #[test]
-fn a_copied_task_lands_under_the_id_its_origins_create_key_derives() {
-    let plan = Plan::new();
-    let (first, _) = plan.ok(&PROJECT_COPY);
-    let key = uuid::Uuid::new_v5(
-        &uuid::Uuid::from_u128(0x7a1c_3f0e_5b2d_4c8a_9e61_0f4d_2b7c_5a39),
-        b"notes:first|dest|",
-    )
-    .hyphenated()
-    .to_string();
-    assert_eq!(
-        landed(&first, "notes:first"),
-        format!(
-            "dest:{}",
-            onetaskgraph_linear::linear_id_of_key(&key).expect("a key")
-        )
+fn the_engines_create_key_and_the_plugins_land_every_kind_under_one_id() {
+    let landed_in = |private: bool| {
+        let plan = Plan::over(Vec::new(), &[], private);
+        let (project, _) = plan.ok(&PROJECT_COPY);
+        let (documents, _) = plan.ok(&DOCUMENT_COPY);
+        ["notes:P", "notes:first", "notes:second"]
+            .map(|source| landed(&project, source))
+            .into_iter()
+            .chain(["notes:D", "notes:E"].map(|source| landed(&documents, source)))
+            .collect::<Vec<_>>()
+    };
+    let keyed = landed_in(false);
+    assert_eq!(landed_in(true), keyed);
+    let plan = Plan::over(Vec::new(), &[], false);
+    let (project, _) = plan.ok(&PROJECT_COPY);
+    let task = plan.show("task", &landed(&project, "notes:first"));
+    assert!(
+        task["metadata"]["onetaskgraph.create_key"].is_string(),
+        "the engine gave the create its own key: {task}"
     );
+}
+
+/// The id the create of `notes:first` is sent under first, and the next one after it — learned
+/// from a copy into a fresh workspace, so the journey holds the ids rather than restating how
+/// they are derived; the next is the first with its last octet XORed with 1, as
+/// `onetaskgraph_linear::linear_ids_of_key` documents.
+fn first_ids() -> (String, String) {
+    let plan = Plan::new();
+    let (project, _) = plan.ok(&PROJECT_COPY);
+    let first = landed(&project, "notes:first")
+        .trim_start_matches("dest:")
+        .to_owned();
+    let (head, last) = first.split_at(34);
+    let next = format!(
+        "{head}{:02x}",
+        u8::from_str_radix(last, 16).expect("hex") ^ 1
+    );
+    (first, next)
+}
+
+/// An issue the workspace holds before anything is copied, under `id`, recording `origin`.
+fn issue_at(id: &str, origin: &str) -> Value {
+    json!({
+        "id": id, "title": "Held", "content": "Someone else's.",
+        "status": {"name": "Ready", "category": "todo"},
+        "_linear_state": {"name": "Ready", "type": "unstarted"},
+        "labels": [], "priority": "none",
+        "metadata": {"onetaskgraph.origin": origin},
+    })
+}
+
+/// A record of another origin at the first id its create would be sent under is passed by both
+/// halves: the create lands under the next id, and a lookup that lists nothing reads past it to
+/// that next id, so a repeat inside the lag window writes nothing.
+#[test]
+fn another_origins_record_at_the_first_id_is_read_past_by_the_create_and_the_lookup() {
+    let (first, next) = first_ids();
+    let plan = Plan::over(vec![issue_at(&first, "notes:other")], &[], true);
+    plan.workspace.lag_listings();
+    let (copied, _) = plan.ok(&PROJECT_COPY);
+    assert_eq!(landed(&copied, "notes:first"), format!("dest:{next}"));
+    let (repeat, served) = plan.ok(&PROJECT_COPY);
+    assert_eq!(mutations(&served), Vec::<String>::new(), "{repeat}");
+    assert_eq!(landed(&repeat, "notes:first"), format!("dest:{next}"));
+    assert_eq!(
+        plan.show("task", &format!("dest:{first}"))["metadata"]["onetaskgraph.origin"],
+        "notes:other",
+        "the other origin's record is left as it was"
+    );
+}
+
+/// A refusal of a create that is not its id being taken is that create's answer: no other id is
+/// tried, and the copy fails naming Linear's refusal.
+#[test]
+fn a_refusal_other_than_a_taken_id_fails_the_create_and_no_other_id_is_tried() {
+    let plan = Plan::over(
+        Vec::new(),
+        &[onetaskgraph_linear::graphql::ISSUE_CREATE],
+        true,
+    );
+    let (output, served) = plan.run_on(&plan.sandbox.subdirectory("host"), &PROJECT_COPY);
+    assert!(!output.status.success(), "{}", stdout(&output));
+    let said = format!("{}{}", stdout(&output), stderr(&output));
+    assert!(said.contains(LINEAR_REFUSED_WRITE), "{said}");
+    assert_eq!(
+        creates(&served)
+            .iter()
+            .filter(|root| *root == "issueCreate")
+            .count(),
+        1,
+        "one create, under one id"
+    );
+}
+
+/// A create refused because its id is taken reads what holds it, and a read that fails is the
+/// copy's answer: no other id is tried, since the one it could not see may hold its counterpart.
+#[test]
+fn a_failed_read_of_a_taken_id_fails_the_create_and_no_other_id_is_tried() {
+    let (first, _) = first_ids();
+    let plan = Plan::over(vec![issue_at(&first, "notes:other")], &[], true);
+    // The lookup's read of that id answers; the read after the refused create does not.
+    let reads = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let held = first.clone();
+    plan.workspace.bend_answers(
+        move |query, variables| {
+            query == onetaskgraph_linear::graphql::ISSUE
+                && variables["id"] == held.as_str()
+                && reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 1
+        },
+        1,
+        |_, data| *data = json!({"issue": 5}),
+    );
+    let (output, served) = plan.run_on(&plan.sandbox.subdirectory("host"), &PROJECT_COPY);
+    assert!(!output.status.success(), "{}", stdout(&output));
+    let issue_creates: Vec<&Value> = served
+        .iter()
+        .filter(|(query, _)| query == onetaskgraph_linear::graphql::ISSUE_CREATE)
+        .map(|(_, variables)| &variables["input"]["id"])
+        .collect();
+    assert_eq!(
+        issue_creates.len(),
+        1,
+        "one create, under the taken id alone: {issue_creates:?}"
+    );
+    assert_eq!(issue_creates[0], first.as_str());
 }
 
 /// A copy whose lookup cannot show its counterpart absent creates nothing: here the issue under

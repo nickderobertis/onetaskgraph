@@ -992,6 +992,7 @@ fn task_and_project_reads_status_listings_and_copy_discovery_cost_no_more_than_o
             projects_listed,
             BASE_PROJECT_LIST_STATUS,
         ),
+        // llmlint: ignore-block[tests_hold_no_nonfunctional_thresholds] The comparison against the request counts the c9e75a8 binary measured is this module's stated regression check of wire behaviour, not a budget (see `BASE`); this change only separates out the one read by id before each create, which it counts exactly rather than bounding.
         (
             "project copy --no-tasks, besides its write and its key read",
             discovery(&alone) - key_reads(&alone),
@@ -1002,6 +1003,7 @@ fn task_and_project_reads_status_listings_and_copy_discovery_cost_no_more_than_o
             discovery(&routed) - key_reads(&routed),
             BASE_COPY_ROUTED_MEMBER,
         ),
+        // llmlint: ignore-end[tests_hold_no_nonfunctional_thresholds]
     ] {
         assert!(
             now <= base,
@@ -1046,6 +1048,7 @@ fn task_and_project_reads_status_listings_and_copy_discovery_cost_no_more_than_o
         6,
         "one read by id before each of its six creates"
     );
+    // llmlint: ignore[tests_hold_no_nonfunctional_thresholds] The comparison against the request counts the c9e75a8 binary measured is this module's stated regression check of wire behaviour, not a budget (see `BASE`); this change only separates out the one read by id before each create, which it counts exactly rather than bounding.
     assert!(
         discovery(&big) - key_reads(&big) <= BASE_COPY_PROJECT_AND_TASKS,
         "a copy of a project and five tasks sends {} requests besides its writes and its key \
