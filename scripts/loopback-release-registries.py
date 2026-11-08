@@ -27,7 +27,9 @@ open pull requests), `refuse` (uploads and calls answered with an error: entries
 short asset behind, as an interrupted one does), `hide` (names read as absent), `corrupt`
 (files served as garbage), and `relabel` (`{"from": v1, "to": v2}`: every read lists v1 as
 v2), `replace` (a file name served as the bytes of another file, its index hashes with it),
-`pulls_raw` (the pull-request list answered as this text), `redirect_api` (every GitHub API
+`pulls_raw` (the pull-request list answered as this text), `digest` (an asset name listed with
+this `digest` instead of its bytes' — `null` or a malformed value included), `pypi_index`
+(`{"status", "raw"}`: PyPI's JSON simple index answered so; the HTML index and pip are untouched), `redirect_api` (every GitHub API
 call redirected to the other port, another origin), `redirect_api_same_origin` (every
 GitHub API read redirected once to itself on the same origin), and `release_answer`, `upload_host`, `upload_answer` (an upload stored nowhere and answered so) and `automerge_answer`, which replace what GitHub
 answers. What it answers GitHub's calls with is held to config/github-interfaces.toml by
@@ -106,6 +108,14 @@ def served_bytes(name, payload):
     if substitute:
         return Path(substitute).read_bytes()
     return b"this is not the file that was published\n" if name in control().get("corrupt", []) else payload
+
+
+def asset_digest(name, asset):
+    """The `digest` GitHub lists for an asset: of the bytes it serves, none while it is partial,
+    and whatever `digest` names for it — `null` included — when it names one."""
+    if name in control().get("digest", {}):
+        return control()["digest"][name]
+    return None if asset.get("state") else f"sha256:{hashlib.sha256(served_bytes(name, asset['bytes'])).hexdigest()}"
 
 
 def normalise(project):
@@ -225,7 +235,7 @@ class Handler(BaseHTTPRequestHandler):
             release_id = abs(hash(tag)) % 100000
             with lock:
                 assets = [
-                    {"id": asset["id"], "name": relabel(name), "size": len(asset["bytes"]), "state": asset.get("state", "uploaded")}
+                    {"id": asset["id"], "name": relabel(name), "size": len(served_bytes(name, asset["bytes"])), "state": asset.get("state", "uploaded"), "digest": asset_digest(name, asset)}
                     for (asset_tag, name), asset in sorted(github_assets.items())
                     if asset_tag == tag and not hidden(name)
                 ]
@@ -290,7 +300,7 @@ class Handler(BaseHTTPRequestHandler):
             asset_id = next(asset_ids)
             github_assets[(tag, name)] = {"id": asset_id, "bytes": payload}
             github_ids[asset_id] = (tag, name)
-        self.send(201, {"id": asset_id, "name": name, "size": len(payload), "state": "uploaded"})
+        self.send(201, {"id": asset_id, "name": name, "size": len(payload), "state": "uploaded", "digest": f"sha256:{hashlib.sha256(payload).hexdigest()}"})
 
     def github_download(self, path):
         tag, _, name = urllib.parse.unquote(path).partition("/")
@@ -343,6 +353,14 @@ class Handler(BaseHTTPRequestHandler):
             self.record(registry="pypi", action="read-index", package=project)
             with lock:
                 files = sorted((name, hashlib.sha256(served_bytes(name, entry["bytes"])).hexdigest()) for name, entry in pypi_files.items() if entry["project"] == project and not hidden(name))
+            if not any(entry["project"] == project for entry in pypi_files.values()):
+                # PyPI answers a project it holds nothing of 404, in either form.
+                self.send(404, "Not Found", "text/plain")
+                return
+            index = control().get("pypi_index")
+            if index and "application/vnd.pypi.simple.v1+json" in self.headers.get("Accept", ""):
+                self.send(index.get("status", 200), index.get("raw", ""), "application/vnd.pypi.simple.v1+json")
+                return
             if "application/vnd.pypi.simple.v1+json" in self.headers.get("Accept", ""):
                 listing = {"meta": {"api-version": "1.0"}, "name": project, "files": [{"filename": relabel(name), "url": f"{self.base()}/pypi/files/{relabel(name)}", "hashes": {"sha256": digest}} for name, digest in files]}
                 self.send(200, listing, "application/vnd.pypi.simple.v1+json")

@@ -32,6 +32,7 @@
       "{workspaceRoot}/.github/fixture-environment.mjs",
       "{workspaceRoot}/.github/release-published-paths",
       "{workspaceRoot}/config/github-interfaces.toml",
+      "{workspaceRoot}/config/pypi-simple-index.toml",
       "{workspaceRoot}/pyproject.toml",
       "{workspaceRoot}/release-plz.toml",
       "{workspaceRoot}/npm/**/*",

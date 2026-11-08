@@ -170,11 +170,11 @@ function expectStatus(result, status, what) {
   assert.equal(result.status, status, `${what}:\n${result.output.slice(-12000)}`);
 }
 
-function control(value) {
-  writeFileSync(join(scratch, "registries", "control.json"), JSON.stringify(value));
+function control(value, state = join(scratch, "registries")) {
+  writeFileSync(join(state, "control.json"), JSON.stringify(value));
 }
-function requests() {
-  const path = join(scratch, "registries", "requests.jsonl");
+function requests(state = join(scratch, "registries")) {
+  const path = join(state, "requests.jsonl");
   return existsSync(path)
     ? readFileSync(path, "utf8")
         .split("\n")
@@ -183,8 +183,8 @@ function requests() {
     : [];
 }
 // Every registry address, pointed at the double; unset, each is the real registry.
-function registries() {
-  const main = `http://127.0.0.1:${ports.main}`;
+function registries(at = ports) {
+  const main = `http://127.0.0.1:${at.main}`;
   return {
     GITHUB_API_URL: `${main}/github/api`,
     GITHUB_REPOSITORY: "nickderobertis/onetaskgraph",
@@ -196,7 +196,7 @@ function registries() {
     NODE_AUTH_TOKEN: "fixture-token",
     npm_config_cache: join(scratch, "npm-cache"),
     ONETASKGRAPH_RELEASE_BASE_URL: `${main}/github/download`,
-    ONETASKGRAPH_CHECKSUM_BASE_URL: `http://127.0.0.1:${ports.checksums}/github/download`,
+    ONETASKGRAPH_CHECKSUM_BASE_URL: `http://127.0.0.1:${at.checksums}/github/download`,
     ONETASKGRAPH_CARGO_REGISTRY: "release-double",
     CARGO_REGISTRIES_RELEASE_DOUBLE_INDEX: `sparse+${main}/crates/index/`,
     CARGO_REGISTRIES_RELEASE_DOUBLE_TOKEN: "fixture-token",
@@ -206,20 +206,23 @@ function registries() {
   };
 }
 
-before(async () => {
-  if (skip) return;
-  const state = join(scratch, "registries");
+async function startDouble(state) {
   mkdirSync(state);
-  double = spawn("python3", ["scripts/loopback-release-registries.py", state], {
+  const started = spawn("python3", ["scripts/loopback-release-registries.py", state], {
     cwd: checkout,
     stdio: ["ignore", "ignore", "inherit"],
   });
   for (let waited = 0; !existsSync(join(state, "ports.json")); waited += 100) {
     assert.ok(waited < 30000, "the registry double never reported its ports");
-    assert.equal(double.exitCode, null, "the registry double exited before it bound");
+    assert.equal(started.exitCode, null, "the registry double exited before it bound");
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  ports = JSON.parse(readFileSync(join(state, "ports.json"), "utf8"));
+  return { process: started, ports: JSON.parse(readFileSync(join(state, "ports.json"), "utf8")) };
+}
+
+before(async () => {
+  if (skip) return;
+  ({ process: double, ports } = await startDouble(join(scratch, "registries")));
 });
 after(() => {
   double?.kill();
@@ -456,11 +459,15 @@ test("the Linux job publishes exactly what it built, re-runs only what is missin
         [["@onetaskgraph/cli-linux-x64", [version]]],
       );
     mark = requests().length;
-    expectStatus(
-      recipe("linux", ["publish", "--to", registry, "--tag", tag, "--dist", dist], env),
-      0,
-      `${registry} again`,
-    );
+    const again = recipe("linux", ["publish", "--to", registry, "--tag", tag, "--dist", dist], env);
+    expectStatus(again, 0, `${registry} again`);
+    if (registry === "pypi")
+      assert.match(
+        again.output,
+        new RegExp(
+          `release-cd: PyPI already holds, with this build's bytes: ${file("wheel").replaceAll(".", "\\.")}\n`,
+        ),
+      );
     assert.deepEqual(
       requests()
         .slice(mark)
@@ -518,6 +525,10 @@ test("the Linux job publishes exactly what it built, re-runs only what is missin
     ["another asset", { id: 9, name: "other.tar.gz", size, state: "uploaded" }],
     ["a short asset", { id: 9, name: archive, size: size - 1, state: "uploaded" }],
     ["an asset not uploaded", { id: 9, name: archive, size, state: "starter" }],
+    [
+      "an asset of other bytes",
+      { id: 9, name: archive, size, state: "uploaded", digest: `sha256:${"0".repeat(64)}` },
+    ],
   ]) {
     control({ releases: [tag], hide: [archive], upload_answer: answer });
     const result = recipe(
@@ -534,6 +545,354 @@ test("the Linux job publishes exactly what it built, re-runs only what is missin
     assert.match(result.output, /release-cd: next: re-run this step/, name);
   }
   control({ releases: [tag] });
+});
+
+// A release cut off part-way — here an earlier attempt of the job uploaded the archive, was
+// interrupted on its checksum, and had already published the wheel and the npm package — is
+// re-run, and the re-run rebuilds: the files it stages carry the same content under other
+// bytes, as a build that does not reproduce byte for byte leaves them. PyPI and npm never
+// replace a published file, so the re-run must take what they hold as the release's and go
+// on to verify it, rather than refuse the release for ever; and the GitHub Release keeps its
+// archive with a checksum that is true of it.
+test("a re-run keeps a file a registry holds with other bytes than its rebuild, completes the release and verifies what is served", {
+  skip,
+}, async () => {
+  const planned = plan("linux");
+  const file = (kind) => planned.find((artifact) => artifact.kind === kind).file;
+  const state = join(scratch, "registries-rerun");
+  const { process: registry, ports: at } = await startDouble(state);
+  try {
+    const env = registries(at);
+    // The earlier attempt's build: this build's files, each repacked to other bytes with the
+    // same content, and the manifest that attempt's build would have written for them.
+    const earlier = join(scratch, "earlier-attempt");
+    rmSync(earlier, { recursive: true, force: true });
+    execFileSync("cp", ["-a", dist, earlier]);
+    execFileSync(
+      "python3",
+      [
+        "-c",
+        `import gzip, hashlib, json, sys, zipfile
+from pathlib import Path
+dist = Path(sys.argv[1])
+manifest_path = dist / 'release-linux.json'
+manifest = json.loads(manifest_path.read_text())
+def located(name):
+    [path] = [path for path in dist.rglob(name) if path.is_file()]
+    return path
+def regzip(path):
+    path.write_bytes(gzip.compress(gzip.decompress(path.read_bytes()), compresslevel=1, mtime=1))
+def rezip(path):
+    with zipfile.ZipFile(path) as source:
+        entries = [(entry, source.read(entry)) for entry in source.infolist()]
+    with zipfile.ZipFile(path, 'w') as packed:
+        for entry, data in reversed(entries):
+            entry.compress_type = zipfile.ZIP_DEFLATED
+            packed.writestr(entry, data, compresslevel=1)
+order = {'archive': 0, 'wheel': 0, 'npm-platform': 0, 'checksum': 1}
+for entry in sorted(manifest['artifacts'], key=lambda entry: order[entry['kind']]):
+    path = located(entry['file'])
+    if entry['kind'] in ('archive', 'npm-platform'):
+        regzip(path)
+    elif entry['kind'] == 'wheel':
+        rezip(path)
+    else:
+        archive = located(entry['file'].removesuffix('.sha256'))
+        path.write_text(hashlib.sha256(archive.read_bytes()).hexdigest() + '  ' + archive.name + '\\n')
+    entry['sha256'] = hashlib.sha256(path.read_bytes()).hexdigest()
+manifest_path.write_text(json.dumps(manifest, indent=2) + '\\n')`,
+        earlier,
+      ],
+      { cwd: checkout },
+    );
+    const staged = {
+      archive: (root) => join(root, "assets", file("archive")),
+      checksum: (root) => join(root, "assets", file("checksum")),
+      wheel: (root) => join(root, "wheels/x86_64-unknown-linux-gnu", file("wheel")),
+      "npm-platform": (root) => join(root, "carriers/linux-x64", file("npm-platform")),
+    };
+    for (const kind of ["archive", "wheel", "npm-platform"])
+      assert.notEqual(
+        sha256(staged[kind](earlier)),
+        sha256(staged[kind](dist)),
+        `the earlier attempt's ${kind} has the rebuild's bytes, so this journey proves nothing`,
+      );
+
+    // The earlier attempt: the archive lands and its checksum is cut off part of the way;
+    // the wheel and the npm package land, PyPI answering 404 for a project it holds nothing of.
+    control(
+      { releases: [tag], refuse: [{ registry: "github", file: file("checksum"), partial: true }] },
+      state,
+    );
+    expectStatus(
+      recipe("linux", ["publish", "--to", "github", "--tag", tag, "--dist", earlier], env),
+      1,
+      "the earlier attempt's interrupted upload",
+    );
+    control({ releases: [tag] }, state);
+    for (const to of ["pypi", "npm"])
+      expectStatus(
+        recipe("linux", ["publish", "--to", to, "--tag", tag, "--dist", earlier], env),
+        0,
+        `the earlier attempt's ${to} publication`,
+      );
+
+    // The re-run publishes its rebuild: each step finishes, sending only the checksum the
+    // release is missing, and none of the files a registry already holds.
+    const mark = requests(state).length;
+    const outputs = {};
+    for (const to of ["github", "pypi", "npm"]) {
+      const result = recipe("linux", ["publish", "--to", to, "--tag", tag, "--dist", dist], env);
+      expectStatus(result, 0, `the re-run's ${to} publication`);
+      outputs[to] = result.output;
+    }
+    assert.deepEqual(
+      requests(state)
+        .slice(mark)
+        .filter((r) => ["upload", "delete-asset", "publish"].includes(r.action))
+        .map((r) => [r.registry, r.action, r.file ?? r.package]),
+      [
+        ["github", "delete-asset", file("checksum")],
+        ["github", "upload", file("checksum")],
+      ],
+    );
+    assert.match(
+      outputs.github,
+      new RegExp(
+        `kept with other bytes than this build's, checksums written from what the release holds: ${file("archive").replaceAll(".", "\\.")}`,
+      ),
+    );
+    assert.match(
+      outputs.pypi,
+      new RegExp(
+        `PyPI already holds, with this build's bytes: none; with other bytes than this build's, kept as the release's: ${file("wheel").replaceAll(".", "\\.")}`,
+      ),
+    );
+
+    // What every registry serves is the earlier attempt's, and the checksum is true of the
+    // archive the release holds rather than of the rebuild's.
+    const main = `http://127.0.0.1:${at.main}`;
+    const fetched = (url) => execFileSync("curl", ["-fsS", url], { maxBuffer: 1 << 28 });
+    const hash = (data) => createHash("sha256").update(data).digest("hex");
+    assert.equal(
+      hash(fetched(`${main}/github/download/${tag}/${file("archive")}`)),
+      sha256(staged.archive(earlier)),
+    );
+    assert.equal(
+      fetched(`${main}/github/download/${tag}/${file("checksum")}`).toString("utf8"),
+      `${sha256(staged.archive(earlier))}  ${file("archive")}\n`,
+    );
+    assert.equal(
+      hash(fetched(`${main}/pypi/files/${file("wheel")}`)),
+      sha256(staged.wheel(earlier)),
+    );
+    assert.equal(
+      hash(fetched(`${main}/npm/@onetaskgraph/cli-linux-x64/-/cli-linux-x64-${version}.tgz`)),
+      sha256(staged["npm-platform"](earlier)),
+    );
+
+    // The index the PyPI step read is held to PyPI's own, pinned in
+    // config/pypi-simple-index.toml: the step asks what the pin describes, the parser accepts
+    // the pinned capture, every field the pin says it reads changes its answer when gone and
+    // no other field does, and the double answers no field PyPI does not. The Accept header is
+    // proven by the run itself too: the double answers JSON only to that header.
+    const listing = execFileSync("curl", [
+      "-fsS",
+      "-H",
+      "Accept: application/vnd.pypi.simple.v1+json",
+      `${main}/pypi/simple/onetaskgraph-cli/`,
+    ]).toString("utf8");
+    const drift = spawnSync(
+      "python3",
+      [
+        "-c",
+        `import copy, json, sys, tomllib
+sys.path.insert(0, 'scripts')
+import release_cd
+with open('config/pypi-simple-index.toml', 'rb') as pinned:
+    pin = tomllib.load(pinned)
+answer, served, reads = json.loads(pin['answer']), json.loads(sys.argv[1]), set(pin['reads'])
+def shape(value, prefix=''):
+    if isinstance(value, dict):
+        return {path for key, child in value.items() for path in {f'{prefix}.{key}' if prefix else key} | shape(child, f'{prefix}.{key}' if prefix else key)}
+    if isinstance(value, list):
+        return {path for child in value for path in shape(child, prefix + '[]')}
+    return set()
+def without(value, field):
+    value = copy.deepcopy(value)
+    def drop(node, parts):
+        key = parts[0].removesuffix('[]')
+        if not isinstance(node, dict) or key not in node:
+            return
+        if len(parts) == 1:
+            del node[key]
+        else:
+            for child in (node[key] if parts[0].endswith('[]') else [node[key]]):
+                drop(child, parts[1:])
+    drop(value, field.split('.'))
+    return value
+problems = []
+# The request: the one pypi_held_files makes of PyPI by default for this release's wheel.
+wheel = release_cd.Path(sys.argv[2])
+asked = release_cd.DEFAULT_PYPI_SIMPLE.rstrip('/') + '/' + release_cd.pypi_project(wheel) + '/'
+if (pin['method'], pin['url'].format(project=release_cd.pypi_project(wheel)), pin['accept']) != ('GET', asked, release_cd.PYPI_SIMPLE_JSON):
+    problems.append(f"the pin asks {pin['method']} {pin['url']} with Accept {pin['accept']}, but the step asks GET {asked} with Accept {release_cd.PYPI_SIMPLE_JSON}")
+whole = release_cd.parse_pypi_index(answer)
+if whole != {entry['filename']: entry['hashes']['sha256'] for entry in answer['files']}:
+    problems.append(f'the parser reads the pinned answer as {whole}')
+for field in sorted(reads - shape(answer)):
+    problems.append(f'the pin reads {field}, which the pinned answer does not carry')
+for field in sorted(shape(answer)):
+    try:
+        same = release_cd.parse_pypi_index(without(answer, field)) == whole
+    except ValueError:
+        same = False
+    ancestor = any(read.startswith((field + '.', field + '[]')) for read in reads)
+    if field in reads and same:
+        problems.append(f'removing {field} leaves the parser unchanged, so it does not read what the pin says')
+    elif field not in reads and not ancestor and not same:
+        problems.append(f'the parser reads {field}, which the pin does not name')
+for field in sorted(shape(served) - shape(answer)):
+    problems.append(f'the double answers {field}, which PyPI does not')
+if not release_cd.parse_pypi_index(served):
+    problems.append('the double listed nothing, so its answer was not compared')
+print('\\n'.join(problems))
+sys.exit(1 if problems else 0)`,
+        listing,
+        file("wheel"),
+      ],
+      { cwd: checkout, encoding: "utf8" },
+    );
+    assert.equal(
+      drift.status,
+      0,
+      `PyPI's index drifted from its pin:\n${drift.stdout}${drift.stderr}`,
+    );
+
+    for (const from of ["github", "pypi", "npm"])
+      expectStatus(
+        recipe("linux", ["verify", "--from", from, "--tag", tag, "--wait", "0"], env),
+        0,
+        `verify ${from} after the re-run`,
+      );
+    // Keeping a file is no exemption from verification: one that does not install still
+    // fails the job, so the publish job that needs it never starts.
+    for (const [from, unusable] of [
+      ["github", file("archive")],
+      ["pypi", file("wheel")],
+      ["npm", `cli-linux-x64-${version}.tgz`],
+    ]) {
+      control({ releases: [tag], corrupt: [unusable] }, state);
+      const result = recipe("linux", ["verify", "--from", from, "--tag", tag, "--wait", "0"], env);
+      assert.equal(
+        result.status,
+        1,
+        `${from} serving a kept file that is unusable verified:\n${result.output.slice(-2000)}`,
+      );
+    }
+    control({ releases: [tag] }, state);
+
+    const sentSince = (since) =>
+      requests(state)
+        .slice(since)
+        .filter((r) => ["upload", "delete-asset", "publish"].includes(r.action))
+        .map((r) => [r.registry, r.action, r.file ?? r.package]);
+    const derived = (archive) => `${sha256(archive)}  ${file("archive")}\n`;
+    const served = (name) => fetched(`${main}/github/download/${tag}/${name}`);
+
+    // A checksum asset the release holds whole that disagrees with the archive it keeps is no
+    // checksum: the re-run replaces it with one true of that archive.
+    const wrong = join(scratch, "wrong-checksum");
+    writeFileSync(wrong, `${"0".repeat(64)}  ${file("archive")}\n`);
+    control({ releases: [tag], replace: { [file("checksum")]: wrong } }, state);
+    let since = requests(state).length;
+    expectStatus(
+      recipe("linux", ["publish", "--to", "github", "--tag", tag, "--dist", dist], env),
+      0,
+      "a re-run over a checksum that disagrees with its archive",
+    );
+    assert.deepEqual(sentSince(since), [
+      ["github", "delete-asset", file("checksum")],
+      ["github", "upload", file("checksum")],
+    ]);
+    control({ releases: [tag] }, state);
+    assert.equal(served(file("checksum")).toString("utf8"), derived(staged.archive(earlier)));
+
+    // An asset digest GitHub answers in no form it documents is refused before anything is sent.
+    control({ releases: [tag], digest: { [file("archive")]: "md5:0123" } }, state);
+    since = requests(state).length;
+    const malformed = recipe(
+      "linux",
+      ["publish", "--to", "github", "--tag", tag, "--dist", dist],
+      env,
+    );
+    expectStatus(malformed, 1, "a release listing a malformed digest");
+    assert.match(malformed.output, /its digest is 'md5:0123', not sha256:<64 hex digits>/);
+    assert.deepEqual(sentSince(since), []);
+
+    // PyPI's index unreadable in any way fails the step naming why, and sends nothing: read
+    // as nothing held, it would send the wheel PyPI then refuses.
+    const unreachable = { ...env, ONETASKGRAPH_PYPI_SIMPLE_URL: "http://127.0.0.1:1/pypi/simple/" };
+    for (const [why, index, at, reason] of [
+      ["answers 503", { status: 503 }, env, /PyPI answered \S+ with HTTP 503/],
+      ["is unreachable", null, unreachable, /could not read what PyPI holds of onetaskgraph-cli/],
+      ["answers no JSON", { raw: "<html>" }, env, /with something that is not JSON/],
+      ["lists no files", { raw: '{"meta": {}}' }, env, /is unreadable: it lists no files array/],
+      [
+        "lists a file without its hash",
+        { raw: `{"files": [{"filename": "${file("wheel")}"}]}` },
+        env,
+        /is unreadable: it lists .* without a file name and SHA-256/,
+      ],
+    ]) {
+      control(index ? { releases: [tag], pypi_index: index } : { releases: [tag] }, state);
+      since = requests(state).length;
+      const result = recipe("linux", ["publish", "--to", "pypi", "--tag", tag, "--dist", dist], at);
+      expectStatus(result, 1, `PyPI's index ${why}`);
+      assert.match(result.output, reason, why);
+      assert.match(result.output, /nothing was sent/, why);
+      assert.deepEqual(sentSince(since), [], why);
+    }
+
+    // An asset GitHub reports no digest for is held to its size, as before digests existed:
+    // an archive of another size is replaced, and its checksum follows it, whatever the size
+    // of the checksum asset already there; one of the same size is left alone.
+    const rebuilt = staged.archive(dist);
+    assert.notEqual(statSync(rebuilt).size, statSync(staged.archive(earlier)).size);
+    control(
+      { releases: [tag], digest: { [file("archive")]: null, [file("checksum")]: null } },
+      state,
+    );
+    since = requests(state).length;
+    expectStatus(
+      recipe("linux", ["publish", "--to", "github", "--tag", tag, "--dist", dist], env),
+      0,
+      "a re-run over assets with no digest",
+    );
+    assert.deepEqual(sentSince(since), [
+      ["github", "delete-asset", file("archive")],
+      ["github", "upload", file("archive")],
+      ["github", "delete-asset", file("checksum")],
+      ["github", "upload", file("checksum")],
+    ]);
+    assert.equal(hash(served(file("archive"))), sha256(rebuilt));
+    assert.equal(served(file("checksum")).toString("utf8"), derived(rebuilt));
+    since = requests(state).length;
+    expectStatus(
+      recipe("linux", ["publish", "--to", "github", "--tag", tag, "--dist", dist], env),
+      0,
+      "a re-run over same-sized assets with no digest",
+    );
+    assert.deepEqual(sentSince(since), []);
+    control({ releases: [tag] }, state);
+    expectStatus(
+      recipe("linux", ["verify", "--from", "github", "--tag", tag, "--wait", "0"], env),
+      0,
+      "verify github after the replaced archive",
+    );
+  } finally {
+    registry.kill();
+  }
 });
 
 test("the Linux job's registry verification fails on another version, an unusable package or none", {
