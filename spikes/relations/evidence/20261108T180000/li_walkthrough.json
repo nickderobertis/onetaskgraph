@@ -1,0 +1,331 @@
+{
+ "identifiers": {
+  "stale-cache-lease": "TES2-2134",
+  "TIMEOUT-42": "TES2-2135",
+  "PAY-7": "TES2-2136",
+  "TIMEOUT-42-acme": "TES2-2137",
+  "TIMEOUT-42-globex": "TES2-2138",
+  "PAY-7-acme": "TES2-2139",
+  "THIRD-9": "TES2-2140"
+ },
+ "parent_writes": {
+  "TIMEOUT-42-acme": {
+   "seq": 215,
+   "ok": true,
+   "errors": []
+  },
+  "TIMEOUT-42-globex": {
+   "seq": 216,
+   "ok": true,
+   "errors": []
+  },
+  "PAY-7-acme": {
+   "seq": 217,
+   "ok": true,
+   "errors": []
+  }
+ },
+ "mirrors": {
+  "TIMEOUT-42": {
+   "seq": 218,
+   "ok": true,
+   "id": "7a44fc18-bde3-41f0-848e-22ed0021e916",
+   "errors": []
+  },
+  "PAY-7": {
+   "seq": 219,
+   "ok": true,
+   "id": "9830da14-b3ce-4369-80a9-ec3615a88cd0",
+   "errors": []
+  },
+  "THIRD-9": {
+   "seq": 220,
+   "ok": true,
+   "id": "b805e72d-b93b-4678-8d2e-15b5fe87a17a",
+   "errors": []
+  }
+ },
+ "metadata_writes": {
+  "TIMEOUT-42": {
+   "exit": 0,
+   "err": null,
+   "ids": null,
+   "item": {
+    "version": "lin1|2026-11-08T23:35:24.122Z|efe6e578f532028c07b97053007bc1e5ebd39b7da6b69d2253090139db0405cf"
+   }
+  },
+  "PAY-7": {
+   "exit": 0,
+   "err": null,
+   "ids": null,
+   "item": {
+    "version": "lin1|2026-11-08T23:35:24.798Z|689f69d6b99b36664fb46efbd4e35994940b157bc43e9bea5d2c5b6237862eec"
+   }
+  },
+  "THIRD-9": {
+   "exit": 0,
+   "err": null,
+   "ids": null,
+   "item": {
+    "version": "lin1|2026-11-08T23:35:25.525Z|7ffad6f91bba689814bf616f406cf1cdd7e43e243a0f40ec2d2caa78e3eaa365"
+   }
+  },
+  "root": {
+   "exit": 0,
+   "err": null,
+   "ids": null,
+   "item": {
+    "version": "lin1|2026-11-08T23:35:26.282Z|428659af3bf3fdb69b7b9538a8704124a3615abe295981afdcd10f6e6c81e5c2"
+   }
+  }
+ },
+ "read_root": {
+  "seq": 225,
+  "identifier": "TES2-2134",
+  "parent": null,
+  "children": {
+   "nodes": []
+  },
+  "relations": {
+   "nodes": []
+  },
+  "inverseRelations": {
+   "nodes": [
+    {
+     "id": "b805e72d-b93b-4678-8d2e-15b5fe87a17a",
+     "type": "related",
+     "issue": {
+      "identifier": "TES2-2140"
+     }
+    },
+    {
+     "id": "9830da14-b3ce-4369-80a9-ec3615a88cd0",
+     "type": "related",
+     "issue": {
+      "identifier": "TES2-2136"
+     }
+    },
+    {
+     "id": "7a44fc18-bde3-41f0-848e-22ed0021e916",
+     "type": "related",
+     "issue": {
+      "identifier": "TES2-2135"
+     }
+    }
+   ]
+  },
+  "errors": []
+ },
+ "read_root_metadata": {
+  "exit": 0,
+  "err": null,
+  "metadata_keys": [
+   "spike.links"
+  ],
+  "links_metadata": [
+   {
+    "type": "caused-by",
+    "direction": "in",
+    "other": "eng:168bc54d-24dc-48c2-a6f6-0b21f56e6d83"
+   },
+   {
+    "type": "caused-by",
+    "direction": "in",
+    "other": "eng:df8f7757-e481-4f67-8c3e-d0c5871ab20b"
+   },
+   {
+    "type": "caused-by",
+    "direction": "in",
+    "other": "eng:1826f408-9a2d-44bc-90eb-0bd9c6ee2873"
+   }
+  ],
+  "content_has_links_section": false,
+  "content_digest": "sha256:798552d3924a30ba"
+ },
+ "read_symptom": {
+  "TIMEOUT-42": {
+   "seq": 227,
+   "identifier": "TES2-2135",
+   "parent": null,
+   "children": {
+    "nodes": [
+     {
+      "identifier": "TES2-2138"
+     },
+     {
+      "identifier": "TES2-2137"
+     }
+    ]
+   },
+   "relations": {
+    "nodes": [
+     {
+      "id": "7a44fc18-bde3-41f0-848e-22ed0021e916",
+      "type": "related",
+      "relatedIssue": {
+       "identifier": "TES2-2134"
+      }
+     }
+    ]
+   },
+   "inverseRelations": {
+    "nodes": []
+   },
+   "errors": []
+  },
+  "PAY-7": {
+   "seq": 228,
+   "identifier": "TES2-2136",
+   "parent": null,
+   "children": {
+    "nodes": [
+     {
+      "identifier": "TES2-2139"
+     }
+    ]
+   },
+   "relations": {
+    "nodes": [
+     {
+      "id": "9830da14-b3ce-4369-80a9-ec3615a88cd0",
+      "type": "related",
+      "relatedIssue": {
+       "identifier": "TES2-2134"
+      }
+     }
+    ]
+   },
+   "inverseRelations": {
+    "nodes": []
+   },
+   "errors": []
+  },
+  "THIRD-9": {
+   "seq": 229,
+   "identifier": "TES2-2140",
+   "parent": null,
+   "children": {
+    "nodes": []
+   },
+   "relations": {
+    "nodes": [
+     {
+      "id": "b805e72d-b93b-4678-8d2e-15b5fe87a17a",
+      "type": "related",
+      "relatedIssue": {
+       "identifier": "TES2-2134"
+      }
+     }
+    ]
+   },
+   "inverseRelations": {
+    "nodes": []
+   },
+   "errors": []
+  }
+ },
+ "read_symptom_metadata": {
+  "TIMEOUT-42": {
+   "exit": 0,
+   "err": null,
+   "metadata_keys": [
+    "spike.links"
+   ],
+   "links_metadata": [
+    {
+     "type": "caused-by",
+     "direction": "out",
+     "other": "eng:33fac6ae-21e3-4435-9ab2-49a82bebb48a"
+    }
+   ],
+   "content_has_links_section": false,
+   "content_digest": "sha256:798552d3924a30ba"
+  },
+  "PAY-7": {
+   "exit": 0,
+   "err": null,
+   "metadata_keys": [
+    "spike.links"
+   ],
+   "links_metadata": [
+    {
+     "type": "caused-by",
+     "direction": "out",
+     "other": "eng:33fac6ae-21e3-4435-9ab2-49a82bebb48a"
+    }
+   ],
+   "content_has_links_section": false,
+   "content_digest": "sha256:798552d3924a30ba"
+  },
+  "THIRD-9": {
+   "exit": 0,
+   "err": null,
+   "metadata_keys": [
+    "spike.links"
+   ],
+   "links_metadata": [
+    {
+     "type": "caused-by",
+     "direction": "out",
+     "other": "eng:33fac6ae-21e3-4435-9ab2-49a82bebb48a"
+    }
+   ],
+   "content_has_links_section": false,
+   "content_digest": "sha256:798552d3924a30ba"
+  }
+ },
+ "read_clients": {
+  "TIMEOUT-42-acme": {
+   "seq": 233,
+   "identifier": "TES2-2137",
+   "parent": {
+    "identifier": "TES2-2135"
+   },
+   "children": {
+    "nodes": []
+   },
+   "relations": {
+    "nodes": []
+   },
+   "inverseRelations": {
+    "nodes": []
+   },
+   "errors": []
+  },
+  "TIMEOUT-42-globex": {
+   "seq": 234,
+   "identifier": "TES2-2138",
+   "parent": {
+    "identifier": "TES2-2135"
+   },
+   "children": {
+    "nodes": []
+   },
+   "relations": {
+    "nodes": []
+   },
+   "inverseRelations": {
+    "nodes": []
+   },
+   "errors": []
+  },
+  "PAY-7-acme": {
+   "seq": 235,
+   "identifier": "TES2-2139",
+   "parent": {
+    "identifier": "TES2-2136"
+   },
+   "children": {
+    "nodes": []
+   },
+   "relations": {
+    "nodes": []
+   },
+   "inverseRelations": {
+    "nodes": []
+   },
+   "errors": []
+  }
+ },
+ "widespread_route_input_count": 3
+}

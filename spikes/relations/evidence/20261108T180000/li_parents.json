@@ -1,0 +1,216 @@
+{
+ "add": {
+  "seq": 66,
+  "ok": true,
+  "errors": []
+ },
+ "chain": {
+  "seq": 67,
+  "ok": true,
+  "errors": []
+ },
+ "read_root": {
+  "seq": 68,
+  "identifier": "TES2-1983",
+  "parent": null,
+  "children": {
+   "nodes": [
+    {
+     "identifier": "TES2-1984"
+    }
+   ]
+  },
+  "relations": {
+   "nodes": []
+  },
+  "inverseRelations": {
+   "nodes": []
+  },
+  "errors": []
+ },
+ "read_leaf": {
+  "seq": 69,
+  "identifier": "TES2-1985",
+  "parent": {
+   "identifier": "TES2-1984"
+  },
+  "children": {
+   "nodes": []
+  },
+  "relations": {
+   "nodes": []
+  },
+  "inverseRelations": {
+   "nodes": []
+  },
+  "errors": []
+ },
+ "move": {
+  "seq": 70,
+  "ok": true,
+  "errors": []
+ },
+ "read_moved": {
+  "seq": 71,
+  "identifier": "TES2-1984",
+  "parent": {
+   "identifier": "TES2-1986"
+  },
+  "children": {
+   "nodes": [
+    {
+     "identifier": "TES2-1985"
+    }
+   ]
+  },
+  "relations": {
+   "nodes": []
+  },
+  "inverseRelations": {
+   "nodes": []
+  },
+  "errors": []
+ },
+ "cycle": {
+  "seq": 72,
+  "ok": false,
+  "errors": [
+   "invalid parent"
+  ]
+ },
+ "remove": {
+  "seq": 73,
+  "ok": true,
+  "errors": []
+ },
+ "read_removed": {
+  "seq": 74,
+  "identifier": "TES2-1985",
+  "parent": null,
+  "children": {
+   "nodes": []
+  },
+  "relations": {
+   "nodes": []
+  },
+  "inverseRelations": {
+   "nodes": []
+  },
+  "errors": []
+ },
+ "depth": {
+  "probe_levels": 10,
+  "accepted_levels": 10
+ },
+ "children": {
+  "probe_children": 105,
+  "accepted": 105,
+  "refusal": null,
+  "batches": [
+   {
+    "seq": 86,
+    "sent": 20,
+    "accepted": 20,
+    "errors": []
+   },
+   {
+    "seq": 87,
+    "sent": 20,
+    "accepted": 20,
+    "errors": []
+   },
+   {
+    "seq": 88,
+    "sent": 20,
+    "accepted": 20,
+    "errors": []
+   },
+   {
+    "seq": 89,
+    "sent": 20,
+    "accepted": 20,
+    "errors": []
+   },
+   {
+    "seq": 90,
+    "sent": 20,
+    "accepted": 20,
+    "errors": []
+   },
+   {
+    "seq": 91,
+    "sent": 5,
+    "accepted": 5,
+    "errors": []
+   }
+  ],
+  "children_read": 105,
+  "read_seq": 92
+ },
+ "cross_team_parent_in_TES2": {
+  "seq": 94,
+  "ok": true,
+  "errors": []
+ },
+ "cross_team_read_child": {
+  "seq": 95,
+  "identifier": "TES-2946",
+  "parent": {
+   "identifier": "TES2-1983"
+  },
+  "children": {
+   "nodes": []
+  },
+  "relations": {
+   "nodes": []
+  },
+  "inverseRelations": {
+   "nodes": []
+  },
+  "errors": []
+ },
+ "cross_team_read_parent": {
+  "seq": 96,
+  "identifier": "TES2-1983",
+  "parent": null,
+  "children": {
+   "nodes": [
+    {
+     "identifier": "TES-2946"
+    }
+   ]
+  },
+  "relations": {
+   "nodes": []
+  },
+  "inverseRelations": {
+   "nodes": []
+  },
+  "errors": []
+ },
+ "read_cost_probe": {
+  "seq": 97,
+  "identifier": "TES2-1983",
+  "parent": null,
+  "children": {
+   "nodes": [
+    {
+     "identifier": "TES-2946"
+    }
+   ]
+  },
+  "relations": {
+   "nodes": []
+  },
+  "inverseRelations": {
+   "nodes": []
+  },
+  "errors": []
+ },
+ "objects": {
+  "root": "TES2-1983",
+  "top": "TES2-1987",
+  "children_parent": "TES2-1997",
+  "cross": "TES-2946"
+ }
+}

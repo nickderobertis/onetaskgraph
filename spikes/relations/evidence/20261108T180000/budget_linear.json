@@ -1,0 +1,137 @@
+{
+ "pass1_parent_write": {
+  "seq": 240,
+  "errors": [],
+  "accepted": 12
+ },
+ "pass1_mirror_write": {
+  "seq": 242,
+  "accepted": 30,
+  "sent": 30,
+  "errors": []
+ },
+ "pass1_metadata_write": {
+  "seq": 243,
+  "sent": 20,
+  "accepted": 20,
+  "errors": []
+ },
+ "larger_alias_sizes": {
+  "50": {
+   "seq": 247,
+   "accepted": 50,
+   "errors": []
+  },
+  "100": {
+   "seq": 248,
+   "accepted": 100,
+   "errors": []
+  }
+ },
+ "counts": {
+  "budget.pass1.relations": {
+   "requests": 1,
+   "cost": 0,
+   "complexity": 2857,
+   "aliases": [
+    20
+   ],
+   "seqs": [
+    238
+   ],
+   "errors": []
+  },
+  "budget.pass1.parent": {
+   "requests": 2,
+   "cost": 0,
+   "complexity": 2885,
+   "aliases": [
+    20,
+    12
+   ],
+   "seqs": [
+    239,
+    240
+   ],
+   "errors": []
+  },
+  "budget.pass1.links": {
+   "requests": 3,
+   "cost": 0,
+   "complexity": 2941,
+   "aliases": [
+    20,
+    30,
+    20
+   ],
+   "seqs": [
+    241,
+    242,
+    243
+   ],
+   "errors": []
+  },
+  "budget.pass2.relations": {
+   "requests": 1,
+   "cost": 0,
+   "complexity": 2857,
+   "aliases": [
+    20
+   ],
+   "seqs": [
+    244
+   ],
+   "errors": []
+  },
+  "budget.pass2.parent": {
+   "requests": 1,
+   "cost": 0,
+   "complexity": 2857,
+   "aliases": [
+    20
+   ],
+   "seqs": [
+    245
+   ],
+   "errors": []
+  },
+  "budget.pass2.links": {
+   "requests": 1,
+   "cost": 0,
+   "complexity": 2857,
+   "aliases": [
+    20
+   ],
+   "seqs": [
+    246
+   ],
+   "errors": []
+  }
+ },
+ "read_results": {
+  "pass1_relations": {
+   "seq": 238,
+   "errors": []
+  },
+  "pass1_parent_read": {
+   "seq": 239,
+   "errors": []
+  },
+  "pass1_links_read": {
+   "seq": 241,
+   "errors": []
+  },
+  "pass2_relations": {
+   "seq": 244,
+   "errors": []
+  },
+  "pass2_parent_read": {
+   "seq": 245,
+   "errors": []
+  },
+  "pass2_links_read": {
+   "seq": 246,
+   "errors": []
+  }
+ }
+}

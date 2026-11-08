@@ -1,0 +1,456 @@
+{
+ "related": {
+  "add": {
+   "seq": 175,
+   "ok": true,
+   "id": "df9164b2-8c99-4c17-a135-6318e5c52e7c",
+   "errors": []
+  },
+  "read_from": {
+   "seq": 176,
+   "identifier": "TES2-2122",
+   "parent": null,
+   "children": {
+    "nodes": []
+   },
+   "relations": {
+    "nodes": [
+     {
+      "id": "df9164b2-8c99-4c17-a135-6318e5c52e7c",
+      "type": "related",
+      "relatedIssue": {
+       "identifier": "TES2-2123"
+      }
+     }
+    ]
+   },
+   "inverseRelations": {
+    "nodes": []
+   },
+   "errors": []
+  },
+  "read_to": {
+   "seq": 177,
+   "identifier": "TES2-2123",
+   "parent": null,
+   "children": {
+    "nodes": []
+   },
+   "relations": {
+    "nodes": []
+   },
+   "inverseRelations": {
+    "nodes": [
+     {
+      "id": "df9164b2-8c99-4c17-a135-6318e5c52e7c",
+      "type": "related",
+      "issue": {
+       "identifier": "TES2-2122"
+      }
+     }
+    ]
+   },
+   "errors": []
+  },
+  "cross_team": {
+   "seq": 178,
+   "ok": true,
+   "id": "838017bf-7b78-4d9c-bbb6-84cd48ba2d2e",
+   "errors": []
+  }
+ },
+ "similar": {
+  "add": {
+   "seq": 179,
+   "ok": true,
+   "id": "3c30f644-ddbe-4880-a82b-ebd38a3672a5",
+   "errors": []
+  },
+  "read_from": {
+   "seq": 180,
+   "identifier": "TES2-2124",
+   "parent": null,
+   "children": {
+    "nodes": []
+   },
+   "relations": {
+    "nodes": [
+     {
+      "id": "3c30f644-ddbe-4880-a82b-ebd38a3672a5",
+      "type": "similar",
+      "relatedIssue": {
+       "identifier": "TES2-2125"
+      }
+     }
+    ]
+   },
+   "inverseRelations": {
+    "nodes": []
+   },
+   "errors": []
+  },
+  "read_to": {
+   "seq": 181,
+   "identifier": "TES2-2125",
+   "parent": null,
+   "children": {
+    "nodes": []
+   },
+   "relations": {
+    "nodes": []
+   },
+   "inverseRelations": {
+    "nodes": [
+     {
+      "id": "3c30f644-ddbe-4880-a82b-ebd38a3672a5",
+      "type": "similar",
+      "issue": {
+       "identifier": "TES2-2124"
+      }
+     }
+    ]
+   },
+   "errors": []
+  },
+  "cross_team": {
+   "seq": 182,
+   "ok": true,
+   "id": "9f22104b-921b-4808-a50c-6a1d76cfd192",
+   "errors": []
+  }
+ },
+ "blocks": {
+  "add": {
+   "seq": 183,
+   "ok": true,
+   "id": "34ef6097-2e30-4190-9e5a-ba31d495eebd",
+   "errors": []
+  },
+  "read_from": {
+   "seq": 184,
+   "identifier": "TES2-2126",
+   "parent": null,
+   "children": {
+    "nodes": []
+   },
+   "relations": {
+    "nodes": [
+     {
+      "id": "34ef6097-2e30-4190-9e5a-ba31d495eebd",
+      "type": "blocks",
+      "relatedIssue": {
+       "identifier": "TES2-2127"
+      }
+     }
+    ]
+   },
+   "inverseRelations": {
+    "nodes": []
+   },
+   "errors": []
+  },
+  "read_to": {
+   "seq": 185,
+   "identifier": "TES2-2127",
+   "parent": null,
+   "children": {
+    "nodes": []
+   },
+   "relations": {
+    "nodes": []
+   },
+   "inverseRelations": {
+    "nodes": [
+     {
+      "id": "34ef6097-2e30-4190-9e5a-ba31d495eebd",
+      "type": "blocks",
+      "issue": {
+       "identifier": "TES2-2126"
+      }
+     }
+    ]
+   },
+   "errors": []
+  },
+  "cross_team": {
+   "seq": 186,
+   "ok": true,
+   "id": "32c700d6-a47e-417b-a961-63e59ef6fa4b",
+   "errors": []
+  }
+ },
+ "duplicate": {
+  "add": {
+   "seq": 187,
+   "ok": true,
+   "id": "ae21b734-8796-46ea-a757-cd1f21372b86",
+   "errors": []
+  },
+  "read_from": {
+   "seq": 188,
+   "identifier": "TES2-2128",
+   "parent": null,
+   "children": {
+    "nodes": []
+   },
+   "relations": {
+    "nodes": [
+     {
+      "id": "ae21b734-8796-46ea-a757-cd1f21372b86",
+      "type": "duplicate",
+      "relatedIssue": {
+       "identifier": "TES2-2129"
+      }
+     }
+    ]
+   },
+   "inverseRelations": {
+    "nodes": []
+   },
+   "errors": []
+  },
+  "read_to": {
+   "seq": 189,
+   "identifier": "TES2-2129",
+   "parent": null,
+   "children": {
+    "nodes": []
+   },
+   "relations": {
+    "nodes": []
+   },
+   "inverseRelations": {
+    "nodes": [
+     {
+      "id": "ae21b734-8796-46ea-a757-cd1f21372b86",
+      "type": "duplicate",
+      "issue": {
+       "identifier": "TES2-2128"
+      }
+     }
+    ]
+   },
+   "errors": []
+  },
+  "cross_team": null
+ },
+ "related_again": {
+  "seq": 190,
+  "ok": true,
+  "id": "df9164b2-8c99-4c17-a135-6318e5c52e7c",
+  "errors": []
+ },
+ "related_reverse_again": {
+  "seq": 191,
+  "ok": true,
+  "id": "df9164b2-8c99-4c17-a135-6318e5c52e7c",
+  "errors": []
+ },
+ "duplicate_marks_state": {
+  "seq": 192,
+  "identifier": "TES2-2128",
+  "state": {
+   "name": "Duplicate",
+   "type": "duplicate"
+  },
+  "canceledAt": "2026-11-08T23:35:07.426Z",
+  "errors": []
+ },
+ "cross_project_related": {
+  "add": {
+   "seq": 193,
+   "ok": true,
+   "id": "2f875a1a-8eda-4220-9172-15a267e75680",
+   "errors": []
+  },
+  "read": {
+   "seq": 194,
+   "identifier": "TES2-2131",
+   "parent": null,
+   "children": {
+    "nodes": []
+   },
+   "relations": {
+    "nodes": []
+   },
+   "inverseRelations": {
+    "nodes": [
+     {
+      "id": "2f875a1a-8eda-4220-9172-15a267e75680",
+      "type": "related",
+      "issue": {
+       "identifier": "TES2-2130"
+      }
+     }
+    ]
+   },
+   "errors": []
+  }
+ },
+ "relation_update_to_similar": {
+  "seq": 195,
+  "ok": true,
+  "errors": [],
+  "payload": {
+   "success": true,
+   "issueRelation": {
+    "id": "df9164b2-8c99-4c17-a135-6318e5c52e7c",
+    "type": "similar"
+   }
+  }
+ },
+ "fallback_metadata_writes": [
+  {
+   "exit": 0,
+   "err": null,
+   "ids": null,
+   "item": {
+    "version": "lin1|2026-11-08T23:35:12.429Z|8742d41d46aa5427a991bcf7ce1f63e38617f742f8607e499b22ef9b58bbddc8"
+   }
+  },
+  {
+   "exit": 0,
+   "err": null,
+   "ids": null,
+   "item": {
+    "version": "lin1|2026-11-08T23:35:13.159Z|ecd60a315e3e80e7349401df64503735eee02638f05ab5a03d044c9bc79d97b9"
+   }
+  }
+ ],
+ "fallback_after_metadata": {
+  "section_present": false,
+  "metadata_slot_present": true,
+  "bytes": 148,
+  "digest": "sha256:18ed09e6467c9735"
+ },
+ "fallback_after_metadata_quote": "spike\n\n<!-- onetaskgraph.metadata `{\"spike.links\":[{\"type\":\"caused-by\",\"direction\":\"out\",\"other\":\"tes2:e3642659-66f4-4e5b-9f46-ce919b8c1b1d\"}]}` -->",
+ "fallback_sent_quote": "Visible symptom text.\n\n## Links\n\n- **caused-by** → [TES2-2133](https://linear.app/<workspace>/issue/TES2-2133) `tes2:TES2-2133`\n* second bullet\n\n<!-- onetaskgraph.metadata `{\"spike.links\":[{\"type\":\"caused-by\",\"direction\":\"out\",\"other\":\"tes2:e3642659-66f4-4e5b-9f46-ce919b8c1b1d\"}]}` -->",
+ "fallback_write": {
+  "seq": 200,
+  "ok": true,
+  "errors": []
+ },
+ "fallback_stored_quote": "Visible symptom text.\n\n## Links\n\n* **caused-by** → [TES2-2133](https://linear.app/<workspace>/issue/TES2-2133) `tes2:TES2-2133`\n\n\n* second bullet\n\n<!-- onetaskgraph.metadata `{\"spike.links\":[{\"type\":\"caused-by\",\"direction\":\"out\",\"other\":\"tes2:e3642659-66f4-4e5b-9f46-ce919b8c1b1d\"}]}` -->",
+ "fallback_stored": {
+  "section_present": true,
+  "metadata_slot_present": true,
+  "bytes": 289,
+  "digest": "sha256:f72e6ca0ebb02570"
+ },
+ "fallback_normalized": true,
+ "fallback_read": {
+  "exit": 0,
+  "err": null,
+  "metadata_keys": [
+   "spike.links"
+  ],
+  "links_metadata": [
+   {
+    "type": "caused-by",
+    "direction": "out",
+    "other": "tes2:e3642659-66f4-4e5b-9f46-ce919b8c1b1d"
+   }
+  ],
+  "content_has_links_section": true,
+  "content_digest": "sha256:df417f7e2e4b3fe4"
+ },
+ "edit_keeps_section": {
+  "write": {
+   "seq": 203,
+   "ok": true,
+   "errors": []
+  },
+  "read": {
+   "exit": 0,
+   "err": null,
+   "metadata_keys": [
+    "spike.links"
+   ],
+   "links_metadata": [
+    {
+     "type": "caused-by",
+     "direction": "out",
+     "other": "tes2:e3642659-66f4-4e5b-9f46-ce919b8c1b1d"
+    }
+   ],
+   "content_has_links_section": true,
+   "content_digest": "sha256:b7cf9d8287f1d543"
+  },
+  "stored": {
+   "section_present": true,
+   "metadata_slot_present": true,
+   "bytes": 307,
+   "digest": "sha256:842d6a5373c4c76a"
+  }
+ },
+ "edit_deletes_section_keeps_slot": {
+  "write": {
+   "seq": 207,
+   "ok": true,
+   "errors": []
+  },
+  "read": {
+   "exit": 0,
+   "err": null,
+   "metadata_keys": [
+    "spike.links"
+   ],
+   "links_metadata": [
+    {
+     "type": "caused-by",
+     "direction": "out",
+     "other": "tes2:e3642659-66f4-4e5b-9f46-ce919b8c1b1d"
+    }
+   ],
+   "content_has_links_section": false,
+   "content_digest": "sha256:7854616b5b771958"
+  },
+  "stored": {
+   "section_present": false,
+   "metadata_slot_present": true,
+   "bytes": 184,
+   "digest": "sha256:2e0457f6cd0c4fdc"
+  }
+ },
+ "edit_rewrites_whole_body": {
+  "write": {
+   "seq": 210,
+   "ok": true,
+   "errors": []
+  },
+  "read": {
+   "exit": 0,
+   "err": null,
+   "metadata_keys": [],
+   "links_metadata": null,
+   "content_has_links_section": false,
+   "content_digest": "sha256:aa10945f6f72bb07"
+  },
+  "other_end_read": {
+   "exit": 0,
+   "err": null,
+   "metadata_keys": [
+    "spike.links"
+   ],
+   "links_metadata": [
+    {
+     "type": "caused-by",
+     "direction": "in",
+     "other": "tes2:26d408cd-85f5-470c-9e6b-31c081968571"
+    }
+   ],
+   "content_has_links_section": false,
+   "content_digest": "sha256:798552d3924a30ba"
+  }
+ },
+ "objects": {
+  "a": "TES2-2122",
+  "b": "TES2-2123",
+  "c": "TES2-2124",
+  "d": "TES2-2125",
+  "e": "TES2-2126",
+  "f": "TES2-2127",
+  "g": "TES2-2128",
+  "h": "TES2-2129"
+ }
+}

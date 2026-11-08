@@ -1,0 +1,80 @@
+{
+ "github_request": 5,
+ "linear_request": 6,
+ "github_issue_relation_fields": [
+  "blockedBy",
+  "duplicateOf",
+  "parent",
+  "relatesTo",
+  "subIssues",
+  "subIssuesSummary",
+  "trackedIssues",
+  "trackedIssuesCount"
+ ],
+ "github_relation_mutations": [
+  "addBlockedBy",
+  "addRelatesTo",
+  "addSubIssue",
+  "removeBlockedBy",
+  "removeRelatesTo",
+  "removeSubIssue",
+  "reprioritizeSubIssue",
+  "unmarkIssueAsDuplicate"
+ ],
+ "github_issue_close_reasons": [
+  "COMPLETED",
+  "NOT_PLANNED",
+  "DUPLICATE"
+ ],
+ "github_add_relates_to_input": [
+  "clientMutationId",
+  "issueId",
+  "relatedIssueId"
+ ],
+ "github_add_blocked_by_input": [
+  "clientMutationId",
+  "issueId",
+  "blockingIssueId"
+ ],
+ "github_add_sub_issue_input": [
+  "clientMutationId",
+  "issueId",
+  "subIssueId",
+  "subIssueUrl",
+  "replaceParent"
+ ],
+ "github_field_types_hierarchy": [
+  "TRACKS",
+  "TRACKED_BY",
+  "PARENT_ISSUE",
+  "SUB_ISSUES_PROGRESS"
+ ],
+ "linear_issue_relation_types": [
+  "blocks",
+  "duplicate",
+  "related",
+  "similar"
+ ],
+ "linear_issue_relation_create_input": [
+  "id",
+  "type",
+  "issueId",
+  "relatedIssueId"
+ ],
+ "linear_relation_mutations": [
+  "issueRelationCreate",
+  "issueRelationUpdate",
+  "issueRelationDelete",
+  "issueBatchCreate",
+  "issueBatchUpdate",
+  "projectRelationCreate",
+  "projectRelationUpdate",
+  "projectRelationDelete"
+ ],
+ "linear_issue_relation_fields": [
+  "parent",
+  "children",
+  "relations",
+  "inverseRelations"
+ ]
+}
