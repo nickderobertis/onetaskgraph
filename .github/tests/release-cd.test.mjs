@@ -206,7 +206,6 @@ function registries(at = ports) {
   };
 }
 
-// A registry double over a state directory of its own, and the ports it bound.
 async function startDouble(state) {
   mkdirSync(state);
   const started = spawn("python3", ["scripts/loopback-release-registries.py", state], {
@@ -460,11 +459,15 @@ test("the Linux job publishes exactly what it built, re-runs only what is missin
         [["@onetaskgraph/cli-linux-x64", [version]]],
       );
     mark = requests().length;
-    expectStatus(
-      recipe("linux", ["publish", "--to", registry, "--tag", tag, "--dist", dist], env),
-      0,
-      `${registry} again`,
-    );
+    const again = recipe("linux", ["publish", "--to", registry, "--tag", tag, "--dist", dist], env);
+    expectStatus(again, 0, `${registry} again`);
+    if (registry === "pypi")
+      assert.match(
+        again.output,
+        new RegExp(
+          `release-cd: PyPI already holds, with this build's bytes: ${file("wheel").replaceAll(".", "\\.")}\n`,
+        ),
+      );
     assert.deepEqual(
       requests()
         .slice(mark)
@@ -616,7 +619,7 @@ manifest_path.write_text(json.dumps(manifest, indent=2) + '\\n')`,
       );
 
     // The earlier attempt: the archive lands and its checksum is cut off part of the way;
-    // the wheel and the npm package land.
+    // the wheel and the npm package land, PyPI answering 404 for a project it holds nothing of.
     control(
       { releases: [tag], refuse: [{ registry: "github", file: file("checksum"), partial: true }] },
       state,
@@ -759,7 +762,6 @@ sys.exit(1 if problems else 0)`,
       `PyPI's index drifted from its pin:\n${drift.stdout}${drift.stderr}`,
     );
 
-    // And the job's verification installs each as served and runs it.
     for (const from of ["github", "pypi", "npm"])
       expectStatus(
         recipe("linux", ["verify", "--from", from, "--tag", tag, "--wait", "0"], env),

@@ -353,6 +353,10 @@ class Handler(BaseHTTPRequestHandler):
             self.record(registry="pypi", action="read-index", package=project)
             with lock:
                 files = sorted((name, hashlib.sha256(served_bytes(name, entry["bytes"])).hexdigest()) for name, entry in pypi_files.items() if entry["project"] == project and not hidden(name))
+            if not any(entry["project"] == project for entry in pypi_files.values()):
+                # PyPI answers a project it holds nothing of 404, in either form.
+                self.send(404, "Not Found", "text/plain")
+                return
             index = control().get("pypi_index")
             if index and "application/vnd.pypi.simple.v1+json" in self.headers.get("Accept", ""):
                 self.send(index.get("status", 200), index.get("raw", ""), "application/vnd.pypi.simple.v1+json")
