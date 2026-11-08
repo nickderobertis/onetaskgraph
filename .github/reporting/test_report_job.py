@@ -75,7 +75,18 @@ OMITTED = frozenset(BudgetId(identifier) for identifier in (
     'github-plan-copy-real-seconds-changed', 'github-plan-copy-real-seconds-first'))
 OMITTED_LINE = (f'{len(OMITTED)} budgets are left out because a pull request cannot measure them '
                 f'(label {OMIT_LABEL}).')
+LEFT_OUT = 'left out because a pull request cannot measure them'
 NO_SAVED_RESULT = 'no saved result was found on this run'
+# The core's comment layout, which the pinned release posts: where each part opens, each closing at
+# its next `</details>`, and the headings and sentences it writes inside them.
+Section = Literal['attention', 'within', 'not-measured']
+SECTIONS = {'attention': '<details open><summary><b>Needs attention (', 'within': '<details><summary><b>Within budget (',
+            'details': '<details><summary>Details</summary>'}
+ATTENTION_HEADER = '| Budget | Now · vs base | Reason |'
+WITHIN_HEADER = '| Budget | Now · vs base |'
+NOTHING_NEEDS_ATTENTION = 'Nothing failed or was flagged.'
+NOT_MEASURED = 'Not measured on this run'
+MISSING_FIGURES = 'Why some figures are missing'
 # Off a pull request's own run the CI-time pair reads a release, and this job holds no onevcs.
 FIGURES_NEED_ONEVCS = 'onevcs is not on PATH'
 LIVE_SESSION = BudgetId('github-live-session-points')
@@ -484,8 +495,12 @@ class Journey:
         self.repository.git('checkout', '--quiet', '-B', branch, self.base)
         head = self.repository.commit('change')
         self.host.head = head
-        return self.run('pull_request', head, inputs=inputs, base_ref='main', register=False,
-                        event=harness.event_pull_request(1, head, self.base, **event))
+        job = self.run('pull_request', head, inputs=inputs, base_ref='main', register=False,
+                       event=harness.event_pull_request(1, head, self.base, **event))
+        # Every comment a journey posts is held to the core's layout over its own run's saved rows.
+        if any(f'head: {head} ' in comment['body'] for comment in self.host.comments):
+            assert_layout(self.test, job)
+        return job
 
     def replaying(self, longest_seconds):
         """A base push sees a release and the real onevcs, over the recordings; a pull request reads its run."""
@@ -500,10 +515,149 @@ class Journey:
         }
 
 
-def table_row(markdown, budget):
-    rows = [line for line in markdown.splitlines() if line.startswith('|') and f'/ {budget} ' in line]
-    assert len(rows) == 1, (budget, rows)
-    return rows[0]
+class Placement(NamedTuple):
+    """Where the core's comment layout shows one budget, and what it shows there."""
+
+    section: Section
+    # A table row's cells after Budget, or a Not measured line's text after the budget's name.
+    cells: tuple[str, ...]
+
+
+def section(markdown, name):
+    """One part of the core's comment layout, from where it opens to its first `</details>`."""
+    start = markdown.find(SECTIONS[name])
+    assert start >= 0, (name, markdown)
+    return markdown[start:markdown.index('</details>', start)]
+
+
+def table_rows(text):
+    """A section's table rows, as each budget's shown name and its other cells."""
+    rows = []
+    for line in text.splitlines():
+        if line.startswith('| **'):
+            name, *cells = [cell.strip() for cell in line.strip().strip('|').split('|')]
+            rows.append((name.removeprefix('**').removesuffix('**'), tuple(cells)))
+    return rows
+
+
+def listed(text, heading):
+    """The `- names: text` bullets under one bold heading of the Details section, as (name, text)."""
+    if f'\n**{heading}' not in text:
+        return []
+    block = text.split(f'\n**{heading}', 1)[1].split('\n\n', 2)[1]
+    return [(name, said) for line in block.splitlines() if line.startswith('- ')
+            for names, said in [line[2:].split(': ', 1)] for name in names.split(', ')]
+
+
+def shown_names(report):
+    """The name the core's layout shows each saved row under: its id less the repository's own prefix,
+    with its file beside it when another file registers the same id."""
+    prefix = report['current']['repository'].rsplit('/', 1)[-1] + '-'
+    names = {}
+    for row in report['rows']:
+        short = row['id'].removeprefix(prefix) or row['id']
+        shared = any(other['id'] == row['id'] and other['file'] != row['file'] for other in report['rows'])
+        names[f'{short} ({row["file"]})' if shared else short] = BudgetId(row['id'])
+    return names
+
+
+def comment_body(job):
+    """The comment `job` posted or updated for its own head, or its report when it posted none."""
+    posted = [comment['body'] for comment in job.host.comments if f'head: {job.sha} ' in comment['body']]
+    return posted[-1] if posted else job.markdown()
+
+
+def placements(job):
+    """Every place the report part of `job`'s comment shows a budget, by budget id, each appearing once."""
+    markdown = comment_body(job)
+    names = shown_names(job.saved('comparison-report.json'))
+    found = [*((name, Placement('attention', cells)) for name, cells in table_rows(section(markdown, 'attention'))),
+             *((name, Placement('within', cells)) for name, cells in table_rows(section(markdown, 'within'))),
+             *((name, Placement('not-measured', (said,)))
+               for name, said in listed(section(markdown, 'details'), NOT_MEASURED))]
+    shown = [name for name, _ in found]
+    assert len(shown) == len(set(shown)), f'a budget shown twice: {sorted(name for name in shown if shown.count(name) > 1)}'
+    assert set(shown) <= set(names), f'a budget no saved row has: {sorted(set(shown) - set(names))}'
+    return {names[name]: placement for name, placement in found}
+
+
+def missing_reasons(job):
+    """Each budget's reason under `Why some figures are missing`, by budget id."""
+    names = shown_names(job.saved('comparison-report.json'))
+    return {names[name]: said for name, said in listed(section(comment_body(job), 'details'), MISSING_FIGURES)}
+
+
+def signed(value):
+    """A change as the core's layout writes it: signed, to one decimal, with no negative zero."""
+    rounded = f'{value:+.1f}'
+    return '+0.0' if rounded == '-0.0' else rounded
+
+
+def report_only_ids(report):
+    excluded = set(report['current']['enforcement_exclude_labels'])
+    return {(budget['file'], budget['id']) for budget in report['current']['catalog'] if excluded & set(budget['labels'])}
+
+
+def expected_placement(row, report_only):
+    """The section the core contract puts a saved row in, with the Reason it gives one needing attention."""
+    verdict = row.get('verdict')
+    if verdict == 'over' or (verdict == 'error' and not report_only) or row['flag']:
+        if verdict == 'over':
+            phrase = 'Over limit · flagged' if row['flag'] else 'Over limit'
+        elif verdict == 'error':
+            phrase = 'Error'
+        elif row.get('sd') == 0:
+            phrase = 'Flagged (was constant)'
+        else:
+            phrase = f'Flagged {signed(row.get("sigma_change") or 0)} SD'
+        return 'attention', phrase + (' (report-only)' if report_only else '')
+    return ('within', None) if verdict == 'within' else ('not-measured', None)
+
+
+def assert_layout(test, job):
+    """The comment `job` posted, in the core's layout, holding exactly its run's saved rows, each once."""
+    report = job.saved('comparison-report.json')
+    markdown = comment_body(job)
+    shown = placements(job)
+    rows = {BudgetId(row['id']): row for row in report['rows']}
+    test.assertEqual(set(shown), set(rows), 'the three sections hold exactly the saved results')
+    test.assertEqual(len(rows), len(report['rows']), 'one saved row per budget id')
+    report_only = report_only_ids(report)
+    counts = {'attention': 0, 'within': 0, 'not-measured': 0}
+    for identifier, row in rows.items():
+        place, reason = expected_placement(row, (row['file'], row['id']) in report_only)
+        counts[place] += 1
+        test.assertEqual(shown[identifier].section, place, (identifier, row))
+        if place == 'attention':
+            test.assertEqual(len(shown[identifier].cells), 2, identifier)
+            test.assertEqual(shown[identifier].cells[1], reason, (identifier, row))
+        elif place == 'within':
+            test.assertEqual(len(shown[identifier].cells), 1, f'{identifier}: Budget and Now · vs base alone')
+    attention = section(markdown, 'attention')
+    test.assertTrue(attention.startswith(f'{SECTIONS["attention"]}{counts["attention"]})</b></summary>'), attention)
+    if counts['attention']:
+        test.assertIn(f'\n{ATTENTION_HEADER}\n', attention)
+    else:
+        test.assertEqual(attention.split('</summary>\n\n', 1)[1], f'{NOTHING_NEEDS_ATTENTION}\n\n')
+    within = section(markdown, 'within')
+    test.assertTrue(within.startswith(f'{SECTIONS["within"]}{counts["within"]})</b></summary>'), within)
+    if counts['within']:
+        test.assertIn(f'\n{WITHIN_HEADER}\n', within)
+    for mark in ('✅', '❌', '⚠️'):
+        test.assertEqual([line for line in markdown.splitlines() if line.startswith('|') and mark in line], [],
+                         f'no table cell holds {mark}')
+    summary = re.search(r'^\*\*(?:⚠️ (\d+) need attention|✅ Nothing needs attention)\*\* · (\d+) within budget'
+                        r'(?: · (\d+) not measured)? · head ', markdown, re.MULTILINE)
+    test.assertIsNotNone(summary, markdown)
+    test.assertEqual(tuple(int(count or 0) for count in summary.groups()),
+                     (counts['attention'], counts['within'], counts['not-measured']), summary[0])
+    left_out = len([budget for budget in job.saved('budget-run.json')['catalog'] if OMIT_LABEL in budget['labels']])
+    lines = [line for line in markdown.splitlines() if LEFT_OUT in line]
+    test.assertEqual(len(lines), 1 if left_out else 0, 'the left-out line is shown once, when any budget is left out')
+    test.assertEqual([line for line in section(markdown, 'details').splitlines() if LEFT_OUT in line], lines,
+                     'the left-out line is inside Details')
+    if left_out == len(OMITTED):
+        test.assertEqual(section(markdown, 'details').count(OMITTED_LINE), 1, 'the left-out line is inside Details')
 
 
 def history_figures(job, sha):
@@ -545,7 +699,8 @@ def assert_left_out_and_counted(test, job):
     for identifier in OMITTED:
         test.assertNotIn(identifier, rows)
         test.assertNotIn(identifier, outcomes, 'an omitted budget is neither run nor reported')
-        test.assertEqual([line for line in markdown.splitlines() if line.startswith('|') and f'/ {identifier} ' in line], [])
+        test.assertNotIn(identifier, placements(job))
+        test.assertNotIn(f'**{identifier}**', markdown)
     test.assertEqual(sum(OMITTED_LINE in line for line in markdown.splitlines()), 1, markdown)
     test.assertEqual(len([budget for budget in run['catalog'] if OMIT_LABEL in budget['labels']]), len(OMITTED),
                      'budget-run.json keeps the catalog whole')
@@ -589,15 +744,17 @@ class ProductionCatalog(unittest.TestCase):
         reasons = {entry['id']: entry['reason'] for entry in run['unavailable']}
         markdown = job.markdown()
         self.assertIn(job.sha, markdown)
+        places = placements(job)
+        missing = missing_reasons(job)
         for identifier in shown() - set(verdicts) - {HEADROOM}:
             self.assertEqual(reasons[identifier], NO_SAVED_RESULT, identifier)
-            row = table_row(markdown, identifier)
-            self.assertIn('unavailable', row, row)
-            self.assertIn(NO_SAVED_RESULT, row, row)
+            self.assertEqual(places[identifier], Placement('not-measured', ('no result this run · baseline 0/5',)))
+            self.assertEqual(missing[identifier], NO_SAVED_RESULT, identifier)
         # Its command does run here; this job's double holds no cache listing, and the read says so.
         self.assertIn(CACHE_LISTING_REFUSED, reasons[HEADROOM])
-        self.assertIn(CACHE_LISTING_REFUSED, table_row(markdown, HEADROOM))
-        self.assertIn('report-only', table_row(markdown, CHECK_TIME))
+        self.assertIn(CACHE_LISTING_REFUSED, missing[HEADROOM])
+        self.assertEqual(places[HEADROOM], Placement('not-measured', ('no result this run (report-only) · baseline 0/5',)))
+        self.assertEqual({places[identifier].section for identifier in verdicts}, {'within'})
         assert_left_out_and_counted(self, job)
 
     def test_a_pull_request_reports_its_own_runs_jobs_with_one_read_per_figure(self):
@@ -660,7 +817,8 @@ class ProductionCatalog(unittest.TestCase):
         self.assertEqual([sample['head_sha'] for sample in baseline], [first.sha], 'base runs alone')
         self.assertEqual(measured(baseline[0]), {OWN})
         self.assertEqual(few.rows()[OWN]['baseline_n'], 1)
-        self.assertIn('minimum 5', few.rows()[OWN]['unavailable'], 'a sample below the minimum is shown as one')
+        self.assertTrue(placements(few)[OWN].cells[0].endswith(f'<br>baseline 1/{MINIMUM_SAMPLES}'),
+                        'a sample below the minimum is shown as one')
 
         journey.repository.git('checkout', '--quiet', 'main')
         pushes = [first, *(journey.push() for _ in range(MINIMUM_SAMPLES - 1))]
@@ -675,7 +833,7 @@ class ProductionCatalog(unittest.TestCase):
         rows = enough.rows()
         self.assertEqual(rows[OWN]['baseline_n'], MINIMUM_SAMPLES)
         self.assertNotIn('baseline unavailable', rows[OWN].get('unavailable', ''), rows[OWN])
-        self.assertNotIn('baseline unavailable', table_row(enough.markdown(), OWN))
+        self.assertNotRegex(placements(enough)[OWN].cells[0], fr'baseline \d+/{MINIMUM_SAMPLES}')
         unmeasured = shown() - {OWN}
         self.assertEqual({rows[identifier]['baseline_n'] for identifier in unmeasured}, {0})
 
@@ -717,9 +875,10 @@ class Replayed(unittest.TestCase):
         self.assertEqual(over.exit_code, 0, over.stdout)
         row = over.rows()[CHECK_TIME]
         self.assertEqual((row['verdict'], row['current'], row['flag']), ('over', 2400, True), row)
-        shown = table_row(over.markdown(), CHECK_TIME)
-        self.assertIn('report-only', shown)
-        self.assertIn('2400', shown)
+        shown = placements(over)[CHECK_TIME]
+        self.assertEqual(shown.section, 'attention')
+        self.assertEqual(shown.cells[1], 'Over limit · flagged (report-only)')
+        self.assertIn('2400', shown.cells[0].replace(',', ''))
         self.assertEqual(len(over.saved('comparison-input.json')['baseline']), 5)
 
         journey.repository.git('checkout', '--quiet', 'main')
@@ -749,7 +908,8 @@ class Replayed(unittest.TestCase):
         kept = journey.pull_request()
         self.assertEqual(kept.exit_code, 0, kept.stdout)
         self.assertEqual(kept.rows()[CHECK_TIME]['verdict'], 'over')
-        self.assertIn('report-only', table_row(kept.markdown(), CHECK_TIME))
+        self.assertEqual(placements(kept)[CHECK_TIME].section, 'attention')
+        self.assertTrue(placements(kept)[CHECK_TIME].cells[1].endswith(' (report-only)'))
 
         # Excluding only `report-only`, the label alone decides. Only this budget stays, because
         # its release-tail siblings would then be enforced too, and error over these recordings.
@@ -1067,12 +1227,12 @@ class SavedResults(unittest.TestCase):
         self.assertEqual(pull_request.exit_code, 0, pull_request.stdout)
         self.assertEqual(pull_request.outcomes['saved-results'], 'success', pull_request.stdout)
         rows = pull_request.rows()
-        markdown = pull_request.markdown()
+        places = placements(pull_request)
         for identifier, saved in expected.items():
             if identifier in OMITTED or identifier == OWN:
                 continue
             self.assertEqual((rows[identifier]['current'], rows[identifier]['verdict']), (saved.actual, saved.verdict), identifier)
-            self.assertIn(f'{saved.actual:g}'.split('.')[0], table_row(markdown, identifier).replace(',', ''), identifier)
+            self.assertIn(f'{saved.actual:g}'.split('.')[0], places[identifier].cells[0].replace(',', ''), identifier)
         own_figure = pull_request.saved('report-job.json')['metrics'][TIME_METRIC]['value']
         self.assertEqual(rows[OWN]['current'], own_figure, "the job's own figure is its own")
         self.assertEqual(expected[OWN].actual, RECORDED_OWN_SECONDS)
@@ -1081,9 +1241,9 @@ class SavedResults(unittest.TestCase):
 
         self.assertNotIn('current', rows[LIVE_SESSION], rows[LIVE_SESSION])
         self.assertEqual(rows[LIVE_SESSION]['unavailable'], NO_SAVED_RESULT)
-        row = table_row(markdown, LIVE_SESSION)
-        self.assertIn(NO_SAVED_RESULT, row)
-        self.assertNotRegex(row.split('|')[3], r'\d', row)
+        self.assertEqual(places[LIVE_SESSION], Placement('not-measured', ('no result this run · baseline 0/5',)),
+                         'listed with no figure')
+        self.assertEqual(missing_reasons(pull_request)[LIVE_SESSION], NO_SAVED_RESULT)
         self.assertEqual(rows[CHECK_TIME]['current'], LONGEST_JOB_SECONDS)
         assert_left_out_and_counted(self, pull_request)
         self.assertIn(OMITTED_LINE, journey.host.comments[0]['body'])
@@ -1226,9 +1386,12 @@ class Contract(unittest.TestCase):
                                     env={**os.environ, 'PATH': path}, capture_output=True, text=True, check=False)
         self.assertEqual(reproduced.returncode, 0, reproduced.stderr)
         self.assertIn('head: bf9fd2313e5118e0f0d6493651457bfd4d47457e', reproduced.stdout)
-        rows = [line for line in reproduced.stdout.splitlines() if line.startswith('| ') and ' / ' in line]
+        rows = [*table_rows(section(reproduced.stdout, 'attention')), *table_rows(section(reproduced.stdout, 'within')),
+                *listed(section(reproduced.stdout, 'details'), NOT_MEASURED)]
         self.assertEqual(len(rows), 60)
-        self.assertIn('onetaskgraph-ci-check-time', reproduced.stdout)
+        self.assertEqual(len({name for name, _ in rows}), 60, 'each row once')
+        # The core shows each id less this repository's own name as its prefix.
+        self.assertIn(CHECK_TIME.removeprefix('onetaskgraph-'), {name for name, _ in rows})
 
     def test_the_job_names_only_inputs_the_action_declares_and_every_one_it_requires(self):
         declared = yaml.safe_load((TREE / 'action.yml').read_text())['inputs']
