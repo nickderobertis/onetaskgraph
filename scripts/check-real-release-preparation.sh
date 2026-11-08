@@ -573,14 +573,11 @@ grep -qF "select-release-version: registry recovery selected $lagged_version -> 
 git -C "$repo" checkout --quiet -- . || fail \
   "could not restore the fixture after observing the selector's decision" "check the scratch repository and rerun"
 
-# The partly published release v0.14.8 was: every tag on the release commit, the registry
-# behind it, and since then a fix that touches no crate — #3937, to scripts/release_cd.py.
-# Over that head the pinned tool walks each crate back to the commit its version tag names
-# and stops there before comparing versions, so it reports every crate up to date and prints
-# no lag at all. The selector has to ask the registry itself, and recover from what it says.
-# A documentation edit stands in for the fix so that the release-tooling fallback cannot be
-# what answers: only the registry's answer can select a version here. Not README.md, which
-# onetaskgraph-core packages as its readme, so the pinned tool counts it as a crate change.
+# Every tag on the release commit, the registry behind it, and since then a fix touching no
+# crate: the pinned tool stops each crate's walk at its tagged commit and reports no lag, so
+# only the selector's own registry read can recover this head. The fix edits documentation
+# so the release-tooling fallback cannot answer instead — and not README.md, which
+# onetaskgraph-core packages as its readme and the pinned tool counts as a crate change.
 git -C "$repo" switch --quiet --force-create untouched-crates-fixture "v$lagged_version" || fail \
   "could not branch from the partly published boundary" "check the scratch repository and rerun"
 printf '\n' >> "$repo/docs/task-projection.md" || fail "could not modify the untouched-crates fixture" "check scratch-directory permissions"

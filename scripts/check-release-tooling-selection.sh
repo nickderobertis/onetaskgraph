@@ -411,9 +411,8 @@ commit_since_boundary "docs: describe the release" docs/task-projection.md
 [ ! -s "$CRATES_IO_ASKED" ] || finding \
   "the selector asked crates.io with no eligible commit since the boundary" "ask only when an eligible commit makes the answer matter"
 
-# A partly published release resumed by fixing the publish pipeline: crates.io one patch
-# behind the tag, and since it a fix to scripts/release_cd.py alone — then a second fix to the
-# selector and its inventory beside it. Each head proposes the next patch, and neither more.
+# A change to the publish pipeline alone recovers a lagging release, once: with one such
+# commit since the tag or two, the head proposes the next patch and nothing more.
 from_boundary
 commit_since_boundary "fix: let a release re-run finish when a registry already holds a rebuilt file (#3937)" \
   scripts/release_cd.py
