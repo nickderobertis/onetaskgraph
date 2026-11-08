@@ -6,5 +6,13 @@ pyproject.toml
 sdks/python/*
 sdks/typescript/*
 scripts/*release*.sh
+scripts/*release*.py
+scripts/cli_wheel_lock.py
+scripts/product_versions.py
+scripts/publish-npm.sh
+scripts/crate-publication-status.sh
+scripts/crate-sibling-resolution.sh
+scripts/install.sh
 scripts/*distribution*.sh
 scripts/set-version.sh
+justfile

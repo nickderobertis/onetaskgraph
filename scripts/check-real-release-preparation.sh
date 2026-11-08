@@ -286,7 +286,35 @@ GH
 then
   fail "could not create the gh fixture" "check scratch-directory permissions and free space"
 fi
-chmod +x "$scoped_launcher_dir/release-plz" "$scratch/bin/gh" || fail \
+# When release-plz reports no registry lag, the selector asks crates.io itself through the
+# real scripts/release-probe.sh, which reads it with curl. The registry of this fixture is
+# the released-version snapshot release-plz compares against, so this curl answers from that
+# snapshot, as crates.io answers `GET /api/v1/crates/<name>`, and one registry is seen the same
+# way by both readers. Anything else it is asked for is a destination outside the fixture,
+# recorded where guard_hermetic reads and refused.
+if ! cat > "$scratch/bin/curl" <<'CURL'
+#!/usr/bin/env bash
+out="" url="" previous=""
+for argument in "$@"; do
+  [ "$previous" = -o ] && out="$argument"
+  [ "$previous" = -- ] && url="$argument"
+  previous="$argument"
+done
+if [ "$url" != https://crates.io/api/v1/crates/onetaskgraph ]; then
+  printf '%s\n' "curl:${url:-<no url>}" >> "$OFFSITE_LOG"
+  echo "curl fixture: refusing $url, which is outside this fixture" >&2
+  exit 6
+fi
+served="$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$(dirname "$FIXTURE_REGISTRY_MANIFEST")/crates/onetaskgraph/Cargo.toml" | head -n1)"
+[ -n "$served" ] || { echo "curl fixture: the registry snapshot names no onetaskgraph version" >&2; exit 6; }
+printf '%s\n' "$url" >> "$GH_FIXTURE_STATE/crates-io-asked"
+printf '{"crate":{"name":"onetaskgraph","max_stable_version":"%s"}}' "$served" > "$out"
+printf 200
+CURL
+then
+  fail "could not create the crates.io fixture" "check scratch-directory permissions and free space"
+fi
+chmod +x "$scoped_launcher_dir/release-plz" "$scratch/bin/gh" "$scratch/bin/curl" || fail \
   "could not make the command fixtures executable" "check scratch-directory permissions"
 export ONETASKGRAPH_TOOLS_HOME="$scratch/tools"
 export GH_FIXTURE_STATE="$scratch/state"
@@ -297,6 +325,7 @@ export GITHUB_REF_NAME="$fixture_base"
 # the exact pinned binary verified above.
 export REAL_RELEASE_PLZ="$release_plz_bin"
 export FIXTURE_REGISTRY_MANIFEST="$registry_snapshot/Cargo.toml"
+export OFFSITE_LOG="$offsite_log"
 # set-version.sh re-locks the Python projects after every bump, and uv reads its index for
 # that unless told the answer is already written down. It is: uv.lock pins every dependency
 # and the only thing changing here is the workspace's own version, so these locks resolve
@@ -543,6 +572,38 @@ grep -qF "select-release-version: registry recovery selected $lagged_version -> 
   "keep this fixture's registry lag pinned so the recovery branch is what this journey drives"
 git -C "$repo" checkout --quiet -- . || fail \
   "could not restore the fixture after observing the selector's decision" "check the scratch repository and rerun"
+
+# Every tag on the release commit, the registry behind it, and since then a fix touching no
+# crate: the pinned tool stops each crate's walk at its tagged commit and reports no lag, so
+# only the selector's own registry read can recover this head. The fix edits documentation
+# so the release-tooling fallback cannot answer instead — and not README.md, which
+# onetaskgraph-core packages as its readme and the pinned tool counts as a crate change.
+git -C "$repo" switch --quiet --force-create untouched-crates-fixture "v$lagged_version" || fail \
+  "could not branch from the partly published boundary" "check the scratch repository and rerun"
+printf '\n' >> "$repo/docs/task-projection.md" || fail "could not modify the untouched-crates fixture" "check scratch-directory permissions"
+git -C "$repo" add docs/task-projection.md || fail "could not stage the untouched-crates fixture" "check the scratch repository and rerun"
+git -C "$repo" -c user.name=check -c user.email=check@example.invalid commit --quiet \
+  -m "fix: repair a partly published release outside every crate" || fail \
+  "could not commit the untouched-crates fixture" "check the scratch repository and rerun"
+git -C "$repo" push --quiet --set-upstream origin untouched-crates-fixture || fail \
+  "could not publish the untouched-crates branch to the fixture origin" "check the scratch repository and rerun"
+: > "$scratch/state/crates-io-asked" || fail "could not clear the crates.io fixture's record" "check scratch-directory permissions and rerun"
+untouched_log="$scratch/untouched-crates-selector.log"
+if ! (cd "$repo" && scripts/select-release-version.sh) > "$untouched_log" 2>&1; then
+  sed 's/^/    /' "$untouched_log" >&2
+  fail "the real selector failed for a partly published head whose fix touched no crate" "fix what it reports above and rerun"
+fi
+guard_hermetic
+grep -qF "select-release-version: registry recovery selected $lagged_version -> $recovery_version" "$untouched_log" || fail \
+  "a partly published head whose fix touched no crate was not recovered: $(cat "$untouched_log")" \
+  "ask crates.io through scripts/release-probe.sh when release-plz reports no lag, and recover when it is behind the tag"
+[ -s "$scratch/state/crates-io-asked" ] || fail \
+  "the partly published head with no crate change was recovered without the selector asking crates.io, so release-plz reported the lag after all and this case no longer covers the miss it was written for" \
+  "re-observe the pinned tool over this head and keep a case where only the registry's own answer reveals the lag"
+git -C "$repo" checkout --quiet -- . || fail \
+  "could not restore the fixture after the untouched-crates case" "check the scratch repository and rerun"
+git -C "$repo" switch --quiet "$fixture_base" || fail \
+  "could not return to $fixture_base after the untouched-crates case" "check the scratch repository and rerun"
 
 # The earlier cases leave an open fixture PR. Remove only that scratch state so registry
 # recovery proves its fresh-proposal branch as well as the update branch exercised above.
