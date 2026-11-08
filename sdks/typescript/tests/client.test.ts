@@ -1311,13 +1311,20 @@ function linearProjectionDouble(received: { query: string; id?: string }[]) {
           return new Response("issueCreate names its input", { status: 400 });
         }
         const stored = input;
+        // An issue is stored under the id its create names, and the backend generates one when
+        // none is given, as `IssueCreateInput.id` in the pinned
+        // `crates/onetaskgraph-linear/tests/fixtures/schema.graphql` documents. The binary refuses
+        // an answer under any other id, so this double diverging from that contract fails the test.
+        if ("id" in stored && typeof stored.id !== "string") {
+          return new Response("issueCreate names its id as a string", { status: 400 });
+        }
+        const id = typeof stored.id === "string" ? stored.id : "ISSUE-1";
         return Response.json({
           data: {
             issueCreate: {
               success: true,
               issue: {
-                // Linear stores an issue under the id its create names, and assigns one otherwise.
-                id: typeof stored.id === "string" ? stored.id : "ISSUE-1",
+                id,
                 identifier: "FIX-1",
                 title: stored.title,
                 description: stored.description,
