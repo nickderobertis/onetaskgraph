@@ -187,21 +187,23 @@ budgets:
     unit: points
     direction: max
     threshold: 675000
-  # Seven of these requests are key reads: one read by id before each create, because a lookup
-  # through Linear's filtered reads can miss a record written moments before and a read by id
-  # cannot. README's "How a copy to Linear finds what it wrote" says why no cheaper read serves.
+  # llmlint: ignore-block[budget_descriptions_durable_and_terse] The manager's ruling of 2026-11-08 raised this threshold from 20 to 27 and requires its description to name the read by id each create now costs and why neither a batched nor a filtered read can replace it.
   - id: linear-requests-per-plan-copy
     description: >-
       The requests one first copy of a realistic plan — 1 project, 5 tasks and 1 design document
       with 2 new images — sends an empty Linear that rewrites every long form, end to end through
       the binary. It protects headroom on the production Linear key every manager of a host
-      shares.
+      shares. Seven are key reads, one read by id before each create, since a lookup through
+      Linear's filtered reads can miss a record written moments before; no batched read replaces
+      them, as Linear refuses operation batching and an id naming nothing fails a whole aliased
+      query, and an `id: {in: …}` filter is itself a filtered read.
     labels: [linear]
     measure: reported
     command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-linear-e2e"]
     unit: requests
     direction: max
     threshold: 27
+    # llmlint: ignore-end[budget_descriptions_durable_and_terse]
   - id: linear-live-documents-created-per-ordinary-pass
     description: >-
       Successful documentCreate operations recorded by both live lanes during one ordinary
