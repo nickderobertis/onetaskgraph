@@ -7128,6 +7128,10 @@ async fn a_batched_origin_read_answers_each_lookup_once_and_the_designator_for_t
             serde_json::json!([project_recording("P-1", "plan:big")]),
             false,
         ),
+        // t1's lookup listed nothing, so the issue its origin's key names is read by id, and
+        // the project t0's names: neither is there.
+        serde_json::json!({"issue": null}),
+        serde_json::json!({"project": null}),
         // t0 asked a second time, on its own.
         serde_json::json!({"issues":{"nodes":[issue_recording("I-1", "plan:t0")],
             "pageInfo":{"hasNextPage":false,"endCursor":null}}}),
@@ -7179,8 +7183,13 @@ async fn a_batched_origin_read_answers_each_lookup_once_and_the_designator_for_t
         .collect();
     assert_eq!(
         sent,
-        vec![graphql::COUNTERPART_LOOKUPS.to_owned()],
-        "one request answered every lookup and the designator"
+        vec![
+            graphql::COUNTERPART_LOOKUPS.to_owned(),
+            graphql::ISSUE.to_owned(),
+            graphql::PROJECT.to_owned(),
+        ],
+        "one request answered every lookup and the designator, and a lookup listing nothing \
+         reads its origin's key by id"
     );
 
     // Answered once: the same lookup again is sent.
@@ -7218,13 +7227,18 @@ async fn an_incomplete_batched_page_or_a_write_leaves_every_origin_to_its_own_lo
             serde_json::json!([]),
             true,
         ),
+        // Each lookup listing nothing reads its origin's key by id, which holds nothing.
         empty.clone(),
+        serde_json::json!({"issue": null}),
         empty.clone(),
+        serde_json::json!({"issue": null}),
         serde_json::json!({"projects":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}),
+        serde_json::json!({"project": null}),
         // A write, then the lookup the origin held before it no longer stands in for.
         serde_json::json!({"issue":issue_recording("I-9", "plan:elsewhere")}),
         serde_json::json!({"issueDelete":{"success":true}}),
         empty,
+        serde_json::json!({"issue": null}),
     ]);
     let source = writable_source(&endpoint);
     source
@@ -7250,8 +7264,11 @@ async fn an_incomplete_batched_page_or_a_write_leaves_every_origin_to_its_own_lo
         vec![
             graphql::COUNTERPART_LOOKUPS.to_owned(),
             graphql::ISSUES.to_owned(),
+            graphql::ISSUE.to_owned(),
             graphql::ISSUES.to_owned(),
+            graphql::ISSUE.to_owned(),
             graphql::PROJECTS.to_owned(),
+            graphql::PROJECT.to_owned(),
         ],
         "an incomplete page answers no origin"
     );
@@ -7275,6 +7292,7 @@ async fn an_incomplete_batched_page_or_a_write_leaves_every_origin_to_its_own_lo
             graphql::ISSUE.to_owned(),
             graphql::ISSUE_DELETE.to_owned(),
             graphql::ISSUES.to_owned(),
+            graphql::ISSUE.to_owned(),
         ],
         "a write drops what was held, the origins not yet asked among it"
     );
@@ -7551,5 +7569,98 @@ async fn a_later_answer_with_no_editor_state_forgets_the_headings_an_earlier_one
         source.stored_headings(MetadataRecord::Document, &"D".into()),
         None,
         "forgotten once an answer carries no state"
+    );
+}
+
+/// A document node as Linear lists it, recording `origin` in its metadata slot.
+fn document_recording(id: &str, origin: &str) -> serde_json::Value {
+    serde_json::json!({"id":id,"title":id,
+        "content":format!("About.\n\n<!-- onetaskgraph.metadata `{{\"onetaskgraph.origin\":\"{origin}\"}}` -->"),
+        "url":null,"createdAt":null,"updatedAt":null,"project":null})
+}
+
+/// A documents page holding `nodes`, with `next` as its cursor to a page behind it.
+fn documents_page(nodes: serde_json::Value, next: Option<&str>) -> serde_json::Value {
+    serde_json::json!({"documents":{"nodes":nodes,
+        "pageInfo":{"hasNextPage":next.is_some(),"endCursor":next}}})
+}
+
+/// The lookup of the documents copied from one origin walks every page of the scope, and is
+/// refused, sending nothing more, when a page holds more rows than it asked for or hands back a
+/// cursor it already handed out; a walk that finds the origin answers it without a read by id.
+#[tokio::test]
+async fn a_document_lookup_by_origin_refuses_an_overrun_page_and_a_repeated_cursor() {
+    use onetaskgraph_linear::graphql;
+    let one = PageRequest {
+        cursor: None,
+        limit: 1,
+    };
+    let (endpoint, wire) = response_server(vec![documents_page(
+        serde_json::json!([
+            document_recording("D-1", "plan:other"),
+            document_recording("D-2", "plan:other"),
+        ]),
+        None,
+    )]);
+    let refused = writable_source(&endpoint)
+        .query_documents_by_origin("plan:d", &one)
+        .await
+        .expect_err("a page of two rows for a page of one");
+    assert!(
+        matches!(&refused, SourceError::Malformed { message } if message.contains("never more")),
+        "{refused:?}"
+    );
+    assert_eq!(wire.try_iter().count(), 1, "nothing is sent after it");
+
+    let (endpoint, wire) = response_server(vec![
+        documents_page(
+            serde_json::json!([document_recording("D-1", "plan:other")]),
+            Some("c1"),
+        ),
+        documents_page(
+            serde_json::json!([document_recording("D-2", "plan:other")]),
+            Some("c1"),
+        ),
+    ]);
+    let refused = writable_source(&endpoint)
+        .query_documents_by_origin("plan:d", &one)
+        .await
+        .expect_err("a cursor handed out twice");
+    assert!(
+        matches!(&refused, SourceError::Malformed { message } if message.contains("never end")),
+        "{refused:?}"
+    );
+    assert_eq!(wire.try_iter().count(), 2, "nothing is sent after it");
+
+    let (endpoint, wire) = response_server(vec![
+        documents_page(
+            serde_json::json!([document_recording("D-1", "plan:other")]),
+            Some("c1"),
+        ),
+        documents_page(
+            serde_json::json!([document_recording("D-2", "plan:d")]),
+            None,
+        ),
+    ]);
+    let found = writable_source(&endpoint)
+        .query_documents_by_origin("plan:d", &one)
+        .await
+        .expect("the walk answers");
+    assert_eq!(
+        found
+            .items
+            .iter()
+            .map(|d| d.id.0.as_str())
+            .collect::<Vec<_>>(),
+        vec!["D-2"]
+    );
+    let sent: Vec<String> = wire
+        .try_iter()
+        .map(|request| sent_document(&request))
+        .collect();
+    assert_eq!(
+        sent,
+        vec![graphql::DOCUMENTS.to_owned(), graphql::DOCUMENTS.to_owned()],
+        "a walk that finds the origin reads nothing by id"
     );
 }

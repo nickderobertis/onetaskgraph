@@ -1253,8 +1253,9 @@ test("a reconcile and a completion drive the real binary over a source whose sta
 });
 
 // A loopback Linear answering the two documents a cold projection sends: the team's resolution
-// and `issueCreate`, answered with the issue it stored. Every request is recorded.
-function linearProjectionDouble(received: { query: string }[]) {
+// and `issueCreate`, answered with the issue it stored. Every request is recorded, with the id a
+// create names.
+function linearProjectionDouble(received: { query: string; id?: string }[]) {
   return Bun.serve({
     port: 0,
     hostname: "127.0.0.1",
@@ -1277,7 +1278,10 @@ function linearProjectionDouble(received: { query: string }[]) {
         variables.input !== null
           ? Object.fromEntries(Object.entries(variables.input))
           : undefined;
-      const body = { query: parsed.query };
+      const body = {
+        query: parsed.query,
+        ...(typeof input?.id === "string" ? { id: input.id } : {}),
+      };
       received.push(body);
       if (body.query.includes("teams(")) {
         return Response.json({
@@ -1307,12 +1311,20 @@ function linearProjectionDouble(received: { query: string }[]) {
           return new Response("issueCreate names its input", { status: 400 });
         }
         const stored = input;
+        // An issue is stored under the id its create names, and the backend generates one when
+        // none is given, as `IssueCreateInput.id` in the pinned
+        // `crates/onetaskgraph-linear/tests/fixtures/schema.graphql` documents. The binary refuses
+        // an answer under any other id, so this double diverging from that contract fails the test.
+        if ("id" in stored && typeof stored.id !== "string") {
+          return new Response("issueCreate names its id as a string", { status: 400 });
+        }
+        const id = typeof stored.id === "string" ? stored.id : "ISSUE-1";
         return Response.json({
           data: {
             issueCreate: {
               success: true,
               issue: {
-                id: "ISSUE-1",
+                id,
                 identifier: "FIX-1",
                 title: stored.title,
                 description: stored.description,
@@ -1336,7 +1348,7 @@ function linearProjectionDouble(received: { query: string }[]) {
 
 test("a human task is projected through the real binary into a loopback Linear", async () => {
   const root = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-projection-"));
-  const received: { query: string }[] = [];
+  const received: { query: string; id?: string }[] = [];
   const server = linearProjectionDouble(received);
   try {
     writeFileSync(
@@ -1383,13 +1395,14 @@ test("a human task is projected through the real binary into a loopback Linear",
       env: { LINEAR_API_KEY: "fixture-key", ONETASKGRAPH_HOST: "sdk-host" },
     });
     const projected = await client.taskProjectHuman(input);
+    const creates = received.filter((call) => call.query.includes("issueCreate("));
+    expect(creates.length).toBe(1);
     expect(projected).toEqual({
-      task: "org:ISSUE-1",
+      task: `org:${creates[0]?.id}`,
       url: "https://linear.app/fixture/issue/FIX-1",
       project: "P-1",
       source: "org",
     });
-    expect(received.filter((call) => call.query.includes("issueCreate(")).length).toBe(1);
     // Bound: the same request again is the same answer, and the tracker is asked nothing.
     const before = received.length;
     expect(await client.taskProjectHuman(input)).toEqual(projected);

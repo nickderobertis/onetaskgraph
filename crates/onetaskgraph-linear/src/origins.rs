@@ -12,9 +12,16 @@ use onetaskgraph_plugin_api::{
 use serde_json::{Value, json};
 
 use crate::{
-    LinearSource, MAX_PAGE_SIZE, ORIGIN_BATCH, RESOLUTION_ROWS, Vocabulary, connection, graphql,
-    map_project, map_task, slot_phrase,
+    CreateId, LinearSource, MAX_PAGE_SIZE, ORIGIN_BATCH, RESOLUTION_ROWS, Vocabulary, connection,
+    create_key_of, graphql, linear_ids_of_key, map_project, map_task, slot_phrase,
 };
+use onetaskgraph_plugin_api::{Document, MetadataRecord, NativeId};
+
+/// The namespace every create key is a version-5 UUID under — the store's, which its README
+/// publishes so another implementation computes the same keys, and which this source computes
+/// [`LinearSource::origin_key`] under for exactly that reason.
+pub const CREATE_KEY_NAMESPACE: uuid::Uuid =
+    uuid::Uuid::from_u128(0x7a1c_3f0e_5b2d_4c8a_9e61_0f4d_2b7c_5a39);
 
 /// What [`TaskSource::read_ahead_origins_for_copy`] read, held for the command.
 #[derive(Default)]
@@ -260,10 +267,18 @@ impl LinearSource {
             if let Some(projects) = held
                 && fits(projects.len(), page)
             {
-                return Ok(Page {
-                    items: projects,
-                    next: None,
-                });
+                return self
+                    .with_copied_by_key(
+                        MetadataRecord::Project,
+                        origin,
+                        page,
+                        Page {
+                            items: projects,
+                            next: None,
+                        },
+                        Copied::into_project,
+                    )
+                    .await;
             }
         }
         let wanted = origin_query(origin);
@@ -312,7 +327,289 @@ impl LinearSource {
                 }
             };
         }
+        if page.cursor.is_none() && matched.is_empty() {
+            return self
+                .with_copied_by_key(
+                    MetadataRecord::Project,
+                    origin,
+                    page,
+                    Page::last(Vec::new()),
+                    Copied::into_project,
+                )
+                .await;
+        }
         page_of_matches(matched, page)
+    }
+}
+
+impl LinearSource {
+    /// The create key the store derives for a create of `record` copied from `origin` into this
+    /// source that replaces no link: the version-5 UUID, under [`CREATE_KEY_NAMESPACE`], of
+    /// `<origin>|<this source's name>|`, with `|project` or `|document` appended for a project or
+    /// a document — the README's rule, so it is the key a copy recording an intent gives that
+    /// create too, and the ids it derives are the ones that create is sent under.
+    pub(crate) fn origin_key(&self, record: MetadataRecord, origin: &str) -> uuid::Uuid {
+        let mut name = format!("{origin}|{}|", self.name);
+        match record {
+            MetadataRecord::Task => {}
+            MetadataRecord::Project => name.push_str("|project"),
+            MetadataRecord::Document => name.push_str("|document"),
+        }
+        uuid::Uuid::new_v5(&CREATE_KEY_NAMESPACE, name.as_bytes())
+    }
+
+    /// The ids a create of `record` carrying `metadata` is sent under: its own create key's,
+    /// when it carries one; otherwise, when it records an origin, the ids of that origin's key —
+    /// so a copy that recorded no intent, and no link, still sends each create under ids a later
+    /// copy can read it back by — and otherwise none. An update chooses none.
+    ///
+    /// # Errors
+    ///
+    /// [`SourceError::Malformed`] for a create key that is not a hyphenated RFC 4122 UUID, as
+    /// [`linear_ids_of_key`] refuses one.
+    pub(crate) fn create_id(
+        &self,
+        record: MetadataRecord,
+        metadata: &std::collections::BTreeMap<String, Value>,
+        target: Option<&NativeId>,
+    ) -> Result<CreateId, SourceError> {
+        if target.is_some() {
+            return Ok(CreateId::Unchosen);
+        }
+        if let Some(key) = create_key_of(metadata, target) {
+            linear_ids_of_key(&key)?;
+            return uuid::Uuid::parse_str(&key)
+                .map(CreateId::Keyed)
+                .map_err(|_| SourceError::Malformed {
+                    message: format!("create key {key:?} is not a hyphenated UUID"),
+                });
+        }
+        Ok(
+            match metadata.get(TaskQuery::ORIGIN_KEY).and_then(Value::as_str) {
+                Some(origin) => CreateId::Origin {
+                    key: self.origin_key(record, origin),
+                    origin: origin.to_owned(),
+                },
+                None => CreateId::Unchosen,
+            },
+        )
+    }
+
+    /// The `record` at `id` when it records `origin`, read by that id alone — `None` when this
+    /// source holds none there, holds a trashed one, or holds one recording anything else.
+    pub(crate) async fn copied_at(
+        &self,
+        record: MetadataRecord,
+        id: &NativeId,
+        origin: &str,
+    ) -> Result<Option<NativeId>, SourceError> {
+        Ok(self
+            .read_copied(record, id)
+            .await?
+            .filter(|held| origin_query(origin).origin_matches(held.metadata()))
+            .map(|held| held.id().clone()))
+    }
+
+    async fn read_copied(
+        &self,
+        record: MetadataRecord,
+        id: &NativeId,
+    ) -> Result<Option<Copied>, SourceError> {
+        Ok(match record {
+            MetadataRecord::Task => self.get_task(id).await?.map(Copied::Task),
+            MetadataRecord::Project => self.get_project(id).await?.map(Copied::Project),
+            MetadataRecord::Document => self.get_document(id).await?.map(Copied::Document),
+        })
+    }
+
+    /// The `record` an earlier copy of `origin` created here, read by the ids [`Self::origin_key`]
+    /// derives — the ids that create was sent under — rather than through any filtered or
+    /// searched read, so it is there however soon after that create it is asked for.
+    ///
+    /// The generations are read in turn, as a create tries them: one holding a record recording
+    /// another origin is read past, and the first reading as no record — none there, or a trashed
+    /// one, which a read answers as none — ends the read, since a create of `origin` tries that id
+    /// before any later one. A counterpart behind a trashed record is therefore not reached here;
+    /// its create is refused naming it instead ([`LinearSource::copied_at`]). Asked only once the
+    /// lookup itself has listed nothing, so a copy whose lookup finds its counterpart sends
+    /// nothing more.
+    async fn copied_by_origin_key(
+        &self,
+        record: MetadataRecord,
+        origin: &str,
+    ) -> Result<Option<Copied>, SourceError> {
+        for id in linear_ids_of_key(&self.origin_key(record, origin).hyphenated().to_string())? {
+            match self.read_copied(record, &NativeId(id)).await? {
+                None => return Ok(None),
+                Some(held) if origin_query(origin).origin_matches(held.metadata()) => {
+                    return Ok(Some(held));
+                }
+                Some(_) => {}
+            }
+        }
+        Ok(None)
+    }
+
+    /// `listed`, the first page of a lookup of the `record`s copied from `origin`, with the one
+    /// [`Self::copied_by_origin_key`] reads in its place when it listed none and has no page
+    /// behind it.
+    pub(crate) async fn with_copied_by_key<T>(
+        &self,
+        record: MetadataRecord,
+        origin: &str,
+        page: &PageRequest,
+        listed: Page<T>,
+        take: impl Fn(Copied) -> Option<T>,
+    ) -> Result<Page<T>, SourceError> {
+        if page.cursor.is_some() || !listed.items.is_empty() || listed.next.is_some() {
+            return Ok(listed);
+        }
+        Ok(Page {
+            items: self
+                .copied_by_origin_key(record, origin)
+                .await?
+                .and_then(take)
+                .into_iter()
+                .collect(),
+            next: None,
+        })
+    }
+
+    /// `listed`, a page of `query`'s issues, with the one [`Self::copied_by_origin_key`] reads in
+    /// its place when `query` is exactly a copy's lookup by origin and its first page listed none.
+    pub(crate) async fn tasks_with_copied_by_key(
+        &self,
+        query: &TaskQuery,
+        page: &PageRequest,
+        listed: Page<Task>,
+    ) -> Result<Page<Task>, SourceError> {
+        match &query.origin {
+            Some(origin) if *query == origin_query(origin) => {
+                self.with_copied_by_key(
+                    MetadataRecord::Task,
+                    origin,
+                    page,
+                    listed,
+                    Copied::into_task,
+                )
+                .await
+            }
+            _ => Ok(listed),
+        }
+    }
+
+    /// [`TaskSource::query_documents_by_origin`]: the scope's documents walked and narrowed to
+    /// `origin`, as the trait's default walks them, and then the one an earlier copy created
+    /// under that origin's key, read by id, when the walk found none.
+    pub(crate) async fn documents_by_origin(
+        &self,
+        origin: &str,
+        page: &PageRequest,
+    ) -> Result<Page<Document>, SourceError> {
+        let wanted = origin_query(origin);
+        let mut matched = Vec::new();
+        let mut cursor: Option<Cursor> = None;
+        let mut visited: Vec<String> = Vec::new();
+        loop {
+            let listed = self
+                .query_documents(
+                    &onetaskgraph_plugin_api::DocumentQuery::default(),
+                    &PageRequest {
+                        cursor: cursor.clone(),
+                        limit: page.limit,
+                    },
+                )
+                .await?;
+            if !fits(listed.items.len(), page) {
+                return Err(SourceError::Malformed {
+                    message: format!(
+                        "the source returned {} rows for a page of at most {}; a source may \
+                         return fewer than it was asked for and never more",
+                        listed.items.len(),
+                        page.limit
+                    ),
+                });
+            }
+            matched.extend(
+                listed
+                    .items
+                    .into_iter()
+                    .filter(|document| wanted.origin_matches(&document.metadata)),
+            );
+            cursor = match listed.next {
+                None => break,
+                Some(next) if visited.contains(&next.0) => {
+                    return Err(SourceError::Malformed {
+                        message: "the source returned a cursor it had already handed out while \
+                                  its documents were walked for one origin, so the walk would \
+                                  never end"
+                            .into(),
+                    });
+                }
+                Some(next) => {
+                    visited.push(next.0.clone());
+                    Some(next)
+                }
+            };
+        }
+        if page.cursor.is_none() && matched.is_empty() {
+            return self
+                .with_copied_by_key(
+                    MetadataRecord::Document,
+                    origin,
+                    page,
+                    Page::last(Vec::new()),
+                    Copied::into_document,
+                )
+                .await;
+        }
+        page_of_matches(matched, page)
+    }
+}
+
+/// A record read by id for an origin's key.
+pub(crate) enum Copied {
+    Task(Task),
+    Project(Project),
+    Document(Document),
+}
+
+impl Copied {
+    fn id(&self) -> &NativeId {
+        match self {
+            Self::Task(task) => &task.id,
+            Self::Project(project) => &project.id,
+            Self::Document(document) => &document.id,
+        }
+    }
+
+    fn metadata(&self) -> &std::collections::BTreeMap<String, Value> {
+        match self {
+            Self::Task(task) => &task.metadata,
+            Self::Project(project) => &project.metadata,
+            Self::Document(document) => &document.metadata,
+        }
+    }
+
+    pub(crate) fn into_task(self) -> Option<Task> {
+        match self {
+            Self::Task(task) => Some(task),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn into_project(self) -> Option<Project> {
+        match self {
+            Self::Project(project) => Some(project),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn into_document(self) -> Option<Document> {
+        match self {
+            Self::Document(document) => Some(document),
+            _ => None,
+        }
     }
 }
 

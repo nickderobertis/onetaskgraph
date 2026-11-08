@@ -51,9 +51,13 @@ function generateWith(binaryPath: string, generated: string) {
   });
 }
 
-test("generation, clean check, stale check, and invalid arguments use the real binary", () => {
+// Each case spawns the generator only as often as its own assertions need, because every
+// generation compiles the whole bundle and the shared hang timeout bounds each case alone.
+type Generate = (...args: string[]) => ReturnType<typeof spawnSync>;
+
+function withGenerated(body: (run: Generate, generated: string) => void) {
   const generated = mkdtempSync(resolve(tmpdir(), "onetaskgraph-generated-"));
-  const run = (...args: string[]) =>
+  const run: Generate = (...args) =>
     spawnSync("bun", ["scripts/generate.ts", ...args], {
       cwd: packageRoot,
       encoding: "utf8",
@@ -65,20 +69,47 @@ test("generation, clean check, stale check, and invalid arguments use the real b
       },
     });
   try {
-    const generatedResult = run();
-    expectExited(generatedResult);
-    expect(generatedResult.status, generatedResult.stderr).toBe(0);
+    body(run, generated);
+  } finally {
+    rmSync(generated, { recursive: true, force: true });
+  }
+}
+
+function generateInto(run: Generate) {
+  const generatedResult = run();
+  expectExited(generatedResult);
+  expect(generatedResult.status, String(generatedResult.stderr)).toBe(0);
+}
+
+test("generation from the real binary passes its own clean check", () => {
+  withGenerated((run) => {
+    generateInto(run);
     expect(run("--check").status).toBe(0);
+  });
+});
+
+test("a stale or a missing generated file fails the check", () => {
+  withGenerated((run, generated) => {
+    generateInto(run);
     appendFileSync(resolve(generated, "commands.ts"), "// stale\n");
     const stale = run("--check");
     expect(stale.status).toBe(1);
     expect(stale.stderr).toContain("commands.ts would change");
-    expect(run().status).toBe(0);
     rmSync(resolve(generated, "commands.ts"));
     const missing = run("--check");
     expect(missing.status).toBe(1);
     expect(missing.stderr).toContain("commands.ts would change");
+  });
+});
+
+test("an unknown argument is refused", () => {
+  withGenerated((run) => {
     expect(run("--unknown").status).toBe(1);
+  });
+});
+
+test("a missing or an empty binary path is refused", () => {
+  withGenerated((_run, generated) => {
     const unavailable = spawnSync("bun", ["scripts/generate.ts"], {
       cwd: packageRoot,
       encoding: "utf8",
@@ -87,17 +118,15 @@ test("generation, clean check, stale check, and invalid arguments use the real b
     expectExited(unavailable);
     expect(unavailable.status).toBe(1);
     expect(unavailable.stderr).toContain("could not emit the SDK contract");
-    const emptyBinary = spawnSync("bun", ["scripts/generate.ts"], {
-      cwd: packageRoot,
-      encoding: "utf8",
-      env: { ...process.env, ONETASKGRAPH_BIN: "" },
-    });
-    expectExited(emptyBinary);
-    expect(emptyBinary.status).toBe(1);
-    expect(emptyBinary.stderr).toContain("ONETASKGRAPH_BIN must be a non-empty executable path");
-  } finally {
-    rmSync(generated, { recursive: true, force: true });
-  }
+  });
+  const emptyBinary = spawnSync("bun", ["scripts/generate.ts"], {
+    cwd: packageRoot,
+    encoding: "utf8",
+    env: { ...process.env, ONETASKGRAPH_BIN: "" },
+  });
+  expectExited(emptyBinary);
+  expect(emptyBinary.status).toBe(1);
+  expect(emptyBinary.stderr).toContain("ONETASKGRAPH_BIN must be a non-empty executable path");
 });
 
 test("a caller's own configuration does not reach the binary the contract is emitted with", () => {

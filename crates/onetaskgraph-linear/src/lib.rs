@@ -34,7 +34,7 @@
 //! | `filter_by_priority` | **Supported and proven.** `issues(filter:{priority:{in:[…]}})` over Linear's own `0`–`4` scale, confirmed against each issue read. |
 //! | `filter_by_comment_activity` | **Supported and proven.** `comments:{some:{or:[{createdAt:{gte:…}},{updatedAt:{gte:…}}]}}` — the issues with a comment created or last edited at or after the instant, over the same two fields a comment read reports. |
 //! | `filter_by_metadata` | **Supported and proven.** `description:{contains:"\"<value>\""}` for each match — the value as every JSON encoder writes it, which a slot holding it contains however it spaces or spells its keys — and every candidate confirmed over the parsed slot, so prose carrying the phrase and a slot holding another value are both kept out. A value with a character an encoder may escape is not sent, and the confirmation decides alone. |
-//! | `filter_by_origin` | **Supported and proven,** on the same terms, for the slot's `onetaskgraph.origin`. |
+//! | `filter_by_origin` | **Supported and proven,** on the same terms, for the slot's `onetaskgraph.origin` — and a lookup that lists nothing reads the record its origin's create key names by id; see the ruling below on how a copy finds what it wrote. |
 //! | `reconcile_status` | **Unsupported — unsupportable.** A Linear issue's workflow state *is* its closure: there is no card beside it to contradict it, so nothing could need reconciling and the source is sent nothing. |
 //! | `complete_by_issue` | **Unsupported — unsupportable** here: a Linear issue is not a GitHub issue a landing's `closes` names, and its state is its closure, so a completion lists this source unsupported and sends it nothing. |
 //! | `orphan_tasks` | **Supported and proven.** `issues(filter:{project:{null:true}})`. |
@@ -423,6 +423,31 @@
 //! it is [`graphql::COUNTERPART_LOOKUPS_CACHED`], each row carrying the token parts its listing would,
 //! so a row it answers reads exactly as that listing's row does. A document copy keeps its own
 //! `documents` lookup.
+//!
+//! ## Ruling: a copy finds what it wrote by id when no listing shows it
+//!
+//! Linear's filtered and searched reads — the `issues` search of a description a lookup by
+//! origin sends, and the `projects` and `documents` listings — were observed on `TES2` to miss
+//! records written moments before, and records a repeat a minute earlier had found. A copy whose
+//! source records no link found its counterparts only through them, so it created a plan a
+//! second time. So no lookup by origin answers "none" from a listing alone:
+//!
+//! - **A create carrying an origin and no create key is sent under that origin's key's ids**
+//!   ([`LinearSource::create_id`]): the store's own create key for a create replacing no link,
+//!   `<origin>|<this source's name>|` under its published namespace, so a create that recorded
+//!   an intent and one that could not land under the same id.
+//! - **A lookup by origin that lists nothing reads that id** — and each later generation past one
+//!   holding another origin's record — by id, which Linear answers the moment a record is
+//!   written. A task's lookup, a project's and a document's alike, a document copy's reference
+//!   resolution among them.
+//! - **A create refused because a record holds its id reads that record**, and one recording the
+//!   create's origin refuses the create naming it, creating nothing: the counterpart the lookup
+//!   did not reach, behind a trashed record. Any other refusal is the create's answer, as it was.
+//!
+//! The cost is one read by id per record a copy creates, before its create; a lookup that lists
+//! its counterpart sends nothing more. Linear refuses operation batching, an id naming nothing
+//! fails a whole aliased query, and an `id:{in:…}` filter is a filtered read, so none of them
+//! can stand in for it.
 //!
 //! ## Ruling: `project` scopes a source to one project
 //!
@@ -2043,19 +2068,32 @@ impl LinearSource {
     /// generation. An answer that did not arrive is never followed by another create, because
     /// Linear may have applied it: it is read for, and otherwise its own failure is the answer.
     /// When every generation is refused, the last refusal is.
+    ///
+    /// A create sent under its origin's key — [`CreateId::Origin`] — is held to more: it tries
+    /// the next generation only when Linear refused the last because a record holds that id, and
+    /// a record there copied from the same origin is the counterpart an earlier copy made, which
+    /// the copy's lookup did not list. That create is refused naming it, and nothing is created:
+    /// see the crate documentation's ruling on how a copy finds what it wrote.
     async fn send_write(
         &self,
         record: MetadataRecord,
         query: &str,
         mut variables: Value,
-        key: Option<&str>,
+        create: &CreateId,
     ) -> Result<Written, SourceError> {
-        let Some(key) = key else {
-            return Ok(Written::Answered {
-                data: self.send(query, variables).await?,
-                sent: None,
-            });
+        let (key, origin) = match create {
+            CreateId::Unchosen => {
+                return Ok(Written::Answered {
+                    data: self.send(query, variables).await?,
+                    sent: None,
+                });
+            }
+            CreateId::Keyed(key) => (key.hyphenated().to_string(), None),
+            CreateId::Origin { key, origin } => {
+                (key.hyphenated().to_string(), Some(origin.as_str()))
+            }
         };
+        let key = key.as_str();
         let mut refused = None;
         for (generation, id) in linear_ids_of_key(key)?.into_iter().enumerate() {
             // A create after a refused one is asked for as every other write is: the hold that
@@ -2074,12 +2112,45 @@ impl LinearSource {
                         sent: Some(NativeId(id)),
                     });
                 }
-                Ok(Err(refusal)) => Ok(refusal.into_error()),
+                Ok(Err(refusal)) => {
+                    // A create under its origin's key moves to the next id only for a record
+                    // holding this one; any other refusal is the create's answer, as it is for a
+                    // create Linear chooses the id of.
+                    if origin.is_some()
+                        && !refusal
+                            .0
+                            .message
+                            .trim()
+                            .eq_ignore_ascii_case(graphql::id_conflict_message(record))
+                    {
+                        self.forget_vocabulary();
+                        return Err(refusal.into_error());
+                    }
+                    Ok(refusal.into_error())
+                }
                 Err(error) => Err(error),
             };
             self.forget_vocabulary();
-            // The read's own failure says nothing of the create, so it is never the answer.
-            if let Ok(Some(held)) = self.held_at(record, &NativeId(id)).await {
+            if let Some(origin) = origin {
+                // Whatever holds the id is read, and a read that fails is the answer: an id
+                // this create cannot see past may hold its counterpart, so no other is tried.
+                if error.is_ok()
+                    && let Some(held) = self
+                        .copied_at(record, &NativeId(id.clone()), origin)
+                        .await?
+                {
+                    return Err(SourceError::Refused {
+                        message: format!(
+                            "Linear already holds {} {}, which an earlier copy made of {origin}, \
+                             though this copy's lookup by origin did not list it; nothing was \
+                             created; next: copy again, which finds it by that id",
+                            record_noun(record),
+                            held.0
+                        ),
+                    });
+                }
+            } else if let Ok(Some(held)) = self.held_at(record, &NativeId(id)).await {
+                // The read's own failure says nothing of the create, so it is never the answer.
                 return Ok(Written::Held(held));
             }
             match error {
@@ -3716,21 +3787,24 @@ impl TaskSource for LinearSource {
         if query.origin.is_some() {
             self.send_origins_ahead().await?;
         }
+        // A copy's lookup by origin that lists nothing reads the issue an earlier copy created
+        // under that origin's key by id, which no filtered read can be behind.
         if let Some(held) = self.held_origin_tasks(query, page)? {
-            return Ok(held);
+            return self.tasks_with_copied_by_key(query, page, held).await;
         }
         let d=self.send(self.read_document(ISSUES),json!({"first":page.limit.min(MAX_PAGE_SIZE),"after":page.cursor.as_ref().map(|c|&c.0),"filter":self.issue_filter(query)?})).await?;
-        let page = connection(&d, "issues", |v| {
+        let listed = connection(&d, "issues", |v| {
             map_task(v, &self.name, &self.statuses, self.spelling())
         })?;
-        Ok(Page {
-            items: page
+        let listed = Page {
+            items: listed
                 .items
                 .into_iter()
                 .filter(|task| Self::confirms(query, task))
                 .collect(),
-            next: page.next,
-        })
+            next: listed.next,
+        };
+        self.tasks_with_copied_by_key(query, page, listed).await
     }
     async fn query_projects(
         &self,
@@ -3768,6 +3842,16 @@ impl TaskSource for LinearSource {
         page: &PageRequest,
     ) -> Result<Page<Project>, SourceError> {
         self.projects_by_origin(origin, page).await
+    }
+    /// The scope's documents walked and narrowed to `origin`, as the trait's default walks them,
+    /// and the one an earlier copy created under that origin's key, read by id, when it lists
+    /// none.
+    async fn query_documents_by_origin(
+        &self,
+        origin: &str,
+        page: &PageRequest,
+    ) -> Result<Page<Document>, SourceError> {
+        self.documents_by_origin(origin, page).await
     }
     /// One [`graphql::COUNTERPART_LOOKUPS`] per [`ORIGIN_BATCH`] origins; see the ruling on the
     /// requests a copy sends.
@@ -3852,7 +3936,7 @@ impl TaskSource for LinearSource {
         let mut metadata = write.item.metadata.clone();
         // A create's key is the issue's own id here, and stays in its slot as every source keeps
         // it, so a later copy reads the issue as the one it wrote.
-        let create_key = create_key_of(&metadata, write.target.as_ref());
+        let create_id = self.create_id(MetadataRecord::Task, &metadata, write.target.as_ref())?;
         set_task_list(&mut metadata, TaskRef::DELIVERS_KEY, &write.item.delivers);
         set_task_list(
             &mut metadata,
@@ -3889,12 +3973,7 @@ impl TaskSource for LinearSource {
             ),
         };
         let (data, sent) = match self
-            .send_write(
-                MetadataRecord::Task,
-                query,
-                variables,
-                create_key.as_deref(),
-            )
+            .send_write(MetadataRecord::Task, query, variables, &create_id)
             .await
         {
             Ok(Written::Answered { data, sent }) => (data, sent),
@@ -3966,7 +4045,11 @@ impl TaskSource for LinearSource {
             &edges,
             WriteKind::Project,
         )?;
-        let create_key = create_key_of(&write.item.metadata, write.target.as_ref());
+        let create_id = self.create_id(
+            MetadataRecord::Project,
+            &write.item.metadata,
+            write.target.as_ref(),
+        )?;
         // A project's long form is its `content`, not its `description`: Linear documents the
         // second as "the short description of the project", and the first — the project's
         // Markdown body — is the one with room for a description and a metadata slot.
@@ -3989,12 +4072,7 @@ impl TaskSource for LinearSource {
             ),
         };
         let (data, sent) = match self
-            .send_write(
-                MetadataRecord::Project,
-                query,
-                variables,
-                create_key.as_deref(),
-            )
+            .send_write(MetadataRecord::Project, query, variables, &create_id)
             .await
         {
             Ok(Written::Answered { data, sent }) => (data, sent),
@@ -4195,7 +4273,11 @@ impl TaskSource for LinearSource {
             Vec::new(),
         )?;
         let project = self.filed_in(write.item.project.as_ref(), "document")?;
-        let create_key = create_key_of(&write.item.metadata, write.target.as_ref());
+        let create_id = self.create_id(
+            MetadataRecord::Document,
+            &write.item.metadata,
+            write.target.as_ref(),
+        )?;
         let (query, variables, root) = match &write.target {
             Some(id) => {
                 // A target this workspace does not hold is refused rather than created:
@@ -4241,12 +4323,7 @@ impl TaskSource for LinearSource {
             }
         };
         let (data, sent) = match self
-            .send_write(
-                MetadataRecord::Document,
-                query,
-                variables,
-                create_key.as_deref(),
-            )
+            .send_write(MetadataRecord::Document, query, variables, &create_id)
             .await?
         {
             Written::Answered { data, sent } => (data, sent),
@@ -6189,6 +6266,32 @@ fn create_key_of(
         .get(MetadataKey::CREATE_KEY)
         .and_then(|key| key.as_str().map(str::to_owned))
         .filter(|_| target.is_none())
+}
+
+/// The ids a create is sent under, as [`LinearSource::create_id`] chooses them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CreateId {
+    /// None: Linear chooses the id — an update, or a create carrying neither a key nor an
+    /// origin.
+    Unchosen,
+    /// Each generation of the create key the item carries.
+    Keyed(uuid::Uuid),
+    /// Each generation of the key [`LinearSource::origin_key`] derives for `origin`: a copy's
+    /// create that carries an origin and no key of its own.
+    Origin {
+        key: uuid::Uuid,
+        /// The origin the item records, which a record already holding one of those ids is
+        /// confirmed against.
+        origin: String,
+    },
+}
+
+fn record_noun(record: MetadataRecord) -> &'static str {
+    match record {
+        MetadataRecord::Task => "issue",
+        MetadataRecord::Project => "project",
+        MetadataRecord::Document => "document",
+    }
 }
 
 /// The id a create carrying `key` is sent to Linear under: the key — a version-5 UUID — with its

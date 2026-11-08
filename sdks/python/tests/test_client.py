@@ -329,6 +329,9 @@ LinearProjectId = NewType("LinearProjectId", str)
 LinearStateId = NewType("LinearStateId", str)
 """A Linear workflow state's id."""
 
+LinearIssueId = NewType("LinearIssueId", str)
+"""A Linear issue's id: the one its ``issueCreate`` names, or the backend's own when none is."""
+
 LinearStateType = Literal["unstarted", "completed", "canceled"]
 """The workflow-state categories the loopback team holds."""
 
@@ -360,6 +363,7 @@ class LinearIssueInput:
     description: str
     priority: int
     project_id: LinearProjectId
+    id: LinearIssueId
 
     @classmethod
     def of(cls, request: GraphqlRequest) -> LinearIssueInput:
@@ -372,12 +376,29 @@ class LinearIssueInput:
             description=str(stored["description"]),
             priority=int(stored["priority"]),
             project_id=LinearProjectId(str(stored["projectId"])),
+            id=LinearIssueId(cls._named_id(stored)),
         )
+
+    @staticmethod
+    def _named_id(stored: dict[object, object]) -> str:
+        """The id an issue is stored under, as the pinned ``IssueCreateInput.id`` documents.
+
+        ``crates/onetaskgraph-linear/tests/fixtures/schema.graphql`` is the source: an issue is
+        stored under the id its create names, and the backend generates one when none is given.
+        The binary refuses an answer under any other id, so this double diverging from that
+        contract fails the test that drives it.
+        """
+        if "id" not in stored:
+            return "ISSUE-1"
+        named = stored["id"]
+        if not isinstance(named, str):
+            raise ValueError("issueCreate names its id as a string")
+        return named
 
     def answered(self) -> dict[str, object]:
         """The issue Linear answers ``issueCreate`` with, stored as given."""
         return {
-            "id": "ISSUE-1",
+            "id": self.id,
             "identifier": "FIX-1",
             "title": self.title,
             "description": self.description,
@@ -517,11 +538,11 @@ def test_a_human_task_is_projected_through_the_real_binary_into_a_loopback_linea
         )
         projected = run(client.task_project_human(str(tmp_path / "request.json")))
         assert projected.source.root == "org"
-        assert projected.task == "org:ISSUE-1"
-        assert projected.url == "https://linear.app/fixture/issue/FIX-1"
-        assert projected.project == "P-1"
         creates = [call for call in received if "issueCreate(" in call.query]
         assert len(creates) == 1
+        assert projected.task == f"org:{LinearIssueInput.of(creates[0]).id}"
+        assert projected.url == "https://linear.app/fixture/issue/FIX-1"
+        assert projected.project == "P-1"
         # Bound: the same request again is the same answer, and the tracker is asked nothing.
         before = len(received)
         assert run(client.task_project_human(str(tmp_path / "request.json"))) == projected

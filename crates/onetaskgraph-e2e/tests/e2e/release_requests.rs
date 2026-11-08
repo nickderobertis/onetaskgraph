@@ -7,7 +7,9 @@
 //! one. Each scenario is a sequence of commands; what is held is the documents each loopback was
 //! sent for each command, in order. The one difference this release owes is stated where it is
 //! allowed: a create onto a board from a hosted source lists the repository by its create key
-//! once more, right after `createIssue`.
+//! once more, right after `createIssue`, and a create into Linear reads the issue by the id its
+//! origin's create key derives once, right before `issueCreate` — README's "How a copy to Linear
+//! finds what it wrote".
 //!
 //! The comparison parses the golden, so its layout is not part of it; a recording writes serde's
 //! pretty-print, which `workspace:format-check` refuses, so run
@@ -255,7 +257,7 @@ fn measured_now() -> BTreeMap<String, Value> {
 }
 
 #[test]
-fn every_task_copy_and_task_write_sends_what_v0_12_13_sent_but_the_one_relist_owed() {
+fn every_task_copy_and_task_write_sends_what_v0_12_13_sent_but_the_relist_and_key_read_owed() {
     let now = measured_now();
     if std::env::var_os("OTG_REQUESTS_RECORD").is_some() {
         std::fs::write(
@@ -291,6 +293,21 @@ fn every_task_copy_and_task_write_sends_what_v0_12_13_sent_but_the_one_relist_ow
                             onetaskgraph_github_projects::graphql::ISSUES_BY_CREATION
                         )),
                     );
+                }
+                // The other: the read by id a Linear create's lookup by origin owes when it listed
+                // nothing, right before the create.
+                if store == "linear" {
+                    let mut at = 0;
+                    while let Some(found) = expected[at..]
+                        .iter()
+                        .position(|document| document == "mutation issueCreate")
+                    {
+                        expected.insert(
+                            at + found,
+                            json!(spelled(onetaskgraph_linear::graphql::ISSUE)),
+                        );
+                        at += found + 2;
+                    }
                 }
                 // llmlint: ignore[tests_hold_no_nonfunctional_thresholds] The task's acceptance criteria ask for exactly this: the requests each copy and task write sends held to what the v0.12.13 release sent, as README's "What it costs" states them. What is compared is which operations are sent and the fields each selects — the wire behaviour a backend sees — recorded from that release's binary, not a count or a time judged against a limit.
                 assert_eq!(
