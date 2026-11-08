@@ -1,0 +1,75 @@
+# PyPI's JSON simple index (PEP 691), as scripts/release_cd.py reads it, pinned.
+#
+# A release's PyPI step asks the index which of its files PyPI already holds, and with what
+# SHA-256, before it hands uv anything: PyPI never replaces a file, so one it holds with other
+# bytes than a re-run's rebuild is kept as the release's rather than sent and refused. That
+# answer is PyPI's interface rather than this repository's, so it is pinned here the way
+# config/github-interfaces.toml pins GitHub's: a recorded observation, with its provenance.
+# .github/tests/release-cd.test.mjs holds `parse_pypi_index` to it — it accepts the answer,
+# and every field `reads` names, and no other, changes what it answers — and holds the
+# loopback double's index to it: the double answers no field this answer does not carry.
+#
+# The answer is a real capture trimmed to two of its files and two of its versions; nothing
+# else in it is edited. Re-observe it with the request below when PyPI moves.
+
+documentation = "https://packaging.python.org/en/latest/specifications/simple-repository-api/#json-serialization"
+observed = "2026-11-08"
+observed_from = "GET https://pypi.org/simple/onetaskgraph-cli/ (Accept: application/vnd.pypi.simple.v1+json)"
+method = "GET"
+url = "https://pypi.org/simple/{project}/"
+accept = "application/vnd.pypi.simple.v1+json"
+reads = ["files[].filename", "files[].hashes.sha256"]
+answer = '''
+{
+  "meta": {
+    "_last-serial": 43360244,
+    "api-version": "1.4"
+  },
+  "name": "onetaskgraph-cli",
+  "project-status": {
+    "status": "active"
+  },
+  "versions": [
+    "0.14.7",
+    "0.14.8"
+  ],
+  "files": [
+    {
+      "core-metadata": {
+        "sha256": "b185d8d8bc7ccbdc3cd5bfc1cacfd6c785804f00c799e28498557c35051b509f"
+      },
+      "data-dist-info-metadata": {
+        "sha256": "b185d8d8bc7ccbdc3cd5bfc1cacfd6c785804f00c799e28498557c35051b509f"
+      },
+      "filename": "onetaskgraph_cli-0.14.8-py3-none-macosx_11_0_arm64.whl",
+      "hashes": {
+        "sha256": "3d7d5a5bbb57f5c514071701593e88607dd8fbc41f35beca3425920da6b94c22"
+      },
+      "provenance": null,
+      "requires-python": ">=3.9",
+      "size": 14816904,
+      "upload-time": "2026-11-08T09:52:13.435142Z",
+      "url": "https://files.pythonhosted.org/packages/ef/d8/b5930800164854e7215590438ba814cfb6831b0d4e52d35d99ea20b8f16a/onetaskgraph_cli-0.14.8-py3-none-macosx_11_0_arm64.whl",
+      "yanked": false
+    },
+    {
+      "core-metadata": {
+        "sha256": "b185d8d8bc7ccbdc3cd5bfc1cacfd6c785804f00c799e28498557c35051b509f"
+      },
+      "data-dist-info-metadata": {
+        "sha256": "b185d8d8bc7ccbdc3cd5bfc1cacfd6c785804f00c799e28498557c35051b509f"
+      },
+      "filename": "onetaskgraph_cli-0.14.8-py3-none-manylinux_2_39_aarch64.whl",
+      "hashes": {
+        "sha256": "4a0a31b5a1bc15351d53ba3119b39d69564a767cdaf42b0918fa155fe5e4b635"
+      },
+      "provenance": null,
+      "requires-python": ">=3.9",
+      "size": 19866682,
+      "upload-time": "2026-11-08T09:54:01.274160Z",
+      "url": "https://files.pythonhosted.org/packages/43/ea/0579bd2c55c8b28e21de95ac1e47aeff74a29a278120cc2ce55be98afda6/onetaskgraph_cli-0.14.8-py3-none-manylinux_2_39_aarch64.whl",
+      "yanked": false
+    }
+  ]
+}
+'''

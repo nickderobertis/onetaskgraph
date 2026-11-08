@@ -669,25 +669,32 @@ def publish_github(tag: ReleaseTag, files: list[Path]) -> None:
     and npm package may already carry the binary that archive does, so it is left as it is
     and verified as served. Its checksum asset is then written from the digest GitHub reports
     of the archive it holds rather than from this build's, so the pair never disagrees. An
-    asset GitHub reports no digest for is held to its size, as before digests existed.
+    asset GitHub reports no digest for is held to its size, as before digests existed, and an
+    archive this run sends always takes its checksum asset with it.
     """
     github = GitHub.from_environment()
     release = github.release(tag)
     assets = {asset.name: asset for asset in release.assets}
     held: dict[str, str] = {}  # archive name -> the digest of the archive the release keeps
+    replaced: set[str] = set()  # archives this run sent, whose checksum asset must follow them
     sent, kept, adopted = [], [], []
     for path in files:
-        payload = path.read_bytes()
         archive = path.name.removesuffix(".sha256")
-        if archive != path.name and archive in held:
-            payload = checksum_line(held[archive], archive)
+        checksum = archive != path.name
+        payload = checksum_line(held[archive], archive) if checksum and archive in held else path.read_bytes()
         digest = hashlib.sha256(payload).hexdigest()
         existing = assets.get(path.name)
         if existing is not None and existing.uploaded:
-            if existing.sha256 == digest or (existing.sha256 is None and existing.size == len(payload)):
+            if existing.sha256 is not None:
+                same = existing.sha256 == digest
+            else:
+                same = existing.size == len(payload) and archive not in replaced
+            if same:
+                if not checksum and existing.sha256 is not None:
+                    held[path.name] = digest
                 kept.append(path.name)
                 continue
-            if existing.sha256 is not None and archive == path.name:
+            if existing.sha256 is not None and not checksum:
                 held[path.name] = existing.sha256
                 adopted.append(path.name)
                 continue
@@ -701,11 +708,13 @@ def publish_github(tag: ReleaseTag, files: list[Path]) -> None:
         except ValueError as error:
             fail(f"GitHub answered the upload of {path.name} with {error}", "re-run this step: a re-run takes back whatever asset the upload left and sends it again")
         if landed.name != path.name or landed.size != len(payload) or not landed.uploaded or landed.sha256 not in (None, digest):
-            fail(f"GitHub answered the upload of {path.name} ({len(payload)} bytes) with {landed.name} ({landed.size} bytes, {'uploaded' if landed.uploaded else 'not uploaded'})", "re-run this step: a re-run takes back whatever asset the upload left and sends it again")
+            fail(f"GitHub answered the upload of {path.name} ({len(payload)} bytes, sha256 {digest}) with {landed.name} ({landed.size} bytes, {'uploaded' if landed.uploaded else 'not uploaded'}, sha256 {landed.sha256 or 'not reported'})", "re-run this step: a re-run takes back whatever asset the upload left and sends it again")
         sent.append(path.name)
-    say(f"the {tag} release holds {len(files)} file(s) of this build: uploaded {', '.join(sent) or 'none'}; already there {', '.join(kept) or 'none'}")
-    if adopted:
-        say(f"the {tag} release already holds {', '.join(adopted)} with other bytes than this build's; kept as the release's, with its checksum written from what the release holds, for verification to install as served")
+        if not checksum:
+            held[path.name] = digest
+            replaced.add(path.name)
+    other = f"; kept with other bytes than this build's, checksums written from what the release holds: {', '.join(adopted)}" if adopted else ""
+    say(f"the {tag} release holds {len(files)} file(s) of this build: uploaded {', '.join(sent) or 'none'}; already there {', '.join(kept) or 'none'}{other}")
 
 
 def pypi_simple_base() -> str:
@@ -722,12 +731,13 @@ def publish_pypi(files: list[Path]) -> None:
     # a release cut off part-way unable ever to finish; so it is never handed one, and the
     # verification that follows installs what the index serves.
     held = pypi_held_files(files)
-    adopted = [path.name for path in files if path.name in held and held[path.name] != sha256(path)]
+    same = [path.name for path in files if held.get(path.name) == sha256(path)]
+    adopted = [path.name for path in files if path.name in held and path.name not in same]
     absent = [path for path in files if path.name not in held]
-    if adopted:
-        say(f"PyPI already holds {', '.join(adopted)} with other bytes than this build's; kept as the release's, for verification to install as served")
+    if held.keys() & {path.name for path in files}:
+        other = f"; with other bytes than this build's, kept as the release's: {', '.join(adopted)}" if adopted else ""
+        say(f"PyPI already holds, with this build's bytes: {', '.join(same) or 'none'}{other}")
     if not absent:
-        say(f"PyPI already holds every file of this build: {', '.join(path.name for path in files)}")
         return
     # --check-url still skips a file that landed between the read above and this upload. It
     # names the index root: uv appends the project, so a project page here is a page nobody
@@ -745,35 +755,54 @@ def pypi_project(path: Path) -> str:
     return re.sub(r"[-_.]+", "-", name).lower()
 
 
+# PyPI's JSON simple index (PEP 691), the answer pip and uv read: this reads `files[].filename`
+# and `files[].hashes.sha256` alone, and config/pypi-simple-index.toml pins a real capture of it
+# that .github/tests/release-cd.test.mjs holds this parser and the loopback double to.
+PYPI_SIMPLE_JSON = "application/vnd.pypi.simple.v1+json"
+
+
+def parse_pypi_index(listing: object) -> dict[str, str]:
+    """Each file PyPI's JSON simple index lists, with the SHA-256 it lists for it."""
+    entries = listing.get("files") if isinstance(listing, dict) else None
+    if not isinstance(entries, list):
+        raise ValueError("it lists no files array")
+    held: dict[str, str] = {}
+    for entry in entries:
+        name = entry.get("filename") if isinstance(entry, dict) else None
+        hashes = entry.get("hashes") if isinstance(entry, dict) else None
+        digest = hashes.get("sha256") if isinstance(hashes, dict) else None
+        if not isinstance(name, str) or not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise ValueError(f"it lists {entry!r:.200} without a file name and SHA-256")
+        held[name] = digest
+    return held
+
+
 def pypi_held_files(files: list[Path]) -> dict[str, str]:
-    """The SHA-256 the index lists for each file it holds of these files' projects (PEP 691).
+    """The SHA-256 the index lists for each file it holds of these files' projects.
 
     A project the index does not know holds nothing. Any answer that cannot be read fails the
-    step rather than reading as nothing held, which would send a file PyPI then refuses.
+    step before anything is sent, rather than reading as nothing held and sending a file PyPI
+    then refuses.
     """
     held: dict[str, str] = {}
     for project in sorted({pypi_project(path) for path in files}):
         url = f"{pypi_simple_base()}{project}/"
-        request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/vnd.pypi.simple.v1+json"})
+        request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": PYPI_SIMPLE_JSON})
         try:
             with urllib.request.urlopen(request, timeout=300) as response:
                 listing = json.loads(response.read())
         except urllib.error.HTTPError as error:
             if error.code == 404:
                 continue
-            fail(f"PyPI answered {url} with HTTP {error.code}", "rerun once PyPI answers")
-        except (urllib.error.URLError, http.client.InvalidURL, TimeoutError, OSError, json.JSONDecodeError) as error:
-            fail(f"could not read what PyPI holds of {project} from {url}: {error}", "rerun once PyPI answers")
-        entries = listing.get("files") if isinstance(listing, dict) else None
-        if not isinstance(entries, list):
-            fail(f"PyPI's index of {project} at {url} lists no files array", "rerun once PyPI answers its JSON simple index")
-        for entry in entries:
-            name = entry.get("filename") if isinstance(entry, dict) else None
-            hashes = entry.get("hashes") if isinstance(entry, dict) else None
-            digest = hashes.get("sha256") if isinstance(hashes, dict) else None
-            if not isinstance(name, str) or not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
-                fail(f"PyPI's index of {project} lists {entry!r:.200} without a file name and SHA-256", "rerun once PyPI answers its JSON simple index")
-            held[name] = digest
+            fail(f"PyPI answered {url} with HTTP {error.code}, so what it already holds of {project} is unknown", "rerun once PyPI answers; nothing was sent")
+        except (urllib.error.URLError, http.client.InvalidURL, TimeoutError, OSError) as error:
+            fail(f"could not read what PyPI holds of {project} from {url}: {error}", "rerun once PyPI is reachable; nothing was sent")
+        except json.JSONDecodeError as error:
+            fail(f"PyPI answered {url} with something that is not JSON: {error}", "rerun once PyPI answers its JSON simple index; nothing was sent")
+        try:
+            held.update(parse_pypi_index(listing))
+        except ValueError as error:
+            fail(f"PyPI's index of {project} at {url} is unreadable: {error}", "rerun once PyPI answers its JSON simple index; nothing was sent")
     return held
 
 

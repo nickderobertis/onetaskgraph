@@ -14,6 +14,7 @@ export const cdJourneyReadSet = [
   ".github/fixture-environment.mjs",
   ".github/release-published-paths",
   "config/github-interfaces.toml",
+  "config/pypi-simple-index.toml",
   "pyproject.toml",
   "release-plz.toml",
   "npm/**/*",
