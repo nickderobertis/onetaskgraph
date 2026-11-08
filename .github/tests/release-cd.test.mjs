@@ -692,9 +692,10 @@ manifest_path.write_text(json.dumps(manifest, indent=2) + '\\n')`,
     );
 
     // The index the PyPI step read is held to PyPI's own, pinned in
-    // config/pypi-simple-index.toml: the parser accepts the pinned capture, every field the
-    // pin says it reads changes its answer when gone and no other field does, and the double
-    // answers no field PyPI does not.
+    // config/pypi-simple-index.toml: the step asks what the pin describes, the parser accepts
+    // the pinned capture, every field the pin says it reads changes its answer when gone and
+    // no other field does, and the double answers no field PyPI does not. The Accept header is
+    // proven by the run itself too: the double answers JSON only to that header.
     const listing = execFileSync("curl", [
       "-fsS",
       "-H",
@@ -731,6 +732,11 @@ def without(value, field):
     drop(value, field.split('.'))
     return value
 problems = []
+# The request: the one pypi_held_files makes of PyPI by default for this release's wheel.
+wheel = release_cd.Path(sys.argv[2])
+asked = release_cd.DEFAULT_PYPI_SIMPLE.rstrip('/') + '/' + release_cd.pypi_project(wheel) + '/'
+if (pin['method'], pin['url'].format(project=release_cd.pypi_project(wheel)), pin['accept']) != ('GET', asked, release_cd.PYPI_SIMPLE_JSON):
+    problems.append(f"the pin asks {pin['method']} {pin['url']} with Accept {pin['accept']}, but the step asks GET {asked} with Accept {release_cd.PYPI_SIMPLE_JSON}")
 whole = release_cd.parse_pypi_index(answer)
 if whole != {entry['filename']: entry['hashes']['sha256'] for entry in answer['files']}:
     problems.append(f'the parser reads the pinned answer as {whole}')
@@ -753,6 +759,7 @@ if not release_cd.parse_pypi_index(served):
 print('\\n'.join(problems))
 sys.exit(1 if problems else 0)`,
         listing,
+        file("wheel"),
       ],
       { cwd: checkout, encoding: "utf8" },
     );
