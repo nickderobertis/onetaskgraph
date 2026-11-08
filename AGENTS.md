@@ -1947,6 +1947,12 @@ reads unavailable until the re-copy of create-repo's fix, which falls back to th
   pipeline tagged seconds earlier, so every push that merges a release pull request looks
   exactly like a publish to recover. Acting on the lag alone released v0.2.4 and v0.2.5
   from no source change at all, and auto-merge fed each proposal back in as the next push.
+  **Release-plz's `local version > registry version` line is not the whole of the lag:** it
+  stops each crate's walk at the commit that crate's version tag names, so with no crate
+  changed since the tag it reports nothing however far crates.io is behind — which left
+  v0.14.8 unpublished after a fix to `scripts/release_cd.py` alone. Then, and only for an
+  eligible commit, the selector asks crates.io through `scripts/release-probe.sh
+  crate:onetaskgraph`, and an unanswered probe fails it rather than reading as no lag.
   `scripts/check-release-tooling-selection.sh` and `scripts/check-real-release-preparation.sh`
   drive both decisions, the second against the real pinned tool over a real checkout.
 - **`release-targets.toml` is what a consumer waits on, and its short names are frozen.**

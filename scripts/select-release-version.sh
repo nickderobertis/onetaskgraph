@@ -122,26 +122,68 @@ PY
     "restore its valid workspace.release_commits policy and rerun"
 }
 
-# release-plz reports registry lag without advancing a manifest: its `update` decision is
-# registry-based, but it limits that situation to a changelog edit. A tag only proves that
-# publishing was attempted, so treating its existence as "already released" would
-# permanently wedge a partial publish. What separates a release worth recovering from a
-# release this pipeline has just cut itself is not the lag — a registry cannot hold a
-# version tagged seconds earlier, so every push that merges a release pull request arrives
-# here — but what has landed since the boundary. Recover only for a commit the policy above
-# accepts; without that test the pipeline releases its own release commit, without end.
+# A tag only proves that publishing was attempted, so treating its existence as "already
+# released" would permanently wedge a partial publish. What separates a release worth
+# recovering from a release this pipeline has just cut itself is not the lag — a registry
+# cannot hold a version tagged seconds earlier, so every push that merges a release pull
+# request arrives here — but what has landed since the boundary. Recover only for a commit
+# the policy above accepts; without that test the pipeline releases its own release commit,
+# without end.
+eligible=no
+for commit in $commits; do
+  # llmlint: ignore[changed_behavior_has_e2e] Reading a commit this script has just listed fails only for a repository corrupted mid-run, which would replace the history boundary under test.
+  message="$(git show -s --format=%B "$commit")" || fail \
+    "could not read commit $commit" "check the repository history and rerun"
+  if release_policy_accepts "$message"; then
+    eligible=yes
+    break
+  fi
+done
+
+# Whether the registry lags the boundary has two sources, and release-plz is only the first.
+# Its `update` logs `local version (X) > registry version (Y)` for a package it walked back
+# through — but it walks from the last commit touching that package and stops at the commit
+# that package's version tag names, before it compares versions. So when nothing since the
+# tag touched a crate, it says `already up to date` however far crates.io is behind: v0.14.8
+# was tagged, crates.io kept serving 0.14.7, and the fix to the publish pipeline that landed
+# next (#3937, scripts/release_cd.py alone) never reached this branch. Ask crates.io directly
+# in that case, through the one probe this repository keeps for "what does a registry serve
+# now". It names the binary crate, which the publish job publishes last of all
+# (CRATE_PUBLICATION_ORDER in scripts/release_cd.py), so it lags whenever any crate does.
+# Only an eligible commit makes the answer matter, so nothing else asks.
+registry_lags=no
 if grep -qF "local version ($before) > registry version (" <<<"$update_output"; then
-  recoverable=no
-  for commit in $commits; do
-    # llmlint: ignore[changed_behavior_has_e2e] Reading a commit this script has just listed fails only for a repository corrupted mid-run, which would replace the history boundary under test.
-    message="$(git show -s --format=%B "$commit")" || fail \
-      "could not read commit $commit" "check the repository history and rerun"
-    if release_policy_accepts "$message"; then
-      recoverable=yes
-      break
+  registry_lags=yes
+elif [ "$eligible" = yes ]; then
+  probe_status=0
+  served="$(scripts/release-probe.sh crate:onetaskgraph)" || probe_status=$?
+  [ "$probe_status" -eq 0 ] || fail \
+    "could not read the version crates.io serves for onetaskgraph, so whether $tag reached it is unknown (the probe's reason is above)" \
+    "rerun once crates.io answers; a release is neither recovered nor declined on a registry that did not say"
+  if [ -z "$served" ]; then
+    registry_lags=yes
+  elif [ "$served" != "$before" ]; then
+    # The probe answers crates.io's max_stable_version, a plain X.Y.Z, as $before is; anything
+    # else is a document this cannot order, and is refused rather than guessed at.
+    [[ $served =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]] || fail \
+      "crates.io answered '$served' for onetaskgraph, which is not a plain X.Y.Z version" \
+      "rerun once crates.io answers a released version; nothing about $tag has been established"
+    served_is_earlier=no
+    if [ "${BASH_REMATCH[1]}" -lt "$major" ] ||
+      { [ "${BASH_REMATCH[1]}" -eq "$major" ] && [ "${BASH_REMATCH[2]}" -lt "$minor" ]; } ||
+      { [ "${BASH_REMATCH[1]}" -eq "$major" ] && [ "${BASH_REMATCH[2]}" -eq "$minor" ] &&
+        [ "${BASH_REMATCH[3]}" -lt "$patch" ]; }; then
+      served_is_earlier=yes
     fi
-  done
-  if [ "$recoverable" = yes ]; then
+    [ "$served_is_earlier" = yes ] || fail \
+      "crates.io serves onetaskgraph $served, later than this checkout's $before" \
+      "bring this checkout up to the released history, or restore the manifest version release-plz last released, then rerun"
+    registry_lags=yes
+  fi
+fi
+
+if [ "$registry_lags" = yes ]; then
+  if [ "$eligible" = yes ]; then
     # The attempted version may remain in some registries, while its successor is new to
     # every crate from that release.
     next="$major.$minor.$((patch + 1))"

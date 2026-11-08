@@ -129,6 +129,40 @@ exit 0
 STUB
 chmod +x "$stand_in_dir/release-plz" || fatal "could not make the stand-in executable" "check scratch-directory permissions and rerun"
 
+# The selector asks crates.io what it serves when release-plz cannot say, through the real
+# scripts/release-probe.sh. This curl stands where that probe finds curl, earlier on PATH,
+# and answers as crates.io does: a 200 carrying `crate.max_stable_version`, a 404 for a crate
+# it serves no release of, or no answer at all. CRATES_IO_SERVES picks which — a version,
+# `absent` or `unreachable` — and every URL it is asked for is recorded, so a case can say
+# whether the registry was asked at all. Left unset it serves the fixture's own version,
+# which is a release that reached the registry whole.
+curl_dir="$scratch/curl-bin"
+mkdir -p "$curl_dir" || fatal "could not create the curl stand-in directory" "check scratch-directory permissions and rerun"
+export CRATES_IO_ASKED="$scratch/crates-io-asked"
+cat > "$curl_dir/curl" <<'STUB'
+#!/usr/bin/env bash
+out="" url="" previous=""
+for argument in "$@"; do
+  [ "$previous" = -o ] && out="$argument"
+  [ "$previous" = -- ] && url="$argument"
+  previous="$argument"
+done
+printf '%s\n' "$url" >> "$CRATES_IO_ASKED"
+if [ "$url" != https://crates.io/api/v1/crates/onetaskgraph ]; then
+  echo "crates.io stand-in: this fixture serves only the onetaskgraph crate, not $url" >&2
+  exit 6
+fi
+serves="${CRATES_IO_SERVES:-$CRATES_IO_FIXTURE_VERSION}"
+case "$serves" in
+  unreachable) echo "crates.io stand-in: could not resolve host: crates.io" >&2; exit 6 ;;
+  absent) printf '{"errors":[{"detail":"crate `onetaskgraph` does not exist"}]}' > "$out"; printf 404 ;;
+  *) printf '{"crate":{"name":"onetaskgraph","max_stable_version":"%s"}}' "$serves" > "$out"; printf 200 ;;
+esac
+STUB
+chmod +x "$curl_dir/curl" || fatal "could not make the curl stand-in executable" "check scratch-directory permissions and rerun"
+export CRATES_IO_FIXTURE_VERSION="$version"
+export PATH="$curl_dir:$PATH"
+
 read_version() {
   value="$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$repo/crates/onetaskgraph/Cargo.toml" | head -n1)" || fatal \
     "could not read the scratch binary version" "check scratch-directory permissions and rerun"
@@ -286,10 +320,131 @@ run_case "fix: adjust Python root package" "pyproject.toml" "$major.$minor.$((pa
 run_case "fix: adjust Python SDK package" "sdks/python/pyproject.toml" "$major.$minor.$((patch + 1))"
 run_case "fix: adjust release preparation" "scripts/prepare-release-pr.sh" "$major.$minor.$((patch + 1))"
 run_case "fix: adjust version sync" "scripts/set-version.sh" "$major.$minor.$((patch + 1))"
+# What every Release job runs is release tooling too: the one implementation each CD recipe
+# calls, the modules and scripts it reads to package and publish, its loopback registries and
+# the recipes themselves. Missing them is what left v0.14.8 unpublished after #3937, a fix
+# to scripts/release_cd.py alone, landed and selected nothing.
+run_case "fix: let a release re-run finish" "scripts/release_cd.py" "$major.$minor.$((patch + 1))"
+run_case "fix: adjust release loopback registries" "scripts/loopback-release-registries.py" "$major.$minor.$((patch + 1))"
+run_case "fix: adjust the wheel lock" "scripts/cli_wheel_lock.py" "$major.$minor.$((patch + 1))"
+run_case "fix: adjust product versions" "scripts/product_versions.py" "$major.$minor.$((patch + 1))"
+run_case "fix: adjust npm publication" "scripts/publish-npm.sh" "$major.$minor.$((patch + 1))"
+run_case "fix: adjust crate publication status" "scripts/crate-publication-status.sh" "$major.$minor.$((patch + 1))"
+run_case "fix: adjust crate sibling resolution" "scripts/crate-sibling-resolution.sh" "$major.$minor.$((patch + 1))"
+run_case "fix: adjust the installer" "scripts/install.sh" "$major.$minor.$((patch + 1))"
+run_case "fix: adjust the release recipes" "justfile" "$major.$minor.$((patch + 1))"
 run_case $'chore: describe compatibility\n\nBREAKING CHANGE: release pipeline contract' \
   ".github/workflows/release.yml" "$major.$((minor + 1)).0"
 run_case "feat: tooling beside crate bump" ".github/workflows/release.yml" \
   "$major.$minor.$((patch + 1))" "$major.$minor.$((patch + 1))"
+
+# A tagged version the registry never received, where release-plz says nothing about it. The
+# real tool walks back from the last commit touching each crate and stops at the commit that
+# crate's version tag names before it compares versions, so with no crate changed since the
+# tag it reports every crate `already up to date` however far crates.io is behind — which is
+# what this stand-in models by printing no lag line. The selector asks crates.io itself. The
+# commits below edit docs/task-projection.md, which no crate packages: README.md is
+# onetaskgraph-core's readme, so the real tool would count a change to it as a crate change.
+# commit_since_boundary <subject> <path>...: one commit after the release boundary.
+commit_since_boundary() {
+  subject="$1"
+  shift
+  for path in "$@"; do
+    printf '\n' >> "$repo/$path" || fatal "could not modify fixture $path" "check scratch-directory permissions and rerun"
+    git -C "$repo" add "$path" || fatal "could not stage fixture $path" "check that git works and rerun"
+  done
+  git -C "$repo" -c user.name=check -c user.email=check@example.invalid commit --quiet --no-verify \
+    -m "$subject" || fatal "could not commit the fixture for '$subject'" "check that git works and rerun"
+}
+from_boundary() {
+  git -C "$repo" checkout --quiet "v$version" -- . || fatal "could not restore the scratch fixture" "check that git works and rerun"
+  git -C "$repo" switch --quiet --detach "v$version" || fatal "could not detach the scratch fixture" "check that git works and rerun"
+  : > "$CRATES_IO_ASKED" || fatal "could not clear the crates.io stand-in's record" "check scratch-directory permissions and rerun"
+}
+# expect_recovery <what> <what crates.io serves>
+expect_recovery() {
+  what="$1"
+  recovery_output="$(cd "$repo" && CRATES_IO_SERVES="$2" scripts/select-release-version.sh)" || finding \
+    "the selector failed for $what" "run that case directly and fix its diagnostic"
+  grep -qF "registry recovery selected $version -> $major.$minor.$((patch + 1))" <<<"$recovery_output" || finding \
+    "the selector did not recover $what, with crates.io serving '$2'; it said: $recovery_output" \
+    "ask crates.io through scripts/release-probe.sh when release-plz reports no lag, and recover when it is behind the tag"
+  [ "$(read_version)" = "$major.$minor.$((patch + 1))" ] || finding \
+    "recovering $what did not advance every manifest beyond $version" "advance the synchronized workspace version for registry recovery"
+  grep -qxF https://crates.io/api/v1/crates/onetaskgraph "$CRATES_IO_ASKED" || finding \
+    "recovering $what never asked crates.io what it serves" "read the registry through scripts/release-probe.sh crate:onetaskgraph"
+}
+if [ "$patch" -gt 0 ]; then
+  earlier="$major.$minor.$((patch - 1))"
+else
+  earlier=absent
+fi
+
+from_boundary
+commit_since_boundary "fix: unrelated documentation" docs/task-projection.md
+expect_recovery "an eligible commit touching no crate and no release tooling, under a tag crates.io is behind" "$earlier"
+from_boundary
+commit_since_boundary "fix: unrelated documentation" docs/task-projection.md
+expect_recovery "an eligible commit under a tag whose crate crates.io serves no release of" absent
+
+# The same commit when crates.io holds the tagged version is nothing to release, and the
+# answer that decided it was the registry's.
+from_boundary
+commit_since_boundary "fix: unrelated documentation" docs/task-projection.md
+current_output="$(cd "$repo" && scripts/select-release-version.sh)" || finding \
+  "the selector failed for an eligible commit under a release crates.io holds whole" "run that case directly and fix its diagnostic"
+[ "$(read_version)" = "$version" ] || finding \
+  "the selector released a commit touching nothing releasable although crates.io serves $version; it said: $current_output" \
+  "recover only when crates.io serves an earlier version than the tag, or none"
+grep -qxF https://crates.io/api/v1/crates/onetaskgraph "$CRATES_IO_ASKED" || finding \
+  "the selector declined without asking crates.io" "read the registry through scripts/release-probe.sh crate:onetaskgraph"
+
+# Without an eligible commit the registry's answer could change nothing, so it is not asked —
+# the head every release pull request's merge pushes stays a call-free decision.
+from_boundary
+commit_since_boundary "docs: describe the release" docs/task-projection.md
+(cd "$repo" && CRATES_IO_SERVES="$earlier" scripts/select-release-version.sh >/dev/null) || finding \
+  "the selector failed for a commit its policy does not accept" "run that case directly and fix its diagnostic"
+[ "$(read_version)" = "$version" ] || finding \
+  "the selector released a commit release_commits does not accept, because crates.io is behind" \
+  "recover registry lag only for a commit the policy accepts"
+[ ! -s "$CRATES_IO_ASKED" ] || finding \
+  "the selector asked crates.io with no eligible commit since the boundary" "ask only when an eligible commit makes the answer matter"
+
+# This repository's present state, as the release-plz run after #3937 saw it: v0.14.8 tagged,
+# crates.io still serving 0.14.7, and since the tag only a fix to the release pipeline
+# (1dbcbb26) — then this change's own commit beside it. Each head proposes the next patch,
+# and neither proposes more than one.
+from_boundary
+commit_since_boundary "fix: let a release re-run finish when a registry already holds a rebuilt file (#3937)" \
+  scripts/release_cd.py
+expect_recovery "a partly published release followed only by a release-pipeline fix" "$earlier"
+from_boundary
+commit_since_boundary "fix: let a release re-run finish when a registry already holds a rebuilt file (#3937)" \
+  scripts/release_cd.py
+commit_since_boundary "fix: make a fix to the release pipeline cut a release" \
+  scripts/select-release-version.sh config/release-tooling-paths.txt scripts/check-release-tooling-selection.sh
+expect_recovery "a partly published release followed by the release-pipeline fix and this change" "$earlier"
+
+# A registry that did not answer, or answered something the boundary cannot be ordered
+# against, decides nothing: the selector refuses rather than reading either as no lag.
+# expect_registry_refusal <phrase> <what crates.io serves>
+expect_registry_refusal() {
+  from_boundary
+  commit_since_boundary "fix: unrelated documentation" docs/task-projection.md
+  refusal_output="" refusal_status=0
+  refusal_output="$(cd "$repo" && CRATES_IO_SERVES="$2" scripts/select-release-version.sh 2>&1)" || refusal_status=$?
+  [ "$refusal_status" -eq 1 ] || finding \
+    "the selector exited $refusal_status with crates.io serving '$2', expected 1; it said: $refusal_output" \
+    "refuse a registry answer that cannot decide recovery"
+  grep -qF "$1" <<<"$refusal_output" || finding \
+    "the selector's refusal with crates.io serving '$2' did not name '$1'; it said: $refusal_output" "repair its diagnostic and rerun"
+  [ "$(read_version)" = "$version" ] || finding \
+    "the selector moved a manifest on a registry answer it refused" "decide nothing until crates.io answers"
+}
+expect_registry_refusal "could not read the version crates.io serves for onetaskgraph" unreachable
+expect_registry_refusal "later than this checkout's $version" "$((major + 1)).0.0"
+expect_registry_refusal "which is not a plain X.Y.Z version" "$major.$minor.$patch.1"
 
 # Two real commits prove aggregation: a later feature dominates the earlier patch bump.
 git -C "$repo" checkout --quiet "v$version" -- . || fatal "could not restore the aggregation fixture" "check that git works and rerun"
