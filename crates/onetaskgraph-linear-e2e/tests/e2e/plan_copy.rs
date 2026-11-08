@@ -491,16 +491,28 @@ pub(crate) fn first_copy_of_the_realistic_plan() -> FirstCopy {
     for sent in [&project_sent, &document_sent] {
         assert_eq!(sent.reads_after_a_write(), Vec::<String>::new());
     }
+    // One request answers every origin lookup, the organization and the resolution; each item
+    // the lookup listed nothing for is then read by the id its origin's key derives — the
+    // project, then each of its five tasks — before the copy creates it under that id.
     assert_eq!(
         project_sent.before_the_first_write(),
-        ["originIssues"],
+        [
+            "originIssues",
+            "project",
+            "issue",
+            "issue",
+            "issue",
+            "issue",
+            "issue"
+        ],
         "one request answers every origin lookup, the organization and the resolution"
     );
     assert!(
         project_sent
             .requests
             .iter()
-            .all(|request| request.mutation() || request.root() == "originIssues"),
+            .all(|request| request.mutation()
+                || ["originIssues", "project", "issue"].contains(&request.root().as_str())),
         "no issues or projects origin query of its own: {:?}",
         project_sent
             .requests
@@ -508,7 +520,11 @@ pub(crate) fn first_copy_of_the_realistic_plan() -> FirstCopy {
             .map(Request::root)
             .collect::<Vec<_>>()
     );
-    assert_eq!(document_sent.before_the_first_write(), ["documents"]);
+    assert_eq!(
+        document_sent.before_the_first_write(),
+        ["documents", "document"],
+        "the document's own lookup, then the read by the id its origin's key derives"
+    );
     assert!(
         !document_sent
             .requests
@@ -540,11 +556,11 @@ pub(crate) fn first_copy_of_the_realistic_plan() -> FirstCopy {
     let follow_ups = landed.len();
     let detail = format!(
         "1 project, 5 tasks and 1 design document with 2 adjacent new images, copied into an \
-         empty loopback Linear that rewrites every long form: {} origin lookup before the \
-         project copy's first write, 1 documents lookup, {} content writes, {follow_ups} \
-         follow-up writes, {} reads after a write, 0 destination-project reads, {} asset requests \
-         ({} fileUpload, {} PUT, {} GET)",
-        project_sent.before_the_first_write().len(),
+         empty loopback Linear that rewrites every long form: 1 origin lookup and {} key reads \
+         before the project copy's first write, 1 documents lookup and 1 key read, {} content \
+         writes, {follow_ups} follow-up writes, {} reads after a write, 0 destination-project \
+         reads, {} asset requests ({} fileUpload, {} PUT, {} GET)",
+        project_sent.before_the_first_write().len() - 1,
         project_sent.writes().len() + document_sent.writes().len() - follow_ups,
         project_sent.reads_after_a_write().len() + document_sent.reads_after_a_write().len(),
         document_sent.uploads + document_sent.puts + document_sent.gets,

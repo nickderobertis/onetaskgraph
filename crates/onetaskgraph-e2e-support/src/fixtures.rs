@@ -6743,6 +6743,32 @@ impl LinearWorkspace {
         self.ledger.lock().unwrap().clone()
     }
 
+    /// Open a lag window: every issue, project and document created from now on is missing from
+    /// every filtered or searched read — each `issues`, `projects` and `documents` listing, a
+    /// copy's batched lookup by origin among them — until [`Self::settle_listings`], while a read
+    /// of it by its id answers it at once. A Linear whose listings run behind its writes.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback Linear's own answers, which only its request loop here builds from its private rows: like `rate_limit` and `bend_answers` it can only be a method of this handle, and the Linear suite is what drives it.
+    pub fn lag_listings(&self) {
+        self.state.lock().unwrap()["_linear_lagging"] = json!(true);
+    }
+
+    /// Close the lag window [`Self::lag_listings`] opened: every record created inside it is
+    /// listed from now on, as one created before it always was.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] As `lag_listings` above: a control of the loopback Linear's private rows, which only this handle reaches.
+    pub fn settle_listings(&self) {
+        let mut data = self.state.lock().unwrap();
+        if let Some(held) = data.as_object_mut() {
+            held.remove("_linear_lagging");
+        }
+        for collection in ["tasks", "projects", "documents"] {
+            for row in data[collection].as_array_mut().into_iter().flatten() {
+                if let Some(row) = row.as_object_mut() {
+                    row.remove("_lagging");
+                }
+            }
+        }
+    }
+
     // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the shared loopback Linear's handle, which more than one suite drives.
     /// Have this workspace store every long form it is written — an issue's `description`, a
     /// project's and a document's `content` — as `rewrite` says Linear does, from the next
@@ -8035,6 +8061,7 @@ fn linear_response(
             .unwrap()
             .iter()
             .filter(|v| linear_holds(v, &vars["filter"], LinearRow::Document, data))
+            .filter(|v| linear_listed(v))
             .map(linear_document)
             .collect();
         return Ok(json!({"documents":linear_connection(rows,&vars)}));
@@ -8109,6 +8136,7 @@ fn linear_response(
             .unwrap()
             .iter()
             .filter(|v| linear_holds(v, &vars["filter"], LinearRow::Issue, data))
+            .filter(|v| linear_listed(v))
             // A trashed issue is listed nowhere, as Linear's own listing leaves it out.
             .filter(|v| v.get("_trashed").is_none_or(Value::is_null))
             .map(|v| linear_task(v, data))
@@ -8121,6 +8149,7 @@ fn linear_response(
             .unwrap()
             .iter()
             .filter(|v| linear_holds(v, &vars["filter"], LinearRow::Project, data))
+            .filter(|v| linear_listed(v))
             .map(|v| linear_project(v, data))
             .collect();
         return Ok(json!({"projects":linear_connection(rows,&vars)}));
@@ -8425,6 +8454,7 @@ fn linear_write_item(
     let stateless = data["_linear_stateless"] == true;
     let web_workspace = data["_linear_web_workspace"].as_str().map(str::to_owned);
     let burnt = linear_burnt(data);
+    let lagging = linear_lagging(data);
     let rows = data[collection]
         .as_array_mut()
         .ok_or("fixture collection is not an array")?;
@@ -8526,6 +8556,11 @@ fn linear_write_item(
     if let Some(index) = existing {
         rows[index] = row;
     } else {
+        // Created inside a lag window: missing from every filtered or searched read until the
+        // journey settles it, and read by its id as any other.
+        if lagging {
+            row["_lagging"] = json!(true);
+        }
         rows.push(row);
     }
     // The write's own answer carries the whole item as it is now stored — exactly what a read
@@ -8581,6 +8616,7 @@ fn linear_write_document(
     let stamp = format!("d{}", data["documents"].as_array().map_or(0, Vec::len));
     let web_workspace = data["_linear_web_workspace"].as_str().map(str::to_owned);
     let burnt = linear_burnt(data);
+    let lagging = linear_lagging(data);
     let rows = data["documents"]
         .as_array_mut()
         .ok_or("fixture collection is not an array")?;
@@ -8631,6 +8667,11 @@ fn linear_write_document(
     if let Some(index) = existing {
         rows[index] = row;
     } else {
+        // Created inside a lag window: missing from every filtered or searched read until the
+        // journey settles it, and read by its id as any other.
+        if lagging {
+            row["_lagging"] = json!(true);
+        }
         rows.push(row);
     }
     let _ = stored;
@@ -9138,6 +9179,17 @@ fn linear_burnt(data: &Value) -> Vec<String> {
         .flatten()
         .filter_map(|id| id.as_str().map(str::to_owned))
         .collect()
+}
+
+/// Whether a create now lands inside a lag window [`LinearWorkspace::lag_listings`] opened.
+fn linear_lagging(data: &Value) -> bool {
+    data["_linear_lagging"] == true
+}
+
+/// Whether a filtered or searched read lists `row`: every row but one created inside a lag
+/// window that has not settled.
+fn linear_listed(row: &Value) -> bool {
+    row.get("_lagging") != Some(&json!(true))
 }
 
 /// Record that `id` is held by a record this workspace no longer answers for.

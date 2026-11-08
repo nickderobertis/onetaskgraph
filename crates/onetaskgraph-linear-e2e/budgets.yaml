@@ -192,13 +192,17 @@ budgets:
       The requests one first copy of a realistic plan — 1 project, 5 tasks and 1 design document
       with 2 new images — sends an empty Linear that rewrites every long form, end to end through
       the binary. It protects headroom on the production Linear key every manager of a host
-      shares.
+      shares. Seven of them are key reads: before each of the seven creates, the item is read by
+      the id its origin's create key derives, because a lookup through Linear's filtered reads can
+      miss a record written moments before and a read by id cannot. No cheaper read replaces
+      them: Linear refuses operation batching, a missing id errors a whole aliased query, and an
+      `id: {in: …}` filter is a filtered read like the lookup it backs up.
     labels: [linear]
     measure: reported
     command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-linear-e2e"]
     unit: requests
     direction: max
-    threshold: 20
+    threshold: 27
   - id: linear-live-documents-created-per-ordinary-pass
     description: >-
       Successful documentCreate operations recorded by both live lanes during one ordinary

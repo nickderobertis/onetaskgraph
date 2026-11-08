@@ -851,6 +851,26 @@ fn discovery(served: &[(String, Value)]) -> usize {
     first + served[first..].len() - of(&served[first..], &writes)
 }
 
+/// How many of `served` are a read by id of an id a create later in `served` is sent under: the
+/// read a copy makes of each item its lookup by origin listed nothing for, by the id that item's
+/// origin's key derives, before it creates the item under that id. Added after the base below
+/// and counted apart from it, one for each item a copy creates.
+fn key_reads(served: &[(String, Value)]) -> usize {
+    let mutation = |query: &str| query.trim_start().starts_with("mutation");
+    served
+        .iter()
+        .enumerate()
+        .filter(|(at, (query, variables))| {
+            !mutation(query)
+                && variables["id"].as_str().is_some_and(|id| {
+                    served[at + 1..].iter().any(|(later, sent)| {
+                        mutation(later) && sent["input"]["id"].as_str() == Some(id)
+                    })
+                })
+        })
+        .count()
+}
+
 /// The base the reads, listings and copy discovery of a mapped source are held to, and what each
 /// cost there. This is a regression check of its own, not a budget.
 ///
@@ -921,6 +941,7 @@ fn task_and_project_reads_status_listings_and_copy_discovery_cost_no_more_than_o
         of(&alone, &[onetaskgraph_linear::graphql::PROJECT_CREATE]),
         1
     );
+    assert_eq!(key_reads(&alone), 1, "one read by id before its one create");
     let routed = counted(
         &sandbox,
         &workspace,
@@ -972,13 +993,13 @@ fn task_and_project_reads_status_listings_and_copy_discovery_cost_no_more_than_o
             BASE_PROJECT_LIST_STATUS,
         ),
         (
-            "project copy --no-tasks, besides its write",
-            discovery(&alone),
+            "project copy --no-tasks, besides its write and its key read",
+            discovery(&alone) - key_reads(&alone),
             BASE_COPY_PROJECT_ALONE,
         ),
         (
-            "a routed copy, besides its writes",
-            discovery(&routed),
+            "a routed copy, besides its writes and its key reads",
+            discovery(&routed) - key_reads(&routed),
             BASE_COPY_ROUTED_MEMBER,
         ),
     ] {
@@ -1020,11 +1041,16 @@ fn task_and_project_reads_status_listings_and_copy_discovery_cost_no_more_than_o
         &workspace,
         &["project", "copy", "plan:big", "--to", LINEAR],
     );
+    assert_eq!(
+        key_reads(&big),
+        6,
+        "one read by id before each of its six creates"
+    );
     assert!(
-        discovery(&big) <= BASE_COPY_PROJECT_AND_TASKS,
-        "a copy of a project and five tasks sends {} requests besides its writes, more than \
-         the {BASE_COPY_PROJECT_AND_TASKS} at {BASE}",
-        discovery(&big)
+        discovery(&big) - key_reads(&big) <= BASE_COPY_PROJECT_AND_TASKS,
+        "a copy of a project and five tasks sends {} requests besides its writes and its key \
+         reads, more than the {BASE_COPY_PROJECT_AND_TASKS} at {BASE}",
+        discovery(&big) - key_reads(&big)
     );
     let engine = engine(&config, Some(&plan));
     let runtime = tokio::runtime::Builder::new_current_thread()

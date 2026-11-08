@@ -35,6 +35,9 @@ serde-saphyr.workspace = true
 # Hashes what a read hands back on its own, so a recorded digest is checked rather than echoed.
 sha2.workspace = true
 tokio.workspace = true
+# Computes the store's create key for an origin as the README states it, so the id a copy
+# lands under is checked against the published rule rather than against the plugin's own code.
+uuid.workspace = true
 
 # The asset live journey opens the same credential gate as the plugin lane.
 onetaskgraph-live.workspace = true

@@ -7128,6 +7128,10 @@ async fn a_batched_origin_read_answers_each_lookup_once_and_the_designator_for_t
             serde_json::json!([project_recording("P-1", "plan:big")]),
             false,
         ),
+        // t1's lookup listed nothing, so the issue its origin's key names is read by id, and
+        // the project t0's names: neither is there.
+        serde_json::json!({"issue": null}),
+        serde_json::json!({"project": null}),
         // t0 asked a second time, on its own.
         serde_json::json!({"issues":{"nodes":[issue_recording("I-1", "plan:t0")],
             "pageInfo":{"hasNextPage":false,"endCursor":null}}}),
@@ -7179,8 +7183,13 @@ async fn a_batched_origin_read_answers_each_lookup_once_and_the_designator_for_t
         .collect();
     assert_eq!(
         sent,
-        vec![graphql::COUNTERPART_LOOKUPS.to_owned()],
-        "one request answered every lookup and the designator"
+        vec![
+            graphql::COUNTERPART_LOOKUPS.to_owned(),
+            graphql::ISSUE.to_owned(),
+            graphql::PROJECT.to_owned(),
+        ],
+        "one request answered every lookup and the designator, and a lookup listing nothing \
+         reads its origin's key by id"
     );
 
     // Answered once: the same lookup again is sent.
@@ -7218,13 +7227,18 @@ async fn an_incomplete_batched_page_or_a_write_leaves_every_origin_to_its_own_lo
             serde_json::json!([]),
             true,
         ),
+        // Each lookup listing nothing reads its origin's key by id, which holds nothing.
         empty.clone(),
+        serde_json::json!({"issue": null}),
         empty.clone(),
+        serde_json::json!({"issue": null}),
         serde_json::json!({"projects":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}),
+        serde_json::json!({"project": null}),
         // A write, then the lookup the origin held before it no longer stands in for.
         serde_json::json!({"issue":issue_recording("I-9", "plan:elsewhere")}),
         serde_json::json!({"issueDelete":{"success":true}}),
         empty,
+        serde_json::json!({"issue": null}),
     ]);
     let source = writable_source(&endpoint);
     source
@@ -7250,8 +7264,11 @@ async fn an_incomplete_batched_page_or_a_write_leaves_every_origin_to_its_own_lo
         vec![
             graphql::COUNTERPART_LOOKUPS.to_owned(),
             graphql::ISSUES.to_owned(),
+            graphql::ISSUE.to_owned(),
             graphql::ISSUES.to_owned(),
+            graphql::ISSUE.to_owned(),
             graphql::PROJECTS.to_owned(),
+            graphql::PROJECT.to_owned(),
         ],
         "an incomplete page answers no origin"
     );
@@ -7275,6 +7292,7 @@ async fn an_incomplete_batched_page_or_a_write_leaves_every_origin_to_its_own_lo
             graphql::ISSUE.to_owned(),
             graphql::ISSUE_DELETE.to_owned(),
             graphql::ISSUES.to_owned(),
+            graphql::ISSUE.to_owned(),
         ],
         "a write drops what was held, the origins not yet asked among it"
     );
