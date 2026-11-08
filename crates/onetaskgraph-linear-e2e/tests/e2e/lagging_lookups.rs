@@ -34,10 +34,8 @@ const TEAM_STATES: &[(&str, &str, &str)] = &[
 
 const PROJECT_STATUSES: &[(&str, &str)] = &[("Scheduled", "planned"), ("Shipped", "completed")];
 
-/// The project copy every journey here makes.
 const PROJECT_COPY: [&str; 6] = ["project", "copy", "notes:P", "--to", "dest", "--json"];
 
-/// The document copy, of both of the project's documents.
 const DOCUMENT_COPY: [&str; 7] = [
     "document", "copy", "notes:D", "notes:E", "--to", "dest", "--json",
 ];
@@ -791,4 +789,41 @@ fn a_copy_out_of_a_private_folder_gives_a_public_linear_no_id_derived_from_it() 
             "nothing names the private record: {everything}"
         );
     }
+}
+
+/// A create under its origin's key whose answer is lost after Linear stored it fails the copy
+/// without another id being tried, and the next copy — inside the lag window, so no listing shows
+/// the issue — finds that issue by the id it was sent under and creates nothing.
+#[test]
+fn a_lost_create_answer_is_found_by_its_id_on_the_next_copy_and_never_created_twice() {
+    let (first, _) = first_ids();
+    let plan = Plan::new();
+    plan.workspace.lag_listings();
+    plan.workspace
+        .lose_answer_once(onetaskgraph_linear::graphql::ISSUE_CREATE);
+    let (output, served) = plan.run_on(&plan.sandbox.subdirectory("host"), &PROJECT_COPY);
+    assert!(!output.status.success(), "{}", stdout(&output));
+    let tried: Vec<&Value> = served
+        .iter()
+        .filter(|(query, _)| query == onetaskgraph_linear::graphql::ISSUE_CREATE)
+        .map(|(_, variables)| &variables["input"]["id"])
+        .collect();
+    assert_eq!(
+        tried,
+        [&json!(first)],
+        "one create, under the first id alone"
+    );
+
+    let (again, served) = plan.ok(&PROJECT_COPY);
+    assert_eq!(
+        landed(&again, "notes:first"),
+        format!("dest:{first}"),
+        "{again}"
+    );
+    assert!(
+        !served.iter().any(|(query, variables)| query
+            == onetaskgraph_linear::graphql::ISSUE_CREATE
+            && variables["input"]["id"] == first.as_str()),
+        "the issue the lost answer stored is not created again"
+    );
 }

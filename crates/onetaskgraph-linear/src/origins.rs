@@ -410,7 +410,6 @@ impl LinearSource {
             .map(|held| held.id().clone()))
     }
 
-    /// The `record` at `id`, read by that id alone.
     async fn read_copied(
         &self,
         record: MetadataRecord,

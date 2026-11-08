@@ -6279,7 +6279,6 @@ enum CreateId {
     /// Each generation of the key [`LinearSource::origin_key`] derives for `origin`: a copy's
     /// create that carries an origin and no key of its own.
     Origin {
-        /// The derived key.
         key: uuid::Uuid,
         /// The origin the item records, which a record already holding one of those ids is
         /// confirmed against.
@@ -6287,7 +6286,6 @@ enum CreateId {
     },
 }
 
-/// What one of `record`'s kind is called in a message.
 fn record_noun(record: MetadataRecord) -> &'static str {
     match record {
         MetadataRecord::Task => "issue",
