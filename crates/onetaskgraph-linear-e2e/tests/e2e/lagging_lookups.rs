@@ -320,7 +320,6 @@ fn a_repeat_project_copy_straight_after_the_first_writes_nothing_while_listings_
         assert_eq!(landed(&repeat, source), landed(&first, source), "{source}");
     }
 
-    // The documents too: copied once, and again at once, inside the same window.
     let (documents, _) = plan.ok(&DOCUMENT_COPY);
     assert!(every(&documents, "created"), "{documents}");
     let (again, served) = plan.ok(&DOCUMENT_COPY);
@@ -340,7 +339,8 @@ fn a_repeat_after_the_lag_window_has_passed_writes_nothing() {
     plan.workspace.lag_listings();
     let (first, _) = plan.ok(&PROJECT_COPY);
     let (documents, _) = plan.ok(&DOCUMENT_COPY);
-    // Repeated at once, inside the window, before it passes.
+    // A repeat inside the window is where a duplicate would be made; settling afterwards lists
+    // every record, so a duplicate made here could no longer hide from the counts below.
     plan.ok(&PROJECT_COPY);
     plan.ok(&DOCUMENT_COPY);
     plan.workspace.settle_listings();
@@ -359,7 +359,6 @@ fn a_repeat_after_the_lag_window_has_passed_writes_nothing() {
             "{source}"
         );
     }
-    // Listed now the window has passed, the workspace holds one record of each item and no more.
     for (kind, held) in [("project", 1), ("task", 2), ("document", 2)] {
         let listed = plan.ok(&[kind, "list", "--source", "dest", "--json"]).0;
         assert_eq!(
