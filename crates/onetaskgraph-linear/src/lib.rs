@@ -2088,9 +2088,12 @@ impl LinearSource {
                     sent: None,
                 });
             }
-            CreateId::Keyed(key) => (key.as_str(), None),
-            CreateId::Origin { key, origin } => (key.as_str(), Some(origin.as_str())),
+            CreateId::Keyed(key) => (key.hyphenated().to_string(), None),
+            CreateId::Origin { key, origin } => {
+                (key.hyphenated().to_string(), Some(origin.as_str()))
+            }
         };
+        let key = key.as_str();
         let mut refused = None;
         for (generation, id) in linear_ids_of_key(key)?.into_iter().enumerate() {
             // A create after a refused one is asked for as every other write is: the hold that
@@ -3933,7 +3936,7 @@ impl TaskSource for LinearSource {
         let mut metadata = write.item.metadata.clone();
         // A create's key is the issue's own id here, and stays in its slot as every source keeps
         // it, so a later copy reads the issue as the one it wrote.
-        let create_id = self.create_id(MetadataRecord::Task, &metadata, write.target.as_ref());
+        let create_id = self.create_id(MetadataRecord::Task, &metadata, write.target.as_ref())?;
         set_task_list(&mut metadata, TaskRef::DELIVERS_KEY, &write.item.delivers);
         set_task_list(
             &mut metadata,
@@ -4046,7 +4049,7 @@ impl TaskSource for LinearSource {
             MetadataRecord::Project,
             &write.item.metadata,
             write.target.as_ref(),
-        );
+        )?;
         // A project's long form is its `content`, not its `description`: Linear documents the
         // second as "the short description of the project", and the first — the project's
         // Markdown body — is the one with room for a description and a metadata slot.
@@ -4274,7 +4277,7 @@ impl TaskSource for LinearSource {
             MetadataRecord::Document,
             &write.item.metadata,
             write.target.as_ref(),
-        );
+        )?;
         let (query, variables, root) = match &write.target {
             Some(id) => {
                 // A target this workspace does not hold is refused rather than created:
@@ -6272,12 +6275,12 @@ enum CreateId {
     /// origin.
     Unchosen,
     /// Each generation of the create key the item carries.
-    Keyed(String),
+    Keyed(uuid::Uuid),
     /// Each generation of the key [`LinearSource::origin_key`] derives for `origin`: a copy's
     /// create that carries an origin and no key of its own.
     Origin {
         /// The derived key.
-        key: String,
+        key: uuid::Uuid,
         /// The origin the item records, which a record already holding one of those ids is
         /// confirmed against.
         origin: String,

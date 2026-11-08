@@ -187,12 +187,9 @@ budgets:
     unit: points
     direction: max
     threshold: 675000
-  # 27, not 20, on the manager's ruling of 2026-11-08: seven of the requests are key reads, one
-  # read by id before each of the seven creates of the id its origin's create key derives,
-  # because a lookup through Linear's filtered reads can miss a record written moments before and
-  # a read by id cannot. No cheaper read replaces them: Linear refuses operation batching, an id
-  # naming nothing errors a whole aliased query, and an `id: {in: …}` filter is a filtered read
-  # like the lookup it backs up. README's "How a copy to Linear finds what it wrote".
+  # Seven of these requests are key reads: one read by id before each create, because a lookup
+  # through Linear's filtered reads can miss a record written moments before and a read by id
+  # cannot. README's "How a copy to Linear finds what it wrote" says why no cheaper read serves.
   - id: linear-requests-per-plan-copy
     description: >-
       The requests one first copy of a realistic plan — 1 project, 5 tasks and 1 design document

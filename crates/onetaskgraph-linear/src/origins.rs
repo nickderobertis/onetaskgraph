@@ -348,7 +348,7 @@ impl LinearSource {
     /// `<origin>|<this source's name>|`, with `|project` or `|document` appended for a project or
     /// a document — the README's rule, so it is the key a copy recording an intent gives that
     /// create too, and the ids it derives are the ones that create is sent under.
-    pub(crate) fn origin_key(&self, record: MetadataRecord, origin: &str) -> String {
+    pub(crate) fn origin_key(&self, record: MetadataRecord, origin: &str) -> uuid::Uuid {
         let mut name = format!("{origin}|{}|", self.name);
         match record {
             MetadataRecord::Task => {}
@@ -356,33 +356,43 @@ impl LinearSource {
             MetadataRecord::Document => name.push_str("|document"),
         }
         uuid::Uuid::new_v5(&CREATE_KEY_NAMESPACE, name.as_bytes())
-            .hyphenated()
-            .to_string()
     }
 
     /// The ids a create of `record` carrying `metadata` is sent under: its own create key's,
     /// when it carries one; otherwise, when it records an origin, the ids of that origin's key —
     /// so a copy that recorded no intent, and no link, still sends each create under ids a later
     /// copy can read it back by — and otherwise none. An update chooses none.
+    ///
+    /// # Errors
+    ///
+    /// [`SourceError::Malformed`] for a create key that is not a hyphenated RFC 4122 UUID, as
+    /// [`linear_ids_of_key`] refuses one.
     pub(crate) fn create_id(
         &self,
         record: MetadataRecord,
         metadata: &std::collections::BTreeMap<String, Value>,
         target: Option<&NativeId>,
-    ) -> CreateId {
+    ) -> Result<CreateId, SourceError> {
         if target.is_some() {
-            return CreateId::Unchosen;
+            return Ok(CreateId::Unchosen);
         }
         if let Some(key) = create_key_of(metadata, target) {
-            return CreateId::Keyed(key);
+            linear_ids_of_key(&key)?;
+            return uuid::Uuid::parse_str(&key)
+                .map(CreateId::Keyed)
+                .map_err(|_| SourceError::Malformed {
+                    message: format!("create key {key:?} is not a hyphenated UUID"),
+                });
         }
-        match metadata.get(TaskQuery::ORIGIN_KEY).and_then(Value::as_str) {
-            Some(origin) => CreateId::Origin {
-                key: self.origin_key(record, origin),
-                origin: origin.to_owned(),
+        Ok(
+            match metadata.get(TaskQuery::ORIGIN_KEY).and_then(Value::as_str) {
+                Some(origin) => CreateId::Origin {
+                    key: self.origin_key(record, origin),
+                    origin: origin.to_owned(),
+                },
+                None => CreateId::Unchosen,
             },
-            None => CreateId::Unchosen,
-        }
+        )
     }
 
     /// The `record` at `id` when it records `origin`, read by that id alone — `None` when this
@@ -429,7 +439,7 @@ impl LinearSource {
         record: MetadataRecord,
         origin: &str,
     ) -> Result<Option<Copied>, SourceError> {
-        for id in linear_ids_of_key(&self.origin_key(record, origin))? {
+        for id in linear_ids_of_key(&self.origin_key(record, origin).hyphenated().to_string())? {
             match self.read_copied(record, &NativeId(id)).await? {
                 None => return Ok(None),
                 Some(held) if origin_query(origin).origin_matches(held.metadata()) => {

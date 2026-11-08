@@ -396,22 +396,27 @@ fn the_engines_create_key_and_the_plugins_land_every_kind_under_one_id() {
     );
 }
 
-/// The id the create of `notes:first` is sent under first, and the next one after it — learned
-/// from a copy into a fresh workspace, so the journey holds the ids rather than restating how
-/// they are derived; the next is the first with its last octet XORed with 1, as
-/// `onetaskgraph_linear::linear_ids_of_key` documents.
-fn first_ids() -> (String, String) {
+/// Every id the create of `notes:first` is sent under, in the order it tries them — the first
+/// learned from a copy into a fresh workspace, so the journey holds the ids rather than restating
+/// how they are derived, and each later one the first with its last octet XORed with its
+/// generation, as `onetaskgraph_linear::linear_ids_of_key` documents.
+fn first_task_ids() -> Vec<String> {
     let plan = Plan::new();
     let (project, _) = plan.ok(&PROJECT_COPY);
     let first = landed(&project, "notes:first")
         .trim_start_matches("dest:")
         .to_owned();
     let (head, last) = first.split_at(34);
-    let next = format!(
-        "{head}{:02x}",
-        u8::from_str_radix(last, 16).expect("hex") ^ 1
-    );
-    (first, next)
+    let octet = u8::from_str_radix(last, 16).expect("hex");
+    (0..onetaskgraph_linear::CREATE_ID_GENERATIONS)
+        .map(|generation| format!("{head}{:02x}", octet ^ generation))
+        .collect()
+}
+
+/// [`first_task_ids`]'s first two.
+fn first_ids() -> (String, String) {
+    let ids = first_task_ids();
+    (ids[0].clone(), ids[1].clone())
 }
 
 /// An issue the workspace holds before anything is copied, under `id`, recording `origin`.
@@ -539,4 +544,74 @@ fn a_create_whose_id_holds_its_counterpart_is_refused_naming_it_and_creates_noth
         .map(|((query, _), _)| query.clone())
         .collect();
     assert_eq!(landed_creates, Vec::<String>::new(), "nothing was created");
+}
+
+/// The lookup's own read by the origin key's id is the answer when it fails: the copy fails and
+/// nothing is created, since the record it could not read may be the counterpart.
+#[test]
+fn a_failed_key_read_fails_the_lookup_and_creates_nothing() {
+    let (first, _) = first_ids();
+    // A record there for the read to answer, which the first read of it is bent into one no
+    // source can read.
+    let plan = Plan::over(vec![issue_at(&first, "notes:other")], &[], true);
+    plan.workspace.lag_listings();
+    let held = first.clone();
+    plan.workspace.bend_answers(
+        move |query, variables| {
+            query == onetaskgraph_linear::graphql::ISSUE && variables["id"] == held.as_str()
+        },
+        1,
+        |_, data| *data = json!({"issue": 5}),
+    );
+    let (output, served) = plan.run_on(&plan.sandbox.subdirectory("host"), &PROJECT_COPY);
+    assert!(!output.status.success(), "{}", stdout(&output));
+    assert!(
+        !served
+            .iter()
+            .any(|(query, _)| query == onetaskgraph_linear::graphql::ISSUE_CREATE),
+        "no issue is created after the read that failed"
+    );
+}
+
+/// With every id its create could be sent under held by another origin's record, the lookup reads
+/// each and finds nothing, the create is refused under every one, and the copy fails with
+/// Linear's last refusal — creating nothing and leaving every holder as it was.
+#[test]
+fn every_id_held_by_another_origin_fails_the_create_and_touches_no_holder() {
+    let ids = first_task_ids();
+    let plan = Plan::over(
+        ids.iter().map(|id| issue_at(id, "notes:other")).collect(),
+        &[],
+        true,
+    );
+    plan.workspace.lag_listings();
+    let (output, served) = plan.run_on(&plan.sandbox.subdirectory("host"), &PROJECT_COPY);
+    assert!(!output.status.success(), "{}", stdout(&output));
+    let said = format!("{}{}", stdout(&output), stderr(&output));
+    assert!(
+        said.contains(onetaskgraph_linear::graphql::ISSUE_ID_CONFLICT_MESSAGE),
+        "{said}"
+    );
+    let tried: Vec<&Value> = served
+        .iter()
+        .filter(|(query, _)| query == onetaskgraph_linear::graphql::ISSUE_CREATE)
+        .map(|(_, variables)| &variables["input"]["id"])
+        .take(ids.len())
+        .collect();
+    assert_eq!(
+        tried,
+        ids.iter()
+            .map(|id| json!(id))
+            .collect::<Vec<_>>()
+            .iter()
+            .collect::<Vec<_>>(),
+        "each id is tried once, in its order"
+    );
+    for id in &ids {
+        assert_eq!(
+            plan.show("task", &format!("dest:{id}"))["metadata"]["onetaskgraph.origin"],
+            "notes:other",
+            "{id} is left as it was"
+        );
+    }
 }
