@@ -13,6 +13,7 @@ which is how the release journeys build what their double serves from the pin.
 
 import contextlib
 import copy
+import hashlib
 import importlib.util
 import io
 import json
@@ -381,7 +382,7 @@ def drive_scripts(pin: Pin, findings: Findings, release_cd, automerge) -> None:
         Recorder.answers = {
             "release-by-tag": release,
             "delete-asset": None,
-            "upload-asset": calls["upload-asset"].answer | {"name": built.name, "size": built.stat().st_size, "state": "uploaded"},
+            "upload-asset": calls["upload-asset"].answer | {"name": built.name, "size": built.stat().st_size, "state": "uploaded", "digest": f"sha256:{hashlib.sha256(built.read_bytes()).hexdigest()}"},
             "open-pulls": [pull],
             "graphql": calls["graphql"].answer,
         }

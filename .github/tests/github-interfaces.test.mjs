@@ -69,8 +69,8 @@ const drifts = [
   [
     "a read the parser does not make",
     drifted(
-      'reads = ["id", "name", "size", "state"]',
-      'reads = ["id", "name", "size", "state", "label"]',
+      'reads = ["id", "name", "size", "state", "digest"]',
+      'reads = ["id", "name", "size", "state", "digest", "label"]',
     ),
     "upload-asset: removing label from GitHub's answer leaves the parser's result unchanged",
   ],
@@ -86,7 +86,10 @@ const drifts = [
   ],
   [
     "a read the parser makes that the pin does not name",
-    drifted('reads = ["id", "name", "size", "state"]', 'reads = ["id", "size", "state"]'),
+    drifted(
+      'reads = ["id", "name", "size", "state", "digest"]',
+      'reads = ["id", "size", "state", "digest"]',
+    ),
     "upload-asset: the parser reads name, which `reads` does not name",
   ],
   [

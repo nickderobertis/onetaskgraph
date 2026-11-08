@@ -35,7 +35,7 @@ method = "GET"
 path = "/repos/{owner}/{repo}/releases/tags/{tag}"
 status = 200
 tag = "v0.7.1"
-reads = ["tag_name", "upload_url", "assets[].id", "assets[].name", "assets[].size", "assets[].state"]
+reads = ["tag_name", "upload_url", "assets[].id", "assets[].name", "assets[].size", "assets[].state", "assets[].digest"]
 answer = '''
 {
   "url": "https://api.github.com/repos/nickderobertis/onetaskgraph/releases/414082970",
@@ -95,7 +95,7 @@ host = "uploads.github.com"
 method = "POST"
 path = "/repos/{owner}/{repo}/releases/{release_id}/assets?name={name}"
 status = 201
-reads = ["id", "name", "size", "state"]
+reads = ["id", "name", "size", "state", "digest"]
 answer = '''
 {
   "url": "https://api.github.com/repos/nickderobertis/onetaskgraph/releases/assets/644642357",

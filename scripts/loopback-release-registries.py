@@ -225,7 +225,7 @@ class Handler(BaseHTTPRequestHandler):
             release_id = abs(hash(tag)) % 100000
             with lock:
                 assets = [
-                    {"id": asset["id"], "name": relabel(name), "size": len(asset["bytes"]), "state": asset.get("state", "uploaded")}
+                    {"id": asset["id"], "name": relabel(name), "size": len(asset["bytes"]), "state": asset.get("state", "uploaded"), "digest": None if asset.get("state") else f"sha256:{hashlib.sha256(asset['bytes']).hexdigest()}"}
                     for (asset_tag, name), asset in sorted(github_assets.items())
                     if asset_tag == tag and not hidden(name)
                 ]
@@ -290,7 +290,7 @@ class Handler(BaseHTTPRequestHandler):
             asset_id = next(asset_ids)
             github_assets[(tag, name)] = {"id": asset_id, "bytes": payload}
             github_ids[asset_id] = (tag, name)
-        self.send(201, {"id": asset_id, "name": name, "size": len(payload), "state": "uploaded"})
+        self.send(201, {"id": asset_id, "name": name, "size": len(payload), "state": "uploaded", "digest": f"sha256:{hashlib.sha256(payload).hexdigest()}"})
 
     def github_download(self, path):
         tag, _, name = urllib.parse.unquote(path).partition("/")
