@@ -34,7 +34,7 @@
 //! | `filter_by_priority` | **Supported and proven.** `issues(filter:{priority:{in:[…]}})` over Linear's own `0`–`4` scale, confirmed against each issue read. |
 //! | `filter_by_comment_activity` | **Supported and proven.** `comments:{some:{or:[{createdAt:{gte:…}},{updatedAt:{gte:…}}]}}` — the issues with a comment created or last edited at or after the instant, over the same two fields a comment read reports. |
 //! | `filter_by_metadata` | **Supported and proven.** `description:{contains:"\"<value>\""}` for each match — the value as every JSON encoder writes it, which a slot holding it contains however it spaces or spells its keys — and every candidate confirmed over the parsed slot, so prose carrying the phrase and a slot holding another value are both kept out. A value with a character an encoder may escape is not sent, and the confirmation decides alone. |
-//! | `filter_by_origin` | **Supported and proven,** on the same terms, for the slot's `onetaskgraph.origin`. |
+//! | `filter_by_origin` | **Supported and proven,** on the same terms, for the slot's `onetaskgraph.origin` — and a lookup that lists nothing reads the record its origin's create key names by id; see the ruling below on how a copy finds what it wrote. |
 //! | `reconcile_status` | **Unsupported — unsupportable.** A Linear issue's workflow state *is* its closure: there is no card beside it to contradict it, so nothing could need reconciling and the source is sent nothing. |
 //! | `complete_by_issue` | **Unsupported — unsupportable** here: a Linear issue is not a GitHub issue a landing's `closes` names, and its state is its closure, so a completion lists this source unsupported and sends it nothing. |
 //! | `orphan_tasks` | **Supported and proven.** `issues(filter:{project:{null:true}})`. |
@@ -423,6 +423,31 @@
 //! it is [`graphql::COUNTERPART_LOOKUPS_CACHED`], each row carrying the token parts its listing would,
 //! so a row it answers reads exactly as that listing's row does. A document copy keeps its own
 //! `documents` lookup.
+//!
+//! ## Ruling: a copy finds what it wrote by id when no listing shows it
+//!
+//! Linear's filtered and searched reads — the `issues` search of a description a lookup by
+//! origin sends, and the `projects` and `documents` listings — were observed on `TES2` to miss
+//! records written moments before, and records a repeat a minute earlier had found. A copy whose
+//! source records no link found its counterparts only through them, so it created a plan a
+//! second time. So no lookup by origin answers "none" from a listing alone:
+//!
+//! - **A create carrying an origin and no create key is sent under that origin's key's ids**
+//!   ([`LinearSource::create_id`]): the store's own create key for a create replacing no link,
+//!   `<origin>|<this source's name>|` under its published namespace, so a create that recorded
+//!   an intent and one that could not land under the same id.
+//! - **A lookup by origin that lists nothing reads that id** — and each later generation past one
+//!   holding another origin's record — by id, which Linear answers the moment a record is
+//!   written. A task's lookup, a project's and a document's alike, a document copy's reference
+//!   resolution among them.
+//! - **A create refused because a record holds its id reads that record**, and one recording the
+//!   create's origin refuses the create naming it, creating nothing: the counterpart the lookup
+//!   did not reach, behind a trashed record. Any other refusal is the create's answer, as it was.
+//!
+//! The cost is one read by id per record a copy creates, before its create; a lookup that lists
+//! its counterpart sends nothing more. Linear refuses operation batching, an id naming nothing
+//! fails a whole aliased query, and an `id:{in:…}` filter is a filtered read, so none of them
+//! can stand in for it.
 //!
 //! ## Ruling: `project` scopes a source to one project
 //!

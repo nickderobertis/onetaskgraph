@@ -852,8 +852,9 @@ other attempt's to finish. On the normal path the cost is exact: an update and a
 copy send what they always sent, to the destination and to the source; an uninterrupted create
 from a folder of Markdown sends the destination exactly what it always did and no remote party
 anything for its intent, whose take and release are lock-guarded file writes; and one from a
-hosted source sends Linear or a folder exactly what it always did, and a board that plus one
-repository listing after `createIssue`. The rare paths are bounded rather than counted. A hosted
+hosted source sends a folder exactly what it always did, and a board that plus one repository
+listing after `createIssue`. A create into Linear, from either, also sends the one read by id
+before it that "How a copy to Linear finds what it wrote" below describes. The rare paths are bounded rather than counted. A hosted
 source is sent at most one intent write before the first destination write plus one renewal
 per destination write request sent while it owns the create — on a board, every write request of
 the creating call but `createIssue` itself — each its existing narrow metadata write, and the intent
@@ -869,7 +870,7 @@ Those exact figures are held, not asserted: `crates/onetaskgraph-e2e/tests/e2e/r
 runs a create, an update, an `unchanged` copy and every task write verb against the loopback board
 and Linear and holds the requests each sends to the ones the v0.12.13 binary sent for the same
 commands — recorded with that binary in `release_requests.v0.12.13.json` — allowing only the one
-listing above. A project's or a document's create from a hosted source adds the one narrow write
+listing above and, on Linear, the one read by id before each create. A project's or a document's create from a hosted source adds the one narrow write
 that takes its intent off beside its link.
 
 **Settings**, in each source's own block beside `cache` and `routes`, in whole seconds, each 120
@@ -889,6 +890,49 @@ sources:
     create_quiescence_seconds: 120
 ```
 <!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
+
+### How a copy to Linear finds what it wrote
+
+A copy whose source records no link to what it wrote — a copy into a Linear source declared
+private from one that is not, which may not name the private item, and a `--no-link` copy —
+finds each counterpart on every later copy by asking Linear for the records whose
+`onetaskgraph.origin` is the item copied. That question goes through Linear's filtered reads: an
+`issues` search of the description, and listings of the projects and documents. On the real
+`TES2` team those once missed records written moments before, and once missed records a repeat a
+minute earlier had found. A copy then created all five records of a plan a second time, and a
+document copied straight after its project left a budget link unresolved. Why Linear's listings
+missed them is not established, so nothing here relies on a listing being current.
+
+**Every create of a copied item carrying an origin is sent under ids that item's origin decides.**
+Where the copy gives it no create key of its own (above), Linear is sent the ids of the key the
+store derives for that origin with no replaced link:
+`<source qualified id>|<destination source name>|`, with `|project` or `|document` appended,
+under the namespace above, transformed and tried generation by generation as a keyed create's
+are. A copy that recorded an intent and one that could not therefore send one create under the
+same ids, and the slot records no key for a create that carried none.
+
+**A lookup by origin that lists nothing reads that id before anything is created.** Each of a
+copy's lookups — of an issue, a project and a document, its own and those a document copy makes
+to resolve the links it carries — is answered from the filtered read when that read lists the
+counterpart. When it lists nothing, the id the origin's key derives is read directly, and a read
+by id answers a record the moment it is written. A record there recording that origin is the
+counterpart, found as if listed. One recording another origin is read past to the next
+generation's id. The first id reading as no record — none there, or a trashed one — ends the
+read, since a create of that origin tries that id before any later one.
+
+**A create Linear refuses because its id is taken is never followed by a second record of the
+same origin.** The record holding the id is read. One recording the create's origin is the
+counterpart an earlier copy made, which the lookup did not reach — a trashed record left in front
+of it, for instance — and the copy is refused naming it, having created nothing: copy again. Any
+other holder sends the create under the next generation's id, and any other refusal is the
+create's answer, as it was.
+
+**What it costs.** A lookup that lists its counterpart sends nothing more, so a repeat copy of an
+unchanged plan sends what it always did. Each record a copy creates on Linear costs one read by
+id, before its create. No cheaper read replaces it: Linear refuses operation batching, an id that
+names nothing fails a whole aliased query, and an `id: {in: …}` filter is a filtered read like the
+lookup it backs up. Nothing is kept on the host: the ids are computed from the origin each time,
+so a copy run on another machine, holding nothing of the first, finds the same records.
 
 ### What a write reports it left
 

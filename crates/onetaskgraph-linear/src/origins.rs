@@ -417,10 +417,13 @@ impl LinearSource {
     /// derives — the ids that create was sent under — rather than through any filtered or
     /// searched read, so it is there however soon after that create it is asked for.
     ///
-    /// The generations are read in turn, as a create tries them: an id reading as no record is
-    /// one no create of `origin` was refused under, so the read stops there; one holding a record
-    /// recording another origin, or a trashed one, is read past. Asked only once the lookup
-    /// itself has listed nothing, so a copy whose lookup finds its counterpart sends nothing more.
+    /// The generations are read in turn, as a create tries them: one holding a record recording
+    /// another origin is read past, and the first reading as no record — none there, or a trashed
+    /// one, which a read answers as none — ends the read, since a create of `origin` tries that id
+    /// before any later one. A counterpart behind a trashed record is therefore not reached here;
+    /// its create is refused naming it instead ([`LinearSource::copied_at`]). Asked only once the
+    /// lookup itself has listed nothing, so a copy whose lookup finds its counterpart sends
+    /// nothing more.
     async fn copied_by_origin_key(
         &self,
         record: MetadataRecord,

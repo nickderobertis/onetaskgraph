@@ -1416,7 +1416,7 @@ them do; this is the inventory of what is owed, not a status board.
      create is sent again.
 132. Every task copy and task write verb sends the board and Linear exactly the requests the v0.12.13
      binary sent for the same commands, but the one relist a board create from a hosted source
-     owes.
+     owes and the one read by id a Linear create owes when its lookup by origin listed nothing.
 133. A section link copied from a folder of Markdown — by a path relative to the linking file or
      by the referent's absolute location, and to a heading of the same record — lands in a
      folder of Markdown, on a GitHub board and in Linear in that destination's form: the
@@ -1504,6 +1504,13 @@ them do; this is the inventory of what is owed, not a status board.
 150. A `related` relation Linear adds between two tasks of one copy, whose sent bodies link one from
      the other on either end, is no change, so a repeat writes nothing; one between two tasks whose
      bodies do not link each other is still reported `updated`.
+151. A plan copied from a folder that records no link into a Linear source declared private is
+     found again while Linear's filtered and searched reads lag its writes: a document copied
+     straight after its project resolves every budget link and its link to the other document, a
+     repeat straight after and one after the lag has passed write nothing, a repeat on a host
+     holding nothing of the first creates nothing, each create lands under the id its origin's
+     create key derives, and a create whose id holds its counterpart is refused naming it,
+     creating nothing.
 
 ## The public boundary
 
