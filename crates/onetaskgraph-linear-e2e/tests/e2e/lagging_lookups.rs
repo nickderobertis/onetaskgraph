@@ -48,6 +48,8 @@ struct Plan {
     sandbox: Sandbox,
     workspace: LinearWorkspace,
     notes: PathBuf,
+    /// The configuration's `sources`, as written.
+    sources: Value,
 }
 
 impl Plan {
@@ -102,19 +104,42 @@ impl Plan {
             std::fs::create_dir_all(path.parent().expect("a folder")).expect("a folder");
             std::fs::write(path, text).expect("a record");
         }
-        sandbox.project_document(&document(&json!({
+        let sources = json!({
             "notes": {"plugin": "local-md", "config": {"root": notes}},
             "dest": if private {
                 json!({"plugin": "linear", "config": config, "visibility": "private"})
             } else {
                 json!({"plugin": "linear", "config": config})
             },
-        })));
+        });
+        sandbox.project_document(&document(&sources));
         Self {
             sandbox,
             workspace,
             notes,
+            sources,
         }
+    }
+
+    /// Rewrite the configuration with `change` made to its `sources`.
+    fn reconfigure(&mut self, change: impl FnOnce(&mut Value)) {
+        change(&mut self.sources);
+        self.sandbox.project_document(&document(&self.sources));
+    }
+
+    /// Configure a second Linear destination `name`, declared private, over a workspace of its
+    /// own, and answer that workspace.
+    fn second_destination(&mut self, name: &str) -> LinearWorkspace {
+        let mut held = json!({"tasks": [], "projects": [], "documents": [], "labels": [],
+                              "task_dependencies": [], "project_dependencies": []});
+        held["_linear_states"] = linear_states(TEAM_STATES);
+        held["_linear_project_statuses"] = linear_statuses(PROJECT_STATUSES);
+        let (mut config, workspace) = linear_workspace_failing(&self.sandbox, held, &[]);
+        config["status_mapping"] = self.sources["dest"]["config"]["status_mapping"].clone();
+        self.reconfigure(|sources| {
+            sources[name] = json!({"plugin": "linear", "config": config, "visibility": "private"});
+        });
+        workspace
     }
 
     /// Run the binary with this host's own state under `state`; what it printed and every
@@ -612,6 +637,158 @@ fn every_id_held_by_another_origin_fails_the_create_and_touches_no_holder() {
             plan.show("task", &format!("dest:{id}"))["metadata"]["onetaskgraph.origin"],
             "notes:other",
             "{id} is left as it was"
+        );
+    }
+}
+
+/// A counterpart a person deleted on Linear is created once again, and one they trashed — which
+/// Linear archives, keeping its id — is created once again under the next id; the next copy once
+/// the listings settle writes nothing. Deleted permanently, an id holds nothing and is sent
+/// again, as `TES2` answered; trashed, the record is read as no record and passed by the create.
+#[test]
+fn a_counterpart_deleted_or_trashed_on_linear_is_created_once_again() {
+    let plan = Plan::new();
+    plan.workspace.lag_listings();
+    let (first, _) = plan.ok(&PROJECT_COPY);
+    let deleted = landed(&first, "notes:first");
+    let trashed = landed(&first, "notes:second");
+    plan.workspace
+        .delete_issue_permanently(deleted.trim_start_matches("dest:"));
+    plan.workspace
+        .trash_issue(trashed.trim_start_matches("dest:"));
+
+    let (again, served) = plan.ok(&PROJECT_COPY);
+    assert_eq!(actions(&again)["notes:P"], "unchanged", "{again}");
+    assert_eq!(actions(&again)["notes:first"], "created", "{again}");
+    assert_eq!(actions(&again)["notes:second"], "created", "{again}");
+    assert_eq!(
+        landed(&again, "notes:first"),
+        deleted,
+        "a deleted record's id is sent again"
+    );
+    assert_ne!(
+        landed(&again, "notes:second"),
+        trashed,
+        "a trashed record keeps its id, so the next is taken"
+    );
+    assert_eq!(
+        creates(&served)
+            .iter()
+            .filter(|root| *root == "issueCreate")
+            .count(),
+        3,
+        "the deleted one's create, and the trashed one's under two ids, one refused"
+    );
+
+    plan.workspace.settle_listings();
+    let (repeat, served) = plan.ok(&PROJECT_COPY);
+    assert_eq!(mutations(&served), Vec::<String>::new(), "{repeat}");
+    for source in ["notes:first", "notes:second"] {
+        assert_eq!(landed(&repeat, source), landed(&again, source), "{source}");
+    }
+}
+
+/// One record copied to two Linear destinations lands once in each, under ids of each
+/// destination's own key, and a repeat to each inside the lag window writes nothing in either.
+#[test]
+fn one_plan_copied_to_two_linear_destinations_lands_once_in_each() {
+    let mut plan = Plan::new();
+    let other = plan.second_destination("dest2");
+    plan.workspace.lag_listings();
+    other.lag_listings();
+    let to_other = ["project", "copy", "notes:P", "--to", "dest2", "--json"];
+    let (here, _) = plan.ok(&PROJECT_COPY);
+    let from = other.served().len();
+    let (there, _) = plan.ok(&to_other);
+    assert_eq!(creates(&other.served()[from..]).len(), 3, "{there}");
+    for source in ["notes:P", "notes:first", "notes:second"] {
+        assert_ne!(
+            landed(&here, source).trim_start_matches("dest:"),
+            landed(&there, source).trim_start_matches("dest2:"),
+            "{source}: each destination's own key"
+        );
+    }
+    for (arguments, workspace, report) in [
+        (&PROJECT_COPY[..], &plan.workspace, &here),
+        (&to_other[..], &other, &there),
+    ] {
+        let from_here = plan.workspace.served().len();
+        let from_there = other.served().len();
+        let (repeat, _) = plan.ok(arguments);
+        assert_eq!(
+            mutations(&plan.workspace.served()[from_here..]),
+            Vec::<String>::new(),
+            "{repeat}"
+        );
+        assert_eq!(
+            mutations(&other.served()[from_there..]),
+            Vec::<String>::new(),
+            "{repeat}"
+        );
+        for source in ["notes:P", "notes:first", "notes:second"] {
+            assert_eq!(landed(&repeat, source), landed(report, source), "{source}");
+        }
+        let _ = workspace;
+    }
+}
+
+/// A copy out of a folder declared private into a Linear source that is not records no origin
+/// there and takes no intent toward it, so no id is derived from the private item: with
+/// `--no-link` and without, the issue is under an id Linear chose, and nothing it holds names the
+/// folder's record.
+#[test]
+fn a_copy_out_of_a_private_folder_gives_a_public_linear_no_id_derived_from_it() {
+    let derived = first_task_ids();
+    let mut plan = Plan::over(Vec::new(), &[], false);
+    plan.reconfigure(|sources| sources["notes"]["visibility"] = json!("private"));
+    // A write policy passing everything: a store declaring a visibility is held to the public
+    // boundary, which this journey is not about.
+    plan.sandbox.project_document(
+        &serde_json::to_string_pretty(&json!({
+            "sources": plan.sources,
+            "write_policy": {
+                "check_command": ["python3", "-c",
+                    "import sys; sys.stdin.read(); print('{\"verdict\": \"pass\"}')"],
+                "visibility_command": ["python3", "-c",
+                    "import sys; sys.stdin.read(); print('{\"visibility\": \"public\"}')"],
+            },
+        }))
+        .expect("a document"),
+    );
+    // With `--no-link`, and as a copy ordinarily runs, recording what it may on the private side.
+    for (source, flags) in [
+        ("notes:first", &["--no-link"][..]),
+        ("notes:second", &[][..]),
+    ] {
+        let mut arguments = vec!["task", "copy", source, "--to", "dest", "--json"];
+        arguments.extend(flags);
+        let (copied, served) = plan.ok(&arguments);
+        let landed_as = landed(&copied, source);
+        let native = landed_as.trim_start_matches("dest:");
+        assert!(
+            !derived.iter().any(|id| id == native),
+            "{native} is no id derived from notes:first"
+        );
+        let sent: Vec<&Value> = served
+            .iter()
+            .filter(|(query, _)| query == onetaskgraph_linear::graphql::ISSUE_CREATE)
+            .map(|(_, variables)| &variables["input"])
+            .collect();
+        assert_eq!(sent.len(), 1, "{source}");
+        assert!(
+            sent[0].get("id").is_none(),
+            "{source}: Linear chose the id: {}",
+            sent[0]
+        );
+        let held = plan.show("task", &landed_as);
+        for key in ["onetaskgraph.origin", "onetaskgraph.create_key"] {
+            assert!(held["metadata"].get(key).is_none(), "{key}: {held}");
+        }
+        let name = source.trim_start_matches("notes:");
+        let everything = format!("{sent:?}{held}");
+        assert!(
+            !everything.contains(source) && !everything.contains(&format!("{name}.md")),
+            "nothing names the private record: {everything}"
         );
     }
 }

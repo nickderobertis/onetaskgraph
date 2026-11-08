@@ -1510,7 +1510,10 @@ them do; this is the inventory of what is owed, not a status board.
      repeat straight after and one after the lag has passed write nothing, a repeat on a host
      holding nothing of the first creates nothing, each create lands under the id its origin's
      create key derives, and a create whose id holds its counterpart is refused naming it,
-     creating nothing.
+     creating nothing; a counterpart deleted on Linear is created again under its own id and one
+     trashed under the next, one plan copied to two Linear destinations lands once in each, and
+     a copy out of a folder declared private into a Linear source that is not sends no id derived
+     from it and leaves nothing there naming it.
 
 ## The public boundary
 

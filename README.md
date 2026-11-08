@@ -934,6 +934,14 @@ names nothing fails a whole aliased query, and an `id: {in: …}` filter is a fi
 lookup it backs up. Nothing is kept on the host: the ids are computed from the origin each time,
 so a copy run on another machine, holding nothing of the first, finds the same records.
 
+**What the ids say, and where they go.** The destination's name is part of the key, so one item
+copied into two Linear sources lands once in each, under ids of each one's own key. A copy out of
+a source declared private into one that is not records no origin there and takes no intent toward
+it (see "The public boundary"), so its create carries no origin to derive an id from: Linear
+chooses the id, and nothing the issue holds names the private item. A counterpart a person
+deleted on Linear frees its id, and the next copy creates it again under that id; one trashed
+keeps its id, and the next copy creates it under the following one.
+
 ### What a write reports it left
 
 <!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by the journeys in

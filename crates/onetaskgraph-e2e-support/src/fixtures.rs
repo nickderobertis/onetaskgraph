@@ -6726,6 +6726,17 @@ impl LinearWorkspace {
             .retain(|edge| !(edge["from"] == from && edge["to"] == to));
     }
 
+    /// Delete the issue `id` permanently, as a person can: it is read nowhere, and its id holds
+    /// nothing, so a create may be sent under it again — what `TES2` answered on 2026-11-08,
+    /// where a trashed issue ([`Self::trash_issue`]) still holds its id.
+    pub fn delete_issue_permanently(&self, id: &str) {
+        let mut data = self.state.lock().unwrap();
+        data["tasks"]
+            .as_array_mut()
+            .expect("the issues")
+            .retain(|row| row["id"] != id);
+    }
+
     /// Delete the project `id`, as a person would: it is read nowhere, and the relations naming
     /// it stay where they were.
     pub fn remove_project(&self, id: &str) {
