@@ -5578,3 +5578,4 @@ mod tests {
 }
 
 // demonstration: touches one library crate
+// demonstration: the one edited line
