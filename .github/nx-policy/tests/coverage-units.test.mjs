@@ -372,6 +372,11 @@ function nonFileInputs(dir) {
       set: () => {},
       unset: () => {},
     },
+    COVERAGE_UNIT_IGNORE_REGEX: {
+      env: { COVERAGE_UNIT_IGNORE_REGEX: "generated" },
+      set: () => {},
+      unset: () => {},
+    },
     rustc: wrapper("rustc", "-vV", real("rustc")),
     "cargo-llvm-cov": flag("llvm-cov"),
     "cargo-nextest": flag("nextest"),
@@ -418,6 +423,7 @@ describe("each non-file input moves every key that names it", { skip: !onLinux }
 
   for (const name of [
     "ONETASKGRAPH_TESTS_UNDER_COVERAGE",
+    "COVERAGE_UNIT_IGNORE_REGEX",
     "rustc",
     "cargo-llvm-cov",
     "cargo-nextest",

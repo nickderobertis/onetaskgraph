@@ -66,7 +66,12 @@ export function copyGraph(scratch, name) {
 
 export const projectFile = (crate) => `crates/${crate}/project.json`;
 export function readJson(dir, path) {
-  return JSON.parse(readFileSync(join(dir, path), "utf8"));
+  const value = JSON.parse(readFileSync(join(dir, path), "utf8"));
+  assert.ok(
+    value !== null && typeof value === "object" && !Array.isArray(value),
+    `${path} is an object`,
+  );
+  return value;
 }
 export function writeJson(dir, path, value) {
   writeFileSync(join(dir, path), `${JSON.stringify(value, null, 2)}\n`);

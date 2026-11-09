@@ -14,6 +14,10 @@ const RUST_CACHE = "Swatinem/rust-cache@";
 const CACHE_SAVE = /^actions\/cache(?:\/save)?@/;
 const RUST_PATH = /(^|[\s/'"])(target|\.cargo)(\/|$|[\s'"])/m;
 const classes = JSON.parse(read(".github/event-classes.json"));
+assert.ok(
+  Array.isArray(classes) && classes.every((entry) => typeof entry?.event === "string"),
+  "event-classes.json is a list of event classes",
+);
 
 function saveExpression(step) {
   const inputs = step.with ?? {};

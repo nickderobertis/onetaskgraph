@@ -73,12 +73,17 @@ fi
 if [ "$REQUEST" = "--report" ]; then
   if ! units="$(python3 -c '
 import json
-targets = json.load(open("workspace/project.json", encoding="utf-8"))["targets"]["coverage"]
+try:
+    target = json.load(open("workspace/project.json", encoding="utf-8"))["targets"]["coverage"]
+except (OSError, ValueError, KeyError, TypeError) as error:
+    raise SystemExit(f"workspace/project.json: {error}")
+depends_on = target.get("dependsOn", []) if isinstance(target, dict) else []
 names = [
     name
-    for entry in targets["dependsOn"]
+    for entry in depends_on
     if isinstance(entry, dict) and entry.get("target") == "coverage"
-    for name in entry["projects"]
+    for name in entry.get("projects", [])
+    if isinstance(name, str)
 ]
 print(" ".join(names))
 ' | tr -d '\r')" || [ -z "$units" ]; then
@@ -87,13 +92,16 @@ print(" ".join(names))
     exit 1
   fi
   # shellcheck disable=SC2086 # $units is space-separated unit names, each one argument.
-  if ! node scripts/coverage-merge.mjs --fail-under-lines "$MIN_LINES" --dir target/coverage-units --unit $units; then
-    echo "rust-coverage: the merge refused the units above (1: below ${MIN_LINES}% and the uncovered" >&2
-    echo "rust-coverage: lines are listed; 2: a report is missing, stray or malformed). Cover lines with" >&2
-    echo "rust-coverage: a test that drives the real behaviour, or run 'just coverage' for fresh reports." >&2
-    exit 1
+  merge_status=0
+  node scripts/coverage-merge.mjs --fail-under-lines "$MIN_LINES" --dir target/coverage-units --unit $units || merge_status=$?
+  if [ "$merge_status" -eq 1 ]; then
+    echo "rust-coverage: the merge is below ${MIN_LINES}%; the uncovered lines are listed above." >&2
+    echo "rust-coverage: cover them with a test that drives the real behaviour." >&2
+  elif [ "$merge_status" -ne 0 ]; then
+    echo "rust-coverage: the merge could not read the units' reports; its reason is above." >&2
+    echo "rust-coverage: run 'just coverage' for fresh reports." >&2
   fi
-  exit 0
+  exit "$merge_status"
 fi
 
 build_only=false

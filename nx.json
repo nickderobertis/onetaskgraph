@@ -64,6 +64,15 @@
         "env": "ONETASKGRAPH_TESTS_UNDER_COVERAGE"
       },
       {
+        "env": "COVERAGE_UNIT_IGNORE_REGEX"
+      },
+      {
+        "env": "LLVM_PROFDATA"
+      },
+      {
+        "env": "LLVM_COV"
+      },
+      {
         "runtime": "node -p process.platform"
       },
       {

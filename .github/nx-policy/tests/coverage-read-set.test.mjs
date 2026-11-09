@@ -139,6 +139,15 @@ function unhashed(reads, hashed) {
 const recorded = JSON.parse(
   readFileSync(join(root, ".github/nx-policy/tests/fixtures/coverage-read-set.json"), "utf8"),
 );
+assert.ok(
+  recorded !== null &&
+    typeof recorded.units === "object" &&
+    Object.values(recorded.units).every(
+      (files) => Array.isArray(files) && files.every((file) => typeof file === "string"),
+    ),
+  "the recording maps each unit to the files it read",
+);
+const unitReads = (unit, file) => (recorded.units[unit] ?? []).includes(file);
 
 const scratch = onLinux ? scratchRoot("coverage-read-set") : "";
 after(() => {
@@ -169,10 +178,19 @@ test("every workspace file a unit reads is in its task hash", { skip: !onLinux }
       .split("\n"),
   );
   // RUNTIME_HASHED is exempt from the file list only because each unit's runtime inputs hash it.
+  const runtimeInput = (file) =>
+    /python|uv\.lock|__init__\.py/.test(file)
+      ? "--ecosystem python"
+      : /index\.ts$/.test(file)
+        ? "--ecosystem files"
+        : /Cargo\.(toml|lock)$/.test(file)
+          ? "nx-cargo-closure"
+          : "--ecosystem npm";
   for (const unit of units) {
     const nodes = Object.keys(hashes[unitTask(unit)].nodes).join("\n");
-    for (const runtime of ["nx-cargo-closure", "--ecosystem npm"])
-      if (!nodes.includes(runtime)) problems.push(`${unit}: no runtime input hashes ${runtime}`);
+    for (const file of tracked)
+      if (RUNTIME_HASHED.test(file) && !nodes.includes(runtimeInput(file)) && unitReads(unit, file))
+        problems.push(`${unit}: reads ${file}, which no runtime input of it hashes`);
   }
   for (const unit of units) {
     const hashed = new Set(hashes[unitTask(unit)].inputs.files);
