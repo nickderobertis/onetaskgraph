@@ -24,8 +24,9 @@ export const root = fileURLToPath(new URL("../../../../", import.meta.url));
 const worker = join(root, ".github/nx-policy/tests/fixtures/nx-workspace-contracts.mjs");
 export const onLinux = process.platform === "linux";
 
-export function scratchRoot(name) {
-  return mkdtempSync(join(process.env.ONEPIPELINE_NODE_SCRATCH_DIR || tmpdir(), `${name}-`));
+export function scratchRoot(name, parent = process.env.ONEPIPELINE_NODE_SCRATCH_DIR || tmpdir()) {
+  mkdirSync(parent, { recursive: true });
+  return mkdtempSync(join(parent, `${name}-`));
 }
 
 export const environment = (additions = {}) => ({

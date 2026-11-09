@@ -1,6 +1,6 @@
 import "../../test-setup.mjs";
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { after, test } from "node:test";
@@ -21,7 +21,8 @@ import {
 // onetaskgraph:coverage-build rebuilds it, and the lines the journeys execute reach the merge.
 // Real cargo-llvm-cov and real journeys, in a scratch copy of the graph.
 
-const scratch = onLinux ? scratchRoot("coverage-spawned-binary") : "";
+// Inside this checkout's target directory, so its build can be hard-linked rather than copied.
+const scratch = onLinux ? scratchRoot("coverage-spawned-binary", join(root, "target")) : "";
 after(() => {
   if (onLinux) rmSync(scratch, { recursive: true, force: true });
 });
@@ -33,10 +34,14 @@ test("an e2e unit finds and counts the instrumented binary after its coverage re
   timeout: 3_000_000,
 }, () => {
   const dir = copyGraph(scratch, "real");
+  // The instrumented dependencies are reused when this checkout's build can be hard-linked;
+  // across file systems, or while another build rewrites it, the copy builds them afresh.
   const warm = join(root, "target/llvm-cov-target");
   if (existsSync(warm)) {
     mkdirSync(join(dir, "target"), { recursive: true });
-    execFileSync("cp", ["-al", warm, join(dir, "target/llvm-cov-target")]);
+    const linked = spawnSync("cp", ["-al", warm, join(dir, "target/llvm-cov-target")]);
+    if (linked.status !== 0)
+      rmSync(join(dir, "target/llvm-cov-target"), { recursive: true, force: true });
   }
   const seeded = nxRun(dir, unitTask("onetaskgraph"));
   assert.equal(seeded.status, 0, seeded.output.slice(-3000));
