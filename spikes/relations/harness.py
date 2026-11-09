@@ -861,15 +861,7 @@ def gh_source(number: int) -> dict[str, Any]:
             "project_number": number,
             "repository": f"{OWNER}/{REPO1}",
             "token_env": "GH_PROJECTS_TOKEN",
-            "status_mapping": {
-                "todo": "Todo",
-                "backlog": "Todo",
-                "draft": "Todo",
-                "queued": "Todo",
-                "in-progress": "In Progress",
-                "done": "Done",
-                "cancelled": "Done",
-            },
+            "status_mapping": {"todo": "Todo", "in-progress": "In Progress", "done": "Done"},
         },
     }
 
@@ -934,7 +926,17 @@ def stage_gh_boards(run: Run) -> None:
     answers["numbers"] = {k: v["number"] for k, v in made.items()}
 
     # One board: both meanings over the same items.
-    cli = Cli(run, {"xd": gh_source(board_x["number"]), "yd": gh_source(board_y["number"])})
+    lm_root = run.scratch / f"lm-{run.stamp}"
+    (lm_root / "projects").mkdir(parents=True, exist_ok=True)
+    (lm_root / "tasks").mkdir(parents=True, exist_ok=True)
+    cli = Cli(
+        run,
+        {
+            "xd": gh_source(board_x["number"]),
+            "yd": gh_source(board_y["number"]),
+            "lm": {"plugin": "local-md", "config": {"root": str(lm_root)}},
+        },
+    )
     one = run.gh_issues("r1", ["sym", "cl1", "cl2", "cause"], "q1.coexist.one.create")
     sym, cl1, cl2, cause = (one[k] for k in ("sym", "cl1", "cl2", "cause"))
     for issue in one.values():
@@ -976,68 +978,59 @@ def stage_gh_boards(run: Run) -> None:
     )
     projects = cli("project", "list", "--source", "xd", q="coexist.one.list")
     answers["one_after_child_removed"] = numbers_for(one, list_ids(projects))
-    # The other direction: what the project meaning writes, seen as parents.
-    created = cli(
-        "project",
-        "create",
-        "xd",
-        "--title",
-        run.title("plugin-project"),
-        "--body-file",
-        "/dev/null",
-        q="coexist.one.write",
+    # The other direction: what the project meaning writes, seen as parents. A board project
+    # is made by a copy, the plugin's own way of creating one.
+    (lm_root / "projects" / "p.md").write_text(
+        f"---\ntitle: {run.title('plugin-project')}\nstatus: todo\n---\nproject\n", encoding="utf-8"
     )
-    answers["one_plugin_project_create"] = summary(created)
-    project_id = (created["out"] or {}).get("id", "") if isinstance(created["out"], dict) else ""
-    native_project = str(project_id).split(":", 1)[-1]
-    if native_project:
-        run.record_created(native_project, "issue", "github", repo="r1", via="binary")
-    task = cli(
-        "task",
-        "create",
-        "xd",
-        "--title",
-        run.title("plugin-task"),
-        "--project",
-        project_id,
-        "--body-file",
-        "/dev/null",
-        q="coexist.one.write",
+    (lm_root / "tasks" / "t.md").write_text(
+        f"---\ntitle: {run.title('plugin-task')}\nstatus: todo\nproject: p\n---\ntask\n",
+        encoding="utf-8",
     )
-    answers["one_plugin_task_create"] = summary(task)
+    copied = cli("project", "copy", "lm:p", "--to", "xd", q="coexist.one.write")
+    answers["one_plugin_project_copy"] = summary(copied)
+    native_project = ""
     native_task = ""
-    if isinstance(task["out"], dict):
-        native_task = str(task["out"].get("id", "")).split(":", 1)[-1]
-    if native_task:
-        run.record_created(native_task, "issue", "github", repo="r1", via="binary")
+    outcomes = copied["out"] if isinstance(copied["out"], dict) else {}
+    for bucket in ("projects", "tasks", "results", "outcomes", "items"):
+        for row in outcomes.get(bucket) or []:
+            target = row.get("to") or row.get("destination") or row.get("result") or row
+            ident = str(
+                (target.get("id") if isinstance(target, dict) else target) or row.get("id") or ""
+            )
+            if not ident:
+                continue
+            if bucket == "projects" or row.get("kind") == "project":
+                native_project = ident.split(":", 1)[-1]
+            elif not native_task:
+                native_task = ident.split(":", 1)[-1]
+    answers["one_plugin_copy_report_keys"] = sorted(outcomes)
+    if not native_project:
+        for line in str(copied["out"]).splitlines():
+            found = re.search(r"\bxd:(I_\w+)", line)
+            if found and not native_project:
+                native_project = found.group(1)
+    for native in (native_project, native_task):
+        if native:
+            run.record_created(native, "issue", "github", repo="r1", via="binary")
     if native_project:
         answers["one_parent_reading_of_plugin_project"] = gh_node(
             run, {"id": native_project}, "q1.coexist.one.read"
         )
-    answers["one_plugin_marker_issue_parent_write"] = (
-        gh_rel(
+        answers["one_parent_write_onto_plugin_project_with_replace"] = gh_rel(
             run,
             "addSubIssue",
             "q1.coexist.one.parent",
-            issueId=native_project or sym["id"],
+            issueId=native_project,
             subIssueId=cl1["id"],
+            replaceParent=True,
         )
-        if native_project
-        else None
-    )
-    if native_project:
-        answers["one_board_after_moving_child_under_plugin_project"] = {
-            "move_with_replace": gh_rel(
-                run,
-                "addSubIssue",
-                "q1.coexist.one.parent",
-                issueId=native_project,
-                subIssueId=cl1["id"],
-                replaceParent=True,
-            ),
-            "projects": list_ids(cli("project", "list", "--source", "xd", q="coexist.one.list")),
+        answers["one_after_parent_write_onto_plugin_project"] = {
             "tasks": numbers_for(
                 one, list_ids(cli("task", "list", "--source", "xd", q="coexist.one.list"))
+            ),
+            "plugin_project_read": summary(
+                cli("project", "show", f"xd:{native_project}", q="coexist.one.show")
             ),
         }
     # Two boards sharing a repository.
@@ -1059,7 +1052,16 @@ def stage_gh_boards(run: Run) -> None:
         ),
     }
     run.gh_add_item(board_y["id"], shared["id"], "q1.coexist.two.shared")
-    answers["two_default_on_y_after_a_parent_ticket_joins_y"] = {
+    answers["two_default_on_y_immediately_after_parent_ticket_joins_y"] = {
+        "projects": numbers_for(
+            two, list_ids(cli("project", "list", "--source", "yd", q="coexist.two.list"))
+        ),
+        "tasks": numbers_for(
+            two, list_ids(cli("task", "list", "--source", "yd", q="coexist.two.list"))
+        ),
+    }
+    time.sleep(30)
+    answers["two_default_on_y_30s_after_parent_ticket_joined_y"] = {
         "projects": numbers_for(
             two, list_ids(cli("project", "list", "--source", "yd", q="coexist.two.list"))
         ),
@@ -1310,6 +1312,208 @@ def stage_gh_links(run: Run) -> None:
     }
     answers["objects"] = {k: v["number"] for k, v in made.items()} | {"cross": cross["number"]}
     run.write_stage("gh_links", answers)
+
+
+def stage_gh_duplicate_cross(run: Run) -> None:
+    """A duplicate naming an issue of another repository: closing the open issue names it."""
+    near = run.gh_issues("r1", ["dup-near"], "q2.gh.duplicate.cross.create")["dup-near"]
+    far = run.gh_issues("r2", ["dup-far"], "q2.gh.duplicate.cross.create")["dup-far"]
+    data, errors, seq = run.gh_mut(
+        [
+            Mut(
+                "a",
+                "closeIssue",
+                {
+                    "input": {
+                        "issueId": near["id"],
+                        "stateReason": Enum("DUPLICATE"),
+                        "duplicateIssueId": far["id"],
+                    }
+                },
+                "issue{state stateReason}",
+            )
+        ],
+        "q2.gh.duplicate.cross",
+    )
+    stage = json.loads((run.dir / "gh_links.json").read_text())
+    stage["duplicate"]["cross_repo_close"] = {
+        "seq": seq,
+        "ok": not errors,
+        "errors": errs(errors),
+        "payload": data.get("a"),
+    }
+    stage["duplicate"]["cross_repo_read"] = gh_node(run, near, "q2.gh.duplicate.read")
+    stage["duplicate"]["cross_repo_note"] = (
+        "first attempt in gh_links closed an already-closed issue, a no-op"
+    )
+    run.write_stage("gh_links", stage)
+
+
+def stage_gh_plugin_project(run: Run) -> None:
+    """What the project meaning writes through today's plugin, read as a parent reading."""
+    boards = json.loads((run.dir / "gh_boards.json").read_text())
+    number = boards["boards"]["x"]
+    board_id = next(
+        k for k, v in run.ledger.items() if v["kind"] == "board" and v.get("number") == number
+    )
+    data, errors, seq = run.gh_mut(
+        [
+            Mut(
+                "a",
+                "createProjectV2Field",
+                {
+                    "input": {
+                        "projectId": board_id,
+                        "dataType": Enum("TEXT"),
+                        "name": "onetaskgraph.origin",
+                    }
+                },
+                "projectV2Field{... on ProjectV2Field{id}}",
+            )
+        ],
+        "q1.coexist.one.origin-field",
+    )
+    lm_root = run.scratch / f"lm-{run.stamp}"
+    cli = Cli(
+        run,
+        {"xd": gh_source(number), "lm": {"plugin": "local-md", "config": {"root": str(lm_root)}}},
+    )
+    copied = cli("project", "copy", "lm:p", "--to", "xd", q="coexist.one.write")
+    answers: dict[str, Any] = {
+        "field": {"seq": seq, "errors": errs(errors)},
+        "copy_exit": copied["exit"],
+        "copy_err": copied["err"],
+    }
+    out = copied["out"] if isinstance(copied["out"], dict) else {}
+    native_project = ""
+    natives: list[str] = []
+    for row in out.get("items") or out.get("outcomes") or out.get("results") or []:
+        result = row.get("result") or {}
+        ident = str(result.get("id") or row.get("id") or "")
+        if ident:
+            natives.append(ident.split(":", 1)[-1])
+    answers["copy_report_keys"] = sorted(out)
+    answers["copy_outcomes"] = [
+        {k: row.get(k) for k in ("kind", "action", "status", "reason") if k in row}
+        for row in (out.get("items") or out.get("outcomes") or out.get("results") or [])
+    ]
+    if not natives:
+        natives = re.findall(r"I_kw\w+", json.dumps(out))
+    natives = list(dict.fromkeys(natives))
+    for native in natives:
+        run.record_created(native, "issue", "github", repo="r1", via="binary")
+    if natives:
+        reads = [gh_node(run, {"id": native}, "q1.coexist.one.read") for native in natives]
+        answers["reads"] = [
+            {
+                "number": r.get("number"),
+                "parent": r.get("parent"),
+                "children": r.get("subIssuesSummary"),
+            }
+            for r in reads
+        ]
+        parent_candidates = [r for r in reads if (r.get("subIssuesSummary") or {}).get("total")]
+        if parent_candidates:
+            native_project = next(n for n, r in zip(natives, reads) if r is parent_candidates[0])
+    answers["project_list"] = summary(
+        cli("project", "list", "--source", "xd", q="coexist.one.list")
+    )
+    fresh = run.gh_issues("r1", ["into-project"], "q1.coexist.one.create")["into-project"]
+    run.gh_add_item(board_id, fresh["id"], "q1.coexist.one.add")
+    answers["fresh_listed_before"] = fresh["number"]
+    if native_project:
+        answers["parent_write_onto_plugin_project"] = gh_rel(
+            run,
+            "addSubIssue",
+            "q1.coexist.one.parent",
+            issueId=native_project,
+            subIssueId=fresh["id"],
+        )
+        answers["project_show_after_parent_write"] = summary(
+            cli("project", "show", f"xd:{native_project}", q="coexist.one.show")
+        )
+        answers["tasks_after_parent_write"] = numbers_for(
+            {"fresh": fresh},
+            list_ids(cli("task", "list", "--source", "xd", q="coexist.one.list")),
+        )
+    run.write_stage("gh_plugin_project", answers)
+
+
+def stage_gh_landed60(run: Run) -> None:
+    """How much of the 60-alias mutation GitHub answered 504 to had landed, read after it."""
+    budget = [
+        v for v in run.ledger.values() if v.get("stage") == "budget_github" and v["kind"] == "issue"
+    ]
+    ids = [v["id"] for v in budget][:20]
+    doc = (
+        "query{"
+        + " ".join(
+            f'i{n}:node(id:"{i}"){{... on Issue{{relatesTo(first:100){{totalCount}}}}}}'
+            for n, i in enumerate(ids)
+        )
+        + "}"
+    )
+    data, errors, seq = run.gh_read(doc, "aliases.read-all")
+    total = sum(
+        ((data.get(f"i{n}") or {}).get("relatesTo") or {}).get("totalCount", 0)
+        for n in range(len(ids))
+    )
+    run.write_stage(
+        "gh_landed60",
+        {
+            "seq": seq,
+            "tickets": len(ids),
+            "sum_of_both_ends": total,
+            "edges_visible": total / 2,
+            "expected_if_every_alias_landed": 30 + 60,
+            "expected_if_none_landed": 30,
+        },
+    )
+
+
+def stage_gh_fallback_page(run: Run) -> None:
+    """How a `## Links` section and the hidden slot render on a public issue page."""
+    root = run.gh_issues("r1", ["links-target"], "q2.gh.fallback.page.create")["links-target"]
+    body = (
+        "Visible symptom text.\n\n"
+        + LINKS_SECTION.format(title="target", url=root["url"], qualified=f"ld:{root['id']}")
+        + '<!-- onetaskgraph.metadata {"spike.links":[{"type":"caused-by"}]} -->'
+    )
+    issue = run.gh_issues("r1", ["links-page"], "q2.gh.fallback.page.create", body=body)[
+        "links-page"
+    ]
+    script = run.scratch / f"capture-{run.stamp}.cjs"
+    script.write_text(CAPTURE_JS, encoding="utf-8")
+    shots = run.dir / "pages"
+    shots.mkdir(exist_ok=True)
+    proc = subprocess.run(
+        ["node", str(script), json.dumps([["fallback-rendered", issue["url"]]]), str(shots)],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=300,
+    )
+    script.unlink(missing_ok=True)
+    run.write_stage(
+        "gh_fallback_page",
+        {
+            "issue": issue["number"],
+            "capture_exit": proc.returncode,
+            "stderr": proc.stderr.strip()[:300],
+        },
+    )
+
+
+def stage_li_duplicate_cross(run: Run) -> None:
+    """Whether `duplicate` crosses teams, the one relation `li_links` did not cross."""
+    near = run.li_issues("TES2", ["dup-near"], "q2.li.duplicate.cross.create")["dup-near"]
+    far = run.li_issues("TES", ["dup-far"], "q2.li.duplicate.cross.create")["dup-far"]
+    result = li_rel(run, "duplicate", near, far, "q2.li.duplicate.cross-team")
+    read = li_node(run, near, "q2.li.duplicate.cross-team.read")
+    state = li_node(
+        run, near, "q2.li.duplicate.cross-team.state", "identifier state{name type} canceledAt"
+    )
+    run.write_stage("li_duplicate_cross", {"add": result, "read": read, "state": state})
 
 
 def li_body(run: Run, issue: dict, q: str) -> tuple[str, int]:
@@ -2171,12 +2375,17 @@ STAGES = {
     "gh_parents": stage_gh_parents,
     "gh_boards": stage_gh_boards,
     "gh_links": stage_gh_links,
+    "gh_duplicate_cross": stage_gh_duplicate_cross,
+    "gh_plugin_project": stage_gh_plugin_project,
     "li_parents": stage_li_parents,
     "li_links": stage_li_links,
     "li_walkthrough": stage_li_walkthrough,
     "budget_linear": stage_budget_linear,
     "budget_github": stage_budget_github,
+    "gh_landed60": stage_gh_landed60,
+    "li_duplicate_cross": stage_li_duplicate_cross,
     "capture": stage_capture,
+    "gh_fallback_page": stage_gh_fallback_page,
     "cleanup": stage_cleanup,
 }
 

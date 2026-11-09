@@ -1,0 +1,76 @@
+{
+ "swept": [],
+ "errors": [
+  "Could not resolve to a node with the global id of 'I_kwDOU_sxG88AAAABdiLmsA'.",
+  "Could not resolve to a node with the global id of 'I_kwDOU_sxG88AAAABdiLm0Q'.",
+  "Could not resolve to a node with the global id of 'I_kwDOU_sxG88AAAABdiLocw'.",
+  "Could not resolve to a node with the global id of 'I_kwDOU_sxG88AAAABdiLojA'."
+ ],
+ "remaining_after": {
+  "github_issues": [
+   "I_kwDOU_sxG88AAAABdiLmsA",
+   "I_kwDOU_sxG88AAAABdiLm0Q",
+   "I_kwDOU_sxG88AAAABdiLocw",
+   "I_kwDOU_sxG88AAAABdiLojA"
+  ],
+  "github_boards": [],
+  "linear_issues": [],
+  "linear_projects": []
+ },
+ "verified_after": {
+  "onetaskgraph-live-scratch": 1,
+  "onetaskgraph-live-scratch-2": 0,
+  "boards": 0,
+  "linear_issues": 0,
+  "linear_projects_including_archived": [
+   {
+    "id": "46797c3f-20f4-47d1-8cef-8f0f88ce145e",
+    "trashed": true
+   },
+   {
+    "id": "14637aac-47ca-47a7-9738-e1680489843e",
+    "trashed": true
+   },
+   {
+    "id": "17fcb4ca-066c-48c6-8748-493e5740236a",
+    "trashed": true
+   },
+   {
+    "id": "6bb99a34-640b-4c42-b7d9-0923b854ea97",
+    "trashed": true
+   }
+  ]
+ },
+ "inventory": {
+  "github:issue": {
+   "total": 211,
+   "deleted": 207,
+   "open": [
+    6090,
+    6091,
+    6092,
+    6093
+   ]
+  },
+  "linear:issue": {
+   "total": 182,
+   "deleted": 182,
+   "open": []
+  },
+  "linear:project": {
+   "total": 4,
+   "deleted": 4,
+   "open": []
+  },
+  "linear:relation": {
+   "total": 52,
+   "deleted": 52,
+   "open": []
+  },
+  "github:board": {
+   "total": 9,
+   "deleted": 9,
+   "open": []
+  }
+ }
+}

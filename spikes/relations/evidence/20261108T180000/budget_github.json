@@ -1,0 +1,136 @@
+{
+ "pass1_relations": {
+  "seq": 544,
+  "errors": []
+ },
+ "pass1_parent_read": {
+  "seq": 545,
+  "errors": []
+ },
+ "pass1_parent_write": {
+  "seq": 546,
+  "accepted": 12,
+  "errors": []
+ },
+ "pass1_links_read": {
+  "seq": 547,
+  "errors": []
+ },
+ "pass1_mirror_write": {
+  "seq": 548,
+  "accepted": 30,
+  "sent": 30,
+  "errors": []
+ },
+ "pass1_metadata_write": {
+  "seq": 549,
+  "sent": 20,
+  "accepted": 20,
+  "errors": []
+ },
+ "pass2_relations": {
+  "seq": 550,
+  "errors": []
+ },
+ "pass2_parent_read": {
+  "seq": 551,
+  "errors": []
+ },
+ "pass2_links_read": {
+  "seq": 552,
+  "errors": []
+ },
+ "larger_alias_sizes": {
+  "size60": {
+   "seq": 553,
+   "sent": 60,
+   "accepted": 0,
+   "errors": [
+    "<!DOCTYPE html>\r\n<!--\r\n\r\nHello future GitHubber! I bet you're here to remove those nasty inline styles,\r\nDRY up these templates and make 'em nice and re-usable, right?\r\n\r\nPlease, don't. https://github.com/styleguide/templates/2.0\r\n\r\n-->\r\n<html>\r\n  <head>\r\n    <title>Unicorn! &middot; GitHub</title>\r"
+   ]
+  },
+  "relates_to_total_on_one_issue": {
+   "totalCount": 17
+  }
+ },
+ "counts": {
+  "budget.pass1.relations": {
+   "requests": 1,
+   "cost": 1,
+   "complexity": 0,
+   "aliases": [
+    20
+   ],
+   "seqs": [
+    544
+   ],
+   "errors": []
+  },
+  "budget.pass1.parent": {
+   "requests": 2,
+   "cost": 2,
+   "complexity": 0,
+   "aliases": [
+    20,
+    12
+   ],
+   "seqs": [
+    545,
+    546
+   ],
+   "errors": []
+  },
+  "budget.pass1.links": {
+   "requests": 3,
+   "cost": 3,
+   "complexity": 0,
+   "aliases": [
+    20,
+    30,
+    20
+   ],
+   "seqs": [
+    547,
+    548,
+    549
+   ],
+   "errors": []
+  },
+  "budget.pass2.relations": {
+   "requests": 1,
+   "cost": 1,
+   "complexity": 0,
+   "aliases": [
+    20
+   ],
+   "seqs": [
+    550
+   ],
+   "errors": []
+  },
+  "budget.pass2.parent": {
+   "requests": 1,
+   "cost": 1,
+   "complexity": 0,
+   "aliases": [
+    20
+   ],
+   "seqs": [
+    551
+   ],
+   "errors": []
+  },
+  "budget.pass2.links": {
+   "requests": 1,
+   "cost": 1,
+   "complexity": 0,
+   "aliases": [
+    20
+   ],
+   "seqs": [
+    552
+   ],
+   "errors": []
+  }
+ }
+}

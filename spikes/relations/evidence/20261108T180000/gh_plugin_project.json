@@ -1,0 +1,79 @@
+{
+ "field": {
+  "seq": 563,
+  "errors": []
+ },
+ "copy_exit": 0,
+ "copy_err": "",
+ "copy_report_keys": [
+  "items",
+  "spent"
+ ],
+ "copy_outcomes": [
+  {
+   "action": "created"
+  },
+  {
+   "action": "created"
+  }
+ ],
+ "reads": [
+  {
+   "number": 6283,
+   "parent": null,
+   "children": {
+    "total": 1
+   }
+  },
+  {
+   "number": 6284,
+   "parent": {
+    "number": 6283
+   },
+   "children": {
+    "total": 0
+   }
+  }
+ ],
+ "project_list": {
+  "exit": 0,
+  "err": null,
+  "ids": [
+   "xd:I_kwDOU_sxG88AAAABdi8pTQ",
+   "xd:I_kwDOU_sxG88AAAABdi9M0g",
+   "xd:I_kwDOU_sxG88AAAABdi9rhQ",
+   "xd:I_kwDOU_sxG88AAAABdjAfyw"
+  ],
+  "item": null
+ },
+ "fresh_listed_before": 6285,
+ "parent_write_onto_plugin_project": {
+  "seq": 570,
+  "ok": true,
+  "errors": []
+ },
+ "project_show_after_parent_write": {
+  "exit": 0,
+  "err": null,
+  "ids": [
+   "xd:I_kwDOU_sxG88AAAABdjAfyw"
+  ],
+  "item": null
+ },
+ "tasks_after_parent_write": {
+  "listed": [
+   "fresh"
+  ],
+  "unknown": [
+   "xd:I_kwDOU_sxG88AAAABdi8pZw",
+   "xd:I_kwDOU_sxG88AAAABdi8phA",
+   "xd:I_kwDOU_sxG88AAAABdi9M6A",
+   "xd:I_kwDOU_sxG88AAAABdi9NCQ",
+   "xd:I_kwDOU_sxG88AAAABdi9NIg",
+   "xd:I_kwDOU_sxG88AAAABdi9rTw",
+   "xd:I_kwDOU_sxG88AAAABdi9raw",
+   "xd:I_kwDOU_sxG88AAAABdi9rKg",
+   "xd:I_kwDOU_sxG88AAAABdjAgKg"
+  ]
+ }
+}

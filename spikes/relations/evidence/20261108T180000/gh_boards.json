@@ -1,0 +1,472 @@
+{
+ "boards": {
+  "x": 270,
+  "y": 271
+ },
+ "board_x_initial": {
+  "seq": 485,
+  "errors": [],
+  "fields": [
+   "TITLE",
+   "ASSIGNEES",
+   "SINGLE_SELECT",
+   "LABELS",
+   "LINKED_PULL_REQUESTS",
+   "MILESTONE",
+   "REPOSITORY",
+   "REVIEWERS",
+   "PARENT_ISSUE",
+   "SUB_ISSUES_PROGRESS",
+   "CREATED",
+   "UPDATED",
+   "CLOSED"
+  ],
+  "workflows": [
+   {
+    "name": "Auto-add sub-issues to project",
+    "enabled": true,
+    "number": 4
+   },
+   {
+    "name": "Auto-close issue",
+    "enabled": true,
+    "number": 3
+   },
+   {
+    "name": "Item added to project",
+    "enabled": true,
+    "number": 6
+   },
+   {
+    "name": "Item closed",
+    "enabled": true,
+    "number": 1
+   },
+   {
+    "name": "Pull request linked to issue",
+    "enabled": true,
+    "number": 5
+   },
+   {
+    "name": "Pull request merged",
+    "enabled": true,
+    "number": 2
+   }
+  ],
+  "item_numbers": [],
+  "items": []
+ },
+ "join_sub_issue": {
+  "seq": 488,
+  "ok": true,
+  "errors": []
+ },
+ "board_after_sub_issue_added_to_a_board_parent": {
+  "seq": 489,
+  "errors": [],
+  "fields": [
+   "TITLE",
+   "ASSIGNEES",
+   "SINGLE_SELECT",
+   "LABELS",
+   "LINKED_PULL_REQUESTS",
+   "MILESTONE",
+   "REPOSITORY",
+   "REVIEWERS",
+   "PARENT_ISSUE",
+   "SUB_ISSUES_PROGRESS",
+   "CREATED",
+   "UPDATED",
+   "CLOSED"
+  ],
+  "workflows": [
+   {
+    "name": "Auto-add sub-issues to project",
+    "enabled": true,
+    "number": 4
+   },
+   {
+    "name": "Auto-close issue",
+    "enabled": true,
+    "number": 3
+   },
+   {
+    "name": "Item added to project",
+    "enabled": true,
+    "number": 6
+   },
+   {
+    "name": "Item closed",
+    "enabled": true,
+    "number": 1
+   },
+   {
+    "name": "Pull request linked to issue",
+    "enabled": true,
+    "number": 5
+   },
+   {
+    "name": "Pull request merged",
+    "enabled": true,
+    "number": 2
+   }
+  ],
+  "item_numbers": [
+   6250,
+   6251
+  ],
+  "items": [
+   {
+    "number": 6250,
+    "parent": null,
+    "children": 1
+   },
+   {
+    "number": 6251,
+    "parent": 6250,
+    "children": 0
+   }
+  ]
+ },
+ "join_created_with_parent_in_repo2": {
+  "seq": 490,
+  "ok": true,
+  "errors": []
+ },
+ "board_after_grandchild": {
+  "seq": 491,
+  "errors": [],
+  "fields": [
+   "TITLE",
+   "ASSIGNEES",
+   "SINGLE_SELECT",
+   "LABELS",
+   "LINKED_PULL_REQUESTS",
+   "MILESTONE",
+   "REPOSITORY",
+   "REVIEWERS",
+   "PARENT_ISSUE",
+   "SUB_ISSUES_PROGRESS",
+   "CREATED",
+   "UPDATED",
+   "CLOSED"
+  ],
+  "workflows": [
+   {
+    "name": "Auto-add sub-issues to project",
+    "enabled": true,
+    "number": 4
+   },
+   {
+    "name": "Auto-close issue",
+    "enabled": true,
+    "number": 3
+   },
+   {
+    "name": "Item added to project",
+    "enabled": true,
+    "number": 6
+   },
+   {
+    "name": "Item closed",
+    "enabled": true,
+    "number": 1
+   },
+   {
+    "name": "Pull request linked to issue",
+    "enabled": true,
+    "number": 5
+   },
+   {
+    "name": "Pull request merged",
+    "enabled": true,
+    "number": 2
+   }
+  ],
+  "item_numbers": [
+   6250,
+   6251,
+   6252
+  ],
+  "items": [
+   {
+    "number": 6250,
+    "parent": null,
+    "children": 1
+   },
+   {
+    "number": 6251,
+    "parent": 6250,
+    "children": 1
+   },
+   {
+    "number": 6252,
+    "parent": 6251,
+    "children": 0
+   }
+  ]
+ },
+ "numbers": {
+  "jp": 6250,
+  "jc": 6251,
+  "jc2": 6252
+ },
+ "one_before": {
+  "projects": {
+   "exit": 0,
+   "err": null,
+   "ids": [
+    "xd:I_kwDOU_sxG88AAAABdi8pTQ"
+   ],
+   "item": null
+  },
+  "tasks": {
+   "exit": 0,
+   "err": null,
+   "ids": [
+    "xd:I_kwDOU_sxG88AAAABdi8pZw",
+    "xd:I_kwDOU_sxG88AAAABdi8phA",
+    "xd:I_kwDOU_sxG88AAAABdi9M0g",
+    "xd:I_kwDOU_sxG88AAAABdi9M6A",
+    "xd:I_kwDOU_sxG88AAAABdi9NCQ",
+    "xd:I_kwDOU_sxG88AAAABdi9NIg"
+   ],
+   "item": null
+  }
+ },
+ "one_after_parent_write": {
+  "default_projects": {
+   "listed": [
+    "cause"
+   ],
+   "unknown": [
+    "xd:I_kwDOU_sxG88AAAABdi8pTQ"
+   ]
+  },
+  "default_tasks": {
+   "listed": [
+    "sym",
+    "cl1",
+    "cl2"
+   ],
+   "unknown": [
+    "xd:I_kwDOU_sxG88AAAABdi8pZw",
+    "xd:I_kwDOU_sxG88AAAABdi8phA"
+   ]
+  },
+  "exit": [
+   0,
+   0
+  ],
+  "parent_reading": {
+   "cause": {
+    "seq": 504,
+    "number": 6256,
+    "state": "OPEN",
+    "stateReason": null,
+    "parent": null,
+    "subIssuesSummary": {
+     "total": 1
+    },
+    "subIssues": {
+     "totalCount": 1,
+     "nodes": [
+      {
+       "number": 6253
+      }
+     ]
+    },
+    "relatesTo": {
+     "totalCount": 0,
+     "nodes": []
+    },
+    "blockedBy": {
+     "totalCount": 0,
+     "nodes": []
+    },
+    "blocking": {
+     "totalCount": 0,
+     "nodes": []
+    },
+    "duplicateOf": null,
+    "trackedIssues": {
+     "totalCount": 0
+    },
+    "trackedInIssues": {
+     "totalCount": 0
+    },
+    "errors": []
+   },
+   "sym": {
+    "seq": 505,
+    "number": 6253,
+    "state": "OPEN",
+    "stateReason": null,
+    "parent": {
+     "number": 6256
+    },
+    "subIssuesSummary": {
+     "total": 2
+    },
+    "subIssues": {
+     "totalCount": 2,
+     "nodes": [
+      {
+       "number": 6254
+      },
+      {
+       "number": 6255
+      }
+     ]
+    },
+    "relatesTo": {
+     "totalCount": 0,
+     "nodes": []
+    },
+    "blockedBy": {
+     "totalCount": 0,
+     "nodes": []
+    },
+    "blocking": {
+     "totalCount": 0,
+     "nodes": []
+    },
+    "duplicateOf": null,
+    "trackedIssues": {
+     "totalCount": 0
+    },
+    "trackedInIssues": {
+     "totalCount": 0
+    },
+    "errors": []
+   }
+  }
+ },
+ "one_task_show_of_a_parent_ticket": {
+  "exit": 0,
+  "err": null,
+  "ids": [
+   "xd:I_kwDOU_sxG88AAAABdi9M0g"
+  ],
+  "item": null
+ },
+ "one_task_show_of_top_ticket": {
+  "exit": 1,
+  "err": "onetaskgraph: no task with that id\nnext: check the id, or list what is there — `onetaskgraph task list` reports every task the configured sources hold.",
+  "ids": null,
+  "item": {}
+ },
+ "one_project_show_of_top_ticket": {
+  "exit": 0,
+  "err": null,
+  "ids": [
+   "xd:I_kwDOU_sxG88AAAABdi9NIg"
+  ],
+  "item": null
+ },
+ "one_project_status_write_on_a_parent_ticket": {
+  "exit": 0,
+  "err": null,
+  "ids": null,
+  "item": {
+   "id": "xd:I_kwDOU_sxG88AAAABdi9NIg"
+  }
+ },
+ "one_remove_only_child_of_cause": {
+  "seq": 510,
+  "ok": true,
+  "errors": []
+ },
+ "one_after_child_removed": {
+  "listed": [
+   "sym"
+  ],
+  "unknown": [
+   "xd:I_kwDOU_sxG88AAAABdi8pTQ"
+  ]
+ },
+ "one_plugin_project_copy": {
+  "exit": 1,
+  "err": "onetaskgraph: source xd could not do it: the source refused the request: GitHub board has no source-owned onetaskgraph.origin text field, and the item carries onetaskgraph.origin; add a text field named onetaskgraph.origin to the board\nnext: fix what the source named above, then copy again.",
+  "ids": null,
+  "item": {}
+ },
+ "one_plugin_copy_report_keys": [
+  "failure"
+ ],
+ "two_default_on_y": {
+  "projects": {
+   "listed": [
+    "py"
+   ],
+   "unknown": []
+  },
+  "tasks": {
+   "listed": [
+    "ty"
+   ],
+   "unknown": []
+  }
+ },
+ "two_default_on_y_immediately_after_parent_ticket_joins_y": {
+  "projects": {
+   "listed": [
+    "py"
+   ],
+   "unknown": []
+  },
+  "tasks": {
+   "listed": [
+    "ty"
+   ],
+   "unknown": []
+  }
+ },
+ "two_default_on_y_30s_after_parent_ticket_joined_y": {
+  "projects": {
+   "listed": [
+    "shared",
+    "py"
+   ],
+   "unknown": []
+  },
+  "tasks": {
+   "listed": [
+    "ty",
+    "tkt",
+    "tkt2"
+   ],
+   "unknown": []
+  }
+ },
+ "two_move_project_task_under_a_ticket_without_replace": {
+  "seq": 529,
+  "ok": false,
+  "errors": [
+   "Failed to add sub-issue #6258 to parent #6259. Sub issue may only have one parent"
+  ]
+ },
+ "two_move_project_task_under_a_ticket_with_replace": {
+  "seq": 530,
+  "ok": true,
+  "errors": []
+ },
+ "two_default_on_y_after_move": {
+  "projects": {
+   "listed": [
+    "shared",
+    "py"
+   ],
+   "unknown": []
+  },
+  "tasks": {
+   "listed": [
+    "py",
+    "ty",
+    "tkt",
+    "tkt2"
+   ],
+   "unknown": []
+  }
+ }
+}

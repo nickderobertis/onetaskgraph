@@ -1,0 +1,8 @@
+{
+ "seq": 575,
+ "tickets": 20,
+ "sum_of_both_ends": 176,
+ "edges_visible": 88.0,
+ "expected_if_every_alias_landed": 90,
+ "expected_if_none_landed": 30
+}

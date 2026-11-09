@@ -28,6 +28,7 @@ class Allowed(unittest.TestCase):
         github("createIssue", repositoryId="R2", title=f"x {STAMP}")
         github("addSubIssue", issueId="I1", subIssueId="I2", replaceParent=True)
         github("addProjectV2ItemById", projectId="B1", contentId="I1")
+        github("createProjectV2Field", projectId="B1", name="onetaskgraph.origin")
         github(
             "createProjectV2",
             ownerId="OWNER",
@@ -59,6 +60,7 @@ class Refusals(unittest.TestCase):
         self.assert_refused(github, "deleteIssue", issueId="OTHER")
         self.assert_refused(github, "addProjectV2ItemById", projectId="BOARD3", contentId="I1")
         self.assert_refused(github, "updateProjectV2", projectId="BOARD1", public=True)
+        self.assert_refused(github, "createProjectV2Field", projectId="BOARD1", name="x")
 
     def test_board_title_and_owner(self) -> None:
         self.assert_refused(github, "createProjectV2", ownerId="OWNER", title="plans")

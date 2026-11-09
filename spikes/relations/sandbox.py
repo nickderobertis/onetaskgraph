@@ -50,6 +50,7 @@ GITHUB_ROOTS = {
     "deleteProjectV2Item",
     "createProjectV2",
     "updateProjectV2",
+    "createProjectV2Field",
     "deleteProjectV2",
 }
 LINEAR_ROOTS = {

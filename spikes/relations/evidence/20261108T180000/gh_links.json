@@ -1,0 +1,691 @@
+{
+ "relates_to": {
+  "add": {
+   "seq": 432,
+   "ok": true,
+   "errors": []
+  },
+  "read_a": {
+   "seq": 433,
+   "number": 6242,
+   "state": "OPEN",
+   "stateReason": null,
+   "parent": null,
+   "subIssuesSummary": {
+    "total": 0
+   },
+   "subIssues": {
+    "totalCount": 0,
+    "nodes": []
+   },
+   "relatesTo": {
+    "totalCount": 1,
+    "nodes": [
+     {
+      "number": 6243
+     }
+    ]
+   },
+   "blockedBy": {
+    "totalCount": 0,
+    "nodes": []
+   },
+   "blocking": {
+    "totalCount": 0,
+    "nodes": []
+   },
+   "duplicateOf": null,
+   "trackedIssues": {
+    "totalCount": 0
+   },
+   "trackedInIssues": {
+    "totalCount": 0
+   },
+   "errors": []
+  },
+  "read_b": {
+   "seq": 434,
+   "number": 6243,
+   "state": "OPEN",
+   "stateReason": null,
+   "parent": null,
+   "subIssuesSummary": {
+    "total": 0
+   },
+   "subIssues": {
+    "totalCount": 0,
+    "nodes": []
+   },
+   "relatesTo": {
+    "totalCount": 1,
+    "nodes": [
+     {
+      "number": 6242
+     }
+    ]
+   },
+   "blockedBy": {
+    "totalCount": 0,
+    "nodes": []
+   },
+   "blocking": {
+    "totalCount": 0,
+    "nodes": []
+   },
+   "duplicateOf": null,
+   "trackedIssues": {
+    "totalCount": 0
+   },
+   "trackedInIssues": {
+    "totalCount": 0
+   },
+   "errors": []
+  },
+  "duplicate_add": {
+   "seq": 435,
+   "ok": true,
+   "errors": []
+  },
+  "remove_from_other_end": {
+   "seq": 436,
+   "ok": true,
+   "errors": []
+  },
+  "read_a_after": {
+   "seq": 437,
+   "number": 6242,
+   "state": "OPEN",
+   "stateReason": null,
+   "parent": null,
+   "subIssuesSummary": {
+    "total": 0
+   },
+   "subIssues": {
+    "totalCount": 0,
+    "nodes": []
+   },
+   "relatesTo": {
+    "totalCount": 0,
+    "nodes": []
+   },
+   "blockedBy": {
+    "totalCount": 0,
+    "nodes": []
+   },
+   "blocking": {
+    "totalCount": 0,
+    "nodes": []
+   },
+   "duplicateOf": null,
+   "trackedIssues": {
+    "totalCount": 0
+   },
+   "trackedInIssues": {
+    "totalCount": 0
+   },
+   "errors": []
+  },
+  "cross_repo": {
+   "seq": 438,
+   "ok": true,
+   "errors": []
+  },
+  "cross_read": {
+   "seq": 439,
+   "number": 5,
+   "state": "OPEN",
+   "stateReason": null,
+   "parent": null,
+   "subIssuesSummary": {
+    "total": 0
+   },
+   "subIssues": {
+    "totalCount": 0,
+    "nodes": []
+   },
+   "relatesTo": {
+    "totalCount": 1,
+    "nodes": [
+     {
+      "number": 6242
+     }
+    ]
+   },
+   "blockedBy": {
+    "totalCount": 0,
+    "nodes": []
+   },
+   "blocking": {
+    "totalCount": 0,
+    "nodes": []
+   },
+   "duplicateOf": null,
+   "trackedIssues": {
+    "totalCount": 0
+   },
+   "trackedInIssues": {
+    "totalCount": 0
+   },
+   "errors": []
+  },
+  "self": {
+   "seq": 440,
+   "ok": false,
+   "errors": [
+    "An error occurred while adding the related issue. Validation failed: Target issue cannot be the same as the source issue"
+   ]
+  }
+ },
+ "blocked_by": {
+  "add": {
+   "seq": 441,
+   "ok": true,
+   "errors": []
+  },
+  "read_blocked": {
+   "seq": 442,
+   "number": 6244,
+   "state": "OPEN",
+   "stateReason": null,
+   "parent": null,
+   "subIssuesSummary": {
+    "total": 0
+   },
+   "subIssues": {
+    "totalCount": 0,
+    "nodes": []
+   },
+   "relatesTo": {
+    "totalCount": 0,
+    "nodes": []
+   },
+   "blockedBy": {
+    "totalCount": 1,
+    "nodes": [
+     {
+      "number": 6245
+     }
+    ]
+   },
+   "blocking": {
+    "totalCount": 0,
+    "nodes": []
+   },
+   "duplicateOf": null,
+   "trackedIssues": {
+    "totalCount": 0
+   },
+   "trackedInIssues": {
+    "totalCount": 0
+   },
+   "errors": []
+  },
+  "read_blocker": {
+   "seq": 443,
+   "number": 6245,
+   "state": "OPEN",
+   "stateReason": null,
+   "parent": null,
+   "subIssuesSummary": {
+    "total": 0
+   },
+   "subIssues": {
+    "totalCount": 0,
+    "nodes": []
+   },
+   "relatesTo": {
+    "totalCount": 0,
+    "nodes": []
+   },
+   "blockedBy": {
+    "totalCount": 0,
+    "nodes": []
+   },
+   "blocking": {
+    "totalCount": 1,
+    "nodes": [
+     {
+      "number": 6244
+     }
+    ]
+   },
+   "duplicateOf": null,
+   "trackedIssues": {
+    "totalCount": 0
+   },
+   "trackedInIssues": {
+    "totalCount": 0
+   },
+   "errors": []
+  },
+  "cycle": {
+   "seq": 444,
+   "ok": false,
+   "errors": [
+    "An error occurred while adding the blocking issue to the issue. Validation failed: this dependency would create a cycle where the target is already blocked by the source"
+   ]
+  },
+  "cross_repo": {
+   "seq": 445,
+   "ok": true,
+   "errors": []
+  },
+  "read_cross": {
+   "seq": 446,
+   "number": 5,
+   "state": "OPEN",
+   "stateReason": null,
+   "parent": null,
+   "subIssuesSummary": {
+    "total": 0
+   },
+   "subIssues": {
+    "totalCount": 0,
+    "nodes": []
+   },
+   "relatesTo": {
+    "totalCount": 1,
+    "nodes": [
+     {
+      "number": 6242
+     }
+    ]
+   },
+   "blockedBy": {
+    "totalCount": 0,
+    "nodes": []
+   },
+   "blocking": {
+    "totalCount": 1,
+    "nodes": [
+     {
+      "number": 6244
+     }
+    ]
+   },
+   "duplicateOf": null,
+   "trackedIssues": {
+    "totalCount": 0
+   },
+   "trackedInIssues": {
+    "totalCount": 0
+   },
+   "errors": []
+  },
+  "remove": {
+   "seq": 447,
+   "ok": true,
+   "errors": []
+  }
+ },
+ "duplicate": {
+  "close": {
+   "seq": 448,
+   "ok": true,
+   "errors": [],
+   "payload": {
+    "issue": {
+     "state": "CLOSED",
+     "stateReason": "DUPLICATE"
+    }
+   }
+  },
+  "read_duplicate": {
+   "seq": 449,
+   "number": 6246,
+   "state": "CLOSED",
+   "stateReason": "DUPLICATE",
+   "parent": null,
+   "subIssuesSummary": {
+    "total": 0
+   },
+   "subIssues": {
+    "totalCount": 0,
+    "nodes": []
+   },
+   "relatesTo": {
+    "totalCount": 0,
+    "nodes": []
+   },
+   "blockedBy": {
+    "totalCount": 0,
+    "nodes": []
+   },
+   "blocking": {
+    "totalCount": 0,
+    "nodes": []
+   },
+   "duplicateOf": {
+    "number": 6247
+   },
+   "trackedIssues": {
+    "totalCount": 0
+   },
+   "trackedInIssues": {
+    "totalCount": 0
+   },
+   "errors": []
+  },
+  "read_canonical": {
+   "seq": 450,
+   "number": 6247,
+   "state": "OPEN",
+   "stateReason": null,
+   "parent": null,
+   "subIssuesSummary": {
+    "total": 0
+   },
+   "subIssues": {
+    "totalCount": 0,
+    "nodes": []
+   },
+   "relatesTo": {
+    "totalCount": 0,
+    "nodes": []
+   },
+   "blockedBy": {
+    "totalCount": 0,
+    "nodes": []
+   },
+   "blocking": {
+    "totalCount": 0,
+    "nodes": []
+   },
+   "duplicateOf": null,
+   "trackedIssues": {
+    "totalCount": 0
+   },
+   "trackedInIssues": {
+    "totalCount": 0
+   },
+   "errors": []
+  },
+  "unmark": {
+   "seq": 451,
+   "ok": true,
+   "errors": []
+  },
+  "read_after_unmark": {
+   "seq": 452,
+   "number": 6246,
+   "state": "CLOSED",
+   "stateReason": "DUPLICATE",
+   "parent": null,
+   "subIssuesSummary": {
+    "total": 0
+   },
+   "subIssues": {
+    "totalCount": 0,
+    "nodes": []
+   },
+   "relatesTo": {
+    "totalCount": 0,
+    "nodes": []
+   },
+   "blockedBy": {
+    "totalCount": 0,
+    "nodes": []
+   },
+   "blocking": {
+    "totalCount": 0,
+    "nodes": []
+   },
+   "duplicateOf": null,
+   "trackedIssues": {
+    "totalCount": 0
+   },
+   "trackedInIssues": {
+    "totalCount": 0
+   },
+   "errors": []
+  },
+  "cross_repo_close": {
+   "seq": 537,
+   "ok": true,
+   "errors": [],
+   "payload": {
+    "issue": {
+     "state": "CLOSED",
+     "stateReason": "DUPLICATE"
+    }
+   }
+  },
+  "cross_repo_read": {
+   "seq": 538,
+   "number": 6262,
+   "state": "CLOSED",
+   "stateReason": "DUPLICATE",
+   "parent": null,
+   "subIssuesSummary": {
+    "total": 0
+   },
+   "subIssues": {
+    "totalCount": 0,
+    "nodes": []
+   },
+   "relatesTo": {
+    "totalCount": 0,
+    "nodes": []
+   },
+   "blockedBy": {
+    "totalCount": 0,
+    "nodes": []
+   },
+   "blocking": {
+    "totalCount": 0,
+    "nodes": []
+   },
+   "duplicateOf": {
+    "number": 6
+   },
+   "trackedIssues": {
+    "totalCount": 0
+   },
+   "trackedInIssues": {
+    "totalCount": 0
+   },
+   "errors": []
+  },
+  "cross_repo_note": "first attempt in gh_links closed an already-closed issue, a no-op"
+ },
+ "tracked": {
+  "set_body_with_task_list": {
+   "seq": 455,
+   "ok": true,
+   "errors": []
+  },
+  "read": {
+   "seq": 456,
+   "number": 6242,
+   "state": "OPEN",
+   "stateReason": null,
+   "parent": null,
+   "subIssuesSummary": {
+    "total": 0
+   },
+   "subIssues": {
+    "totalCount": 0,
+    "nodes": []
+   },
+   "relatesTo": {
+    "totalCount": 1,
+    "nodes": [
+     {
+      "number": 5
+     }
+    ]
+   },
+   "blockedBy": {
+    "totalCount": 0,
+    "nodes": []
+   },
+   "blocking": {
+    "totalCount": 0,
+    "nodes": []
+   },
+   "duplicateOf": null,
+   "trackedIssues": {
+    "totalCount": 1
+   },
+   "trackedInIssues": {
+    "totalCount": 0
+   },
+   "errors": []
+  },
+  "note": "no trackedIssues/tracksIssues mutation exists in the introspected schema"
+ },
+ "fallback_board": 269,
+ "fallback_metadata_writes": [
+  {
+   "exit": 0,
+   "err": null,
+   "ids": null,
+   "item": {
+    "version": null
+   }
+  },
+  {
+   "exit": 0,
+   "err": null,
+   "ids": null,
+   "item": {
+    "version": null
+   }
+  }
+ ],
+ "fallback_after_metadata": {
+  "seq": 464,
+  "section_present": false,
+  "metadata_slot_present": true,
+  "bytes": 148,
+  "digest": "sha256:8a19f5529bdf3cf7"
+ },
+ "fallback_with_section": {
+  "seq": 465,
+  "ok": true,
+  "errors": []
+ },
+ "fallback_read_with_section": {
+  "exit": 0,
+  "err": null,
+  "metadata_keys": [
+   "spike.links"
+  ],
+  "links_metadata": [
+   {
+    "type": "caused-by",
+    "direction": "out",
+    "other": "ld:I_kwDOU_sxG88AAAABdi8CCA"
+   }
+  ],
+  "content_has_links_section": true,
+  "content_digest": "sha256:98ec52ef659e7f32"
+ },
+ "fallback_page": {
+  "url": "https://github.com/nickderobertis/onetaskgraph-live-scratch/issues/6248"
+ },
+ "edit_keeps_section": {
+  "write": {
+   "seq": 468,
+   "ok": true,
+   "errors": []
+  },
+  "read": {
+   "exit": 0,
+   "err": null,
+   "metadata_keys": [
+    "spike.links"
+   ],
+   "links_metadata": [
+    {
+     "type": "caused-by",
+     "direction": "out",
+     "other": "ld:I_kwDOU_sxG88AAAABdi8CCA"
+    }
+   ],
+   "content_has_links_section": true,
+   "content_digest": "sha256:a88b3229bdf8d329"
+  },
+  "stored": {
+   "section_present": true,
+   "metadata_slot_present": true,
+   "bytes": 307,
+   "digest": "sha256:93df7e7d4b61185f"
+  }
+ },
+ "edit_deletes_section_keeps_slot": {
+  "write": {
+   "seq": 472,
+   "ok": true,
+   "errors": []
+  },
+  "read": {
+   "exit": 0,
+   "err": null,
+   "metadata_keys": [
+    "spike.links"
+   ],
+   "links_metadata": [
+    {
+     "type": "caused-by",
+     "direction": "out",
+     "other": "ld:I_kwDOU_sxG88AAAABdi8CCA"
+    }
+   ],
+   "content_has_links_section": false,
+   "content_digest": "sha256:7854616b5b771958"
+  },
+  "stored": {
+   "section_present": false,
+   "metadata_slot_present": true,
+   "bytes": 168,
+   "digest": "sha256:dda2d815d050e022"
+  }
+ },
+ "edit_rewrites_whole_body": {
+  "write": {
+   "seq": 475,
+   "ok": true,
+   "errors": []
+  },
+  "read": {
+   "exit": 0,
+   "err": null,
+   "metadata_keys": [],
+   "links_metadata": null,
+   "content_has_links_section": false,
+   "content_digest": "sha256:aa10945f6f72bb07"
+  },
+  "stored": {
+   "section_present": false,
+   "metadata_slot_present": false,
+   "bytes": 40,
+   "digest": "sha256:aa10945f6f72bb07"
+  },
+  "other_end_read": {
+   "exit": 0,
+   "err": null,
+   "metadata_keys": [
+    "spike.links"
+   ],
+   "links_metadata": [
+    {
+     "type": "caused-by",
+     "direction": "in",
+     "other": "ld:I_kwDOU_sxG88AAAABdi8B2A"
+    }
+   ],
+   "content_has_links_section": false,
+   "content_digest": "sha256:1b68b7321032e70f"
+  }
+ },
+ "objects": {
+  "a": 6242,
+  "b": 6243,
+  "c": 6244,
+  "d": 6245,
+  "e": 6246,
+  "f": 6247,
+  "cross": 5
+ }
+}
