@@ -8,6 +8,9 @@ it ends. Evidence goes to `spikes/relations/evidence/<stamp>/`: `requests.jsonl`
 request, its operation names and costs, and no credential, title or body; `<stage>.json` holds
 the stage's derived answers, keyed by the question they answer, and the only bodies it holds are
 the synthetic ones the report quotes. Every write passes `sandbox.Sandbox` before it is sent.
+
+Exit status: 0 when every stage finished (and, with cleanup, nothing is left); 1 when a stage
+stopped or cleanup left something behind; 2 for a usage error (argparse).
 """
 
 # llmlint: ignore-file[async_typed_clients_at_boundaries] A single-threaded measurement script run once per spike on a branch kept for the record and never landing; a blocking client keeps every request's position in the requests.jsonl sequence the report cites.
@@ -2129,7 +2132,7 @@ const { chromium } = require('/home/nick.guest/ai-orchestrator/node_modules/play
     await page.waitForTimeout(5000);
     await page.screenshot({ path: process.argv[3] + '/' + name + '.png', fullPage: true });
     const text = await page.evaluate(() => document.body.innerText.slice(0, 4000));
-    out.push({ name, url, status: response.status(), bytes: text.length, sample: text });
+    out.push({ name, url, status: response.status(), chars: text.length, sample: text });
     await page.close();
   }
   await browser.close();
