@@ -1,12 +1,20 @@
 """Every refusal the sandbox owes, offline: `python3 -m unittest spikes/relations/test_sandbox.py`."""
 
+# llmlint: ignore-file[new_code_lands_in_a_project] Spike branch kept for the record, not merged; see harness.py.
 import pathlib
 import sys
 import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 
-from sandbox import Enum, Mut, Refused, Sandbox, document, refuse_protected_board  # noqa: E402
+from sandbox import (  # noqa: E402 -- sys.path is set just above
+    Enum,
+    Mut,
+    Refused,
+    Sandbox,
+    document,
+    refuse_protected_board,
+)
 
 STAMP = "20261108T000000"
 

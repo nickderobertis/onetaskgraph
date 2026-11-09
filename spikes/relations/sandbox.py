@@ -4,6 +4,10 @@ Pure and offline: `harness.py` builds each mutation as a list of `Mut` and hands
 `test_sandbox.py` can prove every refusal without a credential or a socket.
 """
 
+# llmlint: ignore-file[new_code_lands_in_a_project] Spike branch kept for the record, not merged; see harness.py.
+# llmlint: ignore-file[modern_domain_modeling] One script's refusal over the two trackers' JSON inputs, kept for one measurement; see harness.py.
+# llmlint: ignore-file[contracts_have_one_source_or_a_drift_gate] The whitelist below names the inputs this spike sends, and any root it did not list is refused; it is deliberately not derived from the trackers, whose schema is what the spike reads.
+
 from __future__ import annotations
 
 import json
@@ -88,13 +92,15 @@ class Mut:
 
 def literal(value: Any) -> str:
     """A value as an inline GraphQL literal."""
-    if isinstance(value, Enum):
-        return value.name
-    if isinstance(value, dict):
-        return "{" + ",".join(f"{k}:{literal(v)}" for k, v in value.items()) + "}"
-    if isinstance(value, (list, tuple)):
-        return "[" + ",".join(literal(v) for v in value) + "]"
-    return json.dumps(value)
+    match value:
+        case Enum(name=name):
+            return name
+        case dict():
+            return "{" + ",".join(f"{k}:{literal(v)}" for k, v in value.items()) + "}"
+        case list() | tuple():
+            return "[" + ",".join(literal(v) for v in value) + "]"
+        case _:
+            return json.dumps(value)
 
 
 def document(muts: list[Mut]) -> str:

@@ -320,7 +320,7 @@
  "fallback_after_metadata": {
   "section_present": false,
   "metadata_slot_present": true,
-  "bytes": 148,
+  "chars": 148,
   "digest": "sha256:18ed09e6467c9735"
  },
  "fallback_after_metadata_quote": "spike\n\n<!-- onetaskgraph.metadata `{\"spike.links\":[{\"type\":\"caused-by\",\"direction\":\"out\",\"other\":\"tes2:e3642659-66f4-4e5b-9f46-ce919b8c1b1d\"}]}` -->",
@@ -334,7 +334,7 @@
  "fallback_stored": {
   "section_present": true,
   "metadata_slot_present": true,
-  "bytes": 289,
+  "chars": 289,
   "digest": "sha256:f72e6ca0ebb02570"
  },
  "fallback_normalized": true,
@@ -379,7 +379,7 @@
   "stored": {
    "section_present": true,
    "metadata_slot_present": true,
-   "bytes": 307,
+   "chars": 307,
    "digest": "sha256:842d6a5373c4c76a"
   }
  },
@@ -408,7 +408,7 @@
   "stored": {
    "section_present": false,
    "metadata_slot_present": true,
-   "bytes": 184,
+   "chars": 184,
    "digest": "sha256:2e0457f6cd0c4fdc"
   }
  },

@@ -128,7 +128,7 @@
    }
   ]
  },
- "join_created_with_parent_in_repo2": {
+ "join_grandchild_of_a_board_parent": {
   "seq": 490,
   "ok": true,
   "errors": []

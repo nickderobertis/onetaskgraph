@@ -557,7 +557,7 @@
   "seq": 464,
   "section_present": false,
   "metadata_slot_present": true,
-  "bytes": 148,
+  "chars": 148,
   "digest": "sha256:8a19f5529bdf3cf7"
  },
  "fallback_with_section": {
@@ -609,7 +609,7 @@
   "stored": {
    "section_present": true,
    "metadata_slot_present": true,
-   "bytes": 307,
+   "chars": 307,
    "digest": "sha256:93df7e7d4b61185f"
   }
  },
@@ -638,7 +638,7 @@
   "stored": {
    "section_present": false,
    "metadata_slot_present": true,
-   "bytes": 168,
+   "chars": 168,
    "digest": "sha256:dda2d815d050e022"
   }
  },
@@ -659,7 +659,7 @@
   "stored": {
    "section_present": false,
    "metadata_slot_present": false,
-   "bytes": 40,
+   "chars": 40,
    "digest": "sha256:aa10945f6f72bb07"
   },
   "other_end_read": {

@@ -10,6 +10,13 @@ the stage's derived answers, keyed by the question they answer, and the only bod
 the synthetic ones the report quotes. Every write passes `sandbox.Sandbox` before it is sent.
 """
 
+# llmlint: ignore-file[async_typed_clients_at_boundaries] A single-threaded measurement script run once per spike on a branch kept for the record and never landing; a blocking client keeps every request's position in the requests.jsonl sequence the report cites.
+# llmlint: ignore-file[changed_behavior_has_e2e] This file is the measurement: its proof is the live run whose evidence sits beside it, against the real trackers the task names, and sandbox.py carries the offline test. There is no production behaviour here for an e2e suite to prove.
+# llmlint: ignore-file[modern_domain_modeling] The evidence is whatever each tracker answers on the day, recorded verbatim for one report; typed models of those answers would be a second schema of two external APIs for a script that runs once and is kept only for the record.
+# llmlint: ignore-file[new_code_lands_in_a_project] Spike branch kept for the record, not merged; adding an Nx project here would widen every selection this repository's graph promises, for code that never lands on main.
+# llmlint: ignore-file[boundary_inputs_validated] The stamp, stages and credentials are validated at the entry; the rest of the inputs are this script's own evidence files or the tracker's answer, which the stage reads back and writes down as it stands, because that answer is what is being measured.
+# llmlint: ignore-file[contracts_have_one_source_or_a_drift_gate] SLOT_OPEN restates the metadata comment the two plugins write, on purpose: the spike observes what is stored on the tracker, and if a plugin moved the delimiter the run would measure that as a change rather than follow it.
+
 from __future__ import annotations
 
 import argparse
@@ -25,11 +32,12 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from typing import Any
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 
-from sandbox import (  # noqa: E402
+from sandbox import (  # noqa: E402 -- sandbox.py sits beside this script, and sys.path is set above
     BOARD_TITLE_PREFIX,
     Enum,
     Mut,
@@ -68,7 +76,10 @@ def load_linear_key() -> str:
     path = pathlib.Path.home() / ".config" / "onetaskgraph" / "secrets.env"
     for line in path.read_text(encoding="utf-8").splitlines():
         if line.startswith("LINEAR_API_KEY="):
-            return line.split("=", 1)[1].strip().strip("'\"")
+            key = line.split("=", 1)[1].strip().strip("'\"")
+            if not key:
+                raise SystemExit(f"LINEAR_API_KEY in {path} is empty; next: set it")
+            return key
     raise SystemExit(f"LINEAR_API_KEY is not in {path}; next: add it, or run on the spike host")
 
 
@@ -90,7 +101,12 @@ class Run:
         self.dir.mkdir(parents=True, exist_ok=True)
         self.requests_path = self.dir / "requests.jsonl"
         self.ledger_path = self.dir / "ledger.jsonl"
-        self.token = os.environ["GH_PROJECTS_TOKEN"]
+        token = os.environ.get("GH_PROJECTS_TOKEN", "")
+        if not token:
+            raise SystemExit(
+                "GH_PROJECTS_TOKEN is not set; next: run from the dispatch environment"
+            )
+        self.token = token
         self.linear_key = load_linear_key()
         self.seq = 0
         self.stage = "-"
@@ -113,11 +129,12 @@ class Run:
             for line in self.requests_path.read_text(encoding="utf-8").splitlines():
                 rec = json.loads(line)
                 self.seq = max(self.seq, rec["seq"])
-                if rec["tracker"] == "github":
-                    self.github_points += rec.get("cost") or 0
-                elif rec["tracker"] == "linear":
-                    self.linear_requests += 1
-                    self.linear_complexity += rec.get("complexity") or 0
+                match rec:
+                    case {"tracker": "github"}:
+                        self.github_points += rec.get("cost") or 0
+                    case {"tracker": "linear"}:
+                        self.linear_requests += 1
+                        self.linear_complexity += rec.get("complexity") or 0
         if self.ledger_path.exists():
             for line in self.ledger_path.read_text(encoding="utf-8").splitlines():
                 ev = json.loads(line)
@@ -125,8 +142,6 @@ class Run:
                     self.ledger[ev["id"]] = ev
                 else:
                     self.ledger[ev["id"]].update(ended=ev["event"], how=ev.get("how"))
-
-    # -- ledger -------------------------------------------------------------------------------
 
     def record_created(self, id_: str, kind: str, tracker: str, **where: Any) -> None:
         ev = {"event": "created", "id": id_, "kind": kind, "tracker": tracker, **where}
@@ -140,8 +155,6 @@ class Run:
         self.ledger[id_].update(ended=event, how=how)
         with self.ledger_path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps({"event": event, "id": id_, "how": how}) + "\n")
-
-    # -- transport ----------------------------------------------------------------------------
 
     def _post(self, url: str, auth: str, doc: str) -> tuple[Any, dict[str, str], float, int]:
         body = json.dumps({"query": doc}).encode()
@@ -171,6 +184,15 @@ class Run:
                 status,
             )
 
+    def github_rate_used(self) -> int:
+        """x-ratelimit-used as of now, from GitHub's free REST read, bracketing a binary run."""
+        request = urllib.request.Request(
+            "https://api.github.com/rate_limit",
+            headers={"authorization": f"bearer {self.token}", "user-agent": "spike"},
+        )
+        with urllib.request.urlopen(request, timeout=60) as response:
+            return json.load(response)["resources"]["graphql"]["used"]
+
     def _write_record(self, rec: dict[str, Any]) -> int:
         self.seq += 1
         rec = {"seq": self.seq, "stage": self.stage, **rec}
@@ -179,6 +201,8 @@ class Run:
         return self.seq
 
     def github(self, doc: str, q: str, *, roots: list[str], aliases: int) -> tuple[dict, list, int]:
+        if self.github_off:
+            raise Refused("this run was started with --no-github")
         if not self.cleaning and self.github_points >= STOP_GITHUB_POINTS:
             raise QuotaStop(f"GitHub spend {self.github_points}")
         is_mutation = doc.startswith("mutation")
@@ -254,12 +278,12 @@ class Run:
     def gh_read(self, doc: str, q: str) -> tuple[dict, list, int]:
         if doc.lstrip().startswith("mutation"):
             raise Refused("gh_read only reads")
-        return self.github(doc, q, roots=root_names(doc), aliases=doc.count("node("))
+        return self.github(doc, q, roots=argument_fields(doc), aliases=doc.count("node("))
 
     def li_read(self, doc: str, q: str) -> tuple[dict, list, int]:
         if doc.lstrip().startswith("mutation"):
             raise Refused("li_read only reads")
-        return self.linear(doc, q, roots=root_names(doc), aliases=doc.count("issue("))
+        return self.linear(doc, q, roots=argument_fields(doc), aliases=doc.count("issue("))
 
     def gh_mut(self, muts: list[Mut], q: str) -> tuple[dict, list, int]:
         self.box.check_github(muts)
@@ -272,8 +296,6 @@ class Run:
         return self.linear(
             document(muts), q, roots=sorted({m.root for m in muts}), aliases=len(muts)
         )
-
-    # -- quota gate ----------------------------------------------------------------------------
 
     def rate_gate(self) -> dict[str, Any]:
         """Read both allowances; wait while either is under 40% of its limit."""
@@ -299,8 +321,6 @@ class Run:
             wait = min(max(waits) + 5, 3700)
             print(f"[{self.stamp}] pausing {wait:.0f}s: allowance under 40%", flush=True)
             time.sleep(wait)
-
-    # -- writes the stages share ---------------------------------------------------------------
 
     def bootstrap(self) -> None:
         if not self.github_off:
@@ -439,8 +459,8 @@ class Run:
         print(f"[{self.stamp}] stage {name} written to {path.name}", flush=True)
 
 
-def root_names(doc: str) -> list[str]:
-    """The first root field names of a read, for the request log."""
+def argument_fields(doc: str) -> list[str]:
+    """Up to six distinct argument-bearing field names of a read, for the request log."""
     return sorted(set(re.findall(r"(?:^|[{ ])(?:\w+:)?(\w+)\(", doc)))[:6]
 
 
@@ -498,21 +518,6 @@ class Cli:
         )
         return {"exit": proc.returncode, "out": out, "err": proc.stderr.strip()[:900]}
 
-
-def run_github_rate_used(self: Run) -> int:
-    """x-ratelimit-used as of now, from GitHub's free REST read, for bracketing a binary run."""
-    request = urllib.request.Request(
-        "https://api.github.com/rate_limit",
-        headers={"authorization": f"bearer {self.token}", "user-agent": "spike"},
-    )
-    with urllib.request.urlopen(request, timeout=60) as response:
-        return json.load(response)["resources"]["graphql"]["used"]
-
-
-Run.github_rate_used = run_github_rate_used  # type: ignore[attr-defined]
-
-
-# -- stages ------------------------------------------------------------------------------------
 
 GH_RELS = (
     "number state stateReason parent{number} subIssuesSummary{total}"
@@ -654,7 +659,9 @@ def stage_preflight(run: Run) -> None:
     run.write_stage("preflight", {"github_delete": seq1, "linear_delete": seq2})
 
 
-def drive_github_limit(run: Run, issues: list[dict], q: str, edge: Any) -> dict[str, Any]:
+def drive_github_limit(
+    run: Run, issues: list[dict], q: str, edge: Callable[[dict, dict], dict]
+) -> dict[str, Any]:
     """Add edges one at a time until the tracker refuses, or the list ends."""
     for size, (parent, child) in enumerate(issues, 1):
         result = edge(parent, child)
@@ -918,14 +925,13 @@ def stage_gh_boards(run: Run) -> None:
     answers["board_after_sub_issue_added_to_a_board_parent"] = board_view(
         run, board_x, "q1.gh.join.read"
     )
-    answers["join_created_with_parent_in_repo2"] = gh_rel(
+    answers["join_grandchild_of_a_board_parent"] = gh_rel(
         run, "addSubIssue", "q1.gh.join.edge", issueId=jc["id"], subIssueId=jc2["id"]
     )
     time.sleep(20)
     answers["board_after_grandchild"] = board_view(run, board_x, "q1.gh.join.read")
     answers["numbers"] = {k: v["number"] for k, v in made.items()}
 
-    # One board: both meanings over the same items.
     lm_root = run.scratch / f"lm-{run.stamp}"
     (lm_root / "projects").mkdir(parents=True, exist_ok=True)
     (lm_root / "tasks").mkdir(parents=True, exist_ok=True)
@@ -978,8 +984,6 @@ def stage_gh_boards(run: Run) -> None:
     )
     projects = cli("project", "list", "--source", "xd", q="coexist.one.list")
     answers["one_after_child_removed"] = numbers_for(one, list_ids(projects))
-    # The other direction: what the project meaning writes, seen as parents. A board project
-    # is made by a copy, the plugin's own way of creating one.
     (lm_root / "projects" / "p.md").write_text(
         f"---\ntitle: {run.title('plugin-project')}\nstatus: todo\n---\nproject\n", encoding="utf-8"
     )
@@ -1107,22 +1111,24 @@ def gh_set_body(run: Run, issue: dict, body: str, q: str) -> dict:
 
 def split_links(body: str) -> dict[str, Any]:
     """Where the metadata slot and the `## Links` section are, in a stored body."""
-    slot = re.search(r"<!-- onetaskgraph\.metadata", body)
+    slot = re.search(SLOT_OPEN_PATTERN, body)
     section = re.search(r"^#{1,6} Links\s*$", body, re.M)
     return {
         "section_present": bool(section),
         "metadata_slot_present": bool(slot),
-        "bytes": len(body),
+        "chars": len(body),
         "digest": digest(body),
     }
 
 
+SLOT_OPEN = "<!-- onetaskgraph.metadata"
+SLOT_OPEN_PATTERN = re.escape(SLOT_OPEN)
 LINKS_SECTION = "## Links\n\n- **caused-by** → [{title}]({url}) `{qualified}`\n\n"
 
 
 def fallback_body(visible: str, links: str, stored: str) -> str:
     """The visible text and a Links section, followed by whatever slot the store holds."""
-    slot = re.search(r"<!-- onetaskgraph\.metadata.*", stored, re.S)
+    slot = re.search(SLOT_OPEN_PATTERN + ".*", stored, re.S)
     return visible + "\n\n" + links + (slot.group(0) if slot else "")
 
 
@@ -1146,7 +1152,6 @@ def stage_gh_links(run: Run) -> None:
     made = run.gh_issues("r1", ["a", "b", "c", "d", "e", "f"], "q2.gh.links.create")
     cross = run.gh_issues("r2", ["x"], "q2.gh.links.create")["x"]
     a, b, c, d, e, f = (made[k] for k in "abcdef")
-    # relates-to
     relates = {
         "add": gh_rel(
             run, "addRelatesTo", "q2.gh.relates", issueId=a["id"], relatedIssueId=b["id"]
@@ -1169,7 +1174,6 @@ def stage_gh_links(run: Run) -> None:
         ),
     }
     answers["relates_to"] = relates
-    # blocked-by
     blocked = {
         "add": gh_rel(
             run, "addBlockedBy", "q2.gh.blocked", issueId=c["id"], blockingIssueId=d["id"]
@@ -1293,9 +1297,7 @@ def stage_gh_links(run: Run) -> None:
     }
     # A person deletes only the section; the comment slot remains.
     stored, _ = gh_read_body(run, sym, "q2.gh.fallback.read")
-    without_section = re.sub(
-        r"## Links\s.*?(?=<!-- onetaskgraph\.metadata)", "", stored, flags=re.S
-    )
+    without_section = re.sub(r"## Links\s.*?(?=" + SLOT_OPEN_PATTERN + ")", "", stored, flags=re.S)
     answers["edit_deletes_section_keeps_slot"] = {
         "write": gh_set_body(run, sym, without_section, "q2.gh.fallback.edit2"),
         "read": cli_task(cli, f"ld:{sym['id']}", "fallback.show"),
@@ -1477,7 +1479,8 @@ def stage_gh_fallback_page(run: Run) -> None:
     body = (
         "Visible symptom text.\n\n"
         + LINKS_SECTION.format(title="target", url=root["url"], qualified=f"ld:{root['id']}")
-        + '<!-- onetaskgraph.metadata {"spike.links":[{"type":"caused-by"}]} -->'
+        + SLOT_OPEN
+        + ' {"spike.links":[{"type":"caused-by"}]} -->'
     )
     issue = run.gh_issues("r1", ["links-page"], "q2.gh.fallback.page.create", body=body)[
         "links-page"
@@ -1715,7 +1718,7 @@ def stage_li_links(run: Run) -> None:
     sent = (
         "Visible symptom text.\n\n## Links\n\n"
         f"- **caused-by** → [{root['identifier']}]({root['url']}) `tes2:{root['identifier']}`\n"
-        f"* second bullet\n\n{re.search(r'<!-- onetaskgraph.metadata.*', stored, re.S).group(0) if '<!-- onetaskgraph.metadata' in stored else stored}"
+        f"* second bullet\n\n{re.search(SLOT_OPEN_PATTERN + '.*', stored, re.S).group(0) if SLOT_OPEN in stored else stored}"
     )
     answers["fallback_sent_quote"] = sent
     answers["fallback_write"] = li_upd(run, sym["id"], "q2.li.fallback.section", description=sent)
@@ -1737,7 +1740,7 @@ def stage_li_links(run: Run) -> None:
         "stored": split_links(li_body(run, sym, "q2.li.fallback.read")[0]),
     }
     current, _ = li_body(run, sym, "q2.li.fallback.read")
-    without = re.sub(r"#+ Links\s.*?(?=<!-- onetaskgraph\.metadata)", "", current, flags=re.S)
+    without = re.sub(r"#+ Links\s.*?(?=" + SLOT_OPEN_PATTERN + ")", "", current, flags=re.S)
     answers["edit_deletes_section_keeps_slot"] = {
         "write": li_upd(run, sym["id"], "q2.li.fallback.edit2", description=without),
         "read": cli_task(cli, f"tes2:{sym['id']}", "fallback.show"),
@@ -1929,9 +1932,7 @@ def stage_budget_linear(run: Run) -> None:
             "issueUpdate",
             {
                 "id": tid,
-                "input": {
-                    "description": 'spike\n\n<!-- onetaskgraph.metadata `{"spike.links":[]}` -->'
-                },
+                "input": {"description": "spike\n\n" + SLOT_OPEN + ' `{"spike.links":[]}` -->'},
             },
             "success issue{updatedAt}",
         )
@@ -1947,7 +1948,6 @@ def stage_budget_linear(run: Run) -> None:
     state["pass2_relations"] = read("budget.pass2.relations")
     state["pass2_parent_read"] = read("budget.pass2.parent")
     state["pass2_links_read"] = read("budget.pass2.links")
-    # Whether larger aliases are accepted, on the same items.
     sizes = {}
     for size in (50, 100):
         muts = [
@@ -2055,7 +2055,7 @@ def stage_budget_github(run: Run) -> None:
             {
                 "input": {
                     "id": tid,
-                    "body": 'spike\n\n<!-- onetaskgraph.metadata {"spike.links":[]} -->',
+                    "body": "spike\n\n" + SLOT_OPEN + ' {"spike.links":[]} -->',
                 }
             },
             "issue{id}",
@@ -2120,8 +2120,6 @@ def stage_budget_github(run: Run) -> None:
         state[key] = {k: state[key][k] for k in ("seq", "errors")}
     run.write_stage("budget_github", state)
 
-
-# -- capture and cleanup -----------------------------------------------------------------------
 
 CAPTURE_JS = """
 const { chromium } = require('/home/nick.guest/ai-orchestrator/node_modules/playwright');
@@ -2204,11 +2202,11 @@ def stage_capture(run: Run) -> None:
     run.write_stage("capture", answers)
 
 
-def stage_cleanup(run: Run) -> None:
+def stage_cleanup(run: Run) -> bool:
+    """Delete everything this stamp created; answer whether every object is verified gone."""
     run.cleaning = True
     run.stage = "cleanup"
     answers: dict[str, Any] = {"swept": []}
-    # Sweep by stamp: anything a stage made that the ledger missed.
     for repo in (REPO1, REPO2):
         page = None
         while True:
@@ -2266,13 +2264,13 @@ def stage_cleanup(run: Run) -> None:
         if node["id"] not in run.ledger:
             run.record_created(node["id"], "project", "linear", via="sweep")
 
-    live = lambda kind, tracker: [  # noqa: E731
-        k
-        for k, v in run.ledger.items()
-        if v["kind"] == kind and v["tracker"] == tracker and v.get("ended") != "deleted"
-    ]
+    def live(kind: str, tracker: str) -> list[str]:
+        return [
+            k
+            for k, v in run.ledger.items()
+            if v["kind"] == kind and v["tracker"] == tracker and v.get("ended") != "deleted"
+        ]
 
-    # GitHub issues, aliased; boards after them.
     def gh_delete(ids: list[str], root: str, key: str, label: str, size: int) -> None:
         for start in range(0, len(ids), size):
             chunk = ids[start : start + size]
@@ -2302,8 +2300,9 @@ def stage_cleanup(run: Run) -> None:
     gh_delete(live("issue", "github"), "deleteIssue", "issueId", "cleanup.gh.issues", 5)
     gh_delete(live("board", "github"), "deleteProjectV2", "projectId", "cleanup.gh.boards", 1)
 
-    # Linear: relations go with their issues; issues then projects.
-    def li_delete(ids: list[str], make: Any, label: str, size: int, how: str) -> None:
+    def li_delete(
+        ids: list[str], make: Callable[[int, str], Mut], label: str, size: int, how: str
+    ) -> None:
         for start in range(0, len(ids), size):
             chunk = ids[start : start + size]
             muts = [make(i, id_) for i, id_ in enumerate(chunk)]
@@ -2330,7 +2329,6 @@ def stage_cleanup(run: Run) -> None:
         25,
         "projectDelete",
     )
-    # Relations ended with their issues; record so the inventory shows it.
     for key, value in run.ledger.items():
         if value["kind"] == "relation" and not value.get("ended"):
             run.record_ended(key, "deleted", "removed with its issues by the permanent issueDelete")
@@ -2340,7 +2338,6 @@ def stage_cleanup(run: Run) -> None:
         "linear_issues": live("issue", "linear"),
         "linear_projects": live("project", "linear"),
     }
-    # Verify from the trackers themselves, by the stamp.
     verified: dict[str, Any] = {}
     for repo in (REPO1, REPO2):
         data, _, _ = run.gh_read(
@@ -2376,6 +2373,7 @@ def stage_cleanup(run: Run) -> None:
             bucket["open"].append(value.get("number") or value.get("identifier") or key)
     answers["inventory"] = inventory
     run.write_stage("cleanup", answers)
+    return not any(bucket["open"] for bucket in inventory.values())
 
 
 STAGES = {
@@ -2404,9 +2402,16 @@ def main() -> int:
     parser.add_argument("stages", nargs="+", help=f"all, or any of {', '.join(STAGES)}")
     parser.add_argument("--stamp", help="continue an earlier run's stamp")
     parser.add_argument("--keep", action="store_true", help="leave objects for a later stage")
-    parser.add_argument("--no-github", action="store_true", help="send GitHub nothing this run")
+    parser.add_argument(
+        "--no-github", action="store_true", help="send GitHub nothing; implies --keep"
+    )
     args = parser.parse_args()
     stamp = args.stamp or dt.datetime.now(dt.UTC).strftime("%Y%m%dT%H%M%S")
+    if not re.fullmatch(r"\d{8}T\d{6}", stamp):
+        parser.error(f"--stamp {stamp!r} is not YYYYmmddTHHMMSS")
+    unknown = sorted(set(args.stages) - set(STAGES) - {"all"})
+    if unknown:
+        parser.error(f"unknown stages {unknown}; choose from {', '.join(STAGES)}")
     run = Run(stamp)
     run.github_off = args.no_github
     run.bootstrap()
@@ -2435,10 +2440,15 @@ def main() -> int:
         urllib.error.URLError,
     ) as err:
         failed = True
-        print(f"[{stamp}] stage {run.stage} stopped: {type(err).__name__}: {err}", flush=True)
+        print(
+            f"[{stamp}] stage {run.stage} stopped: {type(err).__name__}: {err}",
+            file=sys.stderr,
+            flush=True,
+        )
     finally:
-        if not args.keep and "cleanup" not in names:
-            stage_cleanup(run)
+        if not args.keep and not args.no_github and "cleanup" not in names:
+            run.stage = "cleanup"
+            failed = not stage_cleanup(run) or failed
     print(
         f"[{stamp}] totals: GitHub points {run.github_points}, Linear requests {run.linear_requests}, complexity {run.linear_complexity}",
         flush=True,
