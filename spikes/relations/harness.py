@@ -2349,6 +2349,8 @@ def main() -> int:
     stamp = args.stamp or dt.datetime.now(dt.UTC).strftime("%Y%m%dT%H%M%S")
     if not re.fullmatch(r"\d{8}T\d{6}", stamp):
         parser.error(f"--stamp {stamp!r} is not YYYYmmddTHHMMSS")
+    if "all" in args.stages and args.stages != ["all"]:
+        parser.error("`all` cannot be combined with named stages")
     unknown = sorted(set(args.stages) - set(STAGES) - {"all"})
     if unknown:
         parser.error(f"unknown stages {unknown}; choose from {', '.join(STAGES)}")
