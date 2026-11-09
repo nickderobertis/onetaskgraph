@@ -113,9 +113,9 @@ class Run:
         self.linear_key = load_linear_key()
         self.seq = 0
         self.stage = "-"
-        self.github_points = 0
-        self.linear_requests = 0
-        self.linear_complexity = 0
+        self.direct_github_points = 0
+        self.direct_linear_requests = 0
+        self.direct_linear_complexity = 0
         self.last_used: int | None = None
         self.ledger: dict[str, dict[str, Any]] = {}
         self.cleaning = False
@@ -134,10 +134,10 @@ class Run:
                 self.seq = max(self.seq, rec["seq"])
                 match rec:
                     case {"tracker": "github"}:
-                        self.github_points += rec.get("cost") or 0
+                        self.direct_github_points += rec.get("cost") or 0
                     case {"tracker": "linear"}:
-                        self.linear_requests += 1
-                        self.linear_complexity += rec.get("complexity") or 0
+                        self.direct_linear_requests += 1
+                        self.direct_linear_complexity += rec.get("complexity") or 0
         if self.ledger_path.exists():
             for line in self.ledger_path.read_text(encoding="utf-8").splitlines():
                 ev = json.loads(line)
@@ -206,8 +206,8 @@ class Run:
     def github(self, doc: str, q: str, *, roots: list[str], aliases: int) -> tuple[dict, list, int]:
         if self.github_off:
             raise Refused("this run was started with --no-github")
-        if not self.cleaning and self.github_points >= STOP_GITHUB_POINTS:
-            raise QuotaStop(f"GitHub spend {self.github_points}")
+        if not self.cleaning and self.direct_github_points >= STOP_GITHUB_POINTS:
+            raise QuotaStop(f"GitHub spend {self.direct_github_points}")
         is_mutation = doc.startswith("mutation")
         if is_mutation:
             sent = doc
@@ -224,7 +224,7 @@ class Run:
             delta = used - self.last_used if self.last_used is not None else 1
             cost = 1  # the quiet-window delta of one document, aliased or not; see `used_delta`
         self.last_used = used
-        self.github_points += cost
+        self.direct_github_points += cost
         rec = {
             "tracker": "github",
             "q": q,
@@ -249,14 +249,14 @@ class Run:
         return data, errors, seq
 
     def linear(self, doc: str, q: str, *, roots: list[str], aliases: int) -> tuple[dict, list, int]:
-        if not self.cleaning and self.linear_requests >= STOP_LINEAR_REQUESTS:
-            raise QuotaStop(f"Linear spend {self.linear_requests}")
+        if not self.cleaning and self.direct_linear_requests >= STOP_LINEAR_REQUESTS:
+            raise QuotaStop(f"Linear spend {self.direct_linear_requests}")
         payload, headers, elapsed, status = self._post(LINEAR_URL, self.linear_key, doc)
-        self.linear_requests += 1
+        self.direct_linear_requests += 1
         data = payload.get("data") or {}
         errors = payload.get("errors") or []
         complexity = int(float(headers.get("x-complexity", "0") or 0))
-        self.linear_complexity += complexity
+        self.direct_linear_complexity += complexity
         rec = {
             "tracker": "linear",
             "q": q,
@@ -1474,7 +1474,7 @@ def stage_gh_landed60(run: Run) -> None:
     )
 
 
-def stage_gh_fallback_page(run: Run) -> None:
+def stage_gh_fallback_page(run: Run) -> bool:
     """How a `## Links` section and the hidden slot render on a public issue page."""
     root = run.gh_issues("r1", ["links-target"], "q2.gh.fallback.page.create")["links-target"]
     body = (
@@ -1506,6 +1506,7 @@ def stage_gh_fallback_page(run: Run) -> None:
             "stderr": proc.stderr.strip()[:300],
         },
     )
+    return proc.returncode == 0
 
 
 def stage_li_duplicate_cross(run: Run) -> None:
@@ -2141,7 +2142,7 @@ const { chromium } = require('/home/nick.guest/ai-orchestrator/node_modules/play
 """
 
 
-def stage_capture(run: Run) -> None:
+def stage_capture(run: Run) -> bool:
     """GitHub's public pages of the hierarchy and links, kept on the branch."""
     answers: dict[str, Any] = {}
     gh_parents = json.loads((run.dir / "gh_parents.json").read_text())
@@ -2200,6 +2201,7 @@ def stage_capture(run: Run) -> None:
     if proc.returncode == 0:
         answers["pages"] = json.loads(proc.stdout)
     run.write_stage("capture", answers)
+    return proc.returncode == 0
 
 
 def stage_cleanup(run: Run) -> bool:
@@ -2427,7 +2429,7 @@ def main() -> int:
                 + "\n"
             )
             print(
-                f"[{stamp}] stage {name}: GitHub spent {run.github_points}, Linear requests {run.linear_requests}",
+                f"[{stamp}] stage {name}: GitHub spent {run.direct_github_points}, Linear requests {run.direct_linear_requests}",
                 flush=True,
             )
             if STAGES[name](run) is False:
@@ -2452,7 +2454,7 @@ def main() -> int:
             run.stage = "cleanup"
             failed = not stage_cleanup(run) or failed
     print(
-        f"[{stamp}] totals: GitHub points {run.github_points}, Linear requests {run.linear_requests}, complexity {run.linear_complexity}",
+        f"[{stamp}] totals: GitHub points {run.direct_github_points}, Linear requests {run.direct_linear_requests}, complexity {run.direct_linear_complexity}",
         flush=True,
     )
     return 1 if failed else 0

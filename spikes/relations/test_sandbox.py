@@ -161,6 +161,15 @@ class Refusals(unittest.TestCase):
         )
         self.assert_refused(linear, "projectDelete", {"id": "OTHER"})
 
+    def test_document_spells_tuples(self) -> None:
+        self.assertEqual(
+            document([Mut("a", "x", {"input": {"t": ("p", 1)}}, "id")]),
+            'mutation{a:x(input:{t:["p",1]}){id}}',
+        )
+
+    def test_a_board_this_run_may_use_passes(self) -> None:
+        self.assertIsNone(refuse_protected_board(263))
+
     def test_protected_boards(self) -> None:
         for number in (1, 2, 3):
             self.assert_refused(refuse_protected_board, number)
