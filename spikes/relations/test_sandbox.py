@@ -120,11 +120,18 @@ class Refusals(unittest.TestCase):
         self.assert_refused(linear, "issueUpdate", {"id": "L1", "input": {"title": "unstamped"}})
 
     def test_linear_creation_and_moves_stay_inside(self) -> None:
+        stamped = {"teamId": "T2", "title": f"x {STAMP}"}
         for key in ("parentId", "projectId"):
-            self.assert_refused(
-                linear, "issueCreate", {"input": {"teamId": "T2", "title": STAMP, key: "OTHER"}}
-            )
+            with self.assertRaisesRegex(Refused, f"{key}='OTHER' was not created"):
+                linear("issueCreate", {"input": {**stamped, key: "OTHER"}})
         self.assert_refused(linear, "issueUpdate", {"id": "L1", "input": {"teamId": "ENG"}})
+        with self.assertRaisesRegex(Refused, "id='OTHER' was not created"):
+            linear("issueUpdate", {"id": "OTHER", "input": {"title": f"x {STAMP}"}})
+        with self.assertRaisesRegex(Refused, "id='OTHER' was not created"):
+            linear("issueRelationUpdate", {"id": "OTHER", "input": {"type": "similar"}})
+        self.assertIn(
+            'title:"x ', linear("issueUpdate", {"id": "L1", "input": {"title": f"x {STAMP}"}})
+        )
 
     def test_removed_grants_are_refused(self) -> None:
         self.assert_refused(linear, "issueRelationDelete", {"id": "P1"})
