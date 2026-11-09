@@ -181,72 +181,7 @@
   },
   "errors": []
  },
- "depth": {
-  "probe_levels": 10,
-  "refused_at": 8,
-  "request": 37,
-  "error": [
-   "Failed to add sub-issue #6092 to parent #6091. You can’t add more than 7 layers of sub-issues. To add a sub-issue, remove a parent issue at any level."
-  ],
-  "deepest_chain_levels_accepted": 8,
-  "refused_level": 9
- },
- "children": {
-  "probe_children": 105,
-  "accepted": 100,
-  "refusal": {
-   "accepted_total": 100,
-   "seq": 57,
-   "errors": [
-    "Failed to add sub-issue #6195 to parent #6094. Parent cannot have more than 100 sub-issues"
-   ]
-  },
-  "batches": [
-   {
-    "seq": 53,
-    "sent": 25,
-    "cost_delta": 1,
-    "errors": []
-   },
-   {
-    "seq": 54,
-    "sent": 25,
-    "cost_delta": 16,
-    "errors": []
-   },
-   {
-    "seq": 55,
-    "sent": 25,
-    "cost_delta": 21,
-    "errors": []
-   },
-   {
-    "seq": 56,
-    "sent": 25,
-    "cost_delta": 10,
-    "errors": []
-   },
-   {
-    "seq": 57,
-    "sent": 5,
-    "cost_delta": 24,
-    "errors": [
-     "Failed to add sub-issue #6195 to parent #6094. Parent cannot have more than 100 sub-issues"
-    ]
-   }
-  ],
-  "read": {
-   "seq": 264,
-   "subIssuesSummary": {
-    "total": 100
-   },
-   "subIssues": {
-    "totalCount": 100
-   }
-  }
- },
  "children_parent_number": 6094,
- "limits_measured_in_the_earlier_session_of_this_stamp": true,
  "cross_repo_child_in_r2": {
   "seq": 267,
   "ok": true,
@@ -331,5 +266,75 @@
   "children_parent": 6094,
   "cross_parent": 6205,
   "cross_child": 4
+ },
+ "documented_limits": {
+  "source": "https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/adding-sub-issues",
+  "quote": "You can add up to 100 sub-issues per parent issue and create up to eight levels of nested sub-issues."
+ },
+ "observed_before_the_probe_was_stopped": {
+  "depth": {
+   "probe_levels": 10,
+   "refused_at": 8,
+   "request": 37,
+   "error": [
+    "Failed to add sub-issue #6092 to parent #6091. You can’t add more than 7 layers of sub-issues. To add a sub-issue, remove a parent issue at any level."
+   ],
+   "deepest_chain_levels_accepted": 8,
+   "refused_level": 9
+  },
+  "children": {
+   "probe_children": 105,
+   "accepted": 100,
+   "refusal": {
+    "accepted_total": 100,
+    "seq": 57,
+    "errors": [
+     "Failed to add sub-issue #6195 to parent #6094. Parent cannot have more than 100 sub-issues"
+    ]
+   },
+   "batches": [
+    {
+     "seq": 53,
+     "sent": 25,
+     "cost_delta": 1,
+     "errors": []
+    },
+    {
+     "seq": 54,
+     "sent": 25,
+     "cost_delta": 16,
+     "errors": []
+    },
+    {
+     "seq": 55,
+     "sent": 25,
+     "cost_delta": 21,
+     "errors": []
+    },
+    {
+     "seq": 56,
+     "sent": 25,
+     "cost_delta": 10,
+     "errors": []
+    },
+    {
+     "seq": 57,
+     "sent": 5,
+     "cost_delta": 24,
+     "errors": [
+      "Failed to add sub-issue #6195 to parent #6094. Parent cannot have more than 100 sub-issues"
+     ]
+    }
+   ],
+   "read": {
+    "seq": 264,
+    "subIssuesSummary": {
+     "total": 100
+    },
+    "subIssues": {
+     "totalCount": 100
+    }
+   }
+  }
  }
 }

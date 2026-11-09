@@ -58,6 +58,10 @@ REPO1 = "onetaskgraph-live-scratch"
 REPO2 = "onetaskgraph-live-scratch-2"
 GITHUB_URL = "https://api.github.com/graphql"
 LINEAR_URL = "https://api.linear.app/graphql"
+GITHUB_DOCUMENTED_LIMITS = {
+    "source": "https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/adding-sub-issues",
+    "quote": "You can add up to 100 sub-issues per parent issue and create up to eight levels of nested sub-issues.",
+}
 MAX_LEVELS = 10
 MAX_CHILDREN = 105
 STOP_GITHUB_POINTS = 1800  # stop short of the 2,000 that needs the manager, leaving cleanup room
@@ -662,55 +666,11 @@ def stage_preflight(run: Run) -> None:
     run.write_stage("preflight", {"github_delete": seq1, "linear_delete": seq2})
 
 
-def drive_github_limit(
-    run: Run, issues: list[dict], q: str, edge: Callable[[dict, dict], dict]
-) -> dict[str, Any]:
-    """Add edges one at a time until the tracker refuses, or the list ends."""
-    for size, (parent, child) in enumerate(issues, 1):
-        result = edge(parent, child)
-        if not result["ok"]:
-            return {"refused_at": size, "request": result["seq"], "error": result["errors"]}
-    return {"accepted_up_to": len(issues)}
-
-
-def drive_children(run: Run, parent: dict, ordered: list[dict]) -> dict[str, Any]:
-    accepted = 0
-    refusal: dict[str, Any] | None = None
-    batch_log = []
-    for start in range(0, MAX_CHILDREN, 25):
-        chunk = ordered[start : start + 25]
-        muts = [
-            Mut(
-                f"a{i}",
-                "addSubIssue",
-                {"input": {"issueId": parent["id"], "subIssueId": kid["id"]}},
-                "clientMutationId",
-            )
-            for i, kid in enumerate(chunk)
-        ]
-        data, errors, seq = run.gh_mut(muts, "q1.gh.children.batch")
-        done = sum(1 for i in range(len(chunk)) if data.get(f"a{i}"))
-        accepted += done
-        batch_log.append(
-            {"seq": seq, "sent": len(chunk), "accepted": done, "errors": errs(errors)[:2]}
-        )
-        if done < len(chunk):
-            refusal = {"accepted_total": accepted, "seq": seq, "errors": errs(errors)[:2]}
-            break
-    return {
-        "probe_children": MAX_CHILDREN,
-        "accepted": accepted,
-        "refusal": refusal,
-        "batches": batch_log,
-        "read": gh_node(run, parent, "q1.gh.children.read"),
-    }
-
-
 def prior_limits(run: Run) -> dict[str, Any] | None:
-    """Depth and children limits an earlier session of this stamp already drove to refusal.
+    """What the first session of this stamp observed before GitHub's limit probe was stopped.
 
-    The limits are final once refused; re-driving them would spend another 200 content writes
-    against the secondary limiter that stopped the first session.
+    GitHub's limits are documented, so by the manager's ruling nothing here creates issues to
+    probe them; this only reads back the requests that session already made.
     """
     rows = [json.loads(line) for line in run.requests_path.read_text(encoding="utf-8").splitlines()]
     depth = [r for r in rows if r["q"] == "q1.gh.depth"]
@@ -783,38 +743,14 @@ def stage_gh_parents(run: Run) -> None:
     )
     answers["read_removed_leaf"] = gh_node(run, leaf, "q1.gh.read")
 
+    answers["documented_limits"] = GITHUB_DOCUMENTED_LIMITS
     prior = prior_limits(run)
-    if prior is None:
-        chain = run.gh_issues("r1", [f"lvl{i}" for i in range(MAX_LEVELS)], "q1.gh.depth.create")
-        pairs = [(chain[f"lvl{i - 1}"], chain[f"lvl{i}"]) for i in range(1, MAX_LEVELS)]
-        outcome = drive_github_limit(
-            run,
-            pairs,
-            "q1.gh.depth",
-            lambda p, c: gh_rel(
-                run, "addSubIssue", "q1.gh.depth", issueId=p["id"], subIssueId=c["id"]
-            ),
-        )
-        answers["depth"] = {"probe_levels": MAX_LEVELS, **outcome}
-        parent = run.gh_issues("r1", ["kids-parent"], "q1.gh.children.create")["kids-parent"]
-        kids = run.gh_issues(
-            "r1", [f"kid{i:03d}" for i in range(MAX_CHILDREN)], "q1.gh.children.create"
-        )
-        answers["children"] = drive_children(
-            run, parent, [kids[f"kid{i:03d}"] for i in range(MAX_CHILDREN)]
-        )
-        answers["children_parent_number"] = parent["number"]
-    else:
-        answers["depth"] = prior["depth"]
-        children = prior["children"]
-        data, _, seq = run.gh_read(
-            f'query{{repository(owner:"{OWNER}",name:"{REPO1}"){{issue(number:{prior["children_parent_number"]}){{subIssuesSummary{{total}} subIssues(first:100){{totalCount}}}}}}}}',
-            "q1.gh.children.read",
-        )
-        children["read"] = {"seq": seq, **(data.get("repository") or {}).get("issue", {})}
-        answers["children"] = children
+    if prior is not None:
+        answers["observed_before_the_probe_was_stopped"] = {
+            "depth": prior["depth"],
+            "children": prior["children"],
+        }
         answers["children_parent_number"] = prior["children_parent_number"]
-        answers["limits_measured_in_the_earlier_session_of_this_stamp"] = True
 
     across = run.gh_issues("r2", ["xrepo-child"], "q1.gh.cross.create")["xrepo-child"]
     host = run.gh_issues("r1", ["xrepo-parent"], "q1.gh.cross.create")["xrepo-parent"]
@@ -825,7 +761,7 @@ def stage_gh_parents(run: Run) -> None:
     answers["cross_repo_child_read"] = gh_node(run, across, "q1.gh.cross.read")
     answers["objects"] = {
         "root": root["number"],
-        "children_parent": answers["children_parent_number"],
+        "children_parent": answers.get("children_parent_number"),
         "cross_parent": host["number"],
         "cross_child": across["number"],
     }
@@ -2177,13 +2113,14 @@ def stage_capture(run: Run) -> bool:
         answers.setdefault("made_public", []).append({"seq": seq, "errors": errs(errors)})
     pages = [
         ("hierarchy-parent", f"{repo}/{obj['root']}"),
-        ("children-parent", f"{repo}/{obj['children_parent']}"),
         ("links-relates-to", f"{repo}/{links_stage['objects']['a']}"),
         ("links-blocked-by", f"{repo}/{links_stage['objects']['c']}"),
         ("links-duplicate", f"{repo}/{links_stage['objects']['e']}"),
         ("board-table", f"https://github.com/users/{OWNER}/projects/{board_number}/views/1"),
         ("fallback-section", links_stage["fallback_page"]["url"]),
     ]
+    if obj.get("children_parent"):
+        pages.append(("children-parent", f"{repo}/{obj['children_parent']}"))
     script = run.scratch / f"capture-{run.stamp}.cjs"
     script.write_text(CAPTURE_JS, encoding="utf-8")
     shots = run.dir / "pages"
