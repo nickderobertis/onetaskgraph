@@ -1049,7 +1049,7 @@ def gh_set_body(run: Run, issue: dict, body: str, q: str) -> dict:
     return {"seq": seq, "ok": not errors, "errors": errs(errors)}
 
 
-def split_links(body: str) -> dict[str, Any]:
+def describe_links_section(body: str) -> dict[str, Any]:
     """Where the metadata slot and the `## Links` section are, in a stored body."""
     slot = re.search(SLOT_OPEN_PATTERN, body)
     section = re.search(r"^#{1,6} Links\s*$", body, re.M)
@@ -1221,7 +1221,7 @@ def stage_gh_links(run: Run) -> None:
         )
     answers["fallback_metadata_writes"] = writes
     stored, read_seq = gh_read_body(run, sym, "q2.gh.fallback.read")
-    answers["fallback_after_metadata"] = {"seq": read_seq, **split_links(stored)}
+    answers["fallback_after_metadata"] = {"seq": read_seq, **describe_links_section(stored)}
     section = LINKS_SECTION.format(title="root", url=root["url"], qualified=f"ld:{root['id']}")
     body = fallback_body("Visible symptom text.", section, stored)
     answers["fallback_with_section"] = gh_set_body(run, sym, body, "q2.gh.fallback.section")
@@ -1232,21 +1232,21 @@ def stage_gh_links(run: Run) -> None:
     answers["edit_keeps_section"] = {
         "write": gh_set_body(run, sym, edited, "q2.gh.fallback.edit1"),
         "read": cli_task(cli, f"ld:{sym['id']}", "fallback.show"),
-        "stored": split_links(gh_read_body(run, sym, "q2.gh.fallback.read")[0]),
+        "stored": describe_links_section(gh_read_body(run, sym, "q2.gh.fallback.read")[0]),
     }
     stored, _ = gh_read_body(run, sym, "q2.gh.fallback.read")
     without_section = re.sub(r"## Links\s.*?(?=" + SLOT_OPEN_PATTERN + ")", "", stored, flags=re.S)
     answers["edit_deletes_section_keeps_slot"] = {
         "write": gh_set_body(run, sym, without_section, "q2.gh.fallback.edit2"),
         "read": cli_task(cli, f"ld:{sym['id']}", "fallback.show"),
-        "stored": split_links(gh_read_body(run, sym, "q2.gh.fallback.read")[0]),
+        "stored": describe_links_section(gh_read_body(run, sym, "q2.gh.fallback.read")[0]),
     }
     answers["edit_rewrites_whole_body"] = {
         "write": gh_set_body(
             run, sym, "A person replaced the whole description.", "q2.gh.fallback.edit3"
         ),
         "read": cli_task(cli, f"ld:{sym['id']}", "fallback.show"),
-        "stored": split_links(gh_read_body(run, sym, "q2.gh.fallback.read")[0]),
+        "stored": describe_links_section(gh_read_body(run, sym, "q2.gh.fallback.read")[0]),
         "other_end_read": cli_task(cli, f"ld:{root['id']}", "fallback.show"),
     }
     answers["objects"] = {k: v["number"] for k, v in made.items()} | {"cross": cross["number"]}
@@ -1652,7 +1652,7 @@ def stage_li_links(run: Run) -> None:
         )
     answers["fallback_metadata_writes"] = set_results
     stored, _ = li_body(run, sym, "q2.li.fallback.read")
-    answers["fallback_after_metadata"] = split_links(stored)
+    answers["fallback_after_metadata"] = describe_links_section(stored)
     answers["fallback_after_metadata_quote"] = stored
     sent = (
         "Visible symptom text.\n\n## Links\n\n"
@@ -1663,7 +1663,7 @@ def stage_li_links(run: Run) -> None:
     answers["fallback_write"] = li_upd(run, sym["id"], "q2.li.fallback.section", description=sent)
     back, _ = li_body(run, sym, "q2.li.fallback.read")
     answers["fallback_stored_quote"] = back
-    answers["fallback_stored"] = split_links(back)
+    answers["fallback_stored"] = describe_links_section(back)
     answers["fallback_normalized"] = back != sent
     answers["fallback_read"] = cli_task(cli, f"tes2:{sym['id']}", "fallback.show")
     answers["edit_keeps_section"] = {
@@ -1676,14 +1676,14 @@ def stage_li_links(run: Run) -> None:
             ),
         ),
         "read": cli_task(cli, f"tes2:{sym['id']}", "fallback.show"),
-        "stored": split_links(li_body(run, sym, "q2.li.fallback.read")[0]),
+        "stored": describe_links_section(li_body(run, sym, "q2.li.fallback.read")[0]),
     }
     current, _ = li_body(run, sym, "q2.li.fallback.read")
     without = re.sub(r"#+ Links\s.*?(?=" + SLOT_OPEN_PATTERN + ")", "", current, flags=re.S)
     answers["edit_deletes_section_keeps_slot"] = {
         "write": li_upd(run, sym["id"], "q2.li.fallback.edit2", description=without),
         "read": cli_task(cli, f"tes2:{sym['id']}", "fallback.show"),
-        "stored": split_links(li_body(run, sym, "q2.li.fallback.read")[0]),
+        "stored": describe_links_section(li_body(run, sym, "q2.li.fallback.read")[0]),
     }
     answers["edit_rewrites_whole_body"] = {
         "write": li_upd(
