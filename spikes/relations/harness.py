@@ -62,6 +62,8 @@ GITHUB_DOCUMENTED_LIMITS = {
     "source": "https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/adding-sub-issues",
     "quote": "You can add up to 100 sub-issues per parent issue and create up to eight levels of nested sub-issues.",
 }
+GITHUB_NOT_FOUND = "Could not resolve to a node"
+LINEAR_NOT_FOUND = "Entity not found"
 MAX_LEVELS = 10
 MAX_CHILDREN = 105
 STOP_GITHUB_POINTS = 1800  # stop short of the 2,000 that needs the manager, leaving cleanup room
@@ -2377,6 +2379,11 @@ def relations_cross_project(run: Run) -> dict[str, Any]:
     return answers
 
 
+def answered_missing(errors: list, phrase: str) -> bool:
+    """Whether the tracker said the object does not exist, not merely that the read failed."""
+    return any(phrase in str(error.get("message")) for error in errors)
+
+
 def cleanup_relation_gaps(run: Run) -> bool:
     """Delete what `relation_gaps` created and read each object back gone.
 
@@ -2406,41 +2413,42 @@ def cleanup_relation_gaps(run: Run) -> bool:
             answers["deleted"].append({"id": key, "kind": value["kind"], "seq": seq})
         answers["errors"].extend(errs(errors))
     for key, value in made:
-        match (value["tracker"], value["kind"]):
-            case ("linear", "project"):
-                mut = Mut("a", "projectDelete", {"id": key}, "success")
-                data, errors, seq = run.li_mut([mut], "gap.cleanup.li.project")
-                if data.get("a") and not errors:
-                    run.record_ended(key, "deleted", f"projectDelete request {seq}")
-                    answers["deleted"].append({"id": key, "kind": "project", "seq": seq})
-                answers["errors"].extend(errs(errors))
-            case ("linear", "relation"):
-                run.record_ended(
-                    key, "deleted", "removed with its issues by the permanent issueDelete"
-                )
+        if (value["tracker"], value["kind"]) != ("linear", "project"):
+            continue
+        mut = Mut("a", "projectDelete", {"id": key}, "success")
+        data, errors, seq = run.li_mut([mut], "gap.cleanup.li.project")
+        if data.get("a") and not errors:
+            run.record_ended(key, "deleted", f"projectDelete request {seq}")
+            answers["deleted"].append({"id": key, "kind": "project", "seq": seq})
+        answers["errors"].extend(errs(errors))
     for key, value in made:
         match (value["tracker"], value["kind"]):
             case ("github", "issue"):
                 data, errors, seq = run.gh_read(
                     f'query{{node(id:"{key}"){{id}}}}', "gap.cleanup.verify"
                 )
-                gone = not data.get("node")
+                gone = answered_missing(errors, GITHUB_NOT_FOUND)
             case ("linear", "issue"):
                 data, errors, seq = run.li_read(
                     f'query{{issue(id:"{key}"){{id}}}}', "gap.cleanup.verify"
                 )
-                gone = not data.get("issue")
+                gone = answered_missing(errors, LINEAR_NOT_FOUND)
             case ("linear", "project"):
                 data, errors, seq = run.li_read(
                     f'query{{project(id:"{key}"){{trashed}}}}', "gap.cleanup.verify"
                 )
-                gone = bool((data.get("project") or {}).get("trashed", True))
+                project = data.get("project") or {}
+                gone = bool(project.get("trashed")) or answered_missing(errors, LINEAR_NOT_FOUND)
             case _:
                 continue
         answers["verified"].append({"id": key, "kind": value["kind"], "seq": seq, "gone": gone})
+    issues_gone = all(row["gone"] for row in answers["verified"] if row["kind"] == "issue")
+    for key, value in made:
+        if value["kind"] == "relation" and issues_gone:
+            run.record_ended(key, "deleted", "removed with its issues by the permanent issueDelete")
     run.write_stage("relation_gaps_cleanup", answers)
     return all(row["gone"] for row in answers["verified"]) and not any(
-        value["kind"] != "relation" and not value.get("ended") for _, value in made
+        not value.get("ended") for _, value in made
     )
 
 
