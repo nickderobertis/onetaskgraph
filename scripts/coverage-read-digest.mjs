@@ -37,7 +37,9 @@ try {
     1,
   );
 }
-const globs = rustOnly ? ["crates/**/*.rs"] : sets?.units?.[unit];
+if (sets === null || typeof sets !== "object" || Array.isArray(sets))
+  refuse("scripts/coverage-read-sets.json is not an object\nnext: restore it from git", 1);
+const globs = rustOnly ? ["crates/**/*.rs"] : sets.units?.[unit];
 const isGlobList = (value) =>
   Array.isArray(value) && value.every((entry) => typeof entry === "string" && entry !== "");
 if (!isGlobList(globs) || !isGlobList(sets.common))
