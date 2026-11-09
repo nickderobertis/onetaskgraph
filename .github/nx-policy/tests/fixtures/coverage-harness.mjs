@@ -207,9 +207,10 @@ export function readLcov(texts) {
         file = line.slice(3);
         if (!files.has(file)) files.set(file, new Map());
       } else if (line.startsWith("DA:")) {
-        const [number, hits] = line.slice(3).split(",");
+        const [number, hits] = line.slice(3).split(",").map(Number);
+        assert.ok(Number.isInteger(number) && Number.isInteger(hits), `malformed record ${line}`);
         const lines = files.get(file);
-        lines.set(Number(number), (lines.get(Number(number)) ?? false) || Number(hits) > 0);
+        lines.set(number, (lines.get(number) ?? false) || hits > 0);
       }
     }
   }

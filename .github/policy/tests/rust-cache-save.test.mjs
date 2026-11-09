@@ -61,7 +61,7 @@ function contextFor(entry, matrix) {
   };
 }
 
-// Reads no step output: a condition on one is taken as true, the answer that can only report more.
+// A step output no run produced here is read as true, so a step gated on one is still evaluated.
 function holds(expression, context) {
   if (expression === undefined) return true;
   if (typeof expression !== "string") return expression !== false;
@@ -103,7 +103,7 @@ test("no Rust build cache step saves under any event class but a push to main", 
   assert.deepEqual(savers(workflows(), classes), []);
 });
 
-test("the workflows that build Rust each hold a recognised Rust build cache step", () => {
+test("ci, release, release-plz and the warmer each hold a recognised Rust build cache step", () => {
   const seen = new Set();
   for (const [file, workflow] of Object.entries(workflows()))
     for (const [id, job] of Object.entries(workflow.jobs ?? {}))
