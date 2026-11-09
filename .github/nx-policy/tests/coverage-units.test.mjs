@@ -127,7 +127,6 @@ function unitsReadingCrateSource(units, crate) {
     .sort();
 }
 
-// The registry package reaching the fewest units, and which units reach it.
 function narrowestLockedPackage(units) {
   const members = new Set(metadata.workspace_members);
   const external = metadata.packages
@@ -199,7 +198,6 @@ function bumpVersion(dir) {
       `$1"${next}"`,
     ),
   );
-  // Every other file a release moves the version in, each spelled as that file spells it.
   for (const path of VERSIONED_FILES) {
     const text = readFileSync(join(dir, path), "utf8");
     writeFileSync(join(dir, path), text.replaceAll(version, next));

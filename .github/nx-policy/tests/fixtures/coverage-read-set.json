@@ -1,4 +1,5 @@
 {
+  "//": "llmlint: ignore-file[contracts_have_one_source_or_a_drift_gate] Not a contract but a dated recording that only ever adds files the check demands be hashed: it widens the Rust literal scan in coverage-read-set.test.mjs (the gate that runs every time) and can never narrow it, and regenerating it takes a full instrumented run under strace.",
   "how": "strace of each unit's real instrumented run (a successful read-only open of a tracked workspace file, excluding the unit's own crate and every Cargo.toml) unioned with cargo dep-info of the unit's own compiled targets; regenerate when a unit reads new workspace files",
   "units": {
     "onetaskgraph-core": [

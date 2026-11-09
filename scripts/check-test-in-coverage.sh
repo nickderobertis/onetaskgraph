@@ -42,7 +42,6 @@ def commands(project, target):
 MEASURED = ["--no-report", "nextest", "--package", '"$CRATE"', "--all-features", "--locked"]
 coverage_script = Path("scripts/rust-coverage.sh").read_text(encoding="utf-8")
 joined = re.sub(r"\\\n\s*", " ", coverage_script)
-# The measured run goes through scripts/coverage-unit.sh; its arguments follow the `--`.
 runs = [
     ["--no-report", *found.split()]
     for found in re.findall(r'coverage-unit\.sh "\$CRATE" -- (.*?) 2>&1', joined)
