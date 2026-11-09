@@ -902,7 +902,7 @@ def list_ids(result: dict[str, Any]) -> list[str]:
     return [str(item.get("id")) for item in items]
 
 
-def numbers_for(issues: dict[str, dict], ids: list[str]) -> dict[str, list[str]]:
+def classify_listing(issues: dict[str, dict], ids: list[str]) -> dict[str, list[str]]:
     """Which named issues a binary listing held, by slug, from each issue's GitHub number."""
     by_id = {issue["id"]: slug for slug, issue in issues.items()}
     known: dict[str, list[str]] = {"listed": [], "unknown": []}
@@ -962,8 +962,8 @@ def stage_gh_boards(run: Run) -> None:
     projects = cli("project", "list", "--source", "xd", q="coexist.one.list")
     tasks = cli("task", "list", "--source", "xd", q="coexist.one.list")
     answers["one_after_parent_write"] = {
-        "default_projects": numbers_for(one, list_ids(projects)),
-        "default_tasks": numbers_for(one, list_ids(tasks)),
+        "default_projects": classify_listing(one, list_ids(projects)),
+        "default_tasks": classify_listing(one, list_ids(tasks)),
         "exit": [projects["exit"], tasks["exit"]],
         "parent_reading": {
             "cause": gh_node(run, cause, "q1.coexist.one.read"),
@@ -986,7 +986,7 @@ def stage_gh_boards(run: Run) -> None:
         run, "removeSubIssue", "q1.coexist.one.parent", issueId=cause["id"], subIssueId=sym["id"]
     )
     projects = cli("project", "list", "--source", "xd", q="coexist.one.list")
-    answers["one_after_child_removed"] = numbers_for(one, list_ids(projects))
+    answers["one_after_child_removed"] = classify_listing(one, list_ids(projects))
     (lm_root / "projects" / "p.md").write_text(
         f"---\ntitle: {run.title('plugin-project')}\nstatus: todo\n---\nproject\n", encoding="utf-8"
     )
@@ -1033,7 +1033,7 @@ def stage_gh_boards(run: Run) -> None:
             replaceParent=True,
         )
         answers["one_after_parent_write_onto_plugin_project"] = {
-            "tasks": numbers_for(
+            "tasks": classify_listing(
                 one, list_ids(cli("task", "list", "--source", "xd", q="coexist.one.list"))
             ),
             "plugin_project_read": summary(
@@ -1050,28 +1050,28 @@ def stage_gh_boards(run: Run) -> None:
     gh_rel(run, "addSubIssue", "q1.coexist.two.parent", issueId=tkt["id"], subIssueId=tkt2["id"])
     gh_rel(run, "addSubIssue", "q1.coexist.two.parent", issueId=shared["id"], subIssueId=tkt["id"])
     answers["two_default_on_y"] = {
-        "projects": numbers_for(
+        "projects": classify_listing(
             two, list_ids(cli("project", "list", "--source", "yd", q="coexist.two.list"))
         ),
-        "tasks": numbers_for(
+        "tasks": classify_listing(
             two, list_ids(cli("task", "list", "--source", "yd", q="coexist.two.list"))
         ),
     }
     run.gh_add_item(board_y["id"], shared["id"], "q1.coexist.two.shared")
     answers["two_default_on_y_immediately_after_parent_ticket_joins_y"] = {
-        "projects": numbers_for(
+        "projects": classify_listing(
             two, list_ids(cli("project", "list", "--source", "yd", q="coexist.two.list"))
         ),
-        "tasks": numbers_for(
+        "tasks": classify_listing(
             two, list_ids(cli("task", "list", "--source", "yd", q="coexist.two.list"))
         ),
     }
     time.sleep(30)
     answers["two_default_on_y_30s_after_parent_ticket_joined_y"] = {
-        "projects": numbers_for(
+        "projects": classify_listing(
             two, list_ids(cli("project", "list", "--source", "yd", q="coexist.two.list"))
         ),
-        "tasks": numbers_for(
+        "tasks": classify_listing(
             two, list_ids(cli("task", "list", "--source", "yd", q="coexist.two.list"))
         ),
     }
@@ -1087,10 +1087,10 @@ def stage_gh_boards(run: Run) -> None:
         replaceParent=True,
     )
     answers["two_default_on_y_after_move"] = {
-        "projects": numbers_for(
+        "projects": classify_listing(
             two, list_ids(cli("project", "list", "--source", "yd", q="coexist.two.list"))
         ),
-        "tasks": numbers_for(
+        "tasks": classify_listing(
             two, list_ids(cli("task", "list", "--source", "yd", q="coexist.two.list"))
         ),
     }
@@ -1435,7 +1435,7 @@ def stage_gh_plugin_project(run: Run) -> None:
         answers["project_show_after_parent_write"] = summary(
             cli("project", "show", f"xd:{native_project}", q="coexist.one.show")
         )
-        answers["tasks_after_parent_write"] = numbers_for(
+        answers["tasks_after_parent_write"] = classify_listing(
             {"fresh": fresh},
             list_ids(cli("task", "list", "--source", "xd", q="coexist.one.list")),
         )
@@ -2434,6 +2434,11 @@ def main() -> int:
             )
             if STAGES[name](run) is False:
                 failed = True
+                print(
+                    f"[{stamp}] stage {name} reported a failure; see its evidence",
+                    file=sys.stderr,
+                    flush=True,
+                )
     except (
         QuotaStop,
         RateRefused,
@@ -2452,7 +2457,13 @@ def main() -> int:
     finally:
         if not args.keep and not args.no_github and "cleanup" not in names:
             run.stage = "cleanup"
-            failed = not stage_cleanup(run) or failed
+            if not stage_cleanup(run):
+                failed = True
+                print(
+                    f"[{stamp}] cleanup left objects behind; see cleanup.json",
+                    file=sys.stderr,
+                    flush=True,
+                )
     print(
         f"[{stamp}] totals: GitHub points {run.direct_github_points}, Linear requests {run.direct_linear_requests}, complexity {run.direct_linear_complexity}",
         flush=True,
