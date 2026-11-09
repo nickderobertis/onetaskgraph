@@ -5,6 +5,8 @@ Offline: `python3 -B -m unittest discover -s spikes/relations -p 'test_*.py'`.
 
 # llmlint: ignore-file[new_code_lands_in_a_project] Spike branch, never merged; see harness.py.
 # llmlint: ignore-file[modern_domain_modeling] Answers raw tracker JSON; see harness.py.
+# llmlint: ignore-file[contracts_have_one_source_or_a_drift_gate] Mirrors live requests 779-789.
+# The stand-in's not-found phrases are those requests' recorded answers; this branch never merges.
 
 from __future__ import annotations
 

@@ -133,23 +133,30 @@ class Sandbox:
             if mut.root not in GITHUB_ROOTS:
                 raise Refused(f"{mut.root}: not a mutation this spike may send to GitHub")
             payload = mut.args.get("input", mut.args)
-            match mut.root:
-                case "createIssue":
-                    if payload.get("repositoryId") not in self.repositories:
-                        raise Refused(f"createIssue: repository {payload.get('repositoryId')!r}")
-                    self._stamped(mut.root, payload.get("title"))
-                case "createProjectV2":
-                    title = payload.get("title", "")
-                    if payload.get("ownerId") != self.owner_id:
-                        raise Refused(f"createProjectV2: owner {payload.get('ownerId')!r}")
-                    if not title.startswith(BOARD_TITLE_PREFIX + self.stamp):
-                        raise Refused(f"createProjectV2: title {title!r}")
-                case _:
-                    if "title" in payload:
-                        self._stamped(mut.root, payload["title"])
-                    for key, value in payload.items():
-                        if key in GITHUB_ID_KEYS:
-                            self._own(mut.root, key, value)
+            checks = {
+                "createIssue": self._check_create_issue,
+                "createProjectV2": self._check_create_board,
+            }
+            checks.get(mut.root, self._check_github_write)(mut.root, payload)
+
+    def _check_create_issue(self, root: str, payload: dict[str, Any]) -> None:
+        if payload.get("repositoryId") not in self.repositories:
+            raise Refused(f"createIssue: repository {payload.get('repositoryId')!r}")
+        self._stamped(root, payload.get("title"))
+
+    def _check_create_board(self, root: str, payload: dict[str, Any]) -> None:
+        title = payload.get("title", "")
+        if payload.get("ownerId") != self.owner_id:
+            raise Refused(f"{root}: owner {payload.get('ownerId')!r}")
+        if not title.startswith(BOARD_TITLE_PREFIX + self.stamp):
+            raise Refused(f"{root}: title {title!r}")
+
+    def _check_github_write(self, root: str, payload: dict[str, Any]) -> None:
+        if "title" in payload:
+            self._stamped(root, payload["title"])
+        for key, value in payload.items():
+            if key in GITHUB_ID_KEYS:
+                self._own(root, key, value)
 
     def check_linear(self, muts: list[Mut]) -> None:
         """Refuse any Linear mutation outside the sandbox."""
