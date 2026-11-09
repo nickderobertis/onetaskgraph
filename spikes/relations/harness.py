@@ -2399,8 +2399,6 @@ def cleanup_relation_gaps(run: Run) -> bool:
             case ("linear", "issue"):
                 mut = Mut("a", "issueDelete", {"id": key, "permanentlyDelete": True}, "success")
                 data, errors, seq = run.li_mut([mut], "gap.cleanup.li.issue")
-            case ("linear", "relation"):
-                continue
             case _:
                 continue
         if data.get("a") is not None and not errors:
@@ -2408,15 +2406,18 @@ def cleanup_relation_gaps(run: Run) -> bool:
             answers["deleted"].append({"id": key, "kind": value["kind"], "seq": seq})
         answers["errors"].extend(errs(errors))
     for key, value in made:
-        if value["tracker"] == "linear" and value["kind"] == "project":
-            mut = Mut("a", "projectDelete", {"id": key}, "success")
-            data, errors, seq = run.li_mut([mut], "gap.cleanup.li.project")
-            if data.get("a") and not errors:
-                run.record_ended(key, "deleted", f"projectDelete request {seq}")
-                answers["deleted"].append({"id": key, "kind": "project", "seq": seq})
-            answers["errors"].extend(errs(errors))
-        elif value["tracker"] == "linear" and value["kind"] == "relation":
-            run.record_ended(key, "deleted", "removed with its issues by the permanent issueDelete")
+        match (value["tracker"], value["kind"]):
+            case ("linear", "project"):
+                mut = Mut("a", "projectDelete", {"id": key}, "success")
+                data, errors, seq = run.li_mut([mut], "gap.cleanup.li.project")
+                if data.get("a") and not errors:
+                    run.record_ended(key, "deleted", f"projectDelete request {seq}")
+                    answers["deleted"].append({"id": key, "kind": "project", "seq": seq})
+                answers["errors"].extend(errs(errors))
+            case ("linear", "relation"):
+                run.record_ended(
+                    key, "deleted", "removed with its issues by the permanent issueDelete"
+                )
     for key, value in made:
         match (value["tracker"], value["kind"]):
             case ("github", "issue"):
