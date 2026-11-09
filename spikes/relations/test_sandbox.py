@@ -167,6 +167,20 @@ class Refusals(unittest.TestCase):
             'mutation{a:x(input:{t:["p",1]}){id}}',
         )
 
+    def test_a_title_that_is_not_text_is_refused(self) -> None:
+        self.assert_refused(github, "createIssue", repositoryId="R1", title=42)
+        self.assert_refused(linear, "issueCreate", {"input": {"teamId": "T2", "title": 42}})
+
+    def test_one_forbidden_alias_refuses_the_whole_batch(self) -> None:
+        allowed = Mut("a", "addSubIssue", {"input": {"issueId": "I1", "subIssueId": "I2"}})
+        forbidden = Mut("b", "addSubIssue", {"input": {"issueId": "I1", "subIssueId": "OTHER"}})
+        with self.assertRaises(Refused):
+            box().check_github([allowed, forbidden])
+        allowed = Mut("a", "issueUpdate", {"id": "L1", "input": {"parentId": None}})
+        forbidden = Mut("b", "issueUpdate", {"id": "OTHER", "input": {"parentId": None}})
+        with self.assertRaises(Refused):
+            box().check_linear([allowed, forbidden])
+
     def test_a_board_this_run_may_use_passes(self) -> None:
         self.assertIsNone(refuse_protected_board(263))
 
