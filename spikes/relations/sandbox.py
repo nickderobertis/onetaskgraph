@@ -155,6 +155,8 @@ class Sandbox:
         if "title" in payload:
             self._stamped(root, payload["title"])
         for key, value in payload.items():
+            if key.lower().endswith("url"):
+                raise Refused(f"{root}: {key} names an object by URL, which ownership cannot check")
             if key in GITHUB_ID_KEYS:
                 self._own(root, key, value)
 

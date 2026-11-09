@@ -197,6 +197,11 @@ class Refusals(unittest.TestCase):
     def test_a_board_this_run_may_use_passes(self) -> None:
         self.assertIsNone(refuse_protected_board(263))
 
+    def test_a_reference_by_url_is_refused(self) -> None:
+        """A child named by URL would escape the id ownership check, so none is sent."""
+        muts = [Mut("a", "addSubIssue", {"input": {"issueId": "I1", "subIssueUrl": "https://x/1"}})]
+        self.assert_refused(box().check_github, muts)
+
     def test_protected_boards(self) -> None:
         for number in (1, 2, 3):
             self.assert_refused(refuse_protected_board, number)
