@@ -17,38 +17,60 @@ function refuse(message, status) {
 }
 
 const args = process.argv.slice(2);
-const list = args.includes("--list");
-const unitAt = args.indexOf("--unit");
-const unit = unitAt < 0 ? undefined : args[unitAt + 1];
-const known = new Set(["--unit", "--list", unit]);
-if (!unit || args.some((arg) => !known.has(arg)))
-  refuse("usage: node scripts/coverage-read-digest.mjs --unit NAME [--list]", 2);
+const list = args[2] === "--list";
+const unit = args[0] === "--unit" ? args[1] : undefined;
+if (!unit || unit.startsWith("--") || args.length > (list ? 3 : 2))
+  refuse(
+    "usage: node scripts/coverage-read-digest.mjs --unit NAME [--list]\nnext: pass the unit's name as Nx's runtime input does",
+    2,
+  );
 
 let sets;
 try {
   sets = JSON.parse(readFileSync("scripts/coverage-read-sets.json", "utf8"));
 } catch (error) {
-  refuse(`scripts/coverage-read-sets.json cannot be read: ${error.message}`, 1);
+  refuse(
+    `scripts/coverage-read-sets.json cannot be read: ${error.message}\nnext: restore it from git`,
+    1,
+  );
 }
 const globs = sets?.units?.[unit];
-if (!Array.isArray(globs) || !Array.isArray(sets.common))
-  refuse(`scripts/coverage-read-sets.json names no unit ${unit}`, 1);
+const isGlobList = (value) =>
+  Array.isArray(value) && value.every((entry) => typeof entry === "string" && entry !== "");
+if (!isGlobList(globs) || !isGlobList(sets.common))
+  refuse(
+    `scripts/coverage-read-sets.json lists no pathspec globs for unit ${unit}\nnext: add the unit under "units" with the workspace files it reads`,
+    1,
+  );
 
 const pathspecs = [...sets.common, ...globs].map((glob) =>
   glob.startsWith("!") ? `:(exclude,glob)${glob.slice(1)}` : `:(glob)${glob}`,
 );
-const files = execFileSync("git", ["ls-files", "-z", "--", ...pathspecs], {
-  encoding: "utf8",
-  maxBuffer: 64 * 1024 * 1024,
-})
-  .split("\0")
-  .filter(Boolean)
-  .sort();
+let files;
+try {
+  files = execFileSync("git", ["ls-files", "-z", "--", ...pathspecs], {
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+  })
+    .split("\0")
+    .filter(Boolean)
+    .sort();
+} catch (error) {
+  refuse(
+    `git could not list the tracked files: ${error.message}\nnext: run this from a checkout`,
+    1,
+  );
+}
 
 // llmlint: ignore[tool_output_is_signal] Standard output is this script's machine-read interface: Nx hashes this one line.
 if (list) console.log(files.join("\n"));
 else {
   const hash = createHash("sha256");
-  for (const file of files) hash.update(file).update("\0").update(readFileSync(file)).update("\0");
+  try {
+    for (const file of files)
+      hash.update(file).update("\0").update(readFileSync(file)).update("\0");
+  } catch (error) {
+    refuse(`a read-set file cannot be read: ${error.message}\nnext: restore it from git`, 1);
+  }
   console.log(hash.digest("hex"));
 }
