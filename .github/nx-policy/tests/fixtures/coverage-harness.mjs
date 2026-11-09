@@ -8,6 +8,7 @@ import {
   chmodSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -69,6 +70,18 @@ export function readJson(dir, path) {
 }
 export function writeJson(dir, path, value) {
   writeFileSync(join(dir, path), `${JSON.stringify(value, null, 2)}\n`);
+}
+
+export function e2eUnits(dir) {
+  return readdirSync(join(dir, "crates"))
+    .filter((crate) => {
+      try {
+        return readJson(dir, projectFile(crate)).tags?.includes("layer:e2e");
+      } catch {
+        return false;
+      }
+    })
+    .sort();
 }
 
 export function coverageUnits(dir) {

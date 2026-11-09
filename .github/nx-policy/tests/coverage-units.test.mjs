@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 import {
   coverageUnits,
+  e2eUnits,
   environment,
   git,
   hashesOf,
@@ -37,12 +38,7 @@ import {
 // copy of its graph. A key that misses something a run reads is how a stale result would pass
 // the floor, so every assertion is on what Nx reports it ran.
 
-const E2E = [
-  "onetaskgraph-e2e",
-  "onetaskgraph-github-projects-e2e",
-  "onetaskgraph-linear-e2e",
-  "onetaskgraph-status-options-e2e",
-];
+const E2E = e2eUnits(root);
 const BINARY_LINKS = [
   "onetaskgraph",
   "onetaskgraph-core",

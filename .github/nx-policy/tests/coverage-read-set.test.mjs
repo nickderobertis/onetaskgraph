@@ -7,6 +7,7 @@ import { after, test } from "node:test";
 import {
   coverageUnits,
   copyGraph,
+  e2eUnits,
   environment,
   hashesOf,
   onLinux,
@@ -21,12 +22,7 @@ import {
 // fixtures/coverage-read-set.json records what a real traced run opened (strace of each unit) and
 // compiled (cargo's dep-info), which a scan cannot see in what a journey spawns.
 
-const E2E = new Set([
-  "onetaskgraph-e2e",
-  "onetaskgraph-github-projects-e2e",
-  "onetaskgraph-linear-e2e",
-  "onetaskgraph-status-options-e2e",
-]);
+const E2E = new Set(e2eUnits(root));
 
 // Read through a runtime input rather than as a file: their version is blanked.
 const RUNTIME_HASHED =
@@ -172,6 +168,12 @@ test("every workspace file a unit reads is in its task hash", { skip: !onLinux }
       .trim()
       .split("\n"),
   );
+  // RUNTIME_HASHED is exempt from the file list only because each unit's runtime inputs hash it.
+  for (const unit of units) {
+    const nodes = Object.keys(hashes[unitTask(unit)].nodes).join("\n");
+    for (const runtime of ["nx-cargo-closure", "--ecosystem npm"])
+      if (!nodes.includes(runtime)) problems.push(`${unit}: no runtime input hashes ${runtime}`);
+  }
   for (const unit of units) {
     const hashed = new Set(hashes[unitTask(unit)].inputs.files);
     const reads = new Set(
