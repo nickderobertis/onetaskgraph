@@ -8,6 +8,9 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { parse } from "yaml";
 import {
+  nxCoverageUnitFiles,
+  nxCoverageReadSetFiles,
+  nxCoverageSpawnedBinaryFiles,
   budgetJourneyFiles,
   cacheJourneyFiles,
   cdJourneyFiles,
@@ -69,6 +72,9 @@ test("the workflow projects run every journey exactly once through its owning ta
     [workflows, "cd-journeys", cdJourneyFiles],
     [nxPolicy, "nx-inputs", nxInputFiles],
     [nxPolicy, "nx-hashes", nxHashFiles],
+    [nxPolicy, "coverage-units", nxCoverageUnitFiles],
+    [nxPolicy, "coverage-read-set", nxCoverageReadSetFiles],
+    [nxPolicy, "coverage-spawned-binary", nxCoverageSpawnedBinaryFiles],
     [cache, "cache-journeys", cacheJourneyFiles],
     [workflows, "budget-journeys", budgetJourneyFiles],
     [policy, "release-tail", releaseTailFiles],
@@ -91,6 +97,9 @@ test("the workflow projects run every journey exactly once through its owning ta
   );
   assert.deepEqual(
     [
+      ...nxCoverageUnitFiles,
+      ...nxCoverageReadSetFiles,
+      ...nxCoverageSpawnedBinaryFiles,
       ...policyJourneyFiles,
       ...rustCacheJourneyFiles,
       ...cdJourneyFiles,
