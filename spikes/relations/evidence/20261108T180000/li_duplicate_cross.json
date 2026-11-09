@@ -1,0 +1,41 @@
+{
+ "add": {
+  "seq": 675,
+  "ok": true,
+  "id": "05421f05-6097-469b-8352-c5f827f460b5",
+  "errors": []
+ },
+ "read": {
+  "seq": 676,
+  "identifier": "TES2-2161",
+  "parent": null,
+  "children": {
+   "nodes": []
+  },
+  "relations": {
+   "nodes": [
+    {
+     "id": "05421f05-6097-469b-8352-c5f827f460b5",
+     "type": "duplicate",
+     "relatedIssue": {
+      "identifier": "TES-2949"
+     }
+    }
+   ]
+  },
+  "inverseRelations": {
+   "nodes": []
+  },
+  "errors": []
+ },
+ "state": {
+  "seq": 677,
+  "identifier": "TES2-2161",
+  "state": {
+   "name": "Duplicate",
+   "type": "duplicate"
+  },
+  "canceledAt": "2026-11-09T01:20:38.901Z",
+  "errors": []
+ }
+}

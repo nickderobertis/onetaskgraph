@@ -43,8 +43,8 @@
  },
  "inventory": {
   "github:issue": {
-   "total": 211,
-   "deleted": 207,
+   "total": 213,
+   "deleted": 209,
    "open": [
     6090,
     6091,
@@ -53,8 +53,8 @@
    ]
   },
   "linear:issue": {
-   "total": 182,
-   "deleted": 182,
+   "total": 184,
+   "deleted": 184,
    "open": []
   },
   "linear:project": {
@@ -63,8 +63,8 @@
    "open": []
   },
   "linear:relation": {
-   "total": 52,
-   "deleted": 52,
+   "total": 53,
+   "deleted": 53,
    "open": []
   },
   "github:board": {

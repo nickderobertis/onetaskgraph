@@ -914,3 +914,13 @@
 {"event": "deleted", "id": "433dc0d6-af60-412a-9943-3069d2bcaffc", "how": "removed with its issues by the permanent issueDelete"}
 {"event": "deleted", "id": "eed10a40-92fe-4e05-9199-3a44b8590db0", "how": "removed with its issues by the permanent issueDelete"}
 {"event": "deleted", "id": "I_kwDOU_sxG88AAAABdiLvQw", "how": "deleteIssue request 663"}
+{"event": "created", "id": "29c5a372-6203-4056-8fa5-1ce68c3d4332", "kind": "issue", "tracker": "linear", "team": "TES2", "identifier": "TES2-2161", "stage": "li_duplicate_cross"}
+{"event": "created", "id": "16531607-4a4c-4284-9814-ac46c7e66c03", "kind": "issue", "tracker": "linear", "team": "TES", "identifier": "TES-2949", "stage": "li_duplicate_cross"}
+{"event": "created", "id": "05421f05-6097-469b-8352-c5f827f460b5", "kind": "relation", "tracker": "linear", "stage": "li_duplicate_cross"}
+{"event": "created", "id": "I_kwDOU_sxG88AAAABdjSRsg", "kind": "issue", "tracker": "github", "repo": "r1", "number": 6286, "stage": "gh_fallback_page"}
+{"event": "created", "id": "I_kwDOU_sxG88AAAABdjSTsA", "kind": "issue", "tracker": "github", "repo": "r1", "number": 6287, "stage": "gh_fallback_page"}
+{"event": "deleted", "id": "I_kwDOU_sxG88AAAABdjSRsg", "how": "deleteIssue request 691"}
+{"event": "deleted", "id": "I_kwDOU_sxG88AAAABdjSTsA", "how": "deleteIssue request 692"}
+{"event": "deleted", "id": "29c5a372-6203-4056-8fa5-1ce68c3d4332", "how": "issueDelete permanently, request 693"}
+{"event": "deleted", "id": "16531607-4a4c-4284-9814-ac46c7e66c03", "how": "issueDelete permanently, request 693"}
+{"event": "deleted", "id": "05421f05-6097-469b-8352-c5f827f460b5", "how": "removed with its issues by the permanent issueDelete"}
