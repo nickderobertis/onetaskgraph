@@ -39,16 +39,6 @@ import {
 // the floor, so every assertion is on what Nx reports it ran.
 
 const E2E = e2eUnits(root);
-const BINARY_LINKS = [
-  "onetaskgraph",
-  "onetaskgraph-core",
-  "onetaskgraph-github-projects",
-  "onetaskgraph-in-memory",
-  "onetaskgraph-linear",
-  "onetaskgraph-local-md",
-  "onetaskgraph-plugin-api",
-  "onetaskgraph-status-options",
-];
 const STATUS_E2E_TEST = "crates/onetaskgraph-status-options-e2e/tests/e2e/main.rs";
 // The non-Cargo files a release rewrites, from a real release commit.
 const VERSIONED_FILES = [
@@ -117,8 +107,7 @@ function unitsReadingCrateSource(units, crate) {
     .filter(
       (unit) =>
         compiledBy(unit).has(crate) ||
-        (E2E.includes(unit) &&
-          (BINARY_LINKS.includes(crate) || compiledBy("onetaskgraph").has(crate))),
+        (E2E.includes(unit) && compiledBy("onetaskgraph").has(crate)),
     )
     .sort();
 }
