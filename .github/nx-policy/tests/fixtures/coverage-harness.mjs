@@ -90,10 +90,13 @@ export function e2eUnits(dir) {
 }
 
 export function coverageUnits(dir) {
-  const entry = readJson(dir, "workspace/project.json").targets.coverage.dependsOn.find(
-    (candidate) => candidate.target === "coverage",
+  const dependsOn = readJson(dir, "workspace/project.json").targets?.coverage?.dependsOn;
+  assert.ok(Array.isArray(dependsOn), "workspace:coverage declares its dependencies");
+  const entry = dependsOn.find((candidate) => candidate?.target === "coverage");
+  assert.ok(
+    Array.isArray(entry?.projects) && entry.projects.every((name) => typeof name === "string"),
+    "workspace:coverage lists its units",
   );
-  assert.ok(entry, "workspace:coverage lists its units");
   return [...entry.projects].sort();
 }
 
@@ -193,7 +196,12 @@ export function cargoMetadata() {
       value.packages.every((pkg) => typeof pkg?.id === "string" && typeof pkg?.name === "string") &&
       Array.isArray(value.workspace_members) &&
       Array.isArray(value.resolve?.nodes) &&
-      value.resolve.nodes.every((node) => typeof node?.id === "string" && Array.isArray(node.deps)),
+      value.resolve.nodes.every(
+        (node) =>
+          typeof node?.id === "string" &&
+          Array.isArray(node.deps) &&
+          node.deps.every((dep) => typeof dep?.pkg === "string" && Array.isArray(dep?.dep_kinds)),
+      ),
     "cargo metadata has packages, workspace_members and resolve.nodes",
   );
   return value;
