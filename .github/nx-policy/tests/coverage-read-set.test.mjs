@@ -5,12 +5,14 @@ import { existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs
 import { dirname, join, relative, resolve } from "node:path";
 import { after, test } from "node:test";
 import {
+  cargoMetadata,
   coverageUnits,
   copyGraph,
   e2eUnits,
   environment,
   hashesOf,
   onLinux,
+  recordedReadSet,
   root,
   scratchRoot,
   unitTask,
@@ -136,19 +138,7 @@ function unhashed(reads, hashed) {
   return [...reads].filter((file) => !hashed.has(file) && !RUNTIME_HASHED.test(file)).sort();
 }
 
-const recorded = JSON.parse(
-  readFileSync(join(root, ".github/nx-policy/tests/fixtures/coverage-read-set.json"), "utf8"),
-);
-assert.ok(
-  recorded !== null &&
-    recorded.units !== null &&
-    typeof recorded.units === "object" &&
-    !Array.isArray(recorded.units) &&
-    Object.values(recorded.units).every(
-      (files) => Array.isArray(files) && files.every((file) => typeof file === "string"),
-    ),
-  "the recording maps each unit to the files it read",
-);
+const recorded = recordedReadSet();
 const unitReads = (unit, file) => (recorded.units[unit] ?? []).includes(file);
 
 const scratch = onLinux ? scratchRoot("coverage-read-set") : "";
@@ -157,14 +147,7 @@ after(() => {
 });
 
 test("every workspace file a unit reads is in its task hash", { skip: !onLinux }, () => {
-  const metadata = JSON.parse(
-    execFileSync("cargo", ["metadata", "--format-version", "1", "--all-features", "--locked"], {
-      cwd: root,
-      env: environment(),
-      encoding: "utf8",
-      maxBuffer: 128 * 1024 * 1024,
-    }),
-  );
+  const metadata = cargoMetadata();
   const dir = copyGraph(scratch, "read-set");
   const units = coverageUnits(dir);
   const hashes = hashesOf(dir, units.map(unitTask));
@@ -213,14 +196,7 @@ test("a file only a journey reads, left out of the inputs, is named", { skip: !o
 });
 
 test("a journey's literal path is found on the path that names it", { skip: !onLinux }, () => {
-  const metadata = JSON.parse(
-    execFileSync("cargo", ["metadata", "--format-version", "1", "--all-features", "--locked"], {
-      cwd: root,
-      env: environment(),
-      encoding: "utf8",
-      maxBuffer: 128 * 1024 * 1024,
-    }),
-  );
+  const metadata = cargoMetadata();
   assert.ok(scannedReads("onetaskgraph-core", metadata).has("docs/metadata.md"));
   assert.ok(scannedReads("onetaskgraph-e2e", metadata).has("README.md"));
 });
