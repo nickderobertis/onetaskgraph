@@ -2269,7 +2269,7 @@ def stage_cleanup(run: Run) -> None:
     live = lambda kind, tracker: [  # noqa: E731
         k
         for k, v in run.ledger.items()
-        if v["kind"] == kind and v["tracker"] == tracker and not v.get("ended")
+        if v["kind"] == kind and v["tracker"] == tracker and v.get("ended") != "deleted"
     ]
 
     # GitHub issues, aliased; boards after them.
@@ -2283,9 +2283,18 @@ def stage_cleanup(run: Run) -> None:
                 ],
                 label,
             )
+            absent = {
+                (e.get("path") or [""])[0]: e
+                for e in errors
+                if "Could not resolve to a node" in str(e.get("message"))
+            }
             for i, id_ in enumerate(chunk):
                 if f"a{i}" in data and data[f"a{i}"] is not None:
                     run.record_ended(id_, "deleted", f"{root} request {seq}")
+                elif f"a{i}" in absent:
+                    run.record_ended(
+                        id_, "deleted", f"already gone: the 502 batch landed (read back at {seq})"
+                    )
             for error in errors:
                 answers.setdefault("errors", []).append(str(error.get("message"))[:200])
             time.sleep(3)

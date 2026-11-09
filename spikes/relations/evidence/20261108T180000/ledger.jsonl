@@ -924,3 +924,9 @@
 {"event": "deleted", "id": "29c5a372-6203-4056-8fa5-1ce68c3d4332", "how": "issueDelete permanently, request 693"}
 {"event": "deleted", "id": "16531607-4a4c-4284-9814-ac46c7e66c03", "how": "issueDelete permanently, request 693"}
 {"event": "deleted", "id": "05421f05-6097-469b-8352-c5f827f460b5", "how": "removed with its issues by the permanent issueDelete"}
+{"event": "deleted", "id": "I_kwDOU_sxG88AAAABdiLmsA", "how": "already gone: the 502 batch landed (read back at 708)"}
+{"event": "deleted", "id": "I_kwDOU_sxG88AAAABdiLm0Q", "how": "already gone: the 502 batch landed (read back at 708)"}
+{"event": "deleted", "id": "I_kwDOU_sxG88AAAABdiLocw", "how": "already gone: the 502 batch landed (read back at 708)"}
+{"event": "deleted", "id": "I_kwDOU_sxG88AAAABdiLojA", "how": "already gone: the 502 batch landed (read back at 708)"}
+{"event": "open", "id": "I_kwDOU_sxG88AAAABdiLvQw", "how": "deleteIssue accepted (requests 663, 705 and 721) but #6094 still reads OPEN"}
+{"event": "closed-not-deleted", "id": "I_kwDOU_sxG88AAAABdiLvQw", "how": "deleteIssue accepted at requests 663, 705, 721, issue still reads OPEN; closed NOT_PLANNED per the manager, request 731"}

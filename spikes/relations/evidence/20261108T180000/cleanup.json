@@ -7,12 +7,7 @@
   "Could not resolve to a node with the global id of 'I_kwDOU_sxG88AAAABdiLojA'."
  ],
  "remaining_after": {
-  "github_issues": [
-   "I_kwDOU_sxG88AAAABdiLmsA",
-   "I_kwDOU_sxG88AAAABdiLm0Q",
-   "I_kwDOU_sxG88AAAABdiLocw",
-   "I_kwDOU_sxG88AAAABdiLojA"
-  ],
+  "github_issues": [],
   "github_boards": [],
   "linear_issues": [],
   "linear_projects": []
@@ -44,12 +39,9 @@
  "inventory": {
   "github:issue": {
    "total": 213,
-   "deleted": 209,
+   "deleted": 212,
    "open": [
-    6090,
-    6091,
-    6092,
-    6093
+    6094
    ]
   },
   "linear:issue": {
@@ -72,5 +64,15 @@
    "deleted": 9,
    "open": []
   }
+ },
+ "closed_not_deleted": {
+  "issue": 6094,
+  "delete_attempts": [
+   663,
+   705,
+   721
+  ],
+  "closed_not_planned_at": 731,
+  "read_open_at": 730
  }
 }
