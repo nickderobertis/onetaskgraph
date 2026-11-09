@@ -128,7 +128,15 @@
       },
       "cache": false,
       "//": "Its suite runs every case uninstrumented, in `test`, and contributes no line coverage (AGENTS.md records why). This builds instrumented, and runs none of, the two test binaries onetaskgraph-github-projects-e2e's measured entry-point pairs run from target/llvm-cov-target: `plugin`, which holds the GitHub double, and `live`, the entry points. scripts/check-coverage-enforced.sh holds the tag, this target and workspace:coverage's dependency list to one another.",
-      "inputs": ["default", "^coverageDependency", "coverageUnit"]
+      "inputs": [
+        "default",
+        "^coverageDependency",
+        "coverageUnit",
+        "{workspaceRoot}/.tool-versions",
+        {
+          "runtime": "node scripts/coverage-read-digest.mjs --unit onetaskgraph-github-projects"
+        }
+      ]
     }
   }
 }

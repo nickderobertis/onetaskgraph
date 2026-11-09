@@ -85,35 +85,19 @@
       "//": "A coverage unit: its LCOV report is cached, and workspace:coverage merges every unit's and holds the floor. scripts/check-coverage-enforced.sh reconciles the unit with that merge, and .github/nx-policy/tests/coverage-units.test.mjs holds these inputs to every file the run reads. It reaches the instrumented binary through onetaskgraph:coverage-build, never through onetaskgraph:coverage's run, so the journeys find it when that unit replays.",
       "inputs": [
         "versionFreeNpm",
-        "{workspaceRoot}/.tool-versions",
         "{projectRoot}/**/*",
         "!{projectRoot}/Cargo.toml",
         "!{projectRoot}/CHANGELOG.md",
         "sharedGlobals",
         "cargoInputs",
-        "{workspaceRoot}/crates/onetaskgraph/src/**/*",
-        "{workspaceRoot}/crates/onetaskgraph/build.rs",
-        "{workspaceRoot}/crates/onetaskgraph-core/src/**/*",
-        "{workspaceRoot}/crates/onetaskgraph-core/build.rs",
-        "{workspaceRoot}/crates/onetaskgraph-github-projects/src/**/*",
-        "{workspaceRoot}/crates/onetaskgraph-github-projects/build.rs",
-        "{workspaceRoot}/crates/onetaskgraph-in-memory/src/**/*",
-        "{workspaceRoot}/crates/onetaskgraph-in-memory/build.rs",
-        "{workspaceRoot}/crates/onetaskgraph-linear/src/**/*",
-        "{workspaceRoot}/crates/onetaskgraph-linear/build.rs",
-        "{workspaceRoot}/crates/onetaskgraph-local-md/src/**/*",
-        "{workspaceRoot}/crates/onetaskgraph-local-md/build.rs",
-        "{workspaceRoot}/crates/onetaskgraph-plugin-api/src/**/*",
-        "{workspaceRoot}/crates/onetaskgraph-plugin-api/build.rs",
-        "{workspaceRoot}/crates/onetaskgraph-status-options/src/**/*",
-        "{workspaceRoot}/crates/onetaskgraph-status-options/build.rs",
         "^coverageDependency",
         "coverageUnit",
-        "{workspaceRoot}/crates/onetaskgraph-github-projects/tests/github_schema/**/*",
-        "{workspaceRoot}/crates/onetaskgraph-github-projects/tests/fixtures/**/*",
-        "{workspaceRoot}/crates/onetaskgraph-linear/tests/fixtures/**/*",
-        "{workspaceRoot}/scripts/live-crate-test.sh",
-        "coverageSdkSources"
+        "versionFreePython",
+        "versionFreeFiles",
+        "{workspaceRoot}/.tool-versions",
+        {
+          "runtime": "node scripts/coverage-read-digest.mjs --unit onetaskgraph-status-options-e2e"
+        }
       ]
     }
   }

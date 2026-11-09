@@ -303,14 +303,24 @@ describe("coverage unit keys", { skip: !onLinux }, () => {
     );
     assert.ok(read, "the recording names a measurement file its journeys read");
     const negative = stubbedGraph(scratch, "journey-read");
-    const project = readJson(negative, projectFile(reader));
-    project.targets.coverage.inputs = project.targets.coverage.inputs.filter(
-      (input) => input !== "{workspaceRoot}/docs/measurements/**/*",
+    const sets = readJson(negative, "scripts/coverage-read-sets.json");
+    const before = sets.units[reader].length;
+    sets.units[reader] = sets.units[reader].filter((glob) => glob !== "docs/measurements/**/*");
+    assert.equal(sets.units[reader].length, before - 1, "the glob the recording needs is listed");
+    writeJson(negative, "scripts/coverage-read-sets.json", sets);
+    git(negative, "add", "scripts/coverage-read-sets.json");
+    const listed = (at) =>
+      execFileSync("node", ["scripts/coverage-read-digest.mjs", "--unit", reader, "--list"], {
+        cwd: at,
+        env: environment(),
+        encoding: "utf8",
+        maxBuffer: 16 * 1024 * 1024,
+      });
+    assert.ok(
+      !listed(negative).includes(read),
+      `${reader}'s key without the glob leaves ${read} out`,
     );
-    writeJson(negative, projectFile(reader), project);
-    const left = hashesOf(negative, [unitTask(reader)])[unitTask(reader)].inputs.files;
-    assert.ok(!left.includes(read), `${reader}'s key without the input leaves ${read} unhashed`);
-    assert.ok(hashesOf(dir, [unitTask(reader)])[unitTask(reader)].inputs.files.includes(read));
+    assert.ok(listed(dir).includes(read));
     expectExactly(read, [reader]);
   });
 

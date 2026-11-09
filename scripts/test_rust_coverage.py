@@ -28,6 +28,12 @@ class CoverageProgressTest(unittest.TestCase):
             (tree / "rust-toolchain.toml").write_text(
                 (ROOT / "rust-toolchain.toml").read_text(encoding="utf-8"), encoding="utf-8"
             )
+            scripts = tree / "scripts"
+            scripts.mkdir()
+            for name in ("rust-coverage.sh", "coverage-unit.sh"):
+                (scripts / name).write_text(
+                    (ROOT / "scripts" / name).read_text(encoding="utf-8"), encoding="utf-8"
+                )
             (tree / "src").mkdir()
             (tree / "Cargo.toml").write_text(
                 '[package]\nname = "coverage-progress"\nversion = "0.1.0"\nedition = "2024"\n',
@@ -51,7 +57,7 @@ fn waits_for_release() {
             )
             diagnostic = (await lock.communicate())[0].decode("utf-8", errors="replace")
             self.assertEqual(lock.returncode, 0, diagnostic)
-            command = ["bash", str(ROOT / "scripts/rust-coverage.sh"), "coverage-progress"]
+            command = ["bash", "scripts/rust-coverage.sh", "coverage-progress"]
             if native:
                 # Windows does not measure coverage, but still exercises nextest's
                 # progress stream and failure propagation without a shell or WSL.

@@ -57,6 +57,8 @@
       "{workspaceRoot}/Cargo.toml",
       "{workspaceRoot}/Cargo.lock",
       "{workspaceRoot}/crates/*/Cargo.toml",
+      "{workspaceRoot}/scripts/coverage-read-digest.mjs",
+      "{workspaceRoot}/scripts/coverage-read-sets.json",
       "{projectRoot}/tests/fixtures/coverage-harness.mjs",
       "{projectRoot}/tests/fixtures/nx-workspace-contracts.mjs",
       "{workspaceRoot}/.github/fixture-environment.mjs",
@@ -203,7 +205,6 @@
       "inputs": [
         "versionFreeNpm",
         "{workspaceRoot}/.tool-versions",
-        "coverageConfig",
         "{projectRoot}/tests/coverage-spawned-binary.test.mjs",
         {
           "runtime": "node -p process.platform"
@@ -217,7 +218,19 @@
         "{workspaceRoot}/crates/onetaskgraph-in-memory/**/*",
         "{workspaceRoot}/crates/onetaskgraph-status-options/**/*",
         "{workspaceRoot}/crates/onetaskgraph-status-options-e2e/**/*",
-        "{workspaceRoot}/crates/onetaskgraph-e2e-support/**/*"
+        "{workspaceRoot}/crates/onetaskgraph-e2e-support/**/*",
+        "{workspaceRoot}/nx.json",
+        "{workspaceRoot}/scripts/coverage-unit.sh",
+        "{workspaceRoot}/scripts/coverage-merge.mjs",
+        "{workspaceRoot}/scripts/rust-coverage.sh",
+        "{workspaceRoot}/scripts/coverage-read-digest.mjs",
+        "{workspaceRoot}/scripts/coverage-read-sets.json",
+        "{workspaceRoot}/workspace/project.json",
+        "{workspaceRoot}/crates/onetaskgraph/project.json",
+        "{workspaceRoot}/Cargo.lock",
+        "{projectRoot}/tests/fixtures/coverage-harness.mjs",
+        "{workspaceRoot}/.github/fixture-environment.mjs",
+        "{workspaceRoot}/.github/test-setup.mjs"
       ],
       "outputs": []
     }
