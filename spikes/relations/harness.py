@@ -1037,7 +1037,6 @@ def stage_gh_boards(run: Run) -> None:
                 cli("project", "show", f"xd:{native_project}", q="coexist.one.show")
             ),
         }
-    # Two boards sharing a repository.
     two = run.gh_issues("r1", ["py", "ty", "tkt", "tkt2", "shared"], "q1.coexist.two.create")
     py, ty, tkt, tkt2, shared = (two[k] for k in ("py", "ty", "tkt", "tkt2", "shared"))
     for issue in (py, ty):
@@ -1251,7 +1250,6 @@ def stage_gh_links(run: Run) -> None:
     }
     gh_set_body(run, a, "spike", "q2.gh.tracked.restore")
 
-    # Fallback: metadata through today's plugin, plus a rendered section.
     board = run.gh_board("l", "q2.gh.fallback.board")
     answers["fallback_board"] = board["number"]
     pair = run.gh_issues(
@@ -1416,7 +1414,9 @@ def stage_gh_plugin_project(run: Run) -> None:
         ]
         parent_candidates = [r for r in reads if (r.get("subIssuesSummary") or {}).get("total")]
         if parent_candidates:
-            native_project = next(n for n, r in zip(natives, reads) if r is parent_candidates[0])
+            native_project = next(
+                n for n, r in zip(natives, reads, strict=True) if r is parent_candidates[0]
+            )
     answers["project_list"] = summary(
         cli("project", "list", "--source", "xd", q="coexist.one.list")
     )
@@ -1686,7 +1686,6 @@ def stage_li_links(run: Run) -> None:
             "errors": errs(errors),
             "payload": data.get("a"),
         }
-    # Fallback on Linear: real metadata slot, then a section sent through the API.
     cli = Cli(
         run,
         {"tes2": {"plugin": "linear", "config": {"api_key_env": "LINEAR_API_KEY", "team": "TES2"}}},
@@ -2429,7 +2428,8 @@ def main() -> int:
                 f"[{stamp}] stage {name}: GitHub spent {run.github_points}, Linear requests {run.linear_requests}",
                 flush=True,
             )
-            STAGES[name](run)
+            if STAGES[name](run) is False:
+                failed = True
     except (
         QuotaStop,
         RateRefused,

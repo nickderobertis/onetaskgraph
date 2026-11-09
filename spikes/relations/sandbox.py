@@ -41,17 +41,14 @@ GITHUB_ROOTS = {
     "updateIssue",
     "deleteIssue",
     "closeIssue",
-    "reopenIssue",
     "unmarkIssueAsDuplicate",
     "addSubIssue",
     "removeSubIssue",
-    "reprioritizeSubIssue",
     "addBlockedBy",
     "removeBlockedBy",
     "addRelatesTo",
     "removeRelatesTo",
     "addProjectV2ItemById",
-    "deleteProjectV2Item",
     "createProjectV2",
     "updateProjectV2",
     "createProjectV2Field",
@@ -63,7 +60,6 @@ LINEAR_ROOTS = {
     "issueDelete",
     "issueRelationCreate",
     "issueRelationUpdate",
-    "issueRelationDelete",
     "projectCreate",
     "projectDelete",
 }
@@ -173,8 +169,6 @@ class Sandbox:
                     self._own(mut.root, "projectId", payload["projectId"])
                 continue
             if mut.root in {"issueUpdate", "issueDelete", "issueRelationUpdate", "projectDelete"}:
-                self._own(mut.root, "id", mut.args.get("id"))
-            if mut.root == "issueRelationDelete":
                 self._own(mut.root, "id", mut.args.get("id"))
             for key, value in payload.items():
                 if key in LINEAR_ID_KEYS and value is not None:

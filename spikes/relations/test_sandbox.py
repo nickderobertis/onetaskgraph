@@ -1,6 +1,7 @@
 """Every refusal the sandbox owes, offline: `python3 -m unittest spikes/relations/test_sandbox.py`."""
 
 # llmlint: ignore-file[new_code_lands_in_a_project] Spike branch kept for the record, not merged; see harness.py.
+# llmlint: ignore-file[modern_domain_modeling] Fixtures of the trackers' raw JSON inputs, which is exactly what the guard is handed; see harness.py.
 import pathlib
 import sys
 import unittest
@@ -23,27 +24,50 @@ def box() -> Sandbox:
     return Sandbox(STAMP, "OWNER", {"R1", "R2"}, {"T2", "T1"}, {"I1", "I2", "B1", "L1", "P1"})
 
 
-def github(root: str, **payload: object) -> None:
-    box().check_github([Mut("a", root, {"input": payload})])
+def github(root: str, **payload: object) -> str:
+    muts = [Mut("a", root, {"input": payload})]
+    box().check_github(muts)
+    return document(muts)
 
 
-def linear(root: str, args: dict) -> None:
-    box().check_linear([Mut("a", root, args)])
+def linear(root: str, args: dict) -> str:
+    muts = [Mut("a", root, args)]
+    box().check_linear(muts)
+    return document(muts)
 
 
 class Allowed(unittest.TestCase):
     def test_writes_inside_the_sandbox(self) -> None:
-        github("createIssue", repositoryId="R2", title=f"x {STAMP}")
-        github("addSubIssue", issueId="I1", subIssueId="I2", replaceParent=True)
-        github("addProjectV2ItemById", projectId="B1", contentId="I1")
-        github("createProjectV2Field", projectId="B1", name="onetaskgraph.origin")
-        github(
-            "createProjectV2",
-            ownerId="OWNER",
-            title=f"onetaskgraph live board spike-relations-{STAMP}-a",
+        self.assertIn(
+            'repositoryId:"R2"', github("createIssue", repositoryId="R2", title=f"x {STAMP}")
         )
-        linear("issueCreate", {"input": {"teamId": "T2", "title": f"x {STAMP}", "parentId": "L1"}})
-        linear("issueUpdate", {"id": "L1", "input": {"parentId": None}})
+        self.assertIn(
+            "replaceParent:true",
+            github("addSubIssue", issueId="I1", subIssueId="I2", replaceParent=True),
+        )
+        self.assertIn(
+            "addProjectV2ItemById", github("addProjectV2ItemById", projectId="B1", contentId="I1")
+        )
+        self.assertIn(
+            "createProjectV2Field", github("createProjectV2Field", projectId="B1", name="n")
+        )
+        self.assertIn(
+            "createProjectV2",
+            github(
+                "createProjectV2",
+                ownerId="OWNER",
+                title=f"onetaskgraph live board spike-relations-{STAMP}-a",
+            ),
+        )
+        self.assertIn(
+            'parentId:"L1"',
+            linear(
+                "issueCreate", {"input": {"teamId": "T2", "title": f"x {STAMP}", "parentId": "L1"}}
+            ),
+        )
+        self.assertIn(
+            "parentId:null", linear("issueUpdate", {"id": "L1", "input": {"parentId": None}})
+        )
 
     def test_document_spells_enums_and_nulls(self) -> None:
         text = document([Mut("a", "x", {"input": {"t": Enum("BLOCKS"), "p": None}}, "id")])
@@ -85,6 +109,24 @@ class Refusals(unittest.TestCase):
         self.assert_refused(linear, "issueDelete", {"id": "lease-issue"})
         self.assert_refused(linear, "issueUpdate", {"id": "L1", "input": {"parentId": "OTHER"}})
         self.assert_refused(linear, "issueRelationCreate", {"input": {"issueId": "OTHER"}})
+
+    def test_unstamped_titles_on_writes_to_owned_objects(self) -> None:
+        self.assert_refused(github, "updateIssue", id="I1", title="unstamped")
+        self.assert_refused(
+            linear, "issueCreate", {"input": {"teamId": "T2", "title": "unstamped"}}
+        )
+        self.assert_refused(linear, "issueUpdate", {"id": "L1", "input": {"title": "unstamped"}})
+
+    def test_linear_creation_and_moves_stay_inside(self) -> None:
+        for key in ("parentId", "projectId"):
+            self.assert_refused(
+                linear, "issueCreate", {"input": {"teamId": "T2", "title": STAMP, key: "OTHER"}}
+            )
+        self.assert_refused(linear, "issueUpdate", {"id": "L1", "input": {"teamId": "ENG"}})
+
+    def test_removed_grants_are_refused(self) -> None:
+        self.assert_refused(linear, "issueRelationDelete", {"id": "P1"})
+        self.assert_refused(github, "reprioritizeSubIssue", issueId="I1", subIssueId="I2")
 
     def test_protected_boards(self) -> None:
         for number in (1, 2, 3):
