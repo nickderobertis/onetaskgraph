@@ -879,21 +879,21 @@ def gh_source(number: int) -> dict[str, Any]:
 def summary(result: dict[str, Any]) -> dict[str, Any]:
     """What a binary run answered, down to ids, numbers and kinds."""
     out = result["out"]
-    items: Any = None
-    if isinstance(out, dict):
-        items = out.get("items") or out.get("results") or out.get("result") or out
-    return {
-        "exit": result["exit"],
-        "err": result["err"] or None,
-        "ids": sorted(
-            (i.get("id") or i.get("qualified_id") or "") for i in items if isinstance(i, dict)
-        )
-        if isinstance(items, list)
-        else None,
-        "item": ({k: items.get(k) for k in ("id", "parent", "project", "version") if k in items})
-        if isinstance(items, dict)
-        else None,
-    }
+    items = (
+        (out.get("items") or out.get("results") or out.get("result") or out)
+        if isinstance(out, dict)
+        else None
+    )
+    ids = None
+    item = None
+    match items:
+        case list():
+            ids = sorted(
+                (i.get("id") or i.get("qualified_id") or "") for i in items if isinstance(i, dict)
+            )
+        case dict():
+            item = {k: items.get(k) for k in ("id", "parent", "project", "version") if k in items}
+    return {"exit": result["exit"], "err": result["err"] or None, "ids": ids, "item": item}
 
 
 def list_ids(result: dict[str, Any]) -> list[str]:
