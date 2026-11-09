@@ -72,7 +72,7 @@ class RateRefused(Exception):
 
 
 def load_linear_key() -> str:
-    """LINEAR_API_KEY alone from the secrets file; no other line is read into the process."""
+    """LINEAR_API_KEY from the secrets file; every other line is dropped unparsed."""
     path = pathlib.Path.home() / ".config" / "onetaskgraph" / "secrets.env"
     for line in path.read_text(encoding="utf-8").splitlines():
         if line.startswith("LINEAR_API_KEY="):
@@ -1293,7 +1293,6 @@ def stage_gh_links(run: Run) -> None:
         "read": cli_task(cli, f"ld:{sym['id']}", "fallback.show"),
         "stored": split_links(gh_read_body(run, sym, "q2.gh.fallback.read")[0]),
     }
-    # A person deletes only the section; the comment slot remains.
     stored, _ = gh_read_body(run, sym, "q2.gh.fallback.read")
     without_section = re.sub(r"## Links\s.*?(?=" + SLOT_OPEN_PATTERN + ")", "", stored, flags=re.S)
     answers["edit_deletes_section_keeps_slot"] = {
@@ -1301,7 +1300,6 @@ def stage_gh_links(run: Run) -> None:
         "read": cli_task(cli, f"ld:{sym['id']}", "fallback.show"),
         "stored": split_links(gh_read_body(run, sym, "q2.gh.fallback.read")[0]),
     }
-    # A person rewrites the body whole; the comment slot goes with it.
     answers["edit_rewrites_whole_body"] = {
         "write": gh_set_body(
             run, sym, "A person replaced the whole description.", "q2.gh.fallback.edit3"
@@ -1422,7 +1420,7 @@ def stage_gh_plugin_project(run: Run) -> None:
     )
     fresh = run.gh_issues("r1", ["into-project"], "q1.coexist.one.create")["into-project"]
     run.gh_add_item(board_id, fresh["id"], "q1.coexist.one.add")
-    answers["fresh_listed_before"] = fresh["number"]
+    answers["fresh_issue_number"] = fresh["number"]
     if native_project:
         answers["parent_write_onto_plugin_project"] = gh_rel(
             run,
@@ -2372,7 +2370,8 @@ def stage_cleanup(run: Run) -> bool:
             bucket["open"].append(value.get("number") or value.get("identifier") or key)
     answers["inventory"] = inventory
     run.write_stage("cleanup", answers)
-    return not any(bucket["open"] for bucket in inventory.values())
+    remaining = verified[REPO1] + verified[REPO2] + verified["boards"] + verified["linear_issues"]
+    return remaining == 0 and not any(bucket["open"] for bucket in inventory.values())
 
 
 STAGES = {

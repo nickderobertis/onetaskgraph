@@ -8,7 +8,9 @@ import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 
-from sandbox import (  # noqa: E402 -- sys.path is set just above
+from sandbox import (
+    GITHUB_ID_KEYS,
+    LINEAR_ID_KEYS,  # noqa: E402 -- sys.path is set just above
     Enum,
     Mut,
     Refused,
@@ -127,6 +129,30 @@ class Refusals(unittest.TestCase):
     def test_removed_grants_are_refused(self) -> None:
         self.assert_refused(linear, "issueRelationDelete", {"id": "P1"})
         self.assert_refused(github, "reprioritizeSubIssue", issueId="I1", subIssueId="I2")
+
+    def test_every_github_reference_key_must_be_this_runs(self) -> None:
+        for key in GITHUB_ID_KEYS:
+            self.assert_refused(github, "updateIssue", **{key: "OTHER"})
+
+    def test_every_linear_reference_key_must_be_this_runs(self) -> None:
+        for key in LINEAR_ID_KEYS - {"id"}:
+            self.assert_refused(linear, "issueUpdate", {"id": "L1", "input": {key: "OTHER"}})
+
+    def test_linear_projects_and_relations(self) -> None:
+        self.assertIn(
+            "projectCreate", linear("projectCreate", {"input": {"teamIds": ["T2"], "name": STAMP}})
+        )
+        self.assert_refused(linear, "projectCreate", {"input": {"teamIds": [], "name": STAMP}})
+        self.assert_refused(
+            linear, "projectCreate", {"input": {"teamIds": ["T2", "ENG"], "name": STAMP}}
+        )
+        self.assert_refused(
+            linear, "projectCreate", {"input": {"teamIds": ["T2"], "name": "unstamped"}}
+        )
+        self.assert_refused(
+            linear, "issueRelationUpdate", {"id": "OTHER", "input": {"type": "similar"}}
+        )
+        self.assert_refused(linear, "projectDelete", {"id": "OTHER"})
 
     def test_protected_boards(self) -> None:
         for number in (1, 2, 3):
