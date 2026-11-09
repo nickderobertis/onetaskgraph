@@ -2316,6 +2316,145 @@ def stage_cleanup(run: Run) -> bool:
     return remaining == 0 and not any(bucket["open"] for bucket in inventory.values())
 
 
+def tracked_read(run: Run, issue: dict, field: str, q: str) -> dict:
+    """Which issues, in which repositories, a task-list edge names from this end."""
+    selection = "{field}(first:10){{totalCount nodes{{number repository{{nameWithOwner}}}}}}"
+    data, errors, seq = run.gh_read(
+        'query{{node(id:"{}"){{... on Issue{{{}}}}}}}'.format(
+            issue["id"], selection.format(field=field)
+        ),
+        q,
+    )
+    return {"seq": seq, **((data.get("node") or {}).get(field) or {}), "errors": errs(errors)}
+
+
+def tracked_cross_repository(run: Run) -> dict[str, Any]:
+    """Whether a task-list line naming an issue of another repository is a tracked issue.
+
+    Each body also holds a same-repository control line, so an empty cross-repository answer
+    cannot be GitHub's index simply not having caught up with the write.
+    """
+    near = run.gh_issues("r1", ["tracked-near"], "gap.gh.tracked.create")["tracked-near"]
+    control = run.gh_issues("r1", ["tracked-control"], "gap.gh.tracked.create")["tracked-control"]
+    far = run.gh_issues("r2", ["tracked-far"], "gap.gh.tracked.create")["tracked-far"]
+    url = f"https://github.com/{OWNER}/{REPO2}/issues/{far['number']}"
+    answers: dict[str, Any] = {"control_number": control["number"], "far_number": far["number"]}
+    spellings = {"url": url, "owner_repo_number": f"{OWNER}/{REPO2}#{far['number']}"}
+    for name, target in spellings.items():
+        body = f"- [ ] #{control['number']}\n- [ ] {target}\n"
+        written = gh_set_body(run, near, body, f"gap.gh.tracked.{name}.write")
+        time.sleep(10)
+        answers[name] = {
+            "body": body,
+            "write": written,
+            "near_tracked": tracked_read(run, near, "trackedIssues", f"gap.gh.tracked.{name}.near"),
+            "far_tracked_in": tracked_read(
+                run, far, "trackedInIssues", f"gap.gh.tracked.{name}.far"
+            ),
+            "control_tracked_in": tracked_read(
+                run, control, "trackedInIssues", f"gap.gh.tracked.{name}.control"
+            ),
+        }
+    return answers
+
+
+def relations_cross_project(run: Run) -> dict[str, Any]:
+    """Whether `similar`, `blocks` and `duplicate` each join issues of two Linear projects."""
+    project_a = run.li_project("TES2", "gap-a", "gap.li.project")
+    project_b = run.li_project("TES2", "gap-b", "gap.li.project")
+    fields = f"{LI_RELS} project{{id}} state{{name type}}"
+    answers: dict[str, Any] = {"project_a": project_a, "project_b": project_b}
+    for kind in ("similar", "blocks", "duplicate"):
+        near_slug, far_slug = f"gap-{kind}-near", f"gap-{kind}-far"
+        q = f"gap.li.{kind}.cross-project"
+        near = run.li_issues("TES2", [near_slug], f"{q}.create", projectId=project_a)[near_slug]
+        far = run.li_issues("TES2", [far_slug], f"{q}.create", projectId=project_b)[far_slug]
+        answers[kind] = {
+            "add": li_rel(run, kind, near, far, q),
+            "near": li_node(run, near, f"{q}.read", fields),
+            "far": li_node(run, far, f"{q}.read", fields),
+        }
+    return answers
+
+
+def cleanup_relation_gaps(run: Run) -> bool:
+    """Delete what `relation_gaps` created and read each object back gone.
+
+    Scoped to that stage's ledger entries: `stage_cleanup` would overwrite the first run's
+    cleanup record and send another delete to the issue the manager ruled be closed instead.
+    """
+    run.cleaning = True
+    made = [
+        (key, value)
+        for key, value in run.ledger.items()
+        if value.get("stage") == "relation_gaps" and not value.get("ended")
+    ]
+    answers: dict[str, Any] = {"deleted": [], "verified": [], "errors": []}
+    for key, value in made:
+        match (value["tracker"], value["kind"]):
+            case ("github", "issue"):
+                mut = Mut("a", "deleteIssue", {"input": {"issueId": key}}, "clientMutationId")
+                data, errors, seq = run.gh_mut([mut], "gap.cleanup.gh.issue")
+                time.sleep(ISSUE_PACE_SECONDS)
+            case ("linear", "issue"):
+                mut = Mut("a", "issueDelete", {"id": key, "permanentlyDelete": True}, "success")
+                data, errors, seq = run.li_mut([mut], "gap.cleanup.li.issue")
+            case ("linear", "relation"):
+                continue
+            case _:
+                continue
+        if data.get("a") is not None and not errors:
+            run.record_ended(key, "deleted", f"{mut.root} request {seq}")
+            answers["deleted"].append({"id": key, "kind": value["kind"], "seq": seq})
+        answers["errors"].extend(errs(errors))
+    for key, value in made:
+        if value["tracker"] == "linear" and value["kind"] == "project":
+            mut = Mut("a", "projectDelete", {"id": key}, "success")
+            data, errors, seq = run.li_mut([mut], "gap.cleanup.li.project")
+            if data.get("a") and not errors:
+                run.record_ended(key, "deleted", f"projectDelete request {seq}")
+                answers["deleted"].append({"id": key, "kind": "project", "seq": seq})
+            answers["errors"].extend(errs(errors))
+        elif value["tracker"] == "linear" and value["kind"] == "relation":
+            run.record_ended(key, "deleted", "removed with its issues by the permanent issueDelete")
+    for key, value in made:
+        match (value["tracker"], value["kind"]):
+            case ("github", "issue"):
+                data, errors, seq = run.gh_read(
+                    f'query{{node(id:"{key}"){{id}}}}', "gap.cleanup.verify"
+                )
+                gone = not data.get("node")
+            case ("linear", "issue"):
+                data, errors, seq = run.li_read(
+                    f'query{{issue(id:"{key}"){{id}}}}', "gap.cleanup.verify"
+                )
+                gone = not data.get("issue")
+            case ("linear", "project"):
+                data, errors, seq = run.li_read(
+                    f'query{{project(id:"{key}"){{trashed}}}}', "gap.cleanup.verify"
+                )
+                gone = bool((data.get("project") or {}).get("trashed", True))
+            case _:
+                continue
+        answers["verified"].append({"id": key, "kind": value["kind"], "seq": seq, "gone": gone})
+    run.write_stage("relation_gaps_cleanup", answers)
+    return all(row["gone"] for row in answers["verified"]) and not any(
+        value["kind"] != "relation" and not value.get("ended") for _, value in made
+    )
+
+
+def stage_relation_gaps(run: Run) -> bool:
+    """The two questions spike-relations-3's review left open; cleans up however it ends."""
+    answers: dict[str, Any] = {}
+    try:
+        answers["gh_tracked_cross_repository"] = tracked_cross_repository(run)
+        answers["li_relations_cross_project"] = relations_cross_project(run)
+    finally:
+        run.write_stage("relation_gaps", answers)
+        clean = cleanup_relation_gaps(run)
+    return clean
+
+
 STAGES = {
     "introspect": stage_introspect,
     "preflight": stage_preflight,
@@ -2333,6 +2472,7 @@ STAGES = {
     "li_duplicate_cross": stage_li_duplicate_cross,
     "capture": stage_capture,
     "gh_fallback_page": stage_gh_fallback_page,
+    "relation_gaps": stage_relation_gaps,
     "cleanup": stage_cleanup,
 }
 

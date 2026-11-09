@@ -1,0 +1,320 @@
+{
+ "gh_tracked_cross_repository": {
+  "control_number": 6289,
+  "far_number": 7,
+  "url": {
+   "body": "- [ ] #6289\n- [ ] https://github.com/nickderobertis/onetaskgraph-live-scratch-2/issues/7\n",
+   "write": {
+    "seq": 743,
+    "ok": true,
+    "errors": []
+   },
+   "near_tracked": {
+    "seq": 744,
+    "totalCount": 2,
+    "nodes": [
+     {
+      "number": 7,
+      "repository": {
+       "nameWithOwner": "nickderobertis/onetaskgraph-live-scratch-2"
+      }
+     },
+     {
+      "number": 6289,
+      "repository": {
+       "nameWithOwner": "nickderobertis/onetaskgraph-live-scratch"
+      }
+     }
+    ],
+    "errors": []
+   },
+   "far_tracked_in": {
+    "seq": 745,
+    "totalCount": 1,
+    "nodes": [
+     {
+      "number": 6288,
+      "repository": {
+       "nameWithOwner": "nickderobertis/onetaskgraph-live-scratch"
+      }
+     }
+    ],
+    "errors": []
+   },
+   "control_tracked_in": {
+    "seq": 746,
+    "totalCount": 1,
+    "nodes": [
+     {
+      "number": 6288,
+      "repository": {
+       "nameWithOwner": "nickderobertis/onetaskgraph-live-scratch"
+      }
+     }
+    ],
+    "errors": []
+   }
+  },
+  "owner_repo_number": {
+   "body": "- [ ] #6289\n- [ ] nickderobertis/onetaskgraph-live-scratch-2#7\n",
+   "write": {
+    "seq": 747,
+    "ok": true,
+    "errors": []
+   },
+   "near_tracked": {
+    "seq": 748,
+    "totalCount": 2,
+    "nodes": [
+     {
+      "number": 7,
+      "repository": {
+       "nameWithOwner": "nickderobertis/onetaskgraph-live-scratch-2"
+      }
+     },
+     {
+      "number": 6289,
+      "repository": {
+       "nameWithOwner": "nickderobertis/onetaskgraph-live-scratch"
+      }
+     }
+    ],
+    "errors": []
+   },
+   "far_tracked_in": {
+    "seq": 749,
+    "totalCount": 1,
+    "nodes": [
+     {
+      "number": 6288,
+      "repository": {
+       "nameWithOwner": "nickderobertis/onetaskgraph-live-scratch"
+      }
+     }
+    ],
+    "errors": []
+   },
+   "control_tracked_in": {
+    "seq": 750,
+    "totalCount": 1,
+    "nodes": [
+     {
+      "number": 6288,
+      "repository": {
+       "nameWithOwner": "nickderobertis/onetaskgraph-live-scratch"
+      }
+     }
+    ],
+    "errors": []
+   }
+  }
+ },
+ "li_relations_cross_project": {
+  "project_a": "57cd99f3-f9d0-436f-8b43-01ef15ff0c84",
+  "project_b": "f3a26d70-9112-4ede-a409-6d93b14271c6",
+  "similar": {
+   "add": {
+    "seq": 755,
+    "ok": true,
+    "id": "6102e7a9-b5d5-460a-beed-4c0050433828",
+    "errors": []
+   },
+   "near": {
+    "seq": 756,
+    "identifier": "TES2-2162",
+    "parent": null,
+    "children": {
+     "nodes": []
+    },
+    "relations": {
+     "nodes": [
+      {
+       "id": "6102e7a9-b5d5-460a-beed-4c0050433828",
+       "type": "similar",
+       "relatedIssue": {
+        "identifier": "TES2-2163"
+       }
+      }
+     ]
+    },
+    "inverseRelations": {
+     "nodes": []
+    },
+    "project": {
+     "id": "57cd99f3-f9d0-436f-8b43-01ef15ff0c84"
+    },
+    "state": {
+     "name": "Backlog",
+     "type": "backlog"
+    },
+    "errors": []
+   },
+   "far": {
+    "seq": 757,
+    "identifier": "TES2-2163",
+    "parent": null,
+    "children": {
+     "nodes": []
+    },
+    "relations": {
+     "nodes": []
+    },
+    "inverseRelations": {
+     "nodes": [
+      {
+       "id": "6102e7a9-b5d5-460a-beed-4c0050433828",
+       "type": "similar",
+       "issue": {
+        "identifier": "TES2-2162"
+       }
+      }
+     ]
+    },
+    "project": {
+     "id": "f3a26d70-9112-4ede-a409-6d93b14271c6"
+    },
+    "state": {
+     "name": "Backlog",
+     "type": "backlog"
+    },
+    "errors": []
+   }
+  },
+  "blocks": {
+   "add": {
+    "seq": 760,
+    "ok": true,
+    "id": "5175d44c-566d-483a-8285-ad3641c00273",
+    "errors": []
+   },
+   "near": {
+    "seq": 761,
+    "identifier": "TES2-2164",
+    "parent": null,
+    "children": {
+     "nodes": []
+    },
+    "relations": {
+     "nodes": [
+      {
+       "id": "5175d44c-566d-483a-8285-ad3641c00273",
+       "type": "blocks",
+       "relatedIssue": {
+        "identifier": "TES2-2165"
+       }
+      }
+     ]
+    },
+    "inverseRelations": {
+     "nodes": []
+    },
+    "project": {
+     "id": "57cd99f3-f9d0-436f-8b43-01ef15ff0c84"
+    },
+    "state": {
+     "name": "Backlog",
+     "type": "backlog"
+    },
+    "errors": []
+   },
+   "far": {
+    "seq": 762,
+    "identifier": "TES2-2165",
+    "parent": null,
+    "children": {
+     "nodes": []
+    },
+    "relations": {
+     "nodes": []
+    },
+    "inverseRelations": {
+     "nodes": [
+      {
+       "id": "5175d44c-566d-483a-8285-ad3641c00273",
+       "type": "blocks",
+       "issue": {
+        "identifier": "TES2-2164"
+       }
+      }
+     ]
+    },
+    "project": {
+     "id": "f3a26d70-9112-4ede-a409-6d93b14271c6"
+    },
+    "state": {
+     "name": "Backlog",
+     "type": "backlog"
+    },
+    "errors": []
+   }
+  },
+  "duplicate": {
+   "add": {
+    "seq": 765,
+    "ok": true,
+    "id": "f7f5111c-39b3-4358-ad1e-20bf275e0e70",
+    "errors": []
+   },
+   "near": {
+    "seq": 766,
+    "identifier": "TES2-2166",
+    "parent": null,
+    "children": {
+     "nodes": []
+    },
+    "relations": {
+     "nodes": [
+      {
+       "id": "f7f5111c-39b3-4358-ad1e-20bf275e0e70",
+       "type": "duplicate",
+       "relatedIssue": {
+        "identifier": "TES2-2167"
+       }
+      }
+     ]
+    },
+    "inverseRelations": {
+     "nodes": []
+    },
+    "project": {
+     "id": "57cd99f3-f9d0-436f-8b43-01ef15ff0c84"
+    },
+    "state": {
+     "name": "Duplicate",
+     "type": "duplicate"
+    },
+    "errors": []
+   },
+   "far": {
+    "seq": 767,
+    "identifier": "TES2-2167",
+    "parent": null,
+    "children": {
+     "nodes": []
+    },
+    "relations": {
+     "nodes": []
+    },
+    "inverseRelations": {
+     "nodes": [
+      {
+       "id": "f7f5111c-39b3-4358-ad1e-20bf275e0e70",
+       "type": "duplicate",
+       "issue": {
+        "identifier": "TES2-2166"
+       }
+      }
+     ]
+    },
+    "project": {
+     "id": "f3a26d70-9112-4ede-a409-6d93b14271c6"
+    },
+    "state": {
+     "name": "Backlog",
+     "type": "backlog"
+    },
+    "errors": []
+   }
+  }
+ }
+}

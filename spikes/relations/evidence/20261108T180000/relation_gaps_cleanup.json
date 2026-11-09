@@ -1,0 +1,128 @@
+{
+ "deleted": [
+  {
+   "id": "I_kwDOU_sxG88AAAABdj0c6A",
+   "kind": "issue",
+   "seq": 768
+  },
+  {
+   "id": "I_kwDOU_sxG88AAAABdj0fiw",
+   "kind": "issue",
+   "seq": 769
+  },
+  {
+   "id": "I_kwDOVnfM9s8AAAABdj0iDg",
+   "kind": "issue",
+   "seq": 770
+  },
+  {
+   "id": "b4cff006-2afc-4a23-b06d-36c7a3dc369a",
+   "kind": "issue",
+   "seq": 771
+  },
+  {
+   "id": "541626ad-4ecb-41c6-a4be-9c871aaf864f",
+   "kind": "issue",
+   "seq": 772
+  },
+  {
+   "id": "56f5928e-baae-4b7b-9ec0-51a4c14f7194",
+   "kind": "issue",
+   "seq": 773
+  },
+  {
+   "id": "d046fedf-133a-464b-b290-7819b86af85c",
+   "kind": "issue",
+   "seq": 774
+  },
+  {
+   "id": "42a043a5-91f2-44f4-ac60-3c6f31e16d32",
+   "kind": "issue",
+   "seq": 775
+  },
+  {
+   "id": "2b7616f8-bd2d-4c99-b3e4-8fd5788f493e",
+   "kind": "issue",
+   "seq": 776
+  },
+  {
+   "id": "57cd99f3-f9d0-436f-8b43-01ef15ff0c84",
+   "kind": "project",
+   "seq": 777
+  },
+  {
+   "id": "f3a26d70-9112-4ede-a409-6d93b14271c6",
+   "kind": "project",
+   "seq": 778
+  }
+ ],
+ "verified": [
+  {
+   "id": "I_kwDOU_sxG88AAAABdj0c6A",
+   "kind": "issue",
+   "seq": 779,
+   "gone": true
+  },
+  {
+   "id": "I_kwDOU_sxG88AAAABdj0fiw",
+   "kind": "issue",
+   "seq": 780,
+   "gone": true
+  },
+  {
+   "id": "I_kwDOVnfM9s8AAAABdj0iDg",
+   "kind": "issue",
+   "seq": 781,
+   "gone": true
+  },
+  {
+   "id": "57cd99f3-f9d0-436f-8b43-01ef15ff0c84",
+   "kind": "project",
+   "seq": 782,
+   "gone": true
+  },
+  {
+   "id": "f3a26d70-9112-4ede-a409-6d93b14271c6",
+   "kind": "project",
+   "seq": 783,
+   "gone": true
+  },
+  {
+   "id": "b4cff006-2afc-4a23-b06d-36c7a3dc369a",
+   "kind": "issue",
+   "seq": 784,
+   "gone": true
+  },
+  {
+   "id": "541626ad-4ecb-41c6-a4be-9c871aaf864f",
+   "kind": "issue",
+   "seq": 785,
+   "gone": true
+  },
+  {
+   "id": "56f5928e-baae-4b7b-9ec0-51a4c14f7194",
+   "kind": "issue",
+   "seq": 786,
+   "gone": true
+  },
+  {
+   "id": "d046fedf-133a-464b-b290-7819b86af85c",
+   "kind": "issue",
+   "seq": 787,
+   "gone": true
+  },
+  {
+   "id": "42a043a5-91f2-44f4-ac60-3c6f31e16d32",
+   "kind": "issue",
+   "seq": 788,
+   "gone": true
+  },
+  {
+   "id": "2b7616f8-bd2d-4c99-b3e4-8fd5788f493e",
+   "kind": "issue",
+   "seq": 789,
+   "gone": true
+  }
+ ],
+ "errors": []
+}

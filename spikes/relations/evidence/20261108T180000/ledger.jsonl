@@ -930,3 +930,31 @@
 {"event": "deleted", "id": "I_kwDOU_sxG88AAAABdiLojA", "how": "already gone: the 502 batch landed (read back at 708)"}
 {"event": "open", "id": "I_kwDOU_sxG88AAAABdiLvQw", "how": "deleteIssue accepted (requests 663, 705 and 721) but #6094 still reads OPEN"}
 {"event": "closed-not-deleted", "id": "I_kwDOU_sxG88AAAABdiLvQw", "how": "deleteIssue accepted at requests 663, 705, 721, issue still reads OPEN; closed NOT_PLANNED per the manager, request 731"}
+{"event": "created", "id": "I_kwDOU_sxG88AAAABdj0c6A", "kind": "issue", "tracker": "github", "repo": "r1", "number": 6288, "stage": "relation_gaps"}
+{"event": "created", "id": "I_kwDOU_sxG88AAAABdj0fiw", "kind": "issue", "tracker": "github", "repo": "r1", "number": 6289, "stage": "relation_gaps"}
+{"event": "created", "id": "I_kwDOVnfM9s8AAAABdj0iDg", "kind": "issue", "tracker": "github", "repo": "r2", "number": 7, "stage": "relation_gaps"}
+{"event": "created", "id": "57cd99f3-f9d0-436f-8b43-01ef15ff0c84", "kind": "project", "tracker": "linear", "team": "TES2", "stage": "relation_gaps"}
+{"event": "created", "id": "f3a26d70-9112-4ede-a409-6d93b14271c6", "kind": "project", "tracker": "linear", "team": "TES2", "stage": "relation_gaps"}
+{"event": "created", "id": "b4cff006-2afc-4a23-b06d-36c7a3dc369a", "kind": "issue", "tracker": "linear", "team": "TES2", "identifier": "TES2-2162", "stage": "relation_gaps"}
+{"event": "created", "id": "541626ad-4ecb-41c6-a4be-9c871aaf864f", "kind": "issue", "tracker": "linear", "team": "TES2", "identifier": "TES2-2163", "stage": "relation_gaps"}
+{"event": "created", "id": "6102e7a9-b5d5-460a-beed-4c0050433828", "kind": "relation", "tracker": "linear", "stage": "relation_gaps"}
+{"event": "created", "id": "56f5928e-baae-4b7b-9ec0-51a4c14f7194", "kind": "issue", "tracker": "linear", "team": "TES2", "identifier": "TES2-2164", "stage": "relation_gaps"}
+{"event": "created", "id": "d046fedf-133a-464b-b290-7819b86af85c", "kind": "issue", "tracker": "linear", "team": "TES2", "identifier": "TES2-2165", "stage": "relation_gaps"}
+{"event": "created", "id": "5175d44c-566d-483a-8285-ad3641c00273", "kind": "relation", "tracker": "linear", "stage": "relation_gaps"}
+{"event": "created", "id": "42a043a5-91f2-44f4-ac60-3c6f31e16d32", "kind": "issue", "tracker": "linear", "team": "TES2", "identifier": "TES2-2166", "stage": "relation_gaps"}
+{"event": "created", "id": "2b7616f8-bd2d-4c99-b3e4-8fd5788f493e", "kind": "issue", "tracker": "linear", "team": "TES2", "identifier": "TES2-2167", "stage": "relation_gaps"}
+{"event": "created", "id": "f7f5111c-39b3-4358-ad1e-20bf275e0e70", "kind": "relation", "tracker": "linear", "stage": "relation_gaps"}
+{"event": "deleted", "id": "I_kwDOU_sxG88AAAABdj0c6A", "how": "deleteIssue request 768"}
+{"event": "deleted", "id": "I_kwDOU_sxG88AAAABdj0fiw", "how": "deleteIssue request 769"}
+{"event": "deleted", "id": "I_kwDOVnfM9s8AAAABdj0iDg", "how": "deleteIssue request 770"}
+{"event": "deleted", "id": "b4cff006-2afc-4a23-b06d-36c7a3dc369a", "how": "issueDelete request 771"}
+{"event": "deleted", "id": "541626ad-4ecb-41c6-a4be-9c871aaf864f", "how": "issueDelete request 772"}
+{"event": "deleted", "id": "56f5928e-baae-4b7b-9ec0-51a4c14f7194", "how": "issueDelete request 773"}
+{"event": "deleted", "id": "d046fedf-133a-464b-b290-7819b86af85c", "how": "issueDelete request 774"}
+{"event": "deleted", "id": "42a043a5-91f2-44f4-ac60-3c6f31e16d32", "how": "issueDelete request 775"}
+{"event": "deleted", "id": "2b7616f8-bd2d-4c99-b3e4-8fd5788f493e", "how": "issueDelete request 776"}
+{"event": "deleted", "id": "57cd99f3-f9d0-436f-8b43-01ef15ff0c84", "how": "projectDelete request 777"}
+{"event": "deleted", "id": "f3a26d70-9112-4ede-a409-6d93b14271c6", "how": "projectDelete request 778"}
+{"event": "deleted", "id": "6102e7a9-b5d5-460a-beed-4c0050433828", "how": "removed with its issues by the permanent issueDelete"}
+{"event": "deleted", "id": "5175d44c-566d-483a-8285-ad3641c00273", "how": "removed with its issues by the permanent issueDelete"}
+{"event": "deleted", "id": "f7f5111c-39b3-4358-ad1e-20bf275e0e70", "how": "removed with its issues by the permanent issueDelete"}
