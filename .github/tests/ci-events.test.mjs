@@ -27,7 +27,7 @@ const ORDINARY_PUSH = "e2d3bf08e0ced82120f38a708dc2b7a92d26ce7f";
 // test noticing. Moving one means re-deciding its schedule, then this digest.
 const UNCHANGED = {
   "release-plz.yml": "009bb4f705c0d9ce349f887d92b47de09059897ccbce07f166f1021fcec36183",
-  "linear-documents.yml": "4c00908a0f0e78dd5927e17d989ef54440eec1f0237317755c4c241a3894a1ab",
+  "linear-documents.yml": "7ad57095b3b1280faea54349ceb88643a61d94280dba03ba36117bad7a030be5",
   "live-janitor.yml": "12f972eff5e7402be7c9d87de5d5a01191ef96499605d01bc7f4f957001feebb",
   "rust-cache-warm.yml": "2592cb8dba1e30f4741304b3d59e711cf895bec22073233b2683cdbba0bb412c",
 };

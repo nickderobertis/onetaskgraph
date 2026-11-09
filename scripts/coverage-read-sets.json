@@ -168,6 +168,20 @@
       "sdks/typescript/src/**/*",
       "!sdks/python/src/onetaskgraph_sdk/__init__.py",
       "!sdks/typescript/src/index.ts"
+    ],
+    "coverage-spawned-binary": [
+      "crates/onetaskgraph/src/**/*",
+      "crates/onetaskgraph-core/src/**/*",
+      "crates/onetaskgraph-plugin-api/src/**/*",
+      "crates/onetaskgraph-github-projects/src/**/*",
+      "crates/onetaskgraph-linear/src/**/*",
+      "crates/onetaskgraph-local-md/src/**/*",
+      "crates/onetaskgraph-in-memory/src/**/*",
+      "crates/onetaskgraph-status-options/src/**/*",
+      "crates/onetaskgraph-status-options-e2e/**/*",
+      "crates/onetaskgraph-e2e-support/**/*",
+      "crates/onetaskgraph/project.json",
+      "crates/onetaskgraph-status-options-e2e/project.json"
     ]
   }
 }
