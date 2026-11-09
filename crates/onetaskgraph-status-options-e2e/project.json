@@ -76,21 +76,27 @@
     },
     "coverage": {
       "executor": "nx:run-commands",
-      "dependsOn": ["workspace:coverage-clear", "onetaskgraph:coverage"],
+      "dependsOn": ["onetaskgraph:coverage-build"],
       "options": {
         "command": "bash scripts/rust-coverage.sh onetaskgraph-status-options-e2e"
       },
-      "outputs": ["{workspaceRoot}/target/llvm-cov-target/*.profraw"],
-      "cache": false,
-      "//": "Uncached: cargo-llvm-cov names every raw profile after the workspace, not the crate, so a cache hit would restore a sibling's stale profiles beside its own. It depends on onetaskgraph:coverage because that run is what builds the instrumented binary into target/llvm-cov-target, where these journeys find it, so its lines are attributed to the union workspace:coverage holds to the floor; this run never builds the onetaskgraph package, so it cannot relink that file while it runs.",
+      "outputs": ["{workspaceRoot}/target/coverage-units/onetaskgraph-status-options-e2e.lcov"],
+      "cache": true,
+      "//": "A coverage unit: its LCOV report is cached, and workspace:coverage merges every unit's and holds the floor. scripts/check-coverage-enforced.sh reconciles the unit with that merge, and .github/nx-policy/tests/coverage-units.test.mjs holds these inputs to every file the run reads. It reaches the instrumented binary through onetaskgraph:coverage-build, never through onetaskgraph:coverage's run, so the journeys find it when that unit replays.",
       "inputs": [
-        "default",
-        "^default",
+        "versionFreeNpm",
+        "{projectRoot}/**/*",
+        "!{projectRoot}/Cargo.toml",
+        "!{projectRoot}/CHANGELOG.md",
+        "sharedGlobals",
+        "cargoInputs",
+        "^coverageDependency",
+        "coverageUnit",
+        "versionFreePython",
+        "versionFreeFiles",
+        "{workspaceRoot}/.tool-versions",
         {
-          "runtime": "node -p process.platform"
-        },
-        {
-          "runtime": "node scripts/nx-version-free-inputs.mjs --ecosystem cargo --keep-version"
+          "runtime": "node scripts/coverage-read-digest.mjs --unit onetaskgraph-status-options-e2e"
         }
       ]
     }

@@ -862,7 +862,10 @@ assert_npm_auth_refuses 'invalid registry port, which must be between 1 and 6553
 # The bound is inclusive at the top, so the highest usable port is still a registry.
 ONETASKGRAPH_NPM_CONFIG_DIR="$tmp/npm-config-high-port" "$root/scripts/npm-registry-auth.sh" 'http://127.0.0.1:65535' >/dev/null
 grep -Fq '//127.0.0.1:65535/:_authToken=${NODE_AUTH_TOKEN}' "$tmp/npm-config-high-port/.npmrc" || { cat "$tmp/npm-config-high-port/.npmrc" >&2; echo "the npm configuration did not key the token to the highest usable port; next: inspect scripts/npm-registry-auth.sh" >&2; exit 1; }
-if ONETASKGRAPH_NPM_CONFIG_DIR="$tmp/npm-config-unreportable" "$root/scripts/npm-registry-auth.sh" "$npm_registry" >&- 2>"$tmp/error"; then echo "the npm configuration reported a path over a standard output it could not write; next: inspect scripts/npm-registry-auth.sh" >&2; exit 1; fi
+# Through bash itself rather than the shebang: uutils' env, which Ubuntu 26.04 ships as
+# /usr/bin/env, is a Rust program, and Rust reopens a closed standard output on /dev/null before
+# it runs bash, so the closed stream this case is about would never reach the script.
+if ONETASKGRAPH_NPM_CONFIG_DIR="$tmp/npm-config-unreportable" bash "$root/scripts/npm-registry-auth.sh" "$npm_registry" >&- 2>"$tmp/error"; then echo "the npm configuration reported a path over a standard output it could not write; next: inspect scripts/npm-registry-auth.sh" >&2; exit 1; fi
 grep -Fq 'could not report the npm configuration path' "$tmp/error" || { cat "$tmp/error" >&2; echo "an unreportable npm configuration path omitted its reason; next: inspect its diagnostics" >&2; exit 1; }
 grep -q '^next: ' "$tmp/error" || { cat "$tmp/error" >&2; echo "an unreportable npm configuration path omitted a next action; next: inspect its diagnostics" >&2; exit 1; }
 assert_npm_auth_stops() {

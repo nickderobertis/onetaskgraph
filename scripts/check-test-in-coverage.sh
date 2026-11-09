@@ -42,9 +42,10 @@ def commands(project, target):
 MEASURED = ["--no-report", "nextest", "--package", '"$CRATE"', "--all-features", "--locked"]
 coverage_script = Path("scripts/rust-coverage.sh").read_text(encoding="utf-8")
 joined = re.sub(r"\\\n\s*", " ", coverage_script)
-runs = [found.split() for found in re.findall(r"cargo llvm-cov (.*?) 2>&1", joined)]
-# The build-only run (`--build-only`) selects no test, so it measures nothing a tag could claim.
-runs = [words for words in runs if "nextest" in words and "'none()'" not in words]
+runs = [
+    ["--no-report", *found.split()]
+    for found in re.findall(r'coverage-unit\.sh "\$CRATE" -- (.*?) 2>&1', joined)
+]
 measured = runs[0] if len(runs) == 1 else None
 if measured != MEASURED:
     problems.append(

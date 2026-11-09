@@ -43,12 +43,36 @@
       "{workspaceRoot}/rust-toolchain.toml",
       "{workspaceRoot}/.cargo/config.toml",
       "{projectRoot}/version-inputs.mjs"
+    ],
+    "coverageConfig": [
+      "{workspaceRoot}/.tool-versions",
+      "{workspaceRoot}/nx.json",
+      "{workspaceRoot}/**/project.json",
+      "{workspaceRoot}/scripts/coverage-unit.sh",
+      "{workspaceRoot}/scripts/coverage-merge.mjs",
+      "{workspaceRoot}/scripts/rust-coverage.sh",
+      "{workspaceRoot}/scripts/check-coverage-enforced.sh",
+      "{workspaceRoot}/scripts/nx-cargo-closure.mjs",
+      "{workspaceRoot}/scripts/nx-version-free-inputs.mjs",
+      "{workspaceRoot}/scripts/coverage-read-digest.mjs",
+      "{workspaceRoot}/scripts/coverage-read-sets.json",
+      "{projectRoot}/tests/fixtures/coverage-harness.mjs",
+      "{projectRoot}/tests/fixtures/nx-workspace-contracts.mjs",
+      "{workspaceRoot}/.github/fixture-environment.mjs",
+      "{workspaceRoot}/.github/test-setup.mjs",
+      "versionFreeNpm",
+      "versionFreeCargo"
     ]
   },
   "targets": {
     "bootstrap": {
       "executor": "nx:noop",
-      "dependsOn": ["github-workflows:bootstrap"]
+      "dependsOn": ["github-workflows:bootstrap"],
+      "inputs": [
+        {
+          "runtime": "node -p process.platform"
+        }
+      ]
     },
     "check": {
       "executor": "nx:noop",
@@ -90,7 +114,13 @@
     "test": {
       "executor": "nx:noop",
       "cache": false,
-      "dependsOn": ["nx-inputs", "nx-hashes"]
+      "dependsOn": [
+        "nx-inputs",
+        "nx-hashes",
+        "coverage-units",
+        "coverage-read-set",
+        "coverage-spawned-binary"
+      ]
     },
     "nx-inputs": {
       "executor": "nx:run-commands",
@@ -128,6 +158,78 @@
         "command": "bun run biome format --write .github/nx-policy"
       },
       "cache": false
+    },
+    "coverage-units": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["bootstrap"],
+      "options": {
+        "command": "node --test .github/nx-policy/tests/coverage-units.test.mjs"
+      },
+      "cache": true,
+      "inputs": [
+        "versionFreeNpm",
+        "{workspaceRoot}/.tool-versions",
+        "coverageConfig",
+        "{projectRoot}/tests/coverage-units.test.mjs",
+        {
+          "runtime": "node -p process.platform"
+        },
+        "{projectRoot}/tests/fixtures/coverage-read-set.json"
+      ],
+      "outputs": []
+    },
+    "coverage-read-set": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["bootstrap"],
+      "options": {
+        "command": "node --test .github/nx-policy/tests/coverage-read-set.test.mjs"
+      },
+      "cache": true,
+      "inputs": [
+        "versionFreeNpm",
+        "{workspaceRoot}/.tool-versions",
+        "coverageConfig",
+        "{projectRoot}/tests/coverage-read-set.test.mjs",
+        {
+          "runtime": "node -p process.platform"
+        },
+        {
+          "runtime": "node scripts/coverage-read-digest.mjs --rust"
+        },
+        "{projectRoot}/tests/fixtures/coverage-read-set.json"
+      ],
+      "outputs": []
+    },
+    "coverage-spawned-binary": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["bootstrap"],
+      "options": {
+        "command": "node --test .github/nx-policy/tests/coverage-spawned-binary.test.mjs"
+      },
+      "cache": true,
+      "inputs": [
+        "versionFreeNpm",
+        "{workspaceRoot}/.tool-versions",
+        "{projectRoot}/tests/coverage-spawned-binary.test.mjs",
+        {
+          "runtime": "node -p process.platform"
+        },
+        "{workspaceRoot}/nx.json",
+        "{workspaceRoot}/scripts/coverage-unit.sh",
+        "{workspaceRoot}/scripts/coverage-merge.mjs",
+        "{workspaceRoot}/scripts/rust-coverage.sh",
+        "{workspaceRoot}/scripts/coverage-read-digest.mjs",
+        "{workspaceRoot}/scripts/coverage-read-sets.json",
+        "{workspaceRoot}/workspace/project.json",
+        "{projectRoot}/tests/fixtures/coverage-harness.mjs",
+        "{workspaceRoot}/.github/fixture-environment.mjs",
+        "{workspaceRoot}/.github/test-setup.mjs",
+        "versionFreeCargo",
+        {
+          "runtime": "node scripts/coverage-read-digest.mjs --unit coverage-spawned-binary"
+        }
+      ],
+      "outputs": []
     }
   },
   "//": "Workspace-wide Nx input contracts have their own project so project-definition edits select these checks without selecting the CD or sidecar journeys."

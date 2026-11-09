@@ -344,12 +344,12 @@ if not reaches_build(BINARY_PROJECT, "test"):
 # listed: a crate whose project is tagged `layer:e2e` drives the binary, through the runner in
 # onetaskgraph-e2e-support, which finds the file beside its own test executable. Reconciled
 # both ways — a crate linking that runner is a suite, and a suite links it — then each suite's
-# test is held to the build and its coverage to the instrumented build onetaskgraph:coverage
+# test is held to the build and its coverage to the instrumented build onetaskgraph:coverage-build
 # makes in cargo-llvm-cov's directory, which is where its runner looks under instrumentation.
 # Neither builds the package itself: the general rule below refuses that for every target.
 E2E_TAG = "layer:e2e"
 E2E_RUNNER = "onetaskgraph-e2e-support"
-BINARY_COVERAGE = (BINARY_PROJECT, "coverage")
+BINARY_COVERAGE = (BINARY_PROJECT, "coverage-build")
 RUNNER_LINE = re.compile(rf"^{re.escape(E2E_RUNNER)}\s*(\.workspace\s*=|=)", re.M)
 
 
@@ -402,7 +402,7 @@ for path, project in sorted(projects_by_path.items()):
     if measured and "coverage" in targets_by_path.get(path, {}) and not reaches(name, "coverage", BINARY_COVERAGE):
         problems.append(
             f"{display}: coverage spawns the instrumented binary in target/llvm-cov-target, "
-            "which onetaskgraph:coverage builds, but does not depend on it; add that "
+            "which onetaskgraph:coverage-build builds, but does not depend on it; add that "
             "dependency, or its runner finds no binary there and none of its lines are "
             "attributed"
         )

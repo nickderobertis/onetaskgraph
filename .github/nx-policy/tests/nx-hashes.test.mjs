@@ -110,6 +110,8 @@ function hashes(dir, ids, additions = {}) {
   return result;
 }
 const versionReaders = new Set([
+  "onetaskgraph-e2e:coverage",
+  "onetaskgraph-linear-e2e:coverage",
   "onetaskgraph-e2e:test",
   "sdk-python:test",
   "sdk-python:coverage",
@@ -233,6 +235,8 @@ test("Nx's own hash file details retain every original cached target's file inpu
   );
   for (const { ref, tasks } of baselines)
     for (const [id, task] of Object.entries(tasks)) {
+      // Each unit clears only its own outputs now, so this target went with the shared directory.
+      if (id === "workspace:coverage-clear") continue;
       assert.ok(current[id], `${id}: original task still runs`);
       const details = current[id];
       if (/^(onetaskgraph[^:]*|sdk-[^:]+):(test|test-uncovered|coverage)$/.test(id))

@@ -336,37 +336,38 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   destination pre-populated as the copy would leave it and an assertion that nothing
   changed.** That proves what a copy *would* write; it does not prove one landed, and the
   difference is the whole of what the journey is for.
-- **Coverage: 92% lines over the union of every measured crate's run, enforced once, and
-  that reverses an earlier decision.** By the user's decision of 2026-10-30 the live crates'
-  own suites (`onetaskgraph-github-projects` and `onetaskgraph-linear`, tagged
-  `coverage:uninstrumented`) run every case uninstrumented in `test` and are not part of that
-  union, and the floor over the rest is 92%, not 95%. Their `coverage` target measures nothing:
-  the Linear plugin's is a no-op, and the GitHub Projects plugin's only builds instrumented
-  the two test binaries its e2e suite's measured entry-point pairs run, `plugin` and `live`
-  (`rust-coverage.sh --build-only … --test plugin --test live`) — the rest built instrumented
-  were CPU nothing ran. `workspace:coverage` does not depend on either, and
-  `scripts/check-coverage-enforced.sh` holds tag, target and aggregate to one another. Measured
-  on `54327de7`, the union was 95.75% of lines with every suite instrumented, and is 92.69%
-  without the live crates' suites. Each crate's `coverage` target runs its own tests
-  instrumented and keeps its raw profiles (`cargo llvm-cov --no-report nextest -p <crate>`,
-  the one shape every Rust repository of this host measures with) in cargo-llvm-cov's one
-  `target/llvm-cov-target`; the `workspace` project's `coverage` target depends on every
-  one of those runs and enforces the floor over `cargo llvm-cov report`. Each SDK still
-  measures itself. The floor was per crate, each measuring only its own files in a target
-  directory of its own — because a union lets a weak crate hide behind a strong one, and
-  because a workspace-wide pass runs every crate's tests on every change. What ended that
-  is the build configuration `.cargo/config.toml` declares: **every cargo invocation in a
-  clone builds into that clone's one `target`**, and a plain `cargo llvm-cov` clears every
-  raw profile in the directory before it starts, so two crates measured in parallel in one
-  directory deleted each other's coverage — `--no-report`, which clears nothing, is what
-  makes one directory safe, and one directory means one report. The costs are stated rather
-  than discovered: the union is a weaker bar than nine floors, and because `workspace`
-  depends on every project, **an affected change now runs every crate's instrumented tests
-  rather than its own crate's** — the `test` phase still selects by the graph, and the
-  credentials are cleared for coverage, so the live sessions do not multiply with it. `scripts/check-coverage-enforced.sh` holds the wiring: the floor,
-  the `--no-report`, the `--fail-under-lines` on the report, and the aggregate's dependency
-  list reconciled against the crates in the tree both ways, so a crate cannot fall out of
-  the union in silence. The *measurement* is skipped on Windows with a printed notice
+- **Coverage: 92.88% lines on the LCOV basis, over every measured crate's cached report, and
+  92% for each SDK.** Each crate's `coverage` target is a coverage unit: its tests under
+  instrumentation, reduced by `scripts/coverage-unit.sh` (a copy of create-repo's, with
+  `scripts/coverage-merge.mjs`; edit only the source) to `target/coverage-units/<crate>.lcov`,
+  which Nx caches, so a unit whose inputs did not change replays. `workspace:coverage` depends
+  on every unit and holds their merge to `MIN_LINES` in `scripts/rust-coverage.sh`. The floor
+  is the user's 92 of 2026-10-30 over `cargo llvm-cov report`, plus the 0.8775 points by
+  which LCOV reads higher on the same run, rounded up: no commit that fails the old floor at
+  that measurement passes this one. By that same decision the live crates' own suites
+  (`onetaskgraph-github-projects` and `onetaskgraph-linear`, tagged `coverage:uninstrumented`)
+  run every case uninstrumented in `test` and are outside the merge: the Linear plugin's
+  `coverage` target is a no-op, and the GitHub Projects plugin's only builds instrumented the
+  two test binaries its e2e suite's measured entry-point pairs run (`plugin` and `live`), and
+  is uncached like `onetaskgraph:coverage-build`, which every e2e unit depends on, so the
+  journeys find the instrumented binary when `onetaskgraph:coverage` replays. Each SDK measures
+  itself. **A key that misses something the run reads lets a stale result pass the floor**, so
+  a unit's inputs cover its own crate, its dependencies' sources (`^coverageDependency`; a
+  dependency's `tests/` reach no other run, and those that do are named), version-free
+  manifests, `Cargo.lock`, the toolchain and tool pins, each coverage tool's reported version
+  (`coverageUnit` in `nx.json`), `ONETASKGRAPH_TESTS_UNDER_COVERAGE`, the platform, and, for an
+  e2e unit, every crate its spawned binary links and every workspace file its journeys read.
+  Reads outside a unit's own crate are listed in `scripts/coverage-read-sets.json` and hashed
+  through a runtime input: a `{workspaceRoot}` file input marks its project affected, which
+  would break selection rule 3.
+  `.github/nx-policy/tests/coverage-units.test.mjs` proves all of that against real Nx. A
+  package version stays out of a unit's key unless its result depends on the value: it is kept
+  only by `onetaskgraph-e2e` (`surface.rs`) and `onetaskgraph-linear-e2e` (`health.rs`), which
+  compare a crate's declared version to the binary's. The units that write `budgets` telemetry
+  (`onetaskgraph-linear-e2e`, `onetaskgraph-github-projects-e2e`, `onetaskgraph-live-janitor`)
+  declare it as an output too, so a replay restores what `budgets` reads. Nothing in the
+  merge's directory is read except the units' own reports, so a report left behind refuses
+  the merge rather than reaching the total. The measurement is skipped on Windows with a printed notice
   (instrumentation there does not attribute subprocess coverage); the functional lanes
   still gate that platform. **The pull-request jobs measure on Linux alone**, by the user's
   decision of 2026-10-17: `test-macos` and `test-windows` run every suite once,
@@ -390,7 +391,7 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   reconciled against a scan of `sdks/` and `scripts/` for the path, both ways; every
   `layer:e2e` crate is a spawner by its tag, and never builds the `onetaskgraph` package
   itself — it finds the file beside its own test executable, so an instrumented run finds the
-  instrumented build `onetaskgraph:coverage` made, which its `coverage` target depends on.
+  instrumented build `onetaskgraph:coverage-build` made, which its `coverage` target depends on.
 - **The tests that reach a real API are ordinary tests, and that reverses an earlier
   decision.** They were a separate `test-live` target on every project, run by a workflow of
   their own on a schedule and on every pull request, deliberately outside the required set —

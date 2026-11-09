@@ -11,7 +11,9 @@
   ],
   "namedInputs": {
     "cargoInputs": [
-      { "runtime": "node scripts/nx-cargo-closure.mjs --crate onetaskgraph-github-projects" }
+      {
+        "runtime": "node scripts/nx-cargo-closure.mjs --crate onetaskgraph-github-projects"
+      }
     ]
   },
   "targets": {
@@ -61,7 +63,7 @@
         ],
         "parallel": false
       },
-      "//": "The live journey is one of the tests the first command runs; the second drives it through skipped, declined and expected-but-absent without a credential, and the third follows a budget decline through to the check going red, which a test asserting a panic cannot show. Serial: both re-run the binary the first builds. The env inputs are the cache key's, because this target's result is not a function of the files \u2014 a replay of an uncredentialed run would otherwise stand in for a credentialed one and the live tests would not run while the target reported green. `coverage` takes none of them: scripts/rust-coverage.sh clears the credentials first, which is what keeps one run to one live session. docs/metadata.md is an input because `unprojectable_fields_tests` reads its list of the fields a `metadata_fields` entry may not name, so an edit to that list alone has to select this crate and re-run the guard rather than replay a cached pass.",
+      "//": "The live journey is one of the tests the first command runs; the second drives it through skipped, declined and expected-but-absent without a credential, and the third follows a budget decline through to the check going red, which a test asserting a panic cannot show. Serial: both re-run the binary the first builds. The env inputs are the cache key's, because this target's result is not a function of the files — a replay of an uncredentialed run would otherwise stand in for a credentialed one and the live tests would not run while the target reported green. `coverage` takes none of them: scripts/rust-coverage.sh clears the credentials first, which is what keeps one run to one live session. docs/metadata.md is an input because `unprojectable_fields_tests` reads its list of the fields a `metadata_fields` entry may not name, so an edit to that list alone has to select this crate and re-run the guard rather than replay a cached pass.",
       "inputs": [
         "versionFreeNpm",
         "{workspaceRoot}/.tool-versions",
@@ -121,7 +123,6 @@
     },
     "coverage": {
       "executor": "nx:run-commands",
-      "dependsOn": ["workspace:coverage-clear"],
       "options": {
         "command": "bash scripts/rust-coverage.sh --build-only onetaskgraph-github-projects --test plugin --test live"
       },
@@ -129,12 +130,11 @@
       "//": "Its suite runs every case uninstrumented, in `test`, and contributes no line coverage (AGENTS.md records why). This builds instrumented, and runs none of, the two test binaries onetaskgraph-github-projects-e2e's measured entry-point pairs run from target/llvm-cov-target: `plugin`, which holds the GitHub double, and `live`, the entry points. scripts/check-coverage-enforced.sh holds the tag, this target and workspace:coverage's dependency list to one another.",
       "inputs": [
         "default",
-        "^default",
+        "^coverageDependency",
+        "coverageUnit",
+        "{workspaceRoot}/.tool-versions",
         {
-          "runtime": "node -p process.platform"
-        },
-        {
-          "runtime": "node scripts/nx-version-free-inputs.mjs --ecosystem cargo --keep-version"
+          "runtime": "node scripts/coverage-read-digest.mjs --unit onetaskgraph-github-projects"
         }
       ]
     }

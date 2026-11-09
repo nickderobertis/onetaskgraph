@@ -54,6 +54,42 @@
       "{workspaceRoot}/bun.lock",
       "{workspaceRoot}/.python-version",
       "{workspaceRoot}/.tool-versions"
+    ],
+    "coverageDependency": ["{projectRoot}/src/**/*", "{projectRoot}/build.rs"],
+    "coverageUnit": [
+      {
+        "env": "ONETASKGRAPH_TESTS_UNDER_COVERAGE"
+      },
+      {
+        "env": "COVERAGE_UNIT_IGNORE_REGEX"
+      },
+      {
+        "env": "LLVM_PROFDATA"
+      },
+      {
+        "env": "LLVM_COV"
+      },
+      {
+        "runtime": "node -p process.platform"
+      },
+      {
+        "runtime": "bash scripts/coverage-unit.sh --tool-version rustc"
+      },
+      {
+        "runtime": "bash scripts/coverage-unit.sh --tool-version cargo-llvm-cov"
+      },
+      {
+        "runtime": "bash scripts/coverage-unit.sh --tool-version cargo-nextest"
+      },
+      {
+        "runtime": "bash scripts/coverage-unit.sh --tool-version llvm-profdata"
+      },
+      {
+        "runtime": "bash scripts/coverage-unit.sh --tool-version llvm-cov"
+      },
+      {
+        "runtime": "bash scripts/coverage-unit.sh --tool-version llvm-readobj"
+      }
     ]
   },
   "targetDefaults": {

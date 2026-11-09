@@ -59,6 +59,7 @@ const allTasks = [...new Set(Object.values(selected).flat())];
 function outputAllowed(output) {
   if (typeof output !== "string") return false;
   if (/\/telemetry\//.test(output)) return /\.(?:json|jsonl)$/.test(output);
+  if (/\/target\/coverage-units\/[^/]+\.lcov$/.test(output)) return true;
   return /\/(?:[^/]*(?:coverage|report|telemetry|result|budget)[^/]*\.(?:json|jsonl|lcov)|\.coverage)$/.test(
     output,
   );

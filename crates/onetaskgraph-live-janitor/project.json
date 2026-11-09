@@ -6,7 +6,9 @@
   "//": "Unpublished scheduled cleanup executable. Test and coverage invoke offline tests only; neither runs the janitor against GitHub.",
   "namedInputs": {
     "cargoInputs": [
-      { "runtime": "node scripts/nx-cargo-closure.mjs --crate onetaskgraph-live-janitor" }
+      {
+        "runtime": "node scripts/nx-cargo-closure.mjs --crate onetaskgraph-live-janitor"
+      }
     ]
   },
   "targets": {
@@ -55,23 +57,25 @@
       "outputs": ["{workspaceRoot}/target/debug/telemetry/onetaskgraph-live-janitor/*.json"]
     },
     "coverage": {
-      "//": "llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] The required coverage union runs every crate's instrumented tests, including this offline suite, even on unrelated changes. scripts/check-coverage-enforced.sh reconciles every crate against that union; functional tests still select by the project graph.",
+      "//": "llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] The required coverage union runs every crate's instrumented tests, including this offline suite, when its own inputs change; scripts/check-coverage-enforced.sh reconciles every crate against that union; functional tests still select by the graph. A coverage unit: its LCOV report is cached, and workspace:coverage merges every unit's and holds the floor. scripts/check-coverage-enforced.sh reconciles the unit with that merge, and .github/nx-policy/tests/coverage-units.test.mjs holds these inputs to every file the run reads. Its outputs also carry the telemetry `budgets` reads, which its journeys write here (scripts/ci-job.sh).",
       "executor": "nx:run-commands",
-      "dependsOn": ["workspace:coverage-clear"],
       "options": {
         "command": "bash scripts/rust-coverage.sh onetaskgraph-live-janitor"
       },
-      "outputs": ["{workspaceRoot}/target/llvm-cov-target/*.profraw"],
-      "cache": false,
+      "outputs": [
+        "{workspaceRoot}/target/coverage-units/onetaskgraph-live-janitor.lcov",
+        "{workspaceRoot}/target/debug/telemetry/onetaskgraph-live-janitor/*.json"
+      ],
+      "cache": true,
       "// end": "llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]",
       "inputs": [
+        "versionFreeNpm",
         "default",
-        "^default",
+        "^coverageDependency",
+        "coverageUnit",
+        "{workspaceRoot}/.tool-versions",
         {
-          "runtime": "node -p process.platform"
-        },
-        {
-          "runtime": "node scripts/nx-version-free-inputs.mjs --ecosystem cargo --keep-version"
+          "runtime": "node scripts/coverage-read-digest.mjs --unit onetaskgraph-live-janitor"
         }
       ]
     },
