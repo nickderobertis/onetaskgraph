@@ -244,6 +244,16 @@ describe("scripts/coverage-read-digest.mjs", { skip: !onLinux }, () => {
     assert.notEqual(run(dir, "--unit", unit).stdout, first.stdout);
   });
 
+  test("--rust moves with a tracked Rust source and with nothing else", () => {
+    const first = run(dir, "--rust");
+    assert.equal(first.status, 0, first.stderr);
+    assert.match(first.stdout, /^[0-9a-f]{64}\n$/);
+    appendFileSync(join(dir, "docs/metadata.md"), "\nnot Rust\n");
+    assert.equal(run(dir, "--rust").stdout, first.stdout);
+    appendFileSync(join(dir, "crates/onetaskgraph-live/src/lib.rs"), "\n// edited\n");
+    assert.notEqual(run(dir, "--rust").stdout, first.stdout);
+  });
+
   for (const args of [[], ["--unit"], ["--unit", "--list"], ["--unit", "a", "b"], ["--rust", "x"]])
     test(`refuses ${JSON.stringify(args)} with exit 2 and no digest`, () => {
       const answer = run(dir, ...args);
