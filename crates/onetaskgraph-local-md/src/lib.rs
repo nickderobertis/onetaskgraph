@@ -5576,3 +5576,5 @@ mod tests {
         assert!(message.contains("failing-0"), "{message}");
     }
 }
+
+// demonstration: touches one library crate

@@ -138,5 +138,3 @@ if [ "$failures" -ne 0 ]; then
   echo "check-hook-safety: operating on the real repository. See scripts/scratch-clone.sh." >&2
   exit 1
 fi
-
-# demonstration seed: selects workspace:coverage
