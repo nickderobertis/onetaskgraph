@@ -90,10 +90,13 @@ export function e2eUnits(dir) {
 }
 
 export function coverageUnits(dir) {
-  const entry = readJson(dir, "workspace/project.json").targets.coverage.dependsOn.find(
-    (candidate) => candidate.target === "coverage",
+  const dependsOn = readJson(dir, "workspace/project.json").targets?.coverage?.dependsOn;
+  assert.ok(Array.isArray(dependsOn), "workspace:coverage declares its dependencies");
+  const entry = dependsOn.find((candidate) => candidate?.target === "coverage");
+  assert.ok(
+    Array.isArray(entry?.projects) && entry.projects.every((name) => typeof name === "string"),
+    "workspace:coverage lists its units",
   );
-  assert.ok(entry, "workspace:coverage lists its units");
   return [...entry.projects].sort();
 }
 
@@ -178,6 +181,49 @@ export function nxRun(dir, task = "workspace:coverage", additions = {}, flags = 
 }
 
 const ANSI = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
+// `cargo metadata`'s document, held to the fields the key tests read.
+export function cargoMetadata() {
+  const value = JSON.parse(
+    execFileSync("cargo", ["metadata", "--format-version", "1", "--all-features", "--locked"], {
+      cwd: root,
+      env: environment(),
+      encoding: "utf8",
+      maxBuffer: 128 * 1024 * 1024,
+    }),
+  );
+  assert.ok(
+    Array.isArray(value?.packages) &&
+      value.packages.every((pkg) => typeof pkg?.id === "string" && typeof pkg?.name === "string") &&
+      Array.isArray(value.workspace_members) &&
+      Array.isArray(value.resolve?.nodes) &&
+      value.resolve.nodes.every(
+        (node) =>
+          typeof node?.id === "string" &&
+          Array.isArray(node.deps) &&
+          node.deps.every((dep) => typeof dep?.pkg === "string" && Array.isArray(dep?.dep_kinds)),
+      ),
+    "cargo metadata has packages, workspace_members and resolve.nodes",
+  );
+  return value;
+}
+
+export function recordedReadSet() {
+  const recorded = JSON.parse(
+    readFileSync(join(root, ".github/nx-policy/tests/fixtures/coverage-read-set.json"), "utf8"),
+  );
+  assert.ok(
+    recorded !== null &&
+      recorded.units !== null &&
+      typeof recorded.units === "object" &&
+      !Array.isArray(recorded.units) &&
+      Object.values(recorded.units).every(
+        (files) => Array.isArray(files) && files.every((file) => typeof file === "string"),
+      ),
+    "the recording maps each unit to the files it read",
+  );
+  return recorded;
+}
+
 export const unitTask = (unit) => `${unit}:coverage`;
 
 export function ranUnits(run, units) {
@@ -202,7 +248,7 @@ export function hashesOf(dir, ids, additions = {}) {
   const list = join(dirname(dir), `${Math.random().toString(36).slice(2)}.json`);
   writeFileSync(list, JSON.stringify(ids));
   try {
-    return JSON.parse(
+    const hashes = JSON.parse(
       execFileSync(process.execPath, [worker, list], {
         cwd: dir,
         env: nxEnvironment(dir, additions),
@@ -210,6 +256,16 @@ export function hashesOf(dir, ids, additions = {}) {
         maxBuffer: 256 * 1024 * 1024,
       }),
     );
+    assert.ok(
+      ids.every(
+        (id) =>
+          typeof hashes[id]?.hash === "string" &&
+          Array.isArray(hashes[id]?.inputs?.files) &&
+          typeof hashes[id]?.nodes === "object",
+      ),
+      "Nx answered each task's hash and inputs",
+    );
+    return hashes;
   } finally {
     rmSync(list, { force: true });
   }

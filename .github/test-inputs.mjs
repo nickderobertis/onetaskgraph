@@ -85,6 +85,12 @@ export const policyJourneyReadSet = [
   "crates/onetaskgraph-live-janitor/project.json",
 ];
 
+export const nxCoverageUnitFiles = [".github/nx-policy/tests/coverage-units.test.mjs"];
+export const nxCoverageReadSetFiles = [".github/nx-policy/tests/coverage-read-set.test.mjs"];
+export const nxCoverageSpawnedBinaryFiles = [
+  ".github/nx-policy/tests/coverage-spawned-binary.test.mjs",
+];
+
 export const policyJourneyFiles = [
   ".github/policy/tests/boundaries.test.mjs",
   ".github/policy/tests/inventory.test.mjs",

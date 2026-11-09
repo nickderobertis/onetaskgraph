@@ -4,6 +4,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import {
   appendFileSync,
   chmodSync,
+  existsSync,
   readdirSync,
   readFileSync,
   rmSync,
@@ -12,6 +13,7 @@ import {
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 import {
+  cargoMetadata,
   coverageUnits,
   e2eUnits,
   environment,
@@ -21,6 +23,7 @@ import {
   onLinux,
   projectFile,
   ranUnits,
+  recordedReadSet,
   readJson,
   readLcov,
   replayedUnits,
@@ -62,16 +65,7 @@ after(() => {
   if (onLinux) rmSync(scratch, { recursive: true, force: true });
 });
 
-const metadata = onLinux
-  ? JSON.parse(
-      execFileSync("cargo", ["metadata", "--format-version", "1", "--all-features", "--locked"], {
-        cwd: root,
-        env: environment(),
-        encoding: "utf8",
-        maxBuffer: 128 * 1024 * 1024,
-      }),
-    )
-  : undefined;
+const metadata = onLinux ? cargoMetadata() : undefined;
 
 function resolveGraph() {
   const names = new Map(metadata.packages.map((pkg) => [pkg.id, pkg.name]));
@@ -304,11 +298,7 @@ describe("coverage unit keys", { skip: !onLinux }, () => {
     // Left out of the inputs, the task hash no longer covers it: this is the gap the read-set test
     // reports by name. With it in, editing it re-runs that unit and replays the rest.
     const reader = "onetaskgraph-github-projects-e2e";
-    const file = readFileSync(
-      join(root, ".github/nx-policy/tests/fixtures/coverage-read-set.json"),
-      "utf8",
-    );
-    const read = JSON.parse(file).units[reader].find((path) =>
+    const read = recordedReadSet().units[reader].find((path) =>
       path.startsWith("docs/measurements/"),
     );
     assert.ok(read, "the recording names a measurement file its journeys read");
@@ -540,6 +530,19 @@ describe("the real workspace:coverage over cached reports", { skip: !onLinux }, 
       assert.equal(report, cached, `${unit}: restored byte for byte`);
     }
     assertMergeMatchesFiles(dir, run, units);
+  });
+
+  test("a replay restores the telemetry a unit's budgets read", () => {
+    const dir = stubbedGraph(scratch, "telemetry");
+    const units = coverageUnits(dir);
+    assert.equal(nxRun(dir).status, 0);
+    const recording = "target/debug/telemetry/onetaskgraph-live-janitor/stub.json";
+    assert.ok(existsSync(join(dir, recording)));
+    rmSync(join(dir, recording));
+    const run = nxRun(dir);
+    assert.equal(run.status, 0, run.output.slice(-2000));
+    assert.deepEqual(replayedUnits(run, units), units);
+    assert.equal(readFileSync(join(dir, recording), "utf8"), "{}\n");
   });
 
   test("a file no unit owns refuses the merge, naming it", () => {
