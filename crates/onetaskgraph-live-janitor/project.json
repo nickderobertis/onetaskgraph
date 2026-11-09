@@ -57,7 +57,7 @@
       "outputs": ["{workspaceRoot}/target/debug/telemetry/onetaskgraph-live-janitor/*.json"]
     },
     "coverage": {
-      "//": "A coverage unit: its LCOV report is cached, and workspace:coverage merges every unit's and holds the floor. scripts/check-coverage-enforced.sh reconciles the unit with that merge, and .github/nx-policy/tests/coverage-units.test.mjs holds these inputs to every file the run reads. Its outputs also carry the telemetry `budgets` reads, which its journeys write here (scripts/ci-job.sh).",
+      "//": "llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] The required coverage union runs every crate's instrumented tests, including this offline suite, when its own inputs change; scripts/check-coverage-enforced.sh reconciles every crate against that union; functional tests still select by the graph. A coverage unit: its LCOV report is cached, and workspace:coverage merges every unit's and holds the floor. scripts/check-coverage-enforced.sh reconciles the unit with that merge, and .github/nx-policy/tests/coverage-units.test.mjs holds these inputs to every file the run reads. Its outputs also carry the telemetry `budgets` reads, which its journeys write here (scripts/ci-job.sh).",
       "executor": "nx:run-commands",
       "options": {
         "command": "bash scripts/rust-coverage.sh onetaskgraph-live-janitor"

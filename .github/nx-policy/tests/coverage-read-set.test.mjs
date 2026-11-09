@@ -136,7 +136,6 @@ function scannedReads(unit, metadata) {
   return found;
 }
 
-// Every file `unit` reads, by scan and recording, that its hash does not cover.
 function unhashed(reads, hashed) {
   return [...reads].filter((file) => !hashed.has(file) && !RUNTIME_HASHED.test(file)).sort();
 }

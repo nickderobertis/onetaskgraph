@@ -406,8 +406,6 @@ function nonFileInputs(dir) {
   };
 }
 
-// The failures, naming unit and input: a unit that replayed after the input moved, or that did
-// not replay once it was restored.
 function nonFileInputFailures(dir, units, name, input) {
   const failures = [];
   input.set();

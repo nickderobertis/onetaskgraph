@@ -103,7 +103,7 @@ test("no Rust build cache step saves under any event class but a push to main", 
   assert.deepEqual(savers(workflows(), classes), []);
 });
 
-test("every Rust build cache step a tag, release or pull request reaches is found and restores only", () => {
+test("the workflows that build Rust each hold a recognised Rust build cache step", () => {
   const seen = new Set();
   for (const [file, workflow] of Object.entries(workflows()))
     for (const [id, job] of Object.entries(workflow.jobs ?? {}))

@@ -12,6 +12,8 @@ files:
     # Upstream-owned copies, held byte-identical to the pinned dero-skills revisions by the drift test.
     - "scripts/nx-remote-cache.mjs"
     - "scripts/actions-cache-prune.mjs"
+    - "scripts/coverage-unit.sh"
+    - "scripts/coverage-merge.mjs"
     - "scripts/nx-version-free-inputs.mjs"
     - "**/.git/**"
     # Generated from the binary's schema; generator drift is checked deterministically.

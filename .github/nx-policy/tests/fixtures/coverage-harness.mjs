@@ -162,7 +162,6 @@ export function nxRun(dir, task = "workspace:coverage", additions = {}, flags = 
 const ANSI = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
 export const unitTask = (unit) => `${unit}:coverage`;
 
-// The units among `units` Nx ran, by its own report of each task.
 export function ranUnits(run, units) {
   return units.filter((unit) => run.executed.has(unitTask(unit))).sort();
 }
