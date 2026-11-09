@@ -4,6 +4,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import {
   appendFileSync,
   chmodSync,
+  existsSync,
   readdirSync,
   readFileSync,
   rmSync,
@@ -529,6 +530,19 @@ describe("the real workspace:coverage over cached reports", { skip: !onLinux }, 
       assert.equal(report, cached, `${unit}: restored byte for byte`);
     }
     assertMergeMatchesFiles(dir, run, units);
+  });
+
+  test("a replay restores the telemetry a unit's budgets read", () => {
+    const dir = stubbedGraph(scratch, "telemetry");
+    const units = coverageUnits(dir);
+    assert.equal(nxRun(dir).status, 0);
+    const recording = "target/debug/telemetry/onetaskgraph-live-janitor/stub.json";
+    assert.ok(existsSync(join(dir, recording)));
+    rmSync(join(dir, recording));
+    const run = nxRun(dir);
+    assert.equal(run.status, 0, run.output.slice(-2000));
+    assert.deepEqual(replayedUnits(run, units), units);
+    assert.equal(readFileSync(join(dir, recording), "utf8"), "{}\n");
   });
 
   test("a file no unit owns refuses the merge, naming it", () => {

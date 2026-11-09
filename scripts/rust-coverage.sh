@@ -73,11 +73,14 @@ fi
 if [ "$REQUEST" = "--report" ]; then
   if ! units="$(python3 -c '
 import json
+import re
 try:
     target = json.load(open("workspace/project.json", encoding="utf-8"))["targets"]["coverage"]
 except (OSError, ValueError, KeyError, TypeError) as error:
     raise SystemExit(f"workspace/project.json: {error}")
-depends_on = target.get("dependsOn", []) if isinstance(target, dict) else []
+depends_on = target.get("dependsOn") if isinstance(target, dict) else None
+if not isinstance(depends_on, list):
+    raise SystemExit("workspace/project.json: the coverage target has no dependsOn list")
 names = [
     name
     for entry in depends_on
@@ -85,6 +88,10 @@ names = [
     for name in (entry.get("projects") if isinstance(entry.get("projects"), list) else [])
     if isinstance(name, str)
 ]
+unit_name = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_-]*")
+for name in names:
+    if not unit_name.fullmatch(name):
+        raise SystemExit(f"workspace/project.json: {name!r} is not a coverage unit name")
 print(" ".join(names))
 ' | tr -d '\r')" || [ -z "$units" ]; then
     echo "rust-coverage: workspace/project.json's coverage target names no unit to merge." >&2
