@@ -101,10 +101,11 @@ try:
         coverage = handle.read()
 except (OSError, ValueError) as error:
     sys.exit(f"pr-build-commands: scripts/rust-coverage.sh could not be read ({error}); next: restore it, which holds the instrumented run")
-run = re.search(r'run="\$\((cargo llvm-cov\b.*?) 2>&1 \| tee >\(cat >&2\)\)"', coverage, re.S)
-if not run or '"$CRATE"' not in run.group(1):
-    sys.exit("pr-build-commands: scripts/rust-coverage.sh has no streamed instrumented run; next: point this at its cargo llvm-cov command piped through tee")
-instrumented = " ".join(run.group(1).replace("\\\n", " ").split())
+run = re.search(r'run="\$\(bash scripts/coverage-unit\.sh "\$CRATE" -- (.*?) 2>&1 \| tee >\(cat >&2\)\)"', coverage, re.S)
+if not run:
+    sys.exit("pr-build-commands: scripts/rust-coverage.sh has no streamed instrumented run; next: point this at its coverage-unit.sh command piped through tee")
+# coverage-unit.sh runs `cargo llvm-cov --no-report` over these arguments.
+instrumented = "cargo llvm-cov --no-report " + " ".join(run.group(1).replace("\\\n", " ").split())
 uninstrumented = set()
 narrowed_tests = {}
 for found in pathlib.Path("crates").glob("*/project.json"):

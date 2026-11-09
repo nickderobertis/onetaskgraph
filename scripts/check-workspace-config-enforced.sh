@@ -180,7 +180,7 @@ expect check-workspace-config.sh "an e2e suite whose test spawns the binary with
   "crates/onetaskgraph-linear-e2e/project.json: test spawns target/debug/onetaskgraph (through onetaskgraph-e2e-support) but does not depend on onetaskgraph:build"
 restore "$LINEAR_E2E_PROJECT"
 
-mutate "$LINEAR_E2E_PROJECT" 'document["targets"]["coverage"]["dependsOn"].remove("onetaskgraph:coverage")'
+mutate "$LINEAR_E2E_PROJECT" 'document["targets"]["coverage"]["dependsOn"].remove("onetaskgraph:coverage-build")'
 expect check-workspace-config.sh "an e2e suite whose coverage does not depend on the instrumented build" \
   "crates/onetaskgraph-linear-e2e/project.json: coverage spawns the instrumented binary"
 restore "$LINEAR_E2E_PROJECT"
@@ -304,8 +304,7 @@ expect check-coverage-enforced.sh "a crate dropped from the aggregate's dependen
 restore "$WORKSPACE_PROJECT"
 
 # A crate whose suite runs uninstrumented measures nothing, so the aggregate leaving it out is
-# the rule, and its coverage target measuring anything, or building without the clear first, is
-# refused.
+# the rule, and its coverage target measuring anything, or being cached, is refused.
 mutate "$WORKSPACE_PROJECT" 'document["targets"]["coverage"]["dependsOn"][0]["projects"].append("onetaskgraph-linear")'
 expect check-coverage-enforced.sh "an uninstrumented crate put back in the aggregate" \
   "tagged coverage:uninstrumented and measures nothing"
@@ -314,9 +313,9 @@ mutate "$LINEAR_PROJECT" 'document["targets"]["coverage"] = {"executor": "nx:run
 expect check-coverage-enforced.sh "an uninstrumented crate whose coverage still measures" \
   "but its coverage target still runs a measurement"
 restore "$LINEAR_PROJECT"
-mutate "$GITHUB_PROJECTS_PROJECT" 'document["targets"]["coverage"].pop("dependsOn")'
-expect check-coverage-enforced.sh "an uninstrumented crate building its tests before the clear" \
-  "its build-only coverage target must depend on workspace:coverage-clear"
+mutate "$GITHUB_PROJECTS_PROJECT" 'document["targets"]["coverage"]["cache"] = True'
+expect check-coverage-enforced.sh "an uninstrumented crate whose build-only target is cached" \
+  "its build-only coverage target must be uncached"
 restore "$GITHUB_PROJECTS_PROJECT"
 # Narrowed to the test binaries another crate's measured run drives, each must be one the crate
 # has, or that run finds nothing to drive.
@@ -334,33 +333,43 @@ expect check-coverage-enforced.sh "an aggregate that no longer reports" \
   "coverage does not run 'bash scripts/rust-coverage.sh --report'"
 restore "$WORKSPACE_PROJECT"
 
-mutate "$CORE_PROJECT" 'del document["targets"]["coverage"]["cache"]'
-expect check-coverage-enforced.sh "a cached crate coverage target" "its coverage target is cached"
+mutate "$CORE_PROJECT" 'document["targets"]["coverage"]["cache"] = False'
+expect check-coverage-enforced.sh "an uncached crate coverage target" "its coverage target is not cached"
 restore "$CORE_PROJECT"
 
-mutate "$CORE_PROJECT" 'document["targets"]["coverage"]["dependsOn"] = []'
-expect check-coverage-enforced.sh "a crate run that does not clear first" \
-  "does not depend on workspace:coverage-clear"
+mutate "$CORE_PROJECT" 'document["targets"]["coverage"]["outputs"] = []'
+expect check-coverage-enforced.sh "a unit declaring no report" \
+  "does not declare {workspaceRoot}/target/coverage-units/onetaskgraph-core.lcov"
 restore "$CORE_PROJECT"
 
-mutate "$COVERAGE_SCRIPT" 'text = text.replace("readonly MIN_LINES=92", "readonly MIN_LINES=80")'
-expect check-coverage-enforced.sh "a lowered floor" "the line-coverage floor is 80%"
+mutate "$CORE_PROJECT" 'document["targets"]["coverage"]["dependsOn"] = ["workspace:coverage-clear"]'
+expect check-coverage-enforced.sh "a unit depending on the removed clear" \
+  "still depends on workspace:coverage-clear"
+restore "$CORE_PROJECT"
+
+mutate "$COVERAGE_SCRIPT" 'text = text.replace("readonly MIN_LINES=92.88", "readonly MIN_LINES=92")'
+expect check-coverage-enforced.sh "a floor lowered to the old basis" "the line-coverage floor is 92%"
 restore "$COVERAGE_SCRIPT"
 
-mutate "$COVERAGE_SCRIPT" 'text = text.replace("    --fail-under-lines \"$MIN_LINES\" 2>&1", "    2>&1")'
-expect check-coverage-enforced.sh "a report without the floor" \
+mutate "$COVERAGE_SCRIPT" 'text = text.replace("--fail-under-lines \"$MIN_LINES\"", "--fail-under-lines 92")'
+expect check-coverage-enforced.sh "a merge handed a literal floor" \
   "does not pass --fail-under-lines"
 restore "$COVERAGE_SCRIPT"
 
-mutate "$COVERAGE_SCRIPT" 'text = text.replace("  --no-report \\\n", "")'
-expect check-coverage-enforced.sh "a crate run without --no-report" \
-  "no longer passes --no-report"
+mutate "$COVERAGE_SCRIPT" 'text = text.replace("bash scripts/coverage-unit.sh \"$CRATE\" -- ", "cargo llvm-cov --no-report ")'
+expect check-coverage-enforced.sh "a crate run around the coverage unit" \
+  "no longer goes through scripts/coverage-unit.sh"
 restore "$COVERAGE_SCRIPT"
 
 mutate "$COVERAGE_SCRIPT" 'text = text.replace("  nextest \\\n", "")'
 expect check-coverage-enforced.sh "a crate run not under nextest" \
-  "no longer \`cargo llvm-cov --no-report nextest\`"
+  "is no longer \`coverage-unit.sh <crate> -- nextest\`"
 restore "$COVERAGE_SCRIPT"
+
+# The SDK floors stay at the user's 92, on their own tools' reading.
+mutate "sdks/python/pyproject.toml" 'import re; text = re.sub(r"--cov-fail-under=\d+", "--cov-fail-under=91", text)'
+expect check-coverage-enforced.sh "a lowered Python SDK floor" "--cov-fail-under=91 is below the 92% bar"
+restore "sdks/python/pyproject.toml"
 
 printf '{\n' > "$scratch/$CORE_PROJECT"
 expect check-coverage-enforced.sh "a project file that is not JSON" \

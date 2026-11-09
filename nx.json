@@ -54,6 +54,44 @@
       "{workspaceRoot}/bun.lock",
       "{workspaceRoot}/.python-version",
       "{workspaceRoot}/.tool-versions"
+    ],
+    "coverageDependency": ["{projectRoot}/src/**/*", "{projectRoot}/build.rs"],
+    "coverageUnit": [
+      "{workspaceRoot}/scripts/coverage-unit.sh",
+      "{workspaceRoot}/scripts/coverage-merge.mjs",
+      "{workspaceRoot}/scripts/rust-coverage.sh",
+      {
+        "env": "ONETASKGRAPH_TESTS_UNDER_COVERAGE"
+      },
+      {
+        "runtime": "node -p process.platform"
+      },
+      {
+        "runtime": "bash scripts/coverage-unit.sh --tool-version rustc"
+      },
+      {
+        "runtime": "bash scripts/coverage-unit.sh --tool-version cargo-llvm-cov"
+      },
+      {
+        "runtime": "bash scripts/coverage-unit.sh --tool-version cargo-nextest"
+      },
+      {
+        "runtime": "bash scripts/coverage-unit.sh --tool-version llvm-profdata"
+      },
+      {
+        "runtime": "bash scripts/coverage-unit.sh --tool-version llvm-cov"
+      },
+      {
+        "runtime": "bash scripts/coverage-unit.sh --tool-version llvm-readobj"
+      }
+    ],
+    "coverageSdkSources": [
+      "{workspaceRoot}/sdks/python/src/**/*",
+      "{workspaceRoot}/sdks/typescript/src/**/*",
+      "!{workspaceRoot}/sdks/python/src/onetaskgraph_sdk/__init__.py",
+      "!{workspaceRoot}/sdks/typescript/src/index.ts",
+      "versionFreePython",
+      "versionFreeFiles"
     ]
   },
   "targetDefaults": {

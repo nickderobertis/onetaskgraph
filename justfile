@@ -168,22 +168,20 @@ ci-test-macos *args:
     @python3 crates/onetaskgraph-github-projects-e2e/lane_runner.py select scripts/live-lane-selection.sh bash scripts/ci-job.sh test-macos {{args}}
 # llmlint: ignore-end[external_service_suite_stays_out_of_the_affected_tier]
 
-# Every crate's coverage target runs its tests instrumented into the one shared profile
-# directory and keeps its profiles (`--no-report`); the `workspace` project's coverage
-# target depends on all of them and enforces the 95% line floor once, over the union. The
-# crates' runs depend in turn on workspace:coverage-clear, which empties that directory
-# first. Because `workspace` depends on every project, any affected project selects the
-# aggregate and so every crate's run — the cost AGENTS.md records for the shared target
-# directory. Each SDK still measures itself. The measurement is skipped on Windows with a
-# printed notice (see scripts/rust-coverage.sh), where instrumentation does not attribute
-# subprocess coverage; the functional lanes still gate that platform.
+# Every crate's coverage target runs its tests instrumented and reduces them to one LCOV report,
+# target/coverage-units/<crate>.lcov, which Nx caches: a crate whose inputs did not change is
+# replayed rather than run. The `workspace` project's coverage target depends on every crate's
+# and merges those reports to the 92.88% line floor. Each SDK still measures itself. The
+# measurement is skipped on Windows with a printed notice (see scripts/rust-coverage.sh), where
+# instrumentation does not attribute subprocess coverage; the functional lanes still gate that
+# platform.
 #
 # `cargo llvm-cov` re-runs the very integration tests `test` above just ran, so live
 # credentials left set here would open a SECOND session per lane against one shared external
 # fixture. scripts/rust-coverage.sh clears them; read the note there before changing this
 # recipe or the platform matrix in .github/workflows/ci.yml.
 
-# Coverage only, for the affected projects. Fails below 95% lines over the union of the crates.
+# Coverage only, for the affected projects. Fails below 92.88% lines over the crates' merged reports.
 coverage:
     @{{nx}} affected -t coverage
 

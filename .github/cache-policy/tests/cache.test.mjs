@@ -174,19 +174,56 @@ const eventFile = (file) =>
 // Full-file digests, including headers: remote cache v10 from dero-skills
 // 27a6b4950bd7582363eebdfbb8b93a0daf85fc21; figures v13 and cache prune v1 from
 // dero-skills afc6829981dc31ad4221fc7cf706916d078ada35; version-free inputs v3 from
-// fe20052d06406bb07869c5236147b6693489d52f (owned Cargo and Python pins).
+// fe20052d06406bb07869c5236147b6693489d52f (owned Cargo and Python pins); coverage unit v3 and
+// merge v2 from 2cf5ec7ab8d2353f4c67bb1518b9984ffb8491a0.
 const copies = {
   "scripts/actions-budget-figures.sh":
     "f4dbf47e81ce3baf9acf92d4e92f284614bf9c6a3774a76f18ed89893ce7d3b0",
   "scripts/actions-cache-prune.mjs":
     "4c7bfd986ddb7e59b395a00eb3bb74892b44b76234d0c2a61d63ddf7a49b37a7",
   "scripts/nx-remote-cache.mjs": "21a6ba436f59d7bd21d1659bf928b0123a6ac0003d5993747e9f216b020d3526",
+  "scripts/coverage-merge.mjs": "1fbe006859079d27738cefceddef22e1132c7932f1a6ee5cabc2f6eb265091ef",
+  "scripts/coverage-unit.sh": "e94bd694c2313f24017ac01375c37a3de7ff8fb83d301cacd9acb6b1f76f1d36",
   "scripts/nx-version-free-inputs.mjs":
     "624fed99b45a57532ef672ccb4638e4b8052dd12fdee0274fa2f23e9f2f16b60",
 };
+// A copy's header states its digest (of everything after the header) and its .versions file
+// records that version beside it.
+function coverageCopyProblems(file, bytes, base = root) {
+  const text = bytes.toString("utf8");
+  const version = text.match(/^(?:#|\/\/) version: (\d+)$/m)?.[1];
+  const header = text.match(/^(?:#|\/\/) sha256: ([0-9a-f]{64})$/m)?.[1];
+  if (!version || !header) return [`${file}: no version and sha256 header`];
+  const body = bytes.subarray(bytes.indexOf("\n", text.indexOf(header)) + 1);
+  const problems = [];
+  if (createHash("sha256").update(body).digest("hex") !== header)
+    problems.push(`${file}: its body does not match the sha256 in its header`);
+  const versions = join(base, file.replace(/\.[a-z]+$/, ".versions"));
+  const entries = existsSync(versions) ? readFileSync(versions, "utf8").trim().split("\n") : [];
+  if (entries.at(-1) !== `${version} ${header}`)
+    problems.push(`${file}: its .versions entry is missing or is not the header's`);
+  return problems;
+}
 function drift(file, bytes) {
   return createHash("sha256").update(bytes).digest("hex") !== copies[file];
 }
+test("the coverage copies carry a true header and their .versions entry", () => {
+  for (const file of ["scripts/coverage-unit.sh", "scripts/coverage-merge.mjs"]) {
+    const bytes = readFileSync(join(root, file));
+    assert.deepEqual(coverageCopyProblems(file, bytes), []);
+    const edited = Buffer.concat([bytes, Buffer.from("\n# edited by a test\n")]);
+    assert.match(coverageCopyProblems(file, edited).join("\n"), /does not match the sha256/);
+  }
+});
+test("a coverage copy whose .versions entry is missing is named", () => {
+  const dir = mkdtempSync(join(scratch, "versions-"));
+  writeFileSync(join(dir, "coverage-unit.versions"), "1 aaaa\n");
+  const bytes = readFileSync(join(root, "scripts/coverage-unit.sh"));
+  assert.match(
+    coverageCopyProblems("coverage-unit.sh", bytes, dir).join("\n"),
+    /\.versions entry is missing/,
+  );
+});
 test("shared scripts remain byte-identical to the agreed upstream commit", () => {
   for (const file of Object.keys(copies)) {
     const bytes = readFileSync(join(root, file));

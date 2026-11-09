@@ -7,7 +7,9 @@
   "implicitDependencies": ["onetaskgraph-github-projects", "onetaskgraph-plugin-api"],
   "namedInputs": {
     "cargoInputs": [
-      { "runtime": "node scripts/nx-cargo-closure.mjs --crate onetaskgraph-status-options" }
+      {
+        "runtime": "node scripts/nx-cargo-closure.mjs --crate onetaskgraph-status-options"
+      }
     ]
   },
   "targets": {
@@ -54,22 +56,18 @@
     },
     "coverage": {
       "executor": "nx:run-commands",
-      "dependsOn": ["workspace:coverage-clear"],
       "options": {
         "command": "bash scripts/rust-coverage.sh onetaskgraph-status-options"
       },
-      "outputs": ["{workspaceRoot}/target/llvm-cov-target/*.profraw"],
-      "cache": false,
-      "//": "Uncached: cargo-llvm-cov names every raw profile after the workspace, not the crate, so a cache hit would restore a sibling's stale profiles beside its own. workspace:coverage enforces the floor over every crate's run.",
+      "outputs": ["{workspaceRoot}/target/coverage-units/onetaskgraph-status-options.lcov"],
+      "cache": true,
+      "//": "A coverage unit: its LCOV report is cached, and workspace:coverage merges every unit's and holds the floor. scripts/check-coverage-enforced.sh reconciles the unit with that merge, and .github/nx-policy/tests/coverage-units.test.mjs holds these inputs to every file the run reads.",
       "inputs": [
+        "versionFreeNpm",
+        "{workspaceRoot}/.tool-versions",
         "default",
-        "^default",
-        {
-          "runtime": "node -p process.platform"
-        },
-        {
-          "runtime": "node scripts/nx-version-free-inputs.mjs --ecosystem cargo --keep-version"
-        }
+        "^coverageDependency",
+        "coverageUnit"
       ]
     }
   }

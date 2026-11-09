@@ -1,29 +1,31 @@
 #!/usr/bin/env bash
-# The Rust line-coverage floor in three steps over one profile directory, cargo-llvm-cov's
-# own target/llvm-cov-target:
+# The Rust line-coverage floor in two steps, over one LCOV report per coverage unit:
 #
-#   rust-coverage.sh --clear     what a plain `cargo llvm-cov` does before every run
-#   rust-coverage.sh <crate>     one crate's tests under nextest, instrumented, profiles kept
-#   rust-coverage.sh --report    the one report over every crate's run, held to the floor
+#   rust-coverage.sh <crate>     one crate's tests under nextest, instrumented, reduced by
+#                                scripts/coverage-unit.sh to target/coverage-units/<crate>.lcov
+#   rust-coverage.sh --report    those reports, every unit's, merged by scripts/coverage-merge.mjs
+#                                and held to the floor
 #   rust-coverage.sh --build-only <crate> [--test <target>]...
-#                                that crate's tests built instrumented and none run, for a
-#                                suite another crate's run executes (no profile is written);
+#                                that crate's tests built instrumented and none run, for a binary
+#                                or suite another crate's run executes (no profile is written);
 #                                only the named test targets when any are named
 #
-# `--no-report` is the whole reason the crates can share the directory under Nx's parallel
-# fan-out: a plain run clears every raw profile in it first, so two crates deleted each
-# other's coverage. AGENTS.md records what one report over the union costs.
+# Each unit's report is an Nx cache output, so a unit whose inputs did not change is replayed
+# and its tests are not run. AGENTS.md records what the floor is over and why.
 #
 # On Windows every step is skipped with a printed notice: LLVM instrumentation there does
 # not attribute coverage from the binary the e2e journeys spawn, so the number would
 # understate the binary crate and mean nothing for the rest. The functional lanes (lint,
-# typecheck, test) still run on all three platforms, so Windows is still gated.
+# typecheck, test) still run on all three platforms, so Windows is still gated. On macOS a
+# unit runs uninstrumented and writes no report (scripts/coverage-unit.sh), so `--report` is
+# skipped there too: coverage is measured on Linux.
 set -euo pipefail
 
-readonly REQUEST="${1:?usage: scripts/rust-coverage.sh --clear | <crate-name> | --report | --build-only <crate-name> [--test <target>]...}"
-# 92 over the instrumented suites, the live crates' suites running uninstrumented: the user's
-# decision of 2026-10-30, which replaced 95 over every suite.
-readonly MIN_LINES=92
+readonly REQUEST="${1:?usage: scripts/rust-coverage.sh <crate-name> | --report | --build-only <crate-name> [--test <target>]...}"
+# On the LCOV basis. The user's 92 of 2026-10-30, over `cargo llvm-cov report`, plus the 0.8775
+# points by which LCOV reads higher on the same run, rounded up, so no commit that fails the
+# old floor at that measurement passes this one.
+readonly MIN_LINES=92.88
 
 # ONE live session per run of the gate, and this is where the second one would come from.
 # `just check` runs `test` AND `coverage`, and `cargo llvm-cov --no-report nextest --package
@@ -48,6 +50,12 @@ case "${OS:-}${OSTYPE:-}" in
     ;;
 esac
 
+# Coverage is measured on Linux: elsewhere the units wrote no report for the merge to read.
+if [ "$REQUEST" = "--report" ] && [ "$(uname -s)" != Linux ]; then
+  echo "rust-coverage: --report skipped on $(uname -s); coverage is measured on Linux" >&2
+  exit 0
+fi
+
 if ! cargo llvm-cov --version >/dev/null 2>&1; then
   echo "rust-coverage: cargo-llvm-cov is not installed." >&2
   echo "rust-coverage: install it with 'cargo binstall cargo-llvm-cov' and re-run." >&2
@@ -59,40 +67,30 @@ if ! cargo nextest --version >/dev/null 2>&1; then
   exit 1
 fi
 
-# The raw profiles, the merged profile and the workspace crates' own instrumented artifacts
-# — dependencies stay. A stale profile counts lines a since-changed binary no longer runs,
-# and a stale merged profile is what `report` would silently re-read had no run happened.
-if [ "$REQUEST" = "--clear" ]; then
-  if ! output="$(cargo llvm-cov clean --workspace 2>&1)"; then
-    printf '%s\n' "$output" >&2
-    echo "rust-coverage: could not clear target/llvm-cov-target; fix what cargo-llvm-cov reports above, then re-run." >&2
+# The merge reads exactly the units named below, so a report left behind under any other name
+# refuses it rather than reaching the total. The unit list is workspace:coverage's own, and
+# that target depends on each, so every file read was restored or written in this Nx run.
+if [ "$REQUEST" = "--report" ]; then
+  if ! units="$(python3 -c '
+import json
+targets = json.load(open("workspace/project.json", encoding="utf-8"))["targets"]["coverage"]
+names = [
+    name
+    for entry in targets["dependsOn"]
+    if isinstance(entry, dict) and entry.get("target") == "coverage"
+    for name in entry["projects"]
+]
+print(" ".join(names))
+' | tr -d '\r')" || [ -z "$units" ]; then
+    echo "rust-coverage: workspace/project.json's coverage target names no unit to merge." >&2
+    echo "rust-coverage: next: restore its dependsOn list, which check-coverage-enforced.sh reconciles." >&2
     exit 1
   fi
-  exit 0
-fi
-
-# The per-file table and the uncovered line numbers are exactly what you need when the
-# union is under the bar, and noise when it is over — so they are held and replayed only
-# on failure. A failure that printed the table is the floor; one that did not is the report
-# itself — no run behind it, or a tool that could not read what a run wrote — and it is
-# named as such rather than as coverage to add.
-if [ "$REQUEST" = "--report" ]; then
-  if ! report="$(cargo llvm-cov report \
-    --summary-only \
-    --show-missing-lines \
-    --fail-under-lines "$MIN_LINES" 2>&1)"; then
-    printf '%s\n' "$report" >&2
-    # A here-string, not a pipe: grep -q stops at the first match, and under pipefail a long
-    # report's writer killed by that early exit would make the floor read as no report at all.
-    if grep -q '^TOTAL ' <<<"$report"; then
-      echo "rust-coverage: the workspace is below ${MIN_LINES}% line coverage over every crate's run." >&2
-      echo "rust-coverage: the uncovered lines are listed above — cover them with a test that" >&2
-      echo "rust-coverage: drives the real behaviour, not one written to move the number." >&2
-    else
-      echo "rust-coverage: the report could not be produced; cargo-llvm-cov's reason is above." >&2
-      echo "rust-coverage: a report follows every crate's run — run 'just coverage', which clears," >&2
-      echo "rust-coverage: runs each crate and reports, rather than this step on its own." >&2
-    fi
+  # shellcheck disable=SC2086 # $units is space-separated unit names, each one argument.
+  if ! node scripts/coverage-merge.mjs --fail-under-lines "$MIN_LINES" --dir target/coverage-units --unit $units; then
+    echo "rust-coverage: the merge refused the units above (1: below ${MIN_LINES}% and the uncovered" >&2
+    echo "rust-coverage: lines are listed; 2: a report is missing, stray or malformed). Cover lines with" >&2
+    echo "rust-coverage: a test that drives the real behaviour, or run 'just coverage' for fresh reports." >&2
     exit 1
   fi
   exit 0
@@ -149,7 +147,7 @@ fi
 if ! printf '%s\n' "$members" | grep -qxF -- "$CRATE"; then
   echo "rust-coverage: $CRATE is not a member of this Cargo workspace. Members:" >&2
   printf '  %s\n' $members >&2
-  echo "rust-coverage: re-run with one of those names, or with --clear or --report." >&2
+  echo "rust-coverage: re-run with one of those names, or with --report." >&2
   exit 1
 fi
 
@@ -175,8 +173,7 @@ fi
 export NEXTEST_STATUS_LEVEL=all
 export NEXTEST_EXPERIMENTAL_LIBTEST_JSON=1
 export NEXTEST_MESSAGE_FORMAT=libtest-json-plus
-if ! run="$(cargo llvm-cov \
-  --no-report \
+if ! run="$(bash scripts/coverage-unit.sh "$CRATE" -- \
   nextest \
   --package "$CRATE" \
   --all-features \

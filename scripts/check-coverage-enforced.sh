@@ -16,11 +16,14 @@ python3 - <<'PY'
 import json
 import re
 import sys
+from decimal import Decimal
 from pathlib import Path
 
-# The user's decision of 2026-10-30: 92 over the instrumented suites, the live crates' suites
-# running uninstrumented. The SDKs keep floors of their own at or above it.
-MIN_LINES = 92
+# The Rust floor on the LCOV basis: the user's 92 of 2026-10-30 over `cargo llvm-cov report`,
+# plus the measured gap between the two reports, 0.8775 points, rounded up.
+MIN_LINES = Decimal("92.88")
+# The SDKs' own floors are measured by their own tools, so they stay at the user's 92.
+SDK_MIN_LINES = 92
 problems = []
 
 
@@ -64,39 +67,41 @@ def names_in(value: object) -> list[str]:
     return [name for name in value if isinstance(name, str)] if isinstance(value, list) else []
 
 # Every Rust crate routes its instrumented run through one script, which carries the
-# threshold once and enforces it once — in its `--report` step, over the union of every
-# crate's run. So the floor is only as whole as the set of runs the report follows: the
-# `workspace` project's coverage target has to depend on every crate's, the crates' runs
-# have to keep their profiles for it and go through nextest, and the report has to pass
-# the floor to llvm-cov.
+# threshold once and enforces it once — in its `--report` step, over every unit's LCOV. So
+# the floor is only as whole as the set of units the merge names: the `workspace` project's
+# coverage target has to depend on every crate's, each crate's run has to go through
+# scripts/coverage-unit.sh under nextest, and the report has to hand the floor to the merge.
 # Comment lines out, so a flag a comment names is not read as one the invocation passes.
 coverage_script = "\n".join(
     line
     for line in Path("scripts/rust-coverage.sh").read_text(encoding="utf-8").splitlines()
     if not line.lstrip().startswith("#")
 )
-match = re.search(r"^readonly MIN_LINES=(\d+)$", coverage_script, re.MULTILINE)
+match = re.search(r"^readonly MIN_LINES=(\d+(?:\.\d{1,2})?)$", coverage_script, re.MULTILINE)
 if not match:
     problems.append("scripts/rust-coverage.sh: no MIN_LINES floor found")
-elif int(match.group(1)) < MIN_LINES:
+elif Decimal(match.group(1)) < MIN_LINES:
     problems.append(
         f"scripts/rust-coverage.sh: the line-coverage floor is {match.group(1)}%, below the "
         f"{MIN_LINES}% bar this repository commits to in AGENTS.md"
     )
-if not re.search(r'cargo llvm-cov report\b[^\n]*(\\\n[^\n]*)*--fail-under-lines "\$MIN_LINES"', coverage_script):
+if not re.search(
+    r'node scripts/coverage-merge\.mjs --fail-under-lines "\$MIN_LINES" --dir target/coverage-units --unit ',
+    coverage_script,
+):
     problems.append(
         "scripts/rust-coverage.sh: the --report step does not pass --fail-under-lines "
-        '"$MIN_LINES" to `cargo llvm-cov report`, so the floor is declared but never enforced'
+        '"$MIN_LINES" to scripts/coverage-merge.mjs, so the floor is declared but never enforced'
     )
-# The crate run is the `run="$(...)"` one; the build-only one beside it would match them too.
-if not re.search(r"run=\"\$\(cargo llvm-cov\b[^\n]*(\\\n[^\n]*)*--no-report", coverage_script):
+# The crate run is the `run="$(...)"` one; the build-only one beside it would match it too.
+if not re.search(r'run="\$\(bash scripts/coverage-unit\.sh "\$CRATE" -- ', coverage_script):
     problems.append(
-        "scripts/rust-coverage.sh: a crate's run no longer passes --no-report, so it clears "
-        "every sibling's profiles before it starts and the report is over one crate at best"
+        "scripts/rust-coverage.sh: a crate's run no longer goes through scripts/coverage-unit.sh, "
+        "so it writes no report the merge can read"
     )
-if not re.search(r"run=\"\$\(cargo llvm-cov\b[^\n]*(\\\n[^\n]*)*--no-report[^\n]*(\\\n[^\n]*)*\bnextest\b", coverage_script):
+if not re.search(r'run="\$\(bash scripts/coverage-unit\.sh "\$CRATE" -- \\\n\s*nextest\b', coverage_script):
     problems.append(
-        "scripts/rust-coverage.sh: a crate's run is no longer `cargo llvm-cov --no-report "
+        "scripts/rust-coverage.sh: a crate's run is no longer `coverage-unit.sh <crate> -- "
         "nextest`, the one shape the coverage runs share with every repository of this host"
     )
 
@@ -147,10 +152,10 @@ for project_file in sorted(Path("crates").glob("*/project.json")):
                 f"{display}: tagged {UNINSTRUMENTED}, but its coverage target still runs a "
                 f"measurement; it is a no-op or '{build_only}' with any '--test <target>' pairs"
             )
-        elif "workspace:coverage-clear" not in names_in(coverage.get("dependsOn")) or coverage.get("cache") is not False:
+        elif coverage.get("cache") is not False:
             problems.append(
-                f"{display}: its build-only coverage target must depend on workspace:coverage-clear "
-                "and be uncached, or the clear can delete what it built and a cache hit skips the build"
+                f"{display}: its build-only coverage target must be uncached, or a cache hit "
+                "skips the build the run that drives these binaries needs"
             )
         continue
     crate_names.add(crate)
@@ -162,28 +167,26 @@ for project_file in sorted(Path("crates").glob("*/project.json")):
             f"'bash scripts/rust-coverage.sh {crate}', so its run is not in the union the "
             "floor is enforced over"
         )
-    if "workspace:coverage-clear" not in names_in(coverage.get("dependsOn")):
+    report = f"{{workspaceRoot}}/target/coverage-units/{crate}.lcov"
+    if report not in names_in(coverage.get("outputs")):
         problems.append(
-            f"{display}: its coverage target does not depend on workspace:coverage-clear; "
-            "without it a stale profile from an earlier run counts lines this tree no longer "
-            "runs"
+            f"{display}: its coverage target does not declare {report} as an output, so a cache "
+            "hit restores no report and the merge refuses the run"
         )
-    if coverage.get("cache") is not False:
+    if coverage.get("cache") is not True:
         problems.append(
-            f"{display}: its coverage target is cached; a cache hit restores every profile in "
-            "the shared directory as it was, a sibling's stale ones included, beside the fresh "
-            "ones the report then over-counts"
+            f"{display}: its coverage target is not cached, so every pull request runs its "
+            "instrumented tests again even when nothing it reads changed"
+        )
+    if "workspace:coverage-clear" in names_in(coverage.get("dependsOn")):
+        problems.append(
+            f"{display}: its coverage target still depends on workspace:coverage-clear, which "
+            "was removed: a unit clears only its own outputs"
         )
 
 workspace_file = Path("workspace/project.json")
 workspace_display = workspace_file.as_posix()
 aggregate = read_target(workspace_file, "coverage")
-clear = read_target(workspace_file, "coverage-clear")
-if clear and command_of(clear) != "bash scripts/rust-coverage.sh --clear":
-    problems.append(
-        f"{workspace_display}: coverage-clear does not run 'bash scripts/rust-coverage.sh "
-        "--clear', which every crate's run depends on to start from an empty profile directory"
-    )
 if aggregate:
     if "bash scripts/rust-coverage.sh --report" not in commands_of(aggregate):
         problems.append(
@@ -192,8 +195,8 @@ if aggregate:
         )
     if aggregate.get("cache") is not False:
         problems.append(
-            f"{workspace_display}: coverage is cached, but what it reads is the profile "
-            "directory the crates' runs just wrote, which no input describes"
+            f"{workspace_display}: coverage is cached, but it must hold the floor over the "
+            "units' reports on every run"
         )
     depended = set()
     for entry in aggregate.get("dependsOn") if isinstance(aggregate.get("dependsOn"), list) else []:
@@ -217,10 +220,10 @@ pyproject = Path("sdks/python/pyproject.toml").read_text(encoding="utf-8")
 match = re.search(r"--cov-fail-under=(\d+)", pyproject)
 if not match:
     problems.append("sdks/python/pyproject.toml: pytest addopts set no --cov-fail-under")
-elif int(match.group(1)) < MIN_LINES:
+elif int(match.group(1)) < SDK_MIN_LINES:
     problems.append(
         f"sdks/python/pyproject.toml: --cov-fail-under={match.group(1)} is below the "
-        f"{MIN_LINES}% bar"
+        f"{SDK_MIN_LINES}% bar"
     )
 
 # The TypeScript SDK carries its floor on the coverage command.
@@ -230,10 +233,10 @@ if not match:
     problems.append(
         "sdks/typescript/project.json: its coverage target sets no --coverage-threshold"
     )
-elif float(match.group(1)) * 100 < MIN_LINES:
+elif float(match.group(1)) * 100 < SDK_MIN_LINES:
     problems.append(
         f"sdks/typescript/project.json: --coverage-threshold={match.group(1)} is below the "
-        f"{MIN_LINES}% bar"
+        f"{SDK_MIN_LINES}% bar"
     )
 
 if problems:
@@ -242,7 +245,8 @@ if problems:
         print(f"  {problem}", file=sys.stderr)
     print(
         f"check-coverage-enforced: restore the floor at each site named above to at least "
-        f"{MIN_LINES}%, then re-run 'just coverage' to measure against it. Lowering the bar "
+        f"{MIN_LINES}% for Rust or {SDK_MIN_LINES}% for an SDK, then re-run 'just coverage' to "
+        "measure against it. Lowering the bar "
         "is a change to what this repository commits to in AGENTS.md, not a way to go green.",
         file=sys.stderr,
     )

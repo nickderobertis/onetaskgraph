@@ -255,9 +255,7 @@ test("the release coverage switch keeps functional and SDK tasks and omits only 
   assert.ok(omitted.length > budgets.length);
   for (const task of omitted)
     assert.ok(
-      budgets.includes(task) ||
-        task === "workspace:coverage-clear" ||
-        /:(coverage|test-uncovered)$/.test(task),
+      budgets.includes(task) || /:(coverage|coverage-build|test-uncovered)$/.test(task),
       `${task}: functional work was omitted`,
     );
 });

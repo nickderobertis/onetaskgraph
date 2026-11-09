@@ -93,6 +93,7 @@ export const policyJourneyFiles = [
   ".github/policy/tests/release-shortcut.test.mjs",
   ".github/policy/tests/reusable.test.mjs",
   ".github/policy/tests/rust-cache-warm.test.mjs",
+  ".github/policy/tests/rust-cache-save.test.mjs",
   ".github/policy/tests/saved-results.test.mjs",
 ];
 

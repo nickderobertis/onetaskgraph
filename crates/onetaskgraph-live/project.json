@@ -3,9 +3,13 @@
   "name": "onetaskgraph-live",
   "projectType": "library",
   "tags": ["lang:rust", "layer:testing", "test-in-coverage:crate"],
-  "//": "This crate depends on nothing of this workspace, so it declares no implicitDependencies; scripts/check-nx-graph.sh fails, naming the pair, if that ever stops being true. The two hosted plugin crates name it as a dev-dependency, so editing it selects both of them \u2014 which is right: it is the gate their live sessions open. llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] JSON has no comment to scope this to `coverage`: the line floor is one report over every crate's instrumented run, so workspace:coverage runs this crate's whether or not the change reached it. `test` still selects by the graph.",
+  "//": "This crate depends on nothing of this workspace, so it declares no implicitDependencies; scripts/check-nx-graph.sh fails, naming the pair, if that ever stops being true. The two hosted plugin crates name it as a dev-dependency, so editing it selects both of them — which is right: it is the gate their live sessions open. llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] JSON has no comment to scope this to `coverage`: the line floor is one report over every crate's instrumented run, so workspace:coverage runs this crate's whether or not the change reached it. `test` still selects by the graph.",
   "namedInputs": {
-    "cargoInputs": [{ "runtime": "node scripts/nx-cargo-closure.mjs --crate onetaskgraph-live" }]
+    "cargoInputs": [
+      {
+        "runtime": "node scripts/nx-cargo-closure.mjs --crate onetaskgraph-live"
+      }
+    ]
   },
   "targets": {
     "bootstrap": {
@@ -52,22 +56,18 @@
     },
     "coverage": {
       "executor": "nx:run-commands",
-      "dependsOn": ["workspace:coverage-clear"],
       "options": {
         "command": "bash scripts/rust-coverage.sh onetaskgraph-live"
       },
-      "outputs": ["{workspaceRoot}/target/llvm-cov-target/*.profraw"],
-      "cache": false,
-      "//": "Uncached: cargo-llvm-cov names every raw profile after the workspace, not the crate, so a cache hit would restore a sibling's stale profiles beside its own. workspace:coverage enforces the floor over every crate's run.",
+      "outputs": ["{workspaceRoot}/target/coverage-units/onetaskgraph-live.lcov"],
+      "cache": true,
+      "//": "A coverage unit: its LCOV report is cached, and workspace:coverage merges every unit's and holds the floor. scripts/check-coverage-enforced.sh reconciles the unit with that merge, and .github/nx-policy/tests/coverage-units.test.mjs holds these inputs to every file the run reads.",
       "inputs": [
+        "versionFreeNpm",
+        "{workspaceRoot}/.tool-versions",
         "default",
-        "^default",
-        {
-          "runtime": "node -p process.platform"
-        },
-        {
-          "runtime": "node scripts/nx-version-free-inputs.mjs --ecosystem cargo --keep-version"
-        }
+        "^coverageDependency",
+        "coverageUnit"
       ]
     }
   }
