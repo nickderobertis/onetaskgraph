@@ -1,9 +1,17 @@
 import "../../test-setup.mjs";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import {
+  appendFileSync,
+  existsSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
-import { after, test } from "node:test";
+import { after, before, describe, test } from "node:test";
 import {
   cargoMetadata,
   coverageUnits,
@@ -209,4 +217,56 @@ test("a journey's literal path is found on the path that names it", { skip: !onL
   const metadata = cargoMetadata();
   assert.ok(scannedReads("onetaskgraph-core", metadata).has("docs/metadata.md"));
   assert.ok(scannedReads("onetaskgraph-e2e", metadata).has("README.md"));
+});
+
+describe("scripts/coverage-read-digest.mjs", { skip: !onLinux }, () => {
+  const run = (dir, ...args) =>
+    spawnSync("node", ["scripts/coverage-read-digest.mjs", ...args], {
+      cwd: dir,
+      env: environment(),
+      encoding: "utf8",
+    });
+  let dir;
+  before(() => {
+    dir = copyGraph(scratch, "digest");
+  });
+
+  test("a unit's digest moves with a file it lists and with nothing else", () => {
+    const unit = "onetaskgraph-core";
+    const listed = run(dir, "--unit", unit, "--list").stdout.trim().split("\n");
+    assert.ok(listed.includes("README.md"));
+    const first = run(dir, "--unit", unit);
+    assert.equal(first.status, 0, first.stderr);
+    assert.match(first.stdout, /^[0-9a-f]{64}\n$/);
+    appendFileSync(join(dir, "docs/task-projection.md"), "\nunread\n");
+    assert.equal(run(dir, "--unit", unit).stdout, first.stdout);
+    appendFileSync(join(dir, "README.md"), "\nread\n");
+    assert.notEqual(run(dir, "--unit", unit).stdout, first.stdout);
+  });
+
+  for (const args of [[], ["--unit"], ["--unit", "--list"], ["--unit", "a", "b"], ["--rust", "x"]])
+    test(`refuses ${JSON.stringify(args)} with exit 2 and no digest`, () => {
+      const answer = run(dir, ...args);
+      assert.equal(answer.status, 2);
+      assert.equal(answer.stdout, "");
+      assert.match(answer.stderr, /usage: .*\nnext: /);
+    });
+
+  test("an unknown unit, a malformed sets file and an unreadable file each exit 1 naming it", () => {
+    const unknown = run(dir, "--unit", "no-such-unit");
+    assert.equal(unknown.status, 1);
+    assert.match(unknown.stderr, /no pathspec globs for unit no-such-unit\nnext: /);
+    const sets = join(dir, "scripts/coverage-read-sets.json");
+    const text = readFileSync(sets, "utf8");
+    writeFileSync(sets, "null\n");
+    const malformed = run(dir, "--unit", "onetaskgraph-core");
+    assert.equal(malformed.status, 1);
+    assert.match(malformed.stderr, /is not an object\nnext: /);
+    writeFileSync(sets, text);
+    rmSync(join(dir, "README.md"));
+    const unreadable = run(dir, "--unit", "onetaskgraph-core");
+    assert.equal(unreadable.status, 1);
+    assert.equal(unreadable.stdout, "");
+    assert.match(unreadable.stderr, /cannot be read: .*README\.md[\s\S]*next: /);
+  });
 });
