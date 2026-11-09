@@ -141,7 +141,9 @@ const recorded = JSON.parse(
 );
 assert.ok(
   recorded !== null &&
+    recorded.units !== null &&
     typeof recorded.units === "object" &&
+    !Array.isArray(recorded.units) &&
     Object.values(recorded.units).every(
       (files) => Array.isArray(files) && files.every((file) => typeof file === "string"),
     ),

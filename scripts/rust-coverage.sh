@@ -82,7 +82,7 @@ names = [
     name
     for entry in depends_on
     if isinstance(entry, dict) and entry.get("target") == "coverage"
-    for name in entry.get("projects", [])
+    for name in (entry.get("projects") if isinstance(entry.get("projects"), list) else [])
     if isinstance(name, str)
 ]
 print(" ".join(names))
