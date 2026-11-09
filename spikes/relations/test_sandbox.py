@@ -167,6 +167,19 @@ class Refusals(unittest.TestCase):
             'mutation{a:x(input:{t:["p",1]}){id}}',
         )
 
+    def test_writes_to_owned_objects_are_accepted(self) -> None:
+        self.assertIn("updateIssue", github("updateIssue", id="I1", title=f"x {STAMP}"))
+        self.assertIn(
+            'projectId:"P1"',
+            linear("issueCreate", {"input": {"teamId": "T2", "title": STAMP, "projectId": "P1"}}),
+        )
+        self.assertIn("issueDelete", linear("issueDelete", {"id": "L1", "permanentlyDelete": True}))
+        self.assertIn(
+            "issueRelationUpdate",
+            linear("issueRelationUpdate", {"id": "L1", "input": {"type": "similar"}}),
+        )
+        self.assertIn("projectDelete", linear("projectDelete", {"id": "P1"}))
+
     def test_a_title_that_is_not_text_is_refused(self) -> None:
         self.assert_refused(github, "createIssue", repositoryId="R1", title=42)
         self.assert_refused(linear, "issueCreate", {"input": {"teamId": "T2", "title": 42}})
