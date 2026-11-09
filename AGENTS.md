@@ -357,6 +357,9 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   manifests, `Cargo.lock`, the toolchain and tool pins, each coverage tool's reported version
   (`coverageUnit` in `nx.json`), `ONETASKGRAPH_TESTS_UNDER_COVERAGE`, the platform, and, for an
   e2e unit, every crate its spawned binary links and every workspace file its journeys read.
+  Reads outside a unit's own crate are listed in `scripts/coverage-read-sets.json` and hashed
+  through a runtime input: a `{workspaceRoot}` file input marks its project affected, which
+  would break selection rule 3.
   `.github/nx-policy/tests/coverage-units.test.mjs` proves all of that against real Nx. A
   package version stays out of a unit's key unless its result depends on the value: it is kept
   only by `onetaskgraph-e2e` (`surface.rs`) and `onetaskgraph-linear-e2e` (`health.rs`), which

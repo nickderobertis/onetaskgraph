@@ -69,15 +69,15 @@
       "//": "A coverage unit: its LCOV report is cached, and workspace:coverage merges every unit's and holds the floor. scripts/check-coverage-enforced.sh reconciles the unit with that merge, and .github/nx-policy/tests/coverage-units.test.mjs holds these inputs to every file the run reads.",
       "inputs": [
         "versionFreeNpm",
-        "{workspaceRoot}/.tool-versions",
         "default",
         "^coverageDependency",
         "coverageUnit",
-        "{workspaceRoot}/crates/onetaskgraph-github-projects/tests/github_schema/**/*",
-        "{workspaceRoot}/crates/onetaskgraph-github-projects/tests/fixtures/**/*",
-        "{workspaceRoot}/crates/onetaskgraph-linear/tests/fixtures/**/*",
-        "{workspaceRoot}/scripts/live-crate-test.sh",
-        "coverageSdkSources"
+        "versionFreePython",
+        "versionFreeFiles",
+        "{workspaceRoot}/.tool-versions",
+        {
+          "runtime": "node scripts/coverage-read-digest.mjs --unit onetaskgraph-e2e-support"
+        }
       ]
     }
   }

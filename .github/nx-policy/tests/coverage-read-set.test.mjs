@@ -99,6 +99,16 @@ function scanRust(file, crate, found, dependency = false) {
 const rustFilesOf = (crate, sub) =>
   walk(join(root, "crates", crate, sub)).filter((file) => file.endsWith(".rs"));
 
+const digestList = (dir, unit) =>
+  execFileSync("node", ["scripts/coverage-read-digest.mjs", "--unit", unit, "--list"], {
+    cwd: dir,
+    env: environment(),
+    encoding: "utf8",
+    maxBuffer: 16 * 1024 * 1024,
+  })
+    .trim()
+    .split("\n");
+
 function compiledCrates(unit, metadata) {
   const members = new Set(
     metadata.packages.filter((pkg) => pkg.source === null).map((pkg) => pkg.name),
@@ -178,7 +188,7 @@ test("every workspace file a unit reads is in its task hash", { skip: !onLinux }
         problems.push(`${unit}: reads ${file}, which no runtime input of it hashes`);
   }
   for (const unit of units) {
-    const hashed = new Set(hashes[unitTask(unit)].inputs.files);
+    const hashed = new Set([...hashes[unitTask(unit)].inputs.files, ...digestList(dir, unit)]);
     const reads = new Set(
       [...scannedReads(unit, metadata), ...(recorded.units[unit] ?? [])].filter((file) =>
         tracked.has(file),

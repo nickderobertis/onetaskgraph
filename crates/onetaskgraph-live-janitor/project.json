@@ -70,12 +70,13 @@
       "// end": "llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]",
       "inputs": [
         "versionFreeNpm",
-        "{workspaceRoot}/.tool-versions",
         "default",
         "^coverageDependency",
         "coverageUnit",
-        "{workspaceRoot}/crates/onetaskgraph-github-projects/tests/fixtures/schema.graphql",
-        "{workspaceRoot}/crates/onetaskgraph-linear/tests/document_lifecycle/**/*"
+        "{workspaceRoot}/.tool-versions",
+        {
+          "runtime": "node scripts/coverage-read-digest.mjs --unit onetaskgraph-live-janitor"
+        }
       ]
     },
     "build": {
