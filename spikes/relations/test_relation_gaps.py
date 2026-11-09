@@ -6,6 +6,8 @@ Offline: `python3 -B -m unittest discover -s spikes/relations -p 'test_*.py'`.
 # llmlint: ignore-file[new_code_lands_in_a_project] Spike branch, never merged; see harness.py.
 # llmlint: ignore-file[modern_domain_modeling] Answers raw tracker JSON; see harness.py.
 
+from __future__ import annotations
+
 import json
 import os
 import pathlib
@@ -103,8 +105,12 @@ def serve(trackers: Trackers) -> ThreadingHTTPServer:
 
         def do_POST(self) -> None:
             """Answer one GraphQL document."""
-            length = int(self.headers["content-length"])
-            doc = json.loads(self.rfile.read(length))["query"]
+            length = self.headers.get("content-length", "")
+            payload = json.loads(self.rfile.read(int(length))) if length.isdigit() else None
+            if not isinstance(payload, dict) or not isinstance(payload.get("query"), str):
+                self.send_error(400, "expected a JSON object with a string query")
+                return
+            doc = payload["query"]
             trackers.sent.append(doc)
             answer = trackers.mutate(doc) if doc.startswith("mutation") else trackers.read(doc)
             body = json.dumps(answer).encode()
