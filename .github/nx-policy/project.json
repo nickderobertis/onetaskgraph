@@ -54,22 +54,25 @@
       "{workspaceRoot}/scripts/check-coverage-enforced.sh",
       "{workspaceRoot}/scripts/nx-cargo-closure.mjs",
       "{workspaceRoot}/scripts/nx-version-free-inputs.mjs",
-      "{workspaceRoot}/Cargo.toml",
-      "{workspaceRoot}/Cargo.lock",
-      "{workspaceRoot}/crates/*/Cargo.toml",
       "{workspaceRoot}/scripts/coverage-read-digest.mjs",
       "{workspaceRoot}/scripts/coverage-read-sets.json",
       "{projectRoot}/tests/fixtures/coverage-harness.mjs",
       "{projectRoot}/tests/fixtures/nx-workspace-contracts.mjs",
       "{workspaceRoot}/.github/fixture-environment.mjs",
       "{workspaceRoot}/.github/test-setup.mjs",
-      "versionFreeNpm"
+      "versionFreeNpm",
+      "versionFreeCargo"
     ]
   },
   "targets": {
     "bootstrap": {
       "executor": "nx:noop",
-      "dependsOn": ["github-workflows:bootstrap"]
+      "dependsOn": ["github-workflows:bootstrap"],
+      "inputs": [
+        {
+          "runtime": "node -p process.platform"
+        }
+      ]
     },
     "check": {
       "executor": "nx:noop",
@@ -190,7 +193,9 @@
         {
           "runtime": "node -p process.platform"
         },
-        "{workspaceRoot}/crates/**/*.rs",
+        {
+          "runtime": "node scripts/coverage-read-digest.mjs --rust"
+        },
         "{projectRoot}/tests/fixtures/coverage-read-set.json"
       ],
       "outputs": []
@@ -209,16 +214,6 @@
         {
           "runtime": "node -p process.platform"
         },
-        "{workspaceRoot}/crates/onetaskgraph/**/*",
-        "{workspaceRoot}/crates/onetaskgraph-core/**/*",
-        "{workspaceRoot}/crates/onetaskgraph-plugin-api/**/*",
-        "{workspaceRoot}/crates/onetaskgraph-github-projects/**/*",
-        "{workspaceRoot}/crates/onetaskgraph-linear/**/*",
-        "{workspaceRoot}/crates/onetaskgraph-local-md/**/*",
-        "{workspaceRoot}/crates/onetaskgraph-in-memory/**/*",
-        "{workspaceRoot}/crates/onetaskgraph-status-options/**/*",
-        "{workspaceRoot}/crates/onetaskgraph-status-options-e2e/**/*",
-        "{workspaceRoot}/crates/onetaskgraph-e2e-support/**/*",
         "{workspaceRoot}/nx.json",
         "{workspaceRoot}/scripts/coverage-unit.sh",
         "{workspaceRoot}/scripts/coverage-merge.mjs",
@@ -226,11 +221,13 @@
         "{workspaceRoot}/scripts/coverage-read-digest.mjs",
         "{workspaceRoot}/scripts/coverage-read-sets.json",
         "{workspaceRoot}/workspace/project.json",
-        "{workspaceRoot}/crates/onetaskgraph/project.json",
-        "{workspaceRoot}/Cargo.lock",
         "{projectRoot}/tests/fixtures/coverage-harness.mjs",
         "{workspaceRoot}/.github/fixture-environment.mjs",
-        "{workspaceRoot}/.github/test-setup.mjs"
+        "{workspaceRoot}/.github/test-setup.mjs",
+        "versionFreeCargo",
+        {
+          "runtime": "node scripts/coverage-read-digest.mjs --unit coverage-spawned-binary"
+        }
       ],
       "outputs": []
     }

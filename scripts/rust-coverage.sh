@@ -81,13 +81,14 @@ except (OSError, ValueError, KeyError, TypeError) as error:
 depends_on = target.get("dependsOn") if isinstance(target, dict) else None
 if not isinstance(depends_on, list):
     raise SystemExit("workspace/project.json: the coverage target has no dependsOn list")
-names = [
-    name
-    for entry in depends_on
-    if isinstance(entry, dict) and entry.get("target") == "coverage"
-    for name in (entry.get("projects") if isinstance(entry.get("projects"), list) else [])
-    if isinstance(name, str)
-]
+names = []
+for entry in depends_on:
+    if not (isinstance(entry, dict) and entry.get("target") == "coverage"):
+        continue
+    projects = entry.get("projects")
+    if not (isinstance(projects, list) and all(isinstance(name, str) for name in projects)):
+        raise SystemExit("workspace/project.json: a coverage dependency has no list of project names")
+    names.extend(projects)
 unit_name = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_-]*")
 for name in names:
     if not unit_name.fullmatch(name):

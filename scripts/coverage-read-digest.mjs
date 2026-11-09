@@ -2,6 +2,8 @@
 //
 //   node scripts/coverage-read-digest.mjs --unit NAME          one digest line
 //   node scripts/coverage-read-digest.mjs --unit NAME --list   the files, one per line
+//   node scripts/coverage-read-digest.mjs --rust               every tracked Rust source, as one
+//                                                              digest line
 //
 // Reads: scripts/coverage-read-sets.json and the tracked files its pathspec globs name.
 // Exit: 0 on success, 2 on any other arguments, 1 when the sets file or a tracked file cannot be
@@ -17,9 +19,10 @@ function refuse(message, status) {
 }
 
 const args = process.argv.slice(2);
+const rustOnly = args[0] === "--rust" && args.length === 1;
 const list = args[2] === "--list";
 const unit = args[0] === "--unit" ? args[1] : undefined;
-if (!unit || unit.startsWith("--") || args.length > (list ? 3 : 2))
+if (!rustOnly && (!unit || unit.startsWith("--") || args.length > (list ? 3 : 2)))
   refuse(
     "usage: node scripts/coverage-read-digest.mjs --unit NAME [--list]\nnext: pass the unit's name as Nx's runtime input does",
     2,
@@ -34,7 +37,9 @@ try {
     1,
   );
 }
-const globs = sets?.units?.[unit];
+if (sets === null || typeof sets !== "object" || Array.isArray(sets))
+  refuse("scripts/coverage-read-sets.json is not an object\nnext: restore it from git", 1);
+const globs = rustOnly ? ["crates/**/*.rs"] : sets.units?.[unit];
 const isGlobList = (value) =>
   Array.isArray(value) && value.every((entry) => typeof entry === "string" && entry !== "");
 if (!isGlobList(globs) || !isGlobList(sets.common))
@@ -43,7 +48,7 @@ if (!isGlobList(globs) || !isGlobList(sets.common))
     1,
   );
 
-const pathspecs = [...sets.common, ...globs].map((glob) =>
+const pathspecs = [...(rustOnly ? [] : sets.common), ...globs].map((glob) =>
   glob.startsWith("!") ? `:(exclude,glob)${glob.slice(1)}` : `:(glob)${glob}`,
 );
 let files;
