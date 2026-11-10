@@ -366,8 +366,8 @@ impl Engine {
         })
     }
 
-    /// One edge as the digest names it: its kind, its far end's kind, and its far end by the
-    /// title the store reads it at — or by its id, when no configured source can say.
+    /// One edge as the digest names it: its kind, its far end's kind, and its far end by its
+    /// lineage root — see [`lineage_root`](Self::lineage_root).
     async fn edge_entry(
         &self,
         near: &SourceName,
@@ -378,43 +378,66 @@ impl Engine {
             far: edge.to.kind,
             end,
         };
-        let (source_name, native) = if edge.to.is_native() {
-            (near.to_string(), edge.to.id().to_owned())
-        } else if let Some((source, native)) = edge.to.id().split_once(':')
-            && edge.to.is_qualified()
-        {
-            (source.to_owned(), native.to_owned())
+        let start = if edge.to.is_native() {
+            format!("{near}:{}", edge.to.id())
+        } else if edge.to.is_qualified() {
+            edge.to.id().to_owned()
         } else {
+            // An opaque far end names no configured source this read can follow.
             return Ok(entry(FarEnd::Id(edge.to.id().to_owned())));
         };
-        let named = SourceName::new(source_name.clone()).ok();
-        let far = match named.as_ref().map(|name| self.built(name)) {
-            Some(Ok(far)) => Some(far),
-            _ => None,
-        };
-        let title = match far {
-            Some(far) => {
-                let native = onetaskgraph_plugin_api::NativeId::from(native.as_str());
-                match edge.to.kind {
-                    ItemKind::Task => far
-                        .source()
-                        .get_task(&native)
-                        .await
-                        .map_err(|error| source_failed(far, error))?
-                        .map(|task| task.title),
-                    ItemKind::Project => far
-                        .source()
-                        .get_project(&native)
-                        .await
-                        .map_err(|error| source_failed(far, error))?
-                        .map(|project| project.title),
-                }
+        Ok(entry(self.lineage_root(&start, edge.to.kind).await?))
+    }
+
+    /// The item `start` names, followed back through each `onetaskgraph.origin` it records to
+    /// the first item that records none: the one id every copy of it, however many hops away,
+    /// leads back to while the stores between are configured.
+    ///
+    /// A copy records on what it lands the id it copied from, so a far end and its counterpart
+    /// in another store reach one root, and two items sharing a title never do. The walk stops,
+    /// naming the last id reached, at an id this configuration cannot read — a source nothing
+    /// configures, an item that is not there — and refuses a chain longer than
+    /// [`MAX_LINEAGE`] or one that comes round to an id it has already read. A far end whose
+    /// source fails to answer fails the attestation rather than being named by a guess.
+    async fn lineage_root(&self, start: &str, kind: ItemKind) -> Result<FarEnd, EngineError> {
+        let mut current = start.to_owned();
+        let mut seen: Vec<String> = Vec::new();
+        loop {
+            if seen.contains(&current) || seen.len() >= MAX_LINEAGE {
+                return Ok(FarEnd::Lineage(current));
             }
-            None => None,
-        };
-        Ok(entry(title.map_or_else(
-            || FarEnd::Id(format!("{source_name}:{native}")),
-            FarEnd::Title,
-        )))
+            seen.push(current.clone());
+            let Ok(id) = current.parse::<GlobalId>() else {
+                return Ok(FarEnd::Lineage(current));
+            };
+            let Ok(far) = self.built(&id.source) else {
+                return Ok(FarEnd::Lineage(current));
+            };
+            let metadata = match kind {
+                ItemKind::Task => far
+                    .source()
+                    .get_task(&id.native)
+                    .await
+                    .map_err(|error| source_failed(far, error))?
+                    .map(|task| task.metadata),
+                ItemKind::Project => far
+                    .source()
+                    .get_project(&id.native)
+                    .await
+                    .map_err(|error| source_failed(far, error))?
+                    .map(|project| project.metadata),
+            };
+            match metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get(GlobalId::ORIGIN_KEY))
+                .and_then(Value::as_str)
+            {
+                Some(origin) => current = origin.to_owned(),
+                None => return Ok(FarEnd::Lineage(current)),
+            }
+        }
     }
 }
+
+/// The most origins one far end's lineage is followed through: a chain this long is no plan's.
+const MAX_LINEAGE: usize = 16;

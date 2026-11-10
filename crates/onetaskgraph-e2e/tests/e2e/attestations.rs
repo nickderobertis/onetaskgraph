@@ -1025,7 +1025,7 @@ fn an_attestation_held_to_the_version_the_item_is_at_is_recorded() {
 }
 
 #[test]
-fn an_edge_names_its_far_end_wherever_it_is_and_goes_void_when_it_moves() {
+fn an_edge_names_its_far_end_by_identity_wherever_it_is_never_by_title() {
     let plan = Plan::new(false);
     let other = plan.sandbox.subdirectory("other");
     plan.sandbox.project_document(&document(&json!({
@@ -1034,68 +1034,65 @@ fn an_edge_names_its_far_end_wherever_it_is_and_goes_void_when_it_moves() {
     })));
     let moved = json!("content-moved");
     let body = plan.file("far.md", "Far.\n");
-
-    // A task depending on a task of another configured source.
-    let far = stdout(&plan.exits(
-        &[
+    let create = |source: &str, title: &str, extra: &[&str]| {
+        let mut arguments = vec![
             "task",
             "create",
-            "other",
+            source,
             "--project",
             "elsewhere",
             "--title",
-            "Upstream",
+            title,
             "--body-file",
             &body,
-        ],
-        0,
-    ))
-    .trim()
-    .to_owned();
-    let near = stdout(&plan.exits(
-        &[
-            "task",
-            "create",
-            "notes",
-            "--project",
-            "plan-1",
-            "--title",
-            "Near",
-            "--body-file",
-            &body,
-            "--depends-on",
-            &far,
-        ],
-        0,
-    ))
-    .trim()
-    .to_owned();
+        ];
+        arguments.extend_from_slice(extra);
+        stdout(&plan.exits(&arguments, 0)).trim().to_owned()
+    };
+
+    // A task depending on a task of another configured source.
+    let far = create("other", "Upstream", &[]);
+    let twin = create("other", "Upstream", &[]);
+    let near = create("notes", "Near", &["--depends-on", &far]);
+    // Renaming the far end leaves it the same item: the record holds.
     plan.after(
         "task",
         &near,
         &["task", "update", &far, "--title", "Upstream, renamed"],
-        "void",
-        moved.clone(),
+        "valid",
+        Value::Null,
         "the far end in another source renamed",
     );
-    // Its far end gone, the edge is named by its id instead: another edge.
+    // Pointing the edge at another item of that source voids it, whatever the titles.
+    plan.exits(&["task", "update", &far, "--title", "Upstream"], 0);
+    plan.after(
+        "task",
+        &near,
+        &["task", "update", &near, "--depends-on", &twin],
+        "void",
+        moved.clone(),
+        "the edge moved to another item of the same title",
+    );
+    // A far end gone from its store is still named by the id the edge records: the same edge.
     plan.attest("task", &near);
-    let native = far.split_once(':').expect("qualified").1;
+    let native = twin.split_once(':').expect("qualified").1;
     std::fs::remove_file(other.join("tasks").join(format!("{native}.md")))
         .expect("a far end removed");
-    plan.holds("task", &near, "void", moved.clone(), "the far end removed");
-    plan.attest("task", &near);
     plan.holds(
         "task",
         &near,
         "valid",
         Value::Null,
-        "named by its id, it holds again",
+        "the far end removed, the edge unchanged",
     );
 
     // A project depending on a project.
     let template = plan.template("plan.md");
-    for (id, title) in [("upstream", "Upstream plan"), ("plan-1", "The plan")] {
+    for (id, title) in [
+        ("upstream", "Upstream plan"),
+        ("lookalike", "Upstream plan"),
+        ("plan-1", "The plan"),
+    ] {
         plan.exits(
             &[
                 "project",
@@ -1139,9 +1136,23 @@ fn an_edge_names_its_far_end_wherever_it_is_and_goes_void_when_it_moves() {
             "goal=g",
             "--no-interactive",
         ],
+        "valid",
+        Value::Null,
+        "the project it depends on renamed",
+    );
+    plan.attest("project", "notes:plan-1");
+    plan.hand_edit(
+        "projects",
+        "notes:plan-1",
+        "depends_on: [upstream]",
+        "depends_on: [lookalike]",
+    );
+    plan.holds(
+        "project",
+        "notes:plan-1",
         "void",
         moved,
-        "the project it depends on renamed",
+        "the edge moved to another project of the title it once had",
     );
 }
 
@@ -1483,5 +1494,67 @@ fn an_opaque_far_end_no_configured_tracker_is_is_named_by_its_id() {
         "void",
         json!("content-moved"),
         "the opaque far end moved",
+    );
+}
+
+#[test]
+fn a_dependency_swapped_for_another_task_of_the_same_title_voids_the_record() {
+    let plan = Plan::new(false);
+    let body = plan.file("same.md", "Same.\n");
+    let create = |title: &str, extra: &[&str]| {
+        let mut arguments = vec![
+            "task",
+            "create",
+            "notes",
+            "--project",
+            "plan-1",
+            "--title",
+            title,
+            "--body-file",
+            &body,
+        ];
+        arguments.extend_from_slice(extra);
+        stdout(&plan.exits(&arguments, 0)).trim().to_owned()
+    };
+    let first = create("Same title", &[]);
+    let second = create("Same title", &[]);
+    assert_ne!(first, second, "two tasks under one title");
+    let near = create("Near", &["--depends-on", &first]);
+    plan.after(
+        "task",
+        &near,
+        &["task", "update", &near, "--depends-on", &second],
+        "void",
+        json!("content-moved"),
+        "the dependency is now another task that happens to share the first's title",
+    );
+}
+
+#[test]
+fn a_task_record_with_edges_survives_two_hops_of_copying() {
+    let plan = Plan::new(true);
+    let seeded = plan.seed("notes");
+    let record = plan.attest("task", &seeded.ship);
+    let landed = |report: &Value, source: &str| -> String {
+        report["items"]
+            .as_array()
+            .expect("outcomes")
+            .iter()
+            .find(|outcome| outcome["source"] == source)
+            .and_then(|outcome| outcome["destination"].as_str())
+            .unwrap_or_else(|| panic!("{source} landed: {report}"))
+            .to_owned()
+    };
+    // notes → board, then the board's copy → Linear: every far end's origin chain leads back
+    // to the folder's own task.
+    let first = plan.json(&["project", "copy", &seeded.project, "--to", "board"]);
+    let on_board = landed(&first, &seeded.project);
+    let second = plan.json(&["project", "copy", &on_board, "--to", "linear"]);
+    let ship = landed(&second, &landed(&first, &seeded.ship));
+    let checked = plan.check("task", &ship, Some(BAR));
+    assert_eq!(
+        (&checked["state"], &checked["record"]),
+        (&json!("valid"), &record),
+        "two hops from where it was recorded, the record still holds"
     );
 }

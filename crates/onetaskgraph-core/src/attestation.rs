@@ -32,9 +32,11 @@
 //!   hash of the answers it was rendered from — or `null` for an item rendered from none;
 //! - `repositories`, sorted;
 //! - `depends_on`: the item's own forward dependency edges, each `[<edge kind>, <far end's
-//!   kind>, <far end>]` sorted, where the far end is named by its title when the store can
-//!   read it and by its id when it cannot. A copy files the far end under another id; naming it
-//!   by what it is keeps one edge one edge wherever the plan is copied. A document has none;
+//!   kind>, <far end>]` sorted, where the far end is named by its lineage root: the qualified
+//!   id its chain of recorded `onetaskgraph.origin`s leads back to through the configured
+//!   sources — its own, for an item copied from nowhere. A copy files the far end under another
+//!   id and records where it came from, so every copy of one far end reaches one root, while
+//!   two items sharing a title never do. A document has none;
 //! - `metadata`: every caller-owned metadata key and its value, but those the record
 //!   `excludes`.
 //!
@@ -385,9 +387,10 @@ pub struct Attested {
 /// One far end of an edge, as the digest names it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FarEnd {
-    /// By the title a configured source reads it at.
-    Title(String),
-    /// By its qualified id — or its spelling, for an opaque one — when no source can say.
+    /// By its lineage root: the qualified id its chain of recorded origins leads back to — its
+    /// own, for an item copied from nowhere — so it reads the same from every copy of it.
+    Lineage(String),
+    /// By its spelling, for an opaque far end no configured source can be asked about.
     Id(String),
 }
 
@@ -403,7 +406,7 @@ pub struct AuthoredEdge {
 }
 
 impl AuthoredEdge {
-    /// The edge as the digest spells it: `[<edge kind>, <far end's kind>, "title:…" | "id:…"]`.
+    /// The edge as the digest spells it: `[<edge kind>, <far end's kind>, "lineage:…" | "id:…"]`.
     fn spelled(&self) -> [String; 3] {
         let kind = match self.kind {
             DependencyKind::Blocks => "blocks",
@@ -414,7 +417,7 @@ impl AuthoredEdge {
             ItemKind::Project => "project",
         };
         let end = match &self.end {
-            FarEnd::Title(title) => format!("title:{title}"),
+            FarEnd::Lineage(root) => format!("lineage:{root}"),
             FarEnd::Id(id) => format!("id:{id}"),
         };
         [kind.to_owned(), far.to_owned(), end]
@@ -584,7 +587,7 @@ mod tests {
             depends_on: vec![AuthoredEdge {
                 kind: DependencyKind::Blocks,
                 far: ItemKind::Task,
-                end: FarEnd::Title("Other".into()),
+                end: FarEnd::Lineage("src:1".into()),
             }],
         }
     }

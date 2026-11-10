@@ -3088,7 +3088,10 @@ held under the reserved metadata key `onetaskgraph.attestations`, one record per
 again replaces that kind's record alone. The store computes `content_digest` itself: the
 SHA-256 of the item's title, body, template answers (the `answers_digest` of its
 `onetaskgraph.template` entry), repositories, its own dependency edges (each far end named by
-its title, so a copy that files it under another id keeps the edge) and every caller-owned
+its lineage root — the qualified id its recorded `onetaskgraph.origin`s lead back to through the
+configured sources, its own for an item copied from nowhere — so a copy that files it under
+another id keeps the edge, renaming it keeps it, and pointing the edge at another item voids the
+record whatever the two are titled) and every caller-owned
 metadata key but those `--exclude` names. Never its status, priority, labels, ids, location or
 any store-reserved key — the attestations included — so a copy, which carries all of it,
 carries a record that still checks `valid` where it lands. `--if-version` records it only while
