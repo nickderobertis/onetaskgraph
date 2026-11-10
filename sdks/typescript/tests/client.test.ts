@@ -2318,7 +2318,7 @@ test("a copy with comments carries them, and a repeat by query skips the unchang
   }
 });
 
-test("projectCopy flags agree with the binary help and validate membersOnly", () => {
+test("projectCopy flags agree with the binary help and validate membersOnly and documents", () => {
   const flags = (verb: string[]) => {
     const help = spawnSync(binary, [...verb, "--help"], { encoding: "utf8" });
     expect(help.status, help.stderr).toBe(0);
@@ -2339,6 +2339,7 @@ test("projectCopy flags agree with the binary help and validate membersOnly", ()
     noLink: true,
     comments: true,
     noTasks: true,
+    documents: true,
     members: ["from:T-1"],
     membersOnly: true,
     termScope: ["github.com/example/project"],
@@ -2356,6 +2357,12 @@ test("projectCopy flags agree with the binary help and validate membersOnly", ()
       membersOnly: "false" as unknown as boolean,
     }),
   ).toThrow("membersOnly must be a boolean");
+  expect(projectCopyFlags({ documents: false })).not.toContain("--documents");
+  expect(() =>
+    client.projectCopy("from:P-1", "into", {
+      documents: "true" as unknown as boolean,
+    }),
+  ).toThrow("documents must be a boolean");
 });
 
 test("taskAssets rejects a partial exit even beside valid asset names", async () => {
