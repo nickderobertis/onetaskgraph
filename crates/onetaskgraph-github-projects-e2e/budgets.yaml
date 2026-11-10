@@ -203,6 +203,16 @@ budgets:
     unit: writes
     direction: max
     threshold: 40
+  - id: plan-approval-seconds
+    description: >-
+      Seconds recording a design approval takes: the seconds a person waits for one `design-approval` attestation recorded on the board copy of the plan's design document, in simulated time with each request held for the timing spike's mean latency of its kind, local processing excluded against the same loopback; its detail gives each request kind's count and modelled latency. An inner measure, because a person's whole wait on a shared, variably loaded host is not a consistent measurement, so it takes the part the store's requests decide, reproducible on any runner. Workload: one plan of 10 items (a project, 8 tasks and one design document carrying one image) drafted in a private local-md source and copied onto a public GitHub Projects board of 2,000 other items, every public write screened by the write policy, then one attestation of kind `design-approval` written on the copied design document. It protects the time a person waits to approve a plan's design, carried over unchanged from the threshold and workload registered and approved as `plan-approval-seconds` in the orchestrator that records it.
+    labels: [github]
+    measure: reported
+    # llmlint: ignore[budget_commands_measure_directly] Every budget of this file selects a report-only entry in `budget_runner`, the harness-runner convention this crate's budgets landed with, and the task registering this one names that command. It reads only the telemetry `approval_seconds.rs` recorded during the crate's test run, refuses a recording of another workload, and hands the figure to onebudgetspec, which alone judges it.
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_plan_approval", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-github-projects-e2e"]
+    unit: seconds
+    direction: max
+    threshold: 7
   - id: github-approval-calls-points
     description: >-
       Modelled GitHub GraphQL points of one complete plan design approval, its review task's creation and resolution included, on a 2,000-item board, screened or not. It protects every manager's share of the board token.
