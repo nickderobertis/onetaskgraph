@@ -890,6 +890,21 @@ pub struct TaskUpdateArgs {
     #[arg(long = "no-depends-on")]
     pub no_depends_on: bool,
 
+    /// A repository it names, as its origin — `github.com/owner/name`. Repeat for several;
+    /// together they replace its repositories list, and nothing else about it. Where its issue
+    /// lives is never moved.
+    #[arg(
+        long = "repository",
+        value_name = "ORIGIN",
+        value_parser = repository,
+        conflicts_with = "no_repositories"
+    )]
+    pub repository: Vec<Repository>,
+
+    /// Replace its repositories list with none.
+    #[arg(long = "no-repositories")]
+    pub no_repositories: bool,
+
     #[command(flatten)]
     pub expect: ExpectArgs,
 
@@ -922,6 +937,13 @@ pub struct PrioritySetArgs {
     /// The priority to set.
     #[arg(value_name = "PRIORITY")]
     pub priority: PriorityArg,
+
+    /// Write only while the task holds this priority — `none` for a task with none. Repeat for
+    /// several. At any other the task keeps its own, nothing is written, and the answer's
+    /// `outcome` is `held`, with `priority_condition` naming what it holds: the semantics of
+    /// `task copy --when-destination-priority`. Costs one read of the task before the write.
+    #[arg(long = "when-priority", value_name = "PRIORITY")]
+    pub when_priority: Vec<PriorityArg>,
 
     #[command(flatten)]
     pub expect: ExpectArgs,

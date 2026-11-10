@@ -4339,6 +4339,12 @@ impl LocalMdSource {
             });
             front("delivers", list.as_deref())?;
         }
+        if wanted.repositories != before.repositories {
+            let list = (!wanted.repositories.is_empty()).then(|| {
+                serde_json::to_string(&wanted.repositories).expect("a list of origins renders")
+            });
+            front("repositories", list.as_deref())?;
+        }
         if let Some(edges) = edges {
             let written: Vec<WrittenDependency> = edges.iter().map(WrittenDependency::of).collect();
             let list = (!written.is_empty())

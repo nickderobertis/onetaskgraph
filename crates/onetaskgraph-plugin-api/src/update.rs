@@ -17,16 +17,16 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    DependencyEdge, Direction, ItemWrite, MetadataKey, NativeId, PageRequest, Priority,
+    DependencyEdge, Direction, ItemWrite, MetadataKey, NativeId, PageRequest, Priority, Repository,
     SourceError, Status, Task, TaskRef, TaskSource,
 };
 
 /// A targeted update of one existing task. A member left `None` (or empty) leaves that field
 /// exactly as the source holds it.
 ///
-/// Labels, repositories and project membership are deliberately outside it — an existing
-/// item is never moved, and no caller writes labels this way — and so is creation, which is a
-/// copy's.
+/// Labels and project membership are deliberately outside it — an existing item is never
+/// moved, and no caller writes labels this way — and so is creation, which is a copy's. Its
+/// `repositories` list is a field of the item like its title, and is replaced whole.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct TaskUpdate {
     /// The task's title.
@@ -62,6 +62,11 @@ pub struct TaskUpdate {
     /// only the difference.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub depends_on: Option<Vec<DependencyEdge>>,
+    /// Replaces the task's [`Task::repositories`] whole; an empty list clears it. Where the
+    /// item's issue lives is never moved by it: it is the list the item names, as a read
+    /// reports it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repositories: Option<Vec<Repository>>,
 }
 
 impl TaskUpdate {
@@ -76,6 +81,7 @@ impl TaskUpdate {
             && self.metadata_remove.is_empty()
             && self.delivers.is_none()
             && self.depends_on.is_none()
+            && self.repositories.is_none()
     }
 
     /// Whether this update names `field`, which is the only way a source may report it written.
@@ -91,6 +97,7 @@ impl TaskUpdate {
             }
             UpdatedField::Delivers => self.delivers.is_some(),
             UpdatedField::DependsOn => self.depends_on.is_some(),
+            UpdatedField::Repositories => self.repositories.is_some(),
         }
     }
 
@@ -160,6 +167,9 @@ impl TaskUpdate {
         if let Some(delivers) = &self.delivers {
             updated.delivers.clone_from(delivers);
         }
+        if let Some(repositories) = &self.repositories {
+            updated.repositories.clone_from(repositories);
+        }
         updated
     }
 
@@ -196,6 +206,9 @@ impl TaskUpdate {
         }
         if self.delivers.is_some() && before.delivers != after.delivers {
             written.insert(UpdatedField::Delivers);
+        }
+        if self.repositories.is_some() && before.repositories != after.repositories {
+            written.insert(UpdatedField::Repositories);
         }
         written
     }
@@ -302,6 +315,8 @@ pub enum UpdatedField {
     Delivers,
     /// [`TaskUpdate::depends_on`].
     DependsOn,
+    /// [`TaskUpdate::repositories`].
+    Repositories,
 }
 
 /// What a source answers a [`TaskUpdate`] of a task it holds with.

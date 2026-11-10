@@ -25360,6 +25360,28 @@ export const runtimeSchemas = {
           }
         ]
       },
+      "outcome": {
+        "description": "Whether a write guarded by `--when-priority` was `written` or `held` — absent for a\nwrite made without the guard.",
+        "anyOf": [
+          {
+            "$ref": "#/$defs/GuardOutcome"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "priority_condition": {
+        "description": "What the guard found the task's priority at before the write, and whether that is one it\nnames — the shape `task copy --when-destination-priority` reports — absent for a write\nmade without the guard.",
+        "anyOf": [
+          {
+            "$ref": "#/$defs/PriorityCondition"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
       "sanitization": {
         "anyOf": [
           {
@@ -25664,6 +25686,39 @@ export const runtimeSchemas = {
           "unit",
           "amount",
           "lower_bound"
+        ]
+      },
+      "GuardOutcome": {
+        "description": "What a write guarded by a condition on the item's own value came to.",
+        "oneOf": [
+          {
+            "description": "The item held a value the guard names, and the write was made.",
+            "type": "string",
+            "const": "written"
+          },
+          {
+            "description": "The item held a value the guard does not name, and nothing was written.",
+            "type": "string",
+            "const": "held"
+          }
+        ]
+      },
+      "PriorityCondition": {
+        "description": "What a guarded copy found a counterpart's priority at, and whether that met the condition.",
+        "type": "object",
+        "properties": {
+          "held": {
+            "description": "The counterpart's priority, as the copy's own pre-write read held it.",
+            "$ref": "#/$defs/Priority"
+          },
+          "met": {
+            "description": "Whether that priority is one the condition names.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "held",
+          "met"
         ]
       },
       "Sanitization": {
@@ -26737,7 +26792,7 @@ export const runtimeSchemas = {
   "TaskUpdate": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "TaskUpdate",
-    "description": "A targeted update of one existing task. A member left `None` (or empty) leaves that field\nexactly as the source holds it.\n\nLabels, repositories and project membership are deliberately outside it — an existing\nitem is never moved, and no caller writes labels this way — and so is creation, which is a\ncopy's.",
+    "description": "A targeted update of one existing task. A member left `None` (or empty) leaves that field\nexactly as the source holds it.\n\nLabels and project membership are deliberately outside it — an existing item is never\nmoved, and no caller writes labels this way — and so is creation, which is a copy's. Its\n`repositories` list is a field of the item like its title, and is replaced whole.",
     "type": "object",
     "properties": {
       "title": {
@@ -26809,6 +26864,16 @@ export const runtimeSchemas = {
         ],
         "items": {
           "$ref": "#/$defs/DependencyEdge"
+        }
+      },
+      "repositories": {
+        "description": "Replaces the task's [`Task::repositories`] whole; an empty list clears it. Where the\nitem's issue lives is never moved by it: it is the list the item names, as a read\nreports it.",
+        "type": [
+          "array",
+          "null"
+        ],
+        "items": {
+          "$ref": "#/$defs/Repository"
         }
       }
     },
@@ -27007,6 +27072,10 @@ export const runtimeSchemas = {
             "const": "related"
           }
         ]
+      },
+      "Repository": {
+        "description": "A repository identified by its normalized origin, without a URL scheme or `.git` suffix.",
+        "type": "string"
       }
     }
   },
@@ -27394,6 +27463,11 @@ export const runtimeSchemas = {
             "description": "[`TaskUpdate::depends_on`].",
             "type": "string",
             "const": "depends-on"
+          },
+          {
+            "description": "[`TaskUpdate::repositories`].",
+            "type": "string",
+            "const": "repositories"
           }
         ]
       }
@@ -27846,6 +27920,11 @@ export const runtimeSchemas = {
             "description": "[`TaskUpdate::depends_on`].",
             "type": "string",
             "const": "depends-on"
+          },
+          {
+            "description": "[`TaskUpdate::repositories`].",
+            "type": "string",
+            "const": "repositories"
           }
         ]
       },
@@ -28674,6 +28753,11 @@ export const runtimeSchemas = {
         "description": "[`TaskUpdate::depends_on`].",
         "type": "string",
         "const": "depends-on"
+      },
+      {
+        "description": "[`TaskUpdate::repositories`].",
+        "type": "string",
+        "const": "repositories"
       }
     ]
   },

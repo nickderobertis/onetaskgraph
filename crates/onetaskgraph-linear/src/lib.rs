@@ -2939,6 +2939,14 @@ impl LinearSource {
         if let Some(delivers) = &update.delivers {
             set_task_list(&mut slot, TaskRef::DELIVERS_KEY, delivers);
         }
+        // Recorded exactly as a whole write records it: none for an empty list.
+        if let Some(repositories) = &update.repositories {
+            if repositories.is_empty() {
+                slot.remove(Repository::METADATA_KEY);
+            } else {
+                slot.insert(Repository::METADATA_KEY.into(), json!(repositories));
+            }
+        }
         let mut relations = None;
         if let Some(wanted) = &update.depends_on {
             let current = self.forward_edges(&before.id).await?;

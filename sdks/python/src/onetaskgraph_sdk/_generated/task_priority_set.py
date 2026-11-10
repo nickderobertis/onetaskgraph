@@ -117,6 +117,19 @@ class BudgetSpent(BaseModel):
     ]
 
 
+class GuardOutcome(StrEnum):
+    GuardOutcomeWritten = "written"
+    GuardOutcomeHeld = "held"
+
+
+class PriorityCondition(BaseModel):
+    held: Annotated[
+        Priority,
+        Field(description="The counterpart's priority, as the copy's own pre-write read held it."),
+    ]
+    met: Annotated[bool, Field(description="Whether that priority is one the condition names.")]
+
+
 class LocatorKind(StrEnum):
     LocatorKindSource = "source"
     LocatorKindItem = "item"
@@ -242,6 +255,18 @@ class TaskPrioritySet(BaseModel):
         Spent | None,
         Field(
             description="What an expected write spent at the sources that meter their own requests, its\nfallback read included — absent for a write made without `--expect`."
+        ),
+    ] = None
+    outcome: Annotated[
+        GuardOutcome | None,
+        Field(
+            description="Whether a write guarded by `--when-priority` was `written` or `held` — absent for a\nwrite made without the guard."
+        ),
+    ] = None
+    priority_condition: Annotated[
+        PriorityCondition | None,
+        Field(
+            description="What the guard found the task's priority at before the write, and whether that is one it\nnames — the shape `task copy --when-destination-priority` reports — absent for a write\nmade without the guard."
         ),
     ] = None
     sanitization: Sanitization | None = None

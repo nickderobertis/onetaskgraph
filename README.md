@@ -100,13 +100,15 @@ onetaskgraph task status set <ID> draft|backlog|todo|queued|in-progress|done|can
 onetaskgraph task status reconcile --source <SOURCE> [--dry-run]
 onetaskgraph task status complete --issue <OWNER/NAME#N>... [--source <SOURCE>]... [--dry-run]
 onetaskgraph task priority set <ID> none|urgent|high|medium|low [--expect VERSION]
-                               [--if-version VERSION]
+                               [--if-version VERSION] [--when-priority PRIORITY]...
+                               # --when-priority: write only over these; else `outcome: held`
 onetaskgraph task content set <ID> --file PATH [--expect VERSION] [--if-version VERSION]
 onetaskgraph task metadata set <ID> <KEY> <VALUE> [--expect VERSION] [--if-version VERSION]
 onetaskgraph task update <ID> [--title TITLE] [--body-file PATH]
                          [--status CATEGORY [--status-name NAME]] [--priority PRIORITY]
                          [--metadata KEY=JSON]... [--remove-metadata KEY]...
                          [--delivers ID... | --no-delivers] [--depends-on ID... | --no-depends-on]
+                         [--repository ORIGIN... | --no-repositories]
                          [--expect VERSION] [--if-version VERSION]
                          [--term-scope REPOSITORY... | --term-scope-empty]
 onetaskgraph task create <SOURCE> --project P --title TITLE

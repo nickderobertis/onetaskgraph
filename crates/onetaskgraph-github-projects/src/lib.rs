@@ -8658,6 +8658,7 @@ impl GitHubProjectsSource {
             || !update.metadata_set.is_empty()
             || !update.metadata_remove.is_empty()
             || update.delivers.is_some()
+            || update.repositories.is_some()
             || edges.is_some())
             && self.is_unread(id)
         {
@@ -8698,6 +8699,29 @@ impl GitHubProjectsSource {
         }
         if let Some(delivers) = &update.delivers {
             set_task_list(&mut slot, TaskRef::DELIVERS_KEY, delivers);
+        }
+        // The list a whole write records, by the same rule: none when it is exactly the issue's
+        // own repository, or empty with no issue repository to derive, and otherwise the list.
+        if let Some(repositories) = &update.repositories {
+            let derivable = item
+                .own_repository
+                .as_ref()
+                .map_or(repositories.is_empty(), |own| {
+                    repositories.as_slice() == std::slice::from_ref(own)
+                });
+            if derivable {
+                slot.remove(Repository::METADATA_KEY);
+            } else {
+                slot.insert(
+                    Repository::METADATA_KEY.to_owned(),
+                    Value::Array(
+                        repositories
+                            .iter()
+                            .map(|repository| Value::String(repository.as_str().to_owned()))
+                            .collect(),
+                    ),
+                );
+            }
         }
         if let Some((_, recorded)) = &edges {
             record_edges(&mut slot, recorded);
@@ -8831,6 +8855,9 @@ impl GitHubProjectsSource {
         item.slot = slot;
         if let Some(delivers) = &update.delivers {
             item.delivers.clone_from(delivers);
+        }
+        if let Some(repositories) = &update.repositories {
+            item.repositories.clone_from(repositories);
         }
         if let Some(moving) = status_move {
             item.closed = matches!(moving.target, StatusTarget::Terminal(_, _))

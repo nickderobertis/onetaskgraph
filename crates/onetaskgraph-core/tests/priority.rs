@@ -228,6 +228,8 @@ async fn a_narrow_priority_or_content_write_answers_the_task_and_refuses_what_ca
             result: set.result.clone(),
             fallback: None,
             spent: None,
+            outcome: None,
+            priority_condition: None,
         }
     );
     let set = engine

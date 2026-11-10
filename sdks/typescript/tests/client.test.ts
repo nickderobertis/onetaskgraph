@@ -946,8 +946,10 @@ test("taskUpdate sends exactly the flags the binary's task update reports, no mo
         dependsOn: ["work:T-3"],
         termScope: ["github.com/example-org/widget"],
         expect: "gh2|v",
+        ifVersion: "md1|v",
+        repositories: ["github.com/example-org/widget"],
       }),
-      ...taskUpdateFlags({ delivers: [], dependsOn: [], termScope: [] }),
+      ...taskUpdateFlags({ delivers: [], dependsOn: [], termScope: [], repositories: [] }),
     ].filter((argument) => argument.startsWith("--")),
   );
   expect([...sent].sort()).toEqual(own);
@@ -993,6 +995,7 @@ test("taskCopy sends exactly the flags the binary's task copy reports, no more a
         whenDestinationStatus: ["backlog"],
         otherwise: "refuse",
         whenDestinationPriority: ["none"],
+        ifVersion: "md1|v",
       }),
       ...taskCopyFlags({ termScope: [] }),
     ].filter((argument) => argument.startsWith("--")),

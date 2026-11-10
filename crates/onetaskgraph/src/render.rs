@@ -422,10 +422,14 @@ pub fn task_updated(updated: &TaskUpdated) -> String {
 
 /// What `task priority set` did: the task, and the priority its source now reads it as.
 pub fn priority_set(set: &TaskPrioritySet) -> String {
-    columns(&[
+    let mut rows = vec![
         vec!["id:".to_owned(), set.id.to_string()],
         vec!["priority:".to_owned(), wire(&set.priority)],
-    ])
+    ];
+    if let Some(outcome) = &set.outcome {
+        rows.push(vec!["outcome:".to_owned(), wire(outcome)]);
+    }
+    columns(&rows)
 }
 
 /// What `task content set` did: the task whose content was replaced.

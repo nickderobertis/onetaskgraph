@@ -253,6 +253,11 @@ OPTION_TYPES = {
     "when_destination_status": "choice_list",
     "otherwise": "choices",
     "when_destination_priority": "choice_list",
+    # The version of the task a write is held to: refused as `version-moved` at any other.
+    "if_version": "VersionToken",
+    # The priorities a `task priority set` writes over; at any other it answers `held`.
+    "when_priority": "choice_list",
+    "no_repositories": "bool",
 }
 OPTION_PLACEHOLDERS = {
     "apply": None,
@@ -327,6 +332,9 @@ OPTION_PLACEHOLDERS = {
     "when_destination_status": "CATEGORY",
     "otherwise": "WHAT",
     "when_destination_priority": "PRIORITY",
+    "if_version": "VERSION",
+    "when_priority": "PRIORITY",
+    "no_repositories": None,
 }
 
 
@@ -378,6 +386,8 @@ COMMAND_OPTIONS: dict[tuple[str, ...], dict[str, OptionShape]] = {
     ("task", "update"): {
         "status": OptionShape(type="choices", placeholder="CATEGORY"),
         "priority": OptionShape(type="choices", placeholder="PRIORITY"),
+        # The repositories list it replaces, each an origin.
+        "repository": OptionShape(type="list[str] | tuple[str, ...]", placeholder="ORIGIN"),
     },
 }
 

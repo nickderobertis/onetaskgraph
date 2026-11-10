@@ -94,6 +94,9 @@ export type WriteOptions = {
 // task's ids and current values from the source's local cache instead of reading it. Not a
 // precondition — see `docs/plugin-protocol.md`.
 export type ExpectOptions = { expect?: string };
+// The version of the task a write is held to: at any other it is refused as `version-moved`,
+// writing nothing.
+export type HeldOptions = { ifVersion?: string };
 /** Status ownership on copy updates. Creates always carry the source status. */
 export const statusPolicies = ["source", "preserve-destination"] as const;
 export type StatusPolicy = (typeof statusPolicies)[number];
@@ -141,7 +144,8 @@ export type TaskCopyOptions = StatusCopyOptions &
   CopyOptions &
   CopyQueryOptions &
   CopyConditionOptions &
-  ExpectOptions & { create?: boolean; targetTask?: string };
+  ExpectOptions &
+  HeldOptions & { create?: boolean; targetTask?: string };
 // A comment's body, given as text the client writes to the binary's standard input or as a
 // file the binary reads byte for byte — never as a word of the command line.
 export type CommentBodyOptions = ({ body: string } | { bodyFile: string }) &
@@ -201,7 +205,8 @@ export type ProjectCreateOptions = CreateOptions & { status?: StatusCategory };
 // source that keeps one. A list given replaces that list, `[]` included — which is how a list is
 // cleared — and one left out is not named.
 export type TaskUpdateOptions = WriteOptions &
-  ExpectOptions & {
+  ExpectOptions &
+  HeldOptions & {
     title?: string;
     bodyFile?: string;
     status?: StatusCategory;
@@ -211,6 +216,8 @@ export type TaskUpdateOptions = WriteOptions &
     removeMetadata?: string[];
     delivers?: string[];
     dependsOn?: string[];
+    // The repository origins the task names, replacing its list; `[]` clears it.
+    repositories?: string[];
   };
 // A regenerate: the template to use in place of the recorded one, answers laid over the stored
 // base, `unset` names whose answer is dropped, and `dryRun` to write nothing.
@@ -556,6 +563,9 @@ export const taskUpdateOptionFlags: Readonly<Record<keyof TaskUpdateOptions, str
   reject: "--reject",
   sanitizeDryRun: "--sanitize-dry-run",
   expect: "--expect",
+  ifVersion: "--if-version",
+  // `[]` is sent as `--no-repositories`, which is how the list is cleared.
+  repositories: "--repository",
 };
 
 // A string option, refused unless it is one: anything else would reach the binary as its string
@@ -586,13 +596,14 @@ export function taskUpdateFlags(options: unknown): string[] {
     );
   }
   const args: string[] = [];
-  const scalars: readonly ("title" | "status" | "statusName" | "priority" | "expect")[] = [
-    "title",
-    "status",
-    "statusName",
-    "priority",
-    "expect",
-  ];
+  const scalars: readonly (
+    | "title"
+    | "status"
+    | "statusName"
+    | "priority"
+    | "expect"
+    | "ifVersion"
+  )[] = ["title", "status", "statusName", "priority", "expect", "ifVersion"];
   for (const name of scalars) {
     if (options[name] !== undefined) {
       args.push(taskUpdateOptionFlags[name], stringOption(method, name, options[name]));
@@ -621,6 +632,11 @@ export function taskUpdateFlags(options: unknown): string[] {
     const ids = stringList(method, name, options[name]);
     if (ids.length === 0) args.push(flag.replace("--", "--no-"));
     for (const id of ids) args.push(flag, id);
+  }
+  if (options.repositories !== undefined) {
+    const origins = stringList(method, "repositories", options.repositories);
+    if (origins.length === 0) args.push("--no-repositories");
+    for (const origin of origins) args.push("--repository", origin);
   }
   args.push(...writePolicyFlags(method, options));
   return args;
@@ -942,6 +958,9 @@ export function taskCopyFlags(options: TaskCopyOptions): string[] {
       ? []
       : ["--target-task", stringOption("taskCopy", "targetTask", options.targetTask)]),
     ...expectFlags("taskCopy", options),
+    ...(options.ifVersion === undefined
+      ? []
+      : ["--if-version", stringOption("taskCopy", "ifVersion", options.ifVersion)]),
   ];
 }
 

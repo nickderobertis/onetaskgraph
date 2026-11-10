@@ -701,7 +701,15 @@ async fn run_inner(
                 &engine,
                 &task,
                 &args.held,
-                engine.set_task_priority(&task, args.priority.priority()),
+                engine.set_task_priority_when(
+                    &task,
+                    args.priority.priority(),
+                    &args
+                        .when_priority
+                        .iter()
+                        .map(|priority| priority.priority())
+                        .collect::<Vec<_>>(),
+                ),
             )
             .await
             .map_err(|error| write_failed(&engine, &error))?;

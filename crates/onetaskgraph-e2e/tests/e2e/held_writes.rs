@@ -556,3 +556,355 @@ fn two_writes_held_to_one_version_of_a_folder_task_never_both_land() {
         );
     }
 }
+
+/// The fields a field-scoped write must leave as they were: every member of `task show` but
+/// the version, the field written and the time a hosted source stamps the write with — and the
+/// field's reserved metadata spelling, which a Linear read also reports among the metadata.
+fn untouched(task: &Value, written: &str) -> Value {
+    let mut task = task.clone();
+    let fields = task.as_object_mut().expect("a task is an object");
+    for member in ["version", "updated_at", written] {
+        fields.remove(member);
+    }
+    if let Some(metadata) = fields.get_mut("metadata").and_then(Value::as_object_mut) {
+        metadata.remove(&format!("onetaskgraph.{written}"));
+    }
+    task
+}
+
+#[test]
+fn a_guarded_priority_set_writes_only_over_a_priority_it_names_and_answers_held_otherwise() {
+    for destination in DESTINATIONS {
+        let stores = Stores::new(false);
+        stores.note("A", "Task A");
+        let task =
+            stores.exited(&owned(&["task", "copy", "notes:A", "--to", destination]), 0)["items"][0]
+                ["destination"]
+                .as_str()
+                .expect("an id")
+                .to_owned();
+        let before = stores.shown(&task);
+        assert_eq!(before["priority"], "high", "{destination}");
+
+        // Held: the task is at `high`, which the guard does not name.
+        let held = stores.exited(
+            &owned(&[
+                "task",
+                "priority",
+                "set",
+                &task,
+                "low",
+                "--when-priority",
+                "none",
+                "--when-priority",
+                "medium",
+            ]),
+            0,
+        );
+        assert_eq!(held["outcome"], "held", "{destination}: {held:#}");
+        assert_eq!(held["priority"], "high", "{destination}: {held:#}");
+        assert_eq!(
+            held["priority_condition"],
+            json!({"held": "high", "met": false}),
+            "{destination}"
+        );
+        assert_eq!(
+            stores.shown(&task),
+            before,
+            "{destination}: nothing was written"
+        );
+
+        // Written: the guard names the priority the task holds.
+        let written = stores.exited(
+            &owned(&[
+                "task",
+                "priority",
+                "set",
+                &task,
+                "low",
+                "--when-priority",
+                "high",
+            ]),
+            0,
+        );
+        assert_eq!(written["outcome"], "written", "{destination}: {written:#}");
+        assert_eq!(written["priority"], "low", "{destination}");
+        assert_eq!(
+            written["priority_condition"],
+            json!({"held": "high", "met": true}),
+            "{destination}"
+        );
+        assert_eq!(stores.shown(&task)["priority"], "low", "{destination}");
+
+        // `none` names a task with no priority.
+        stores.exited(&owned(&["task", "priority", "set", &task, "none"]), 0);
+        let cleared = stores.exited(
+            &owned(&[
+                "task",
+                "priority",
+                "set",
+                &task,
+                "medium",
+                "--when-priority",
+                "none",
+            ]),
+            0,
+        );
+        assert_eq!(cleared["outcome"], "written", "{destination}: {cleared:#}");
+        assert_eq!(stores.shown(&task)["priority"], "medium", "{destination}");
+
+        // Held to a version another writer moved the task past: refused, the task unchanged.
+        let read = stores.version(&task);
+        stores.exited(&owned(&["task", "update", &task, "--title", "Moved"]), 0);
+        let moved = stores.shown(&task);
+        let refused = stores.exited(
+            &owned(&[
+                "task",
+                "priority",
+                "set",
+                &task,
+                "urgent",
+                "--when-priority",
+                "medium",
+                "--if-version",
+                &read,
+            ]),
+            1,
+        );
+        assert_eq!(
+            refused["failure"]["kind"], "version-moved",
+            "{destination}: {refused:#}"
+        );
+        assert_eq!(
+            refused["held"]["version"], moved["version"],
+            "{destination}"
+        );
+        assert_eq!(
+            stores.shown(&task),
+            moved,
+            "{destination}: nothing was written"
+        );
+        // And a guard answering `held` at a stale version is refused all the same.
+        let stale_held = stores.exited(
+            &owned(&[
+                "task",
+                "priority",
+                "set",
+                &task,
+                "urgent",
+                "--when-priority",
+                "low",
+                "--if-version",
+                &read,
+            ]),
+            1,
+        );
+        assert_eq!(
+            stale_held["failure"]["kind"], "version-moved",
+            "{destination}"
+        );
+    }
+}
+
+#[test]
+fn a_repositories_update_replaces_the_list_alone_and_clears_it() {
+    for destination in DESTINATIONS {
+        let stores = Stores::new(false);
+        stores.note("A", "Task A");
+        let task =
+            stores.exited(&owned(&["task", "copy", "notes:A", "--to", destination]), 0)["items"][0]
+                ["destination"]
+                .as_str()
+                .expect("an id")
+                .to_owned();
+        stores.exited(
+            &owned(&[
+                "task",
+                "metadata",
+                "set",
+                &task,
+                "followup.kept",
+                "\"as it was\"",
+            ]),
+            0,
+        );
+        let before = stores.shown(&task);
+
+        let named = ["github.com/acme/widgets", "github.com/acme/gadgets"];
+        let updated = stores.exited(
+            &owned(&[
+                "task",
+                "update",
+                &task,
+                "--repository",
+                named[0],
+                "--repository",
+                named[1],
+            ]),
+            0,
+        );
+        assert_eq!(
+            updated["written"],
+            json!(["repositories"]),
+            "{destination}: {updated:#}"
+        );
+        let after = stores.shown(&task);
+        assert_eq!(
+            after["repositories"],
+            json!(named),
+            "{destination}: {after:#}"
+        );
+        assert_eq!(
+            untouched(&after, "repositories"),
+            untouched(&before, "repositories"),
+            "{destination}: title, body, status, priority and metadata read back unchanged"
+        );
+
+        // Held to a version another writer moved the task past: refused, the list unchanged.
+        let read = stores.version(&task);
+        stores.exited(&owned(&["task", "update", &task, "--title", "Moved"]), 0);
+        let moved = stores.shown(&task);
+        let refused = stores.exited(
+            &owned(&[
+                "task",
+                "update",
+                &task,
+                "--no-repositories",
+                "--if-version",
+                &read,
+            ]),
+            1,
+        );
+        assert_eq!(
+            refused["failure"]["kind"], "version-moved",
+            "{destination}: {refused:#}"
+        );
+        assert_eq!(
+            stores.shown(&task),
+            moved,
+            "{destination}: nothing was written"
+        );
+
+        // Cleared, at the version the task is at.
+        let current = stores.version(&task);
+        stores.exited(
+            &owned(&[
+                "task",
+                "update",
+                &task,
+                "--no-repositories",
+                "--if-version",
+                &current,
+            ]),
+            0,
+        );
+        let cleared = stores.shown(&task);
+        assert_eq!(
+            cleared["repositories"],
+            json!([]),
+            "{destination}: {cleared:#}"
+        );
+        assert_eq!(
+            untouched(&cleared, "repositories"),
+            untouched(&moved, "repositories"),
+            "{destination}"
+        );
+    }
+}
+
+#[test]
+fn an_in_memory_task_takes_a_guarded_priority_and_a_repositories_update() {
+    let sandbox = Sandbox::new();
+    std::fs::create_dir_all(sandbox.subdirectory("folder").join("tasks")).expect("a folder");
+    memory(&sandbox, "As configured");
+    let run = |arguments: &[&str], code: i32| -> Value {
+        let mut full = vec!["--json"];
+        full.extend(arguments);
+        let output = sandbox.command().args(&full).assert().get_output().clone();
+        assert_eq!(
+            output.status.code(),
+            Some(code),
+            "{}\n{}",
+            stdout(&output),
+            stderr(&output)
+        );
+        serde_json::from_str(&stdout(&output)).expect("JSON")
+    };
+    let held = run(
+        &[
+            "task",
+            "priority",
+            "set",
+            "memory:T-1",
+            "low",
+            "--when-priority",
+            "none",
+        ],
+        0,
+    );
+    assert_eq!(held["outcome"], "held", "{held:#}");
+    assert_eq!(held["priority"], "high");
+    let written = run(
+        &[
+            "task",
+            "priority",
+            "set",
+            "memory:T-1",
+            "low",
+            "--when-priority",
+            "high",
+        ],
+        0,
+    );
+    assert_eq!(written["outcome"], "written", "{written:#}");
+    assert_eq!(written["priority"], "low");
+
+    let updated = run(
+        &[
+            "task",
+            "update",
+            "memory:T-1",
+            "--repository",
+            "github.com/acme/widgets",
+        ],
+        0,
+    );
+    assert_eq!(
+        updated["task"]["repositories"],
+        json!(["github.com/acme/widgets"])
+    );
+    assert_eq!(updated["task"]["title"], "As configured");
+    assert_eq!(updated["written"], json!(["repositories"]));
+    let read = run(&["task", "show", "memory:T-1"], 0)["items"][0]["item"]["version"]
+        .as_str()
+        .expect("a version")
+        .to_owned();
+    memory(&sandbox, "Changed since the read");
+    let refused = run(
+        &[
+            "task",
+            "update",
+            "memory:T-1",
+            "--no-repositories",
+            "--if-version",
+            &read,
+        ],
+        1,
+    );
+    assert_eq!(refused["failure"]["kind"], "version-moved", "{refused:#}");
+    let stale = run(
+        &[
+            "task",
+            "priority",
+            "set",
+            "memory:T-1",
+            "low",
+            "--when-priority",
+            "high",
+            "--if-version",
+            &read,
+        ],
+        1,
+    );
+    assert_eq!(stale["failure"]["kind"], "version-moved", "{stale:#}");
+}
