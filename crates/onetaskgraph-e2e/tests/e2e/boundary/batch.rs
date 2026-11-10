@@ -452,6 +452,46 @@ fn a_public_plan_copy_starts_one_check_and_one_inspect_per_repository_of_the_rel
     );
 }
 
+#[test]
+fn under_a_policy_that_rewrites_a_value_rewritable_in_one_write_and_fixed_in_another_keeps_both() {
+    // `t1` is the id task t1's create offers the board, which a rewriting policy may rewrite, and
+    // the far end of t2's dependency, which nothing rewrites: the batch hands the released
+    // `boundary sanitize` both, so the fixed one is never screened only behind the other.
+    let sandbox = Sandbox::new();
+    let mut home = OnevcsHome::new(&sandbox);
+    registered_with_plan(&mut home);
+    let record = home.recorded_sanitizing(&sandbox, json!([]));
+    let (config, board) = crate::fixtures::github_projects_with_items(&sandbox, Vec::new());
+    let extra = json!({
+        "draft": super::folder(&sandbox, "draft", "public"),
+        "board": {"plugin": "github-projects", "config": config, "visibility": "public"},
+    });
+    let policy = record.write_policy().clone();
+    let store = Store::configured(sandbox, Some(home), Some(policy), extra);
+    plan(&store);
+    let mut with = PLAN_COPY.to_vec();
+    with.push("--json");
+    store.ok(&with);
+    assert!(!mutations(&board).is_empty(), "the plan landed");
+    let batches: Vec<Value> = record
+        .calls()
+        .into_iter()
+        .filter(|call| call.command == BoundaryCommand::Sanitize)
+        .map(|call| call.input)
+        .filter(|input| counted(&input["metadata"]).contains_key("Retry step 2"))
+        .collect();
+    assert_eq!(batches.len(), 1, "one sanitisation of the whole plan");
+    let batch = &batches[0];
+    assert!(
+        counted(&batch["metadata"]).contains_key("t1"),
+        "rewritable: {batch}"
+    );
+    assert!(
+        counted(&batch["fixed"]["metadata"]).contains_key("t1"),
+        "fixed: {batch}"
+    );
+}
+
 /// The budget the journey above records, and the workload it records it for.
 pub(crate) const BOUNDARY_BUDGET: &str = "boundary-invocations-per-public-copy";
 pub(crate) const BOUNDARY_WORKLOAD: &str = "public plan of a project, six tasks, a design document and two spike reports naming two \

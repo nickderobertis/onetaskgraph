@@ -1311,12 +1311,13 @@ impl Exposure {
     /// decides on whether a value is there, and a rewrite maps each value it changes, so neither
     /// reads the same value twice differently.
     ///
-    /// `checked` is whether the policy only checks, rewriting nothing: then a value is counted
-    /// over each surface as the check reads it — rewritable and fixed together, as one list —
-    /// so the batch's check is handed exactly the union of what each write's own would be. A
-    /// policy that rewrites keeps the two apart, so a value one write may have rewritten never
+    /// Under a policy that only checks, rewriting nothing — [`PolicyMode::Checks`] — a value is
+    /// counted over each surface as the check reads it, rewritable and fixed together as one
+    /// list, so the batch's check is handed exactly the union of what each write's own would be.
+    /// A policy that rewrites keeps the two apart, so a value one write may have rewritten never
     /// stands in for the same value another write holds where nothing rewrites it.
-    pub(crate) fn union(mut self, other: Self, checked: bool) -> Self {
+    fn union(mut self, other: Self, mode: PolicyMode) -> Self {
+        let checked = mode == PolicyMode::Checks;
         type Tally = std::collections::HashMap<String, usize>;
         fn tally<'a>(lists: impl IntoIterator<Item = &'a [String]>) -> Tally {
             let mut tally = Tally::new();
@@ -2325,9 +2326,11 @@ impl Engine {
             return self.check(destination, item, exposure).await;
         }
         let mut union = Exposure::default();
-        let checked = self.boundary.mode == PolicyMode::Checks;
         for (destination, item, exposure) in writes {
-            union = union.union(located(destination, item, exposure.clone()), checked);
+            union = union.union(
+                located(destination, item, exposure.clone()),
+                self.boundary.mode,
+            );
         }
         if let Some(rewrite) = self.boundary.passed(&union) {
             return Ok(rewrite);

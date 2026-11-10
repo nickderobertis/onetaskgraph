@@ -172,29 +172,62 @@ fn refused(plan: &Plan, arguments: &[&str], oversize: &[(&str, u64)]) {
 }
 
 #[test]
-fn a_plan_whose_later_task_is_too_large_is_refused_before_its_first_task_is_written() {
+fn a_plan_whose_later_tasks_are_too_large_is_refused_before_its_first_task_is_written() {
     let plan = Plan::new(0, Vec::new());
-    // Task 1 fits and is planned before task 5, which does not.
+    // Task 1 fits and is planned before tasks 5 and 7, which do not.
     plan.write_task(5, &prose(70_000), true);
+    plan.write_task(7, &prose(68_000), true);
     let report = dry_run(&plan, &["project", "copy", "notes:P", "--to", "board"]);
-    let size = reported_oversize(&report, "notes:T-5");
+    let five = reported_oversize(&report, "notes:T-5");
+    let seven = reported_oversize(&report, "notes:T-7");
     assert!(
-        size > 70_000,
+        five > 70_000,
         "the composed body is larger than its content"
     );
     for source in std::iter::once("notes:P".to_owned()).chain(
         (1..=TASKS)
-            .filter(|n| *n != 5)
+            .filter(|n| *n != 5 && *n != 7)
             .map(|n| format!("notes:T-{n}")),
     ) {
         let item = outcome(&report, &source);
         assert_eq!(item["action"], json!("created"), "{item}");
         assert!(item["body_size"].as_u64().unwrap() <= LIMIT, "{item}");
     }
+    // The human rendering says the same, row by row, and names each item it would not copy.
+    let output = plan.run(&["project", "copy", "notes:P", "--to", "board", "--dry-run"]);
+    assert_eq!(output.status.code(), Some(4), "{}", stderr(&output));
+    let rendered = stdout(&output);
+    let row = |source: &str| {
+        rendered
+            .lines()
+            .find(|line| line.starts_with(&format!("{source} ")))
+            .unwrap_or_else(|| panic!("no row for {source}: {rendered}"))
+            .to_owned()
+    };
+    let over = row("notes:T-5");
+    assert!(over.contains("oversize"), "{over}");
+    assert!(
+        over.contains(&format!(
+            "body: {five} characters, over the limit of {LIMIT}"
+        )),
+        "{over}"
+    );
+    let fits = row("notes:T-1");
+    let size = outcome(&report, "notes:T-1")["body_size"].as_u64().unwrap();
+    assert!(fits.contains(&format!("body: {size} characters")), "{fits}");
+    assert!(!fits.contains("over the limit"), "{fits}");
+    assert!(
+        stderr(&output).contains(&format!(
+            "notes:T-7 would not be copied: its body of {seven} characters is larger than the \
+             {LIMIT} its destination holds"
+        )),
+        "{}",
+        stderr(&output)
+    );
     refused(
         &plan,
         &["project", "copy", "notes:P", "--to", "board"],
-        &[("notes:T-5", size)],
+        &[("notes:T-5", five), ("notes:T-7", seven)],
     );
 }
 
