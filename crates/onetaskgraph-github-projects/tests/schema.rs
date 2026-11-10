@@ -1824,9 +1824,19 @@ fn a_schema_check_server_retries_an_endpoint_it_cannot_remove_and_says_if_it_nev
         };
         writable(0o555);
         let mut log = BufReader::new(child.stderr.take().expect("a piped standard error"));
+        // The lines before it say the server's idle countdown; the first about the endpoint is
+        // the one the server writes when its removal fails.
         let mut first = String::new();
-        log.read_line(&mut first)
-            .expect("the server says it could not remove its endpoint");
+        while !first.contains("endpoint.json") {
+            first.clear();
+            let read = log
+                .read_line(&mut first)
+                .expect("the server says it could not remove its endpoint");
+            assert!(
+                read > 0,
+                "the server ended without saying it could not remove its endpoint"
+            );
+        }
         if transient {
             writable(0o755);
         }

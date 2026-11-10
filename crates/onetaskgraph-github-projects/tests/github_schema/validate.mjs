@@ -352,21 +352,35 @@ function serve(directory) {
     process.stderr.write(`the schema check could not remove ${endpoint}: ${failure}\n`);
     return false;
   };
+  // A server whose idle period a test set is one that test watches stop, and a stop that never
+  // came has said nothing about why: so such a server says on standard error, its `server.log`,
+  // each connection it counts opened and closed and when it starts and ends its countdown. The
+  // shared server, whose log outlives every test, says none of it.
+  const said =
+    process.env.GITHUB_SCHEMA_IDLE_MS === undefined
+      ? () => {}
+      : (what) => process.stderr.write(`${new Date().toISOString()} ${what}\n`);
   const stop = () => {
+    said("idle: stopping");
     server.close();
     process.exit(release() ? 0 : 1);
   };
   const quiet = () => {
     clearTimeout(idle);
-    if (open === 0) idle = setTimeout(stop, IDLE_MS);
+    if (open === 0) {
+      said(`no connection open: stopping in ${IDLE_MS} ms`);
+      idle = setTimeout(stop, IDLE_MS);
+    }
   };
   const server = createServer((socket) => {
     open += 1;
+    said(`connection opened: ${open} open`);
     clearTimeout(idle);
     socket.setNoDelay(true);
-    socket.on("error", () => {});
+    socket.on("error", (error) => said(`connection error: ${error}`));
     socket.on("close", () => {
       open -= 1;
+      said(`connection closed: ${open} open`);
       quiet();
     });
     let greeted = false;
