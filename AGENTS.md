@@ -364,7 +364,8 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   package version stays out of a unit's key unless its result depends on the value: it is kept
   only by `onetaskgraph-e2e` (`surface.rs`) and `onetaskgraph-linear-e2e` (`health.rs`), which
   compare a crate's declared version to the binary's. The units that write `budgets` telemetry
-  (`onetaskgraph-linear-e2e`, `onetaskgraph-github-projects-e2e`, `onetaskgraph-live-janitor`)
+  (`onetaskgraph-e2e`, `onetaskgraph-linear-e2e`, `onetaskgraph-github-projects-e2e`,
+  `onetaskgraph-live-janitor`)
   declare it as an output too, so a replay restores what `budgets` reads. Nothing in the
   merge's directory is read except the units' own reports, so a report left behind refuses
   the merge rather than reaching the total. The measurement is skipped on Windows with a printed notice
@@ -1515,6 +1516,24 @@ them do; this is the inventory of what is owed, not a status board.
      trashed under the next, one plan copied to two Linear destinations lands once in each, and
      a copy out of a folder declared private into a Linear source that is not sends no id derived
      from it and leaves nothing there naming it.
+
+152. Every item a copy writes is sized before the first write: a `task copy`, a `project copy`
+     — `--documents` included — and a `document copy` dry run report each item's composed body
+     size, and answer an item over a GitHub board's 65,536 characters `oversize` with that
+     limit, one whose content fits and whose metadata slot and rewritten image links do not
+     among them; each copy itself fails `oversize`, listing every such item, with no request
+     that writes reaching the board — a valid task planned before the oversize one included —
+     and nothing written at the source.
+153. A public copy is put to the write policy as one batch: one `check_command` input whose
+     `text`, `paths` and `metadata` are the multiset union of what its writes are each screened
+     as, one `visibility_command` run per repository it names; a term planted in one task refuses
+     the whole copy without printing it, an unavailable check writes nothing, and a task copied
+     alone is a batch of one.
+154. `project copy --documents` lands a plan's project, tasks and documents in one command, each
+     document's references to the plan's tasks pointed at their copies; and a store configured
+     by configuration alone — Linear team sources with no default and no route, folders of
+     Markdown `drafts` and `authoring`, templates of its own — copies a plan to a named team,
+     its dry run sizing every item, and lands every item there and nowhere else.
 
 ## The public boundary
 

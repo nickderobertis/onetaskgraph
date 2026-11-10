@@ -129,6 +129,7 @@ onetaskgraph project graph <ID> [--format mermaid|json] [--direction auto|td|lr]
                            [--group-by KEY] [--complete]
                                                  # see "Drawing a project's dependency graph"
 onetaskgraph project copy <ID> --to <SOURCE> [--no-tasks | --member TASK-ID...]
+                                                 [--documents]
                                                  [--match-by KEY] [--recreate] [--dry-run]
 onetaskgraph project copy <ID> --to <SOURCE> --member TASK-ID... --members-only
                                                  # into the project already there, untouched
@@ -619,7 +620,7 @@ copied from, which is what makes the next copy of it an update.
 
 | Flag | What it is for |
 | --- | --- |
-| `--dry-run` | Every read, no write, and the action each item would have got. |
+| `--dry-run` | Every read, no write, and the action each item would have got — beside, for a destination that can say, the size of the body each item would store there (`body_size`). |
 | `--recreate` | An origin or a link naming an item the destination no longer holds refuses by default, because creating there would duplicate work somebody deleted. This says create instead. |
 | `--create` | `task copy` only: you assert the destination holds no counterpart of any task named — typically because you have just asked it — so each is created without the correspondence lookup, and a GitHub board is sent no origin query. Sound because that query reads an index that lags a fresh write by the same amount whoever asks, so repeating yours could find nothing yours did not. Refused beside `--match-by` or `--recreate`, and for a task whose own link or origin already names an item at the destination, naming that item. |
 | `--match-by KEY` | Delete or corrupt the origin key and neither rule can find the counterpart, so the next copy back creates a new item. This re-establishes the lost correspondence by matching on `title`, or on a metadata key of your choosing, without hand-editing ids. |
@@ -628,6 +629,7 @@ copied from, which is what makes the next copy of it an update.
 | `--otherwise refuse\|preserve-destination` | With `--when-destination-status`, and refused without it: what a task at another category gets. `refuse`, the default, writes nothing for it and answers it `{"action": "failed", "error": {"kind": "destination-status", …}, "held": …}` — naming the item, its category and the set — while every other item lands; the copy then exits `4`, with the report on standard output, as for any item left unwritten. `preserve-destination` copies it as `--status-policy preserve-destination` would, keeping its status. |
 | `--when-destination-priority PRIORITY` | `task copy` only, repeatable: write the source's priority over an existing destination task only while that task is at one of these priorities (`none`, `urgent`, `high`, `medium`, `low`); at any other it keeps its own — a priority a person set — and every other field is written as without the flag. Nothing is refused for it. Taken beside either `--status-policy` and beside `--when-destination-status`; a task a status condition refuses is written nothing. Decided on the same read, so it adds no request; a create takes the source's priority. Each updated task's outcome carries `priority_condition: {"held": <priority>, "met": <bool>}`. A later copy of the unchanged source without the flag writes the source's priority. |
 | `--no-tasks` | Copy a project on its own. By default `project copy` copies the project and every task in it — a home's members' tasks included — matching each task independently. |
+| `--documents` | `project copy` only: copy the documents filed under the project too, in the same copy — read, put to the write policy and sized together with the project and its tasks before anything is written, and landed after them, filed under the project's copy, each reference to a task of the plan pointed at that task's copy. Without it `project copy` reads and writes no document, exactly as before, and `document copy` carries them. Refused beside `--member`. |
 | `--comments` | `task copy` and `project copy`: keep the destination's copies of each task's comments in step with the source's, as [below](#carrying-comments-and-copying-only-what-changed). Without it a copy reads and writes no comment. |
 | `--no-link` | Write nothing at all to the source — no `onetaskgraph.copies` link — and report every link `skipped`. The next copy finds each counterpart by the destination's own `onetaskgraph.origin`. |
 | `--source S`, `--commented-since RFC3339`, `--metadata KEY=VALUE` | `task copy` only, in place of ids: copy what `task list` with the same narrowing answers. Refused beside ids. |
@@ -637,6 +639,19 @@ copied from, which is what makes the next copy of it an update.
 
 `--dry-run` is how you read that table's first row before trusting it: every source is
 read, nothing is written, and each item is reported with the action it would have got.
+
+**An item too large for its destination is found before anything is written.** A copy asks the
+destination's plugin how large a body each item it plans would store there — its content
+composed as the write composes it: the metadata slot the destination keeps beside the content,
+the record the copy leaves, and every image reference rewritten to where the destination serves
+it — after the write policy has passed them and before the first write, an intent at the source
+included. A GitHub board holds at most 65,536 characters in one issue body; a Linear source
+states no limit. A copy holding any item over its destination's limit — a project's tasks and
+documents among them — writes nothing at all and fails as `oversize`, its failure document
+listing every such item under `oversize` as `{source, destination, body_size, limit}`. A dry run
+reports `body_size` on every item it sized and answers an item over the limit as
+`{"action": "oversize", "limit": …}`, exiting `4`. A destination that cannot say — a stdio
+plugin, a folder of Markdown — is sized not at all, and copies as it did.
 
 ![A terminal showing a dry-run copy of two tasks into another source: the first names its counterpart there and reads `updated`, the second has none and reads `created`, followed by the line counting rewritten, unresolved and ambiguous references](docs/screenshots/task-copy-dry-run.svg)
 
@@ -1005,7 +1020,7 @@ the same copy created, found by its create key ([below](#a-create-safe-to-retry)
 it is always `created`, because none did. `link` says what became of the item's own link, on those same three actions of a
 copy that writes: `recorded`, `unchanged`, `unrecorded` where its source could not hold
 one, or `skipped` under `--no-link`, which writes nothing at all to the source. A dry run
-reports `via` and leaves `link` out, and an `orphaned` item and a `failed` one carry neither.
+reports `via` and leaves `link` out, and an `orphaned` item, a `failed` one and a dry run's `oversize` one carry neither.
 In the generated SDKs the six rule words are the type `CopyVia` and `created` is
 `NoCounterpart`, and the link words are `CopyLink`.
 <!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
@@ -1652,7 +1667,7 @@ plugin is sent.
 | `0` | Success — every source asked, every source answered. A dependency read (`task deps`, `project graph`) of an item outside a source declared private also asks that private source what it records of it; one that could not be asked is not a failure of the read, because the item lives elsewhere, and is reported in the answer's `unanswered` and on standard error as a notice. `--complete` makes it a failure. |
 | `1` | The command failed while running: an id that names nothing, a configuration it will not run on, a source name nothing configures. |
 | `2` | The invocation itself was wrong — an unknown flag, a value out of range, or answers a template refuses. |
-| `4` | The query ran and at least one source did not answer. The others' results still stand and the failure is named on standard error. A write — a copy, `task status set`, `task update` or `task status complete` — also exits `4` when it landed and a task it delivers could not be kept in step; its `delivered` list says which. `task status reconcile` and `task status complete` exit `4` when an item they list failed while the others were written, and name each such item and why on standard error beside the report. |
+| `4` | The query ran and at least one source did not answer. The others' results still stand and the failure is named on standard error. A write — a copy, `task status set`, `task update` or `task status complete` — also exits `4` when it landed and a task it delivers could not be kept in step; its `delivered` list says which. `task status reconcile` and `task status complete` exit `4` when an item they list failed while the others were written, and name each such item and why on standard error beside the report. A copy's `--dry-run` exits `4` when it answers an item `oversize`, which the copy itself would refuse, writing nothing. |
 
 `--allow-partial` says a partial answer is acceptable and turns `4` into `0`. Nothing else
 does: a run that lost a source never exits `0` unless you asked for that. A source in a
@@ -2651,6 +2666,19 @@ metadata values among `metadata`, content among `text`, asset names and recorded
 references among `paths` — and **passes it only by exiting 0 with `{"verdict": "pass"}`**. A
 refusal names where the check stopped and never what it found; no command, a failure, or any
 other answer is unavailable, which never passes.
+
+**A copy is screened as one batch.** A copy composes every write it would make — a project's
+tasks and, with `--documents`, its documents among them — and hands `check_command` **one**
+input for the whole copy before it writes any: its `text`, `paths` and `metadata` each the
+multiset union of what each write would have been screened as alone — a value as many times as
+the write holding it most often holds it — under the one `scope` they share, and
+`visibility_command` runs once per distinct repository the copy names, its answer used for every
+item naming it. A copy of one item is a batch of one. A refusal refuses the whole copy before
+anything is written; the store then screens the copy's writes one at a time only to name the
+item the refusal is about, and still writes nothing. An unavailable check makes the copy
+unavailable. With a `sanitize_command`, which rewrites per item, the batch keeps each write's
+rewritable and fixed values apart, so a value fixed in one write is never screened only behind
+the same value another may rewrite.
 
 **Replacing a declared term instead of refusing it.** With a `sanitize_command`, every write
 the boundary screens is put to it **in place of** `check_command` — the same one call, no second
