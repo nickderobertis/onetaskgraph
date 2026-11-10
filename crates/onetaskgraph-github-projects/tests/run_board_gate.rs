@@ -171,8 +171,8 @@ struct Account {
     /// (`"unanswered-draft"`), an item answered without its type (`"untyped-item"`), a copy
     /// answered without its id (`"copy-without-id"`) or as the template itself
     /// (`"copy-as-template"`), every copy made as one and the same board (`"shared-copy"`),
-    /// a deletion refused (`"refused-delete"`), and a first copy that settles one draft short
-    /// (`"short-copy"`).
+    /// a deletion refused (`"refused-delete"`), and a first copy (`"short-copy"`) or every
+    /// copy (`"every-copy-short"`) that settles one draft short.
     faults: Vec<&'static str>,
     copy_reads: usize,
     /// Whether the per-minute secondary limits are enforced, over every request since the
@@ -350,9 +350,11 @@ impl Account {
                 };
                 return json!({"data":{"repositoryOwner":{"projectV2":{"items":{"totalCount":count}}}}});
             }
-            if self.has("short-copy") && number(variables) == TEMPLATE + 1 {
-                // The first copy, settled one draft short and staying there, as GitHub left
-                // run 42872346902's; every later copy is whole.
+            if self.has("every-copy-short")
+                || (self.has("short-copy") && number(variables) == TEMPLATE + 1)
+            {
+                // A copy settled one draft short and staying there, as GitHub left run
+                // 42872346902's: under `"short-copy"` the first alone, later copies whole.
                 return json!({"data":{"repositoryOwner":{"projectV2":{"items":{"totalCount":TEMPLATE_DRAFTS - 1}}}}});
             }
             if self.has("last-draft-late") {
@@ -1353,12 +1355,13 @@ fn a_copy_that_settles_short_is_deleted_and_the_template_copied_once_more() {
 
 #[test]
 fn a_second_copy_that_settles_short_too_is_refused_naming_both() {
-    let (said, account) = failing_session_with(&["short-copy", "stalled-copy"], "main");
+    let (said, account) = failing_session("every-copy-short", "main");
     assert!(
         said.contains("deleted and the template copied again"),
         "{said}"
     );
-    assert!(said.contains("did not settle"), "{said}");
+    // Both refusals are named, the second copy's after the first's.
+    assert_eq!(said.matches("did not settle").count(), 2, "{said}");
     let account = account.lock().unwrap();
     assert_eq!(
         account

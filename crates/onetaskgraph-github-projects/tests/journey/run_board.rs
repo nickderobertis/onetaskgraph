@@ -254,7 +254,8 @@ struct Target<'a> {
 enum Copied {
     /// It settled below the template's draft count, and was deleted.
     Short(String),
-    /// Anything else.
+    /// It was not made, was answered unusably, never settled, could not be counted, or
+    /// could not be deleted: copying again would not help.
     Refused(String),
 }
 
