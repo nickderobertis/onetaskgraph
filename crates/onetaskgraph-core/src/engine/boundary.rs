@@ -1840,6 +1840,16 @@ impl Engine {
         self.sanitization_log().take()
     }
 
+    /// How many fields and comments of items this command's sanitisations have changed beyond
+    /// the writes themselves, read without taking them from the command's answer.
+    pub(crate) fn side_effects_recorded(&self) -> usize {
+        self.boundary
+            .sanitized
+            .lock()
+            .map(|sanitized| sanitized.side_effect.len())
+            .unwrap_or_default()
+    }
+
     /// A handle on what this engine's screened writes replaced and sanitised, which outlives a
     /// borrow of the engine: what the command line reads once a verb has answered.
     #[must_use]

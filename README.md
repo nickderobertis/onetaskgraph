@@ -3162,11 +3162,14 @@ its lineage root — the root of its chain of copies, which a copy records on wh
 `onetaskgraph.lineage` beside `onetaskgraph.origin`: one read of the far end, its lineage, else its
 origin, else its own id — so a copy that files it under another id keeps the edge, deleting a copy
 between it and its root keeps it, renaming it keeps it, and pointing the edge at another item voids
-the record whatever the two are titled) and every caller-owned
+the record whatever the two are titled; an opaque far end is named by its designator and its id
+there, so the same id in another tracker voids it too) and every caller-owned
 metadata key but those `--exclude` names. Never its status, priority, labels, ids, location or
 any store-reserved key — the attestations included — so a copy, which carries all of it,
 carries a record that still checks `valid` where it lands. `--if-version` records it only while
-the item is at that version, read first, writing nothing at any other.
+the item is at that version, read first, writing nothing at any other. A write that sanitises a
+task as stored first (`write_policy.sanitize_stored_on_write`) records the digest of what that
+sanitisation left.
 
 A check answers `{"kind", "state", "reason", "record"}`: `valid` (exit `0`); `void` (exit `3`)
 with `reason` `content-moved` when the content is not what the record cleared, else

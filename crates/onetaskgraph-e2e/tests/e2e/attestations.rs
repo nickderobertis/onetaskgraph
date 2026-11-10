@@ -1586,7 +1586,7 @@ fn every_label_an_attestation_refuses_is_refused_by_its_flag_writing_nothing() {
 }
 
 #[test]
-fn an_opaque_far_end_no_configured_tracker_is_is_named_by_its_id() {
+fn an_opaque_far_end_no_configured_tracker_is_is_named_by_its_tracker_and_id() {
     let plan = Plan::new(false);
     let seeded = plan.seed("notes");
     let measure = seeded.measure.as_str();
@@ -1614,6 +1614,21 @@ fn an_opaque_far_end_no_configured_tracker_is_is_named_by_its_id() {
         "void",
         json!("content-moved"),
         "the opaque far end moved",
+    );
+    // The same id in another tracker is another item.
+    plan.attest("task", measure);
+    plan.hand_edit(
+        "tasks",
+        measure,
+        &far,
+        &format!("linear/{}", "cd".repeat(32)),
+    );
+    plan.holds(
+        "task",
+        measure,
+        "void",
+        json!("content-moved"),
+        "the opaque far end's tracker moved",
     );
 }
 

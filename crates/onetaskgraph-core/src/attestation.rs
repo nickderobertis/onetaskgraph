@@ -391,8 +391,16 @@ pub enum FarEnd {
     /// By its lineage root: the qualified id that roots its chain of copies, as it records it —
     /// its own, for an item copied from nowhere — so it reads the same from every copy of it.
     Lineage(GlobalId),
-    /// By its spelling, for an opaque far end no configured source can be asked about.
+    /// By its spelling, for a far end no configured source can be asked about.
     Id(String),
+    /// By the tracker its designator names and its id there, for an opaque far end: the same
+    /// id in another tracker is another item.
+    Opaque {
+        /// The tracker, as the endpoint's designator spells it.
+        designator: String,
+        /// Its id in that tracker.
+        id: String,
+    },
 }
 
 /// One of an item's own forward dependency edges, as the digest reads it.
@@ -407,7 +415,8 @@ pub struct AuthoredEdge {
 }
 
 impl AuthoredEdge {
-    /// The edge as the digest spells it: `[<edge kind>, <far end's kind>, "lineage:…" | "id:…"]`.
+    /// The edge as the digest spells it: `[<edge kind>, <far end's kind>, "lineage:…" | "id:…" |
+    /// "opaque:<designator>:<id>"]` — a designator holds no `:`, so the last reads one way.
     fn spelled(&self) -> [String; 3] {
         let kind = match self.kind {
             DependencyKind::Blocks => "blocks",
@@ -420,6 +429,7 @@ impl AuthoredEdge {
         let end = match &self.end {
             FarEnd::Lineage(root) => format!("lineage:{root}"),
             FarEnd::Id(id) => format!("id:{id}"),
+            FarEnd::Opaque { designator, id } => format!("opaque:{designator}:{id}"),
         };
         [kind.to_owned(), far.to_owned(), end]
     }

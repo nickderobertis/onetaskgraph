@@ -4478,6 +4478,53 @@ fn a_plan_member_title_is_rewritten_and_its_offered_id_is_a_fixed_entry() {
 }
 
 #[test]
+fn an_attestation_whose_write_rewrites_the_stored_item_holds_over_what_it_rewrote() {
+    // Opted in to sanitising what is stored, the attestation's own write rewrites the item's
+    // title, body, label and metadata first; the record is of the content that write left.
+    let (store, _) = guarded(replaced());
+    stage_older(&store);
+    let answer: Value = serde_json::from_str(&store.ok(&[
+        "task",
+        "attest",
+        "site:older",
+        "--kind",
+        "plan-review",
+        "--by",
+        "ada",
+        "--bar",
+        "bar-1",
+        "--json",
+    ]))
+    .expect("JSON");
+    assert_eq!(answer["record"]["kind"], json!("plan-review"), "{answer}");
+    let file = std::fs::read_to_string(store.folder("site").join("tasks").join("older.md"))
+        .expect("the task file");
+    assert!(
+        !file.contains(TERM),
+        "the stored item was rewritten: {file}"
+    );
+    let check = [
+        "task",
+        "attestation",
+        "check",
+        "site:older",
+        "--kind",
+        "plan-review",
+        "--bar",
+        "bar-1",
+    ];
+    assert_eq!(store.ok(&check), "plan-review: valid\n");
+    store.ok(&["task", "update", "site:older", "--title", "Port the retry"]);
+    let moved = store.run(&check);
+    assert_eq!(moved.status.code(), Some(3), "{}", stdout(&moved));
+    assert!(
+        stdout(&moved).contains("content-moved"),
+        "{}",
+        stdout(&moved)
+    );
+}
+
+#[test]
 fn an_attestation_on_a_public_item_is_screened_rewritten_previewed_and_refused() {
     let (store, _) = sanitizing(replaced());
     store.record(
