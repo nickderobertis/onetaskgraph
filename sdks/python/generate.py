@@ -164,6 +164,9 @@ CONTRACT_ROOTS = {
     "Attestation",
     "AttestationState",
     "VoidReason",
+    # One member of a project template's plan graph, which a caller writing a project template
+    # models by name.
+    "MemberDeclaration",
     # The v1 request `task project-human` reads from its input file, which a producer builds
     # by name from the one declaration the engine exports.
     "HumanTaskProjection",
@@ -176,6 +179,8 @@ ALTERNATE_ROOTS: dict[str, tuple[str, ...]] = {
     "sources_fields": ("StatusNamesReport",),
     # `project attestation check --tasks` answers one entry per task of the project.
     "project_attestation_check": ("ProjectAttestationCheck",),
+    # `project create --dry-run` answers the project and every member it would create.
+    "project_create": ("PlannedProject",),
 }
 
 

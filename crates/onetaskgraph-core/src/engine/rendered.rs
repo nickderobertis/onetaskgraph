@@ -95,6 +95,33 @@ impl Body {
         }))
     }
 
+    /// The content a create writes.
+    #[must_use]
+    pub fn content(&self) -> &str {
+        match &self.0 {
+            Content::Plain(content) => content,
+            Content::Rendered { rendered, .. } => &rendered.body,
+        }
+    }
+
+    /// The provenance a rendered body records; `None` for a plain one.
+    #[must_use]
+    pub fn provenance(&self) -> Option<&TemplateProvenance> {
+        match &self.0 {
+            Content::Plain(_) => None,
+            Content::Rendered { provenance, .. } => Some(provenance),
+        }
+    }
+
+    /// The resolved answers a rendered body was rendered with; `None` for a plain one.
+    #[must_use]
+    pub fn answers(&self) -> Option<&BTreeMap<String, Value>> {
+        match &self.0 {
+            Content::Plain(_) => None,
+            Content::Rendered { rendered, .. } => Some(&rendered.answers),
+        }
+    }
+
     /// What a create writes of this body beside `metadata`.
     fn parts(&self, metadata: &BTreeMap<MetadataKey, Value>) -> Parts<'_> {
         let mut carried: BTreeMap<String, Value> = metadata
@@ -560,9 +587,19 @@ impl Engine {
     /// cannot be reached, [`EngineError::NotCreatable`] for one with no write side — neither is
     /// written — and [`EngineError::SourceFailed`] when the source refuses the task.
     pub async fn create_task(&self, request: &TaskCreate) -> Result<TaskCreated, EngineError> {
+        self.create_task_as(request, None).await
+    }
+
+    /// [`create_task`](Self::create_task), offering the source `id` for the task rather than
+    /// an id made up from its title — a source that issues its own ids still issues one.
+    pub(super) async fn create_task_as(
+        &self,
+        request: &TaskCreate,
+        id: Option<&NativeId>,
+    ) -> Result<TaskCreated, EngineError> {
         let mut result = None;
         let mut operation: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> =
-            Box::pin(async { result = Some(self.create_task_in_scope(request).await) });
+            Box::pin(async { result = Some(self.create_task_in_scope(request, id).await) });
         for source in self.ready() {
             operation = source.source().scope_visibility(operation);
         }
@@ -570,7 +607,11 @@ impl Engine {
         result.expect("the scoped operation completed")
     }
 
-    async fn create_task_in_scope(&self, request: &TaskCreate) -> Result<TaskCreated, EngineError> {
+    async fn create_task_in_scope(
+        &self,
+        request: &TaskCreate,
+        offered: Option<&NativeId>,
+    ) -> Result<TaskCreated, EngineError> {
         let record = format!("task {:?}", request.title);
         let carried = assets::settled(
             &record,
@@ -603,7 +644,9 @@ impl Engine {
                 .place_classified(&request.source, classification, &request.repositories);
         let near = &placement.destination;
         let source = self.creatable(near, MetadataRecord::Task)?;
-        let id = NativeId::from(slug(&request.title, "task").as_str());
+        let id = offered
+            .cloned()
+            .unwrap_or_else(|| NativeId::from(slug(&request.title, "task").as_str()));
         let depends_on = self
             .publicly_named(
                 near,
@@ -689,7 +732,7 @@ impl Engine {
             .await?;
         rewrite.task(&mut write.item);
         // An id this create made up from the title is made up from the title as written.
-        if !rewrite.is_identity() {
+        if !rewrite.is_identity() && offered.is_none() {
             let made = NativeId::from(slug(&write.item.title, "task").as_str());
             for edge in &mut write.depends_on {
                 if edge.from.id() == write.item.id.as_str() {

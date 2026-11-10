@@ -13,8 +13,9 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr as _;
 
 use onetaskgraph_core::{
-    Body, DocumentCreate, EngineError, Failure, GlobalId, Loaded, OutputFormat, ProjectCreate,
-    RenderRequest, RenderTemplate, RenderedRecord, TaskCreate,
+    Body, DocumentCreate, EngineError, Failure, GlobalId, Loaded, OutputFormat, PlanMember,
+    PlannedProject, ProjectCreate, RenderRequest, RenderTemplate, RenderedRecord, TaskCreate,
+    Template, TemplateInput,
 };
 use onetaskgraph_plugin_api::{
     AssetName, AssetPayload, MetadataKey, NativeId, Repository, SourceName,
@@ -127,36 +128,64 @@ pub(crate) async fn create_document(
     Ok(EXIT_OK)
 }
 
-/// `project create`: create or replace the project, then write its qualified id — or, under
-/// `--json`, the project exactly as `project show --json` writes it.
+/// `project create`: create or replace the project — and every member its template declares —
+/// then write its qualified id, and each member's on a line of its own — or, under `--json`, the
+/// project exactly as `project show --json` writes it. `--dry-run` writes the plan instead,
+/// and nothing to the source.
 pub(crate) async fn create_project(
     out: &mut impl Write,
     loaded: &Loaded,
     args: &ProjectCreateArgs,
 ) -> Result<u8, Failure> {
-    let request = match project(args, loaded) {
-        Ok(request) => request,
+    let (request, members) = match project(args, loaded) {
+        Ok(planned) => planned,
         Err(Refusal::Answers(message)) => return Ok(refused(&message)),
         Err(Refusal::Failed(failure)) => return Err(failure),
     };
+    if args.dry_run {
+        let planned = PlannedProject::of(&request, &members);
+        let rendered = match loaded.config.output() {
+            OutputFormat::Text => render::planned(&planned),
+            OutputFormat::Json => json(&planned, "the plan")?,
+        };
+        emit(out, rendered.trim_end(), "the plan")?;
+        return Ok(EXIT_OK);
+    }
     let engine = engine(loaded);
-    let created = engine
-        .create_project(&request)
-        .await
-        .map_err(|error| Failure::from(&error))?;
+    let (project, created) = if members.is_empty() {
+        let created = engine
+            .create_project(&request)
+            .await
+            .map_err(|error| Failure::from(&error))?;
+        (created.id, Vec::new())
+    } else {
+        let created = engine
+            .create_plan(&request, &members)
+            .await
+            .map_err(|error| Failure::from(&error))?;
+        (
+            created.project,
+            created.members.into_iter().map(|(_, id)| id).collect(),
+        )
+    };
     match loaded.config.output() {
-        OutputFormat::Text => emit(
-            out,
-            &crate::sanitized(created.id.to_string(), OutputFormat::Text)?,
-            "the project's id",
-        )?,
+        OutputFormat::Text => {
+            let lines: Vec<String> = std::iter::once(project.to_string())
+                .chain(created.iter().map(ToString::to_string))
+                .collect();
+            emit(
+                out,
+                &crate::sanitized(lines.join("\n"), OutputFormat::Text)?,
+                "the project's id",
+            )?;
+        }
         OutputFormat::Json => {
             let response = engine
-                .project(&created.id)
+                .project(&project)
                 .await
                 .map_err(|error| Failure::from(&error))?;
             let rendered = crate::sanitized(json(&response, "the project")?, OutputFormat::Json)?;
-            emit(out, &rendered, "the project")?;
+            emit(out, rendered.trim_end(), "the project")?;
         }
     }
     Ok(EXIT_OK)
@@ -395,26 +424,119 @@ fn item(args: &CreateItemArgs, loaded: &Loaded) -> Result<Item, Refusal> {
     })
 }
 
-/// Read a project create: its source, repositories and metadata checked, and its body
-/// rendered — asking, when interactive, for what the answers leave unanswered. A label or a
-/// repository given replaces what a project being replaced holds, and none given keeps it.
-fn project(args: &ProjectCreateArgs, loaded: &Loaded) -> Result<ProjectCreate, Refusal> {
+/// Read a project create: its source, repositories and metadata checked, its body rendered —
+/// asking, when interactive, for what the answers leave unanswered — and every member its
+/// template declares rendered and ready to create, dependencies first. A label or a repository
+/// given replaces what a project being replaced holds, and none given keeps it.
+fn project(
+    args: &ProjectCreateArgs,
+    loaded: &Loaded,
+) -> Result<(ProjectCreate, Vec<PlanMember>), Refusal> {
     let source = source_name(&args.source)?;
     let repositories = repositories(&args.repository)?;
     let metadata = metadata(&args.metadata)?;
-    let body = body(&args.body, loaded)?;
-    Ok(ProjectCreate {
-        source,
-        id: args.id.clone(),
-        title: args.title.clone(),
-        body,
-        status: args.status.map(|status| status.category()),
-        labels: (!args.label.is_empty()).then(|| args.label.clone()),
-        repositories: (!repositories.is_empty()).then_some(repositories),
+    let (body, template) = rendered_body(&args.body, loaded)?;
+    let members = match &template {
+        Some((input, template, answers)) if !template.members().is_empty() => {
+            let base = member_base(input, args.body.template_loader.as_deref());
+            template
+                .prepare_members(answers, &base)?
+                .into_iter()
+                .map(plan_member)
+                .collect::<Result<_, _>>()?
+        }
+        _ => Vec::new(),
+    };
+    Ok((
+        ProjectCreate {
+            source,
+            id: args.id.clone(),
+            title: args.title.clone(),
+            body,
+            status: args.status.map(|status| status.category()),
+            labels: (!args.label.is_empty()).then(|| args.label.clone()),
+            repositories: (!repositories.is_empty()).then_some(repositories),
+            metadata,
+            classification: args
+                .classification
+                .map(crate::cli::ClassificationArg::classification),
+        },
+        members,
+    ))
+}
+
+/// Where a project template's relative member templates are looked for: the directory of the
+/// file that named the template — the template file's own, or the loader document's — then the
+/// directories its chain resolves over.
+fn member_base(input: &TemplateInput, loader: Option<&Path>) -> Vec<PathBuf> {
+    let (named, search_path): (Option<&Path>, &[PathBuf]) = match input {
+        TemplateInput::File { path, search_path } => (Some(path.as_path()), search_path),
+        TemplateInput::Loader(document) => (
+            loader.filter(|path| path.as_os_str() != "-"),
+            document.search_path(),
+        ),
+    };
+    named
+        .and_then(Path::parent)
+        .map(|directory| {
+            if directory.as_os_str().is_empty() {
+                PathBuf::from(".")
+            } else {
+                directory.to_path_buf()
+            }
+        })
+        .into_iter()
+        .chain(search_path.iter().cloned())
+        .collect()
+}
+
+/// One rendered member as the engine creates it, its metadata and repositories checked and
+/// refused naming the member.
+fn plan_member(
+    prepared: onetaskgraph_core::template::PreparedMember,
+) -> Result<PlanMember, Refusal> {
+    let declaration = &prepared.declaration;
+    let named = |kind: &str, message: String| {
+        Refusal::Failed(Failure::decided(
+            kind,
+            format!(
+                "member {:?} of the project template: {message}",
+                declaration.id
+            ),
+        ))
+    };
+    let metadata = declaration
+        .metadata
+        .iter()
+        .map(|(key, value)| {
+            MetadataKey::new(key.as_str())
+                .map(|key| (key, value.clone()))
+                .map_err(|message| named("invalid-metadata-key", message))
+        })
+        .collect::<Result<_, _>>()?;
+    let repositories = declaration
+        .repositories
+        .iter()
+        .map(|origin| {
+            Repository::try_from(origin.clone()).map_err(|error| {
+                named(
+                    "invalid-repository",
+                    format!("repository {origin}: {error}"),
+                )
+            })
+        })
+        .collect::<Result<_, _>>()?;
+    Ok(PlanMember {
+        id: NativeId::from(declaration.id.as_str()),
+        title: declaration.title.clone(),
+        body: Body::rendered(&prepared.input, prepared.rendered.clone())?,
+        depends_on: declaration
+            .depends_on
+            .iter()
+            .map(|id| NativeId::from(id.as_str()))
+            .collect(),
         metadata,
-        classification: args
-            .classification
-            .map(crate::cli::ClassificationArg::classification),
+        repositories,
     })
 }
 
@@ -500,6 +622,21 @@ pub(crate) fn metadata_entry(entry: &str) -> Result<(MetadataKey, Value), Failur
 /// A create's body: rendered from a template or a loader document, read from `--body-file`,
 /// or read from standard input.
 fn body(args: &CreateBodyArgs, loaded: &Loaded) -> Result<Body, Refusal> {
+    rendered_body(args, loaded).map(|(body, _)| body)
+}
+
+/// The template a rendered body came from, loaded, and the answers it resolved.
+type Rendering = (
+    TemplateInput,
+    Template,
+    std::collections::BTreeMap<String, Value>,
+);
+
+/// [`body`], with the template and the resolved answers a rendered one came from.
+fn rendered_body(
+    args: &CreateBodyArgs,
+    loaded: &Loaded,
+) -> Result<(Body, Option<Rendering>), Refusal> {
     if let Some(input) = input(
         args.template.as_deref(),
         &args.search_path,
@@ -514,9 +651,11 @@ fn body(args: &CreateBodyArgs, loaded: &Loaded) -> Result<Body, Refusal> {
             &HashSet::new(),
         )?;
         let rendered = template.render(&answers)?;
-        return Ok(Body::rendered(&input, rendered)?);
+        let resolved = rendered.answers.clone();
+        let body = Body::rendered(&input, rendered)?;
+        return Ok((body, Some((input, template, resolved))));
     }
-    plain(args.body_file.as_deref()).map(Body::plain)
+    plain(args.body_file.as_deref()).map(|text| (Body::plain(text), None))
 }
 
 /// A plain body, byte for byte from `path`, or from standard input without one.

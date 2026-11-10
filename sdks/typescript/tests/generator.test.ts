@@ -414,7 +414,11 @@ test("every command's response root is the one the Python generator maps it to",
       ([, verb, roots]) => [verb, [...(roots ?? "").matchAll(/"(\w+)"/g)].map(([, root]) => root)],
     ),
   );
-  expect(Object.keys(pythonAlternates)).toEqual(["sources_fields", "project_attestation_check"]);
+  expect(Object.keys(pythonAlternates)).toEqual([
+    "sources_fields",
+    "project_attestation_check",
+    "project_create",
+  ]);
   expect(
     Object.fromEntries(
       Object.entries(commandAlternateRoots).map(([command, roots]) => [

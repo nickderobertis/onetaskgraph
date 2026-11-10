@@ -1,0 +1,516 @@
+//! A plan graph created from one project template, driven through the binary against a folder
+//! of Markdown: `project create` from a template declaring `members` makes the project and
+//! every member task — each rendered from its own task template with its own answers and
+//! recording its provenance as `task create` does — and each member's `depends_on` as a
+//! `blocks` edge.
+//!
+//! A member whose answer its template's schema refuses refuses the whole create, naming the
+//! member, and the folder is left byte for byte as it was; `--dry-run` prints the plan and
+//! writes nothing; and a project template declaring no `members` creates exactly what it
+//! always did.
+
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use std::process::Output;
+
+use serde_json::{Value, json};
+use sha2::{Digest as _, Sha256};
+
+use crate::common::{Sandbox, stderr, stdout};
+use crate::fixtures::document;
+
+/// The project template: three members, the first two from different task templates — the
+/// second through a loader document — and the third depending on both.
+const PLAN: &str = "---\n\
+onetaskgraph_template: 1\n\
+variables:\n  \
+  slug:\n    \
+    description: The plan's short name\n  \
+  goal:\n    \
+    description: What the plan is for\n  \
+  steps:\n    \
+    description: The release steps\n    \
+    type: list\n    \
+    default: [Build, Release]\n\
+members:\n  \
+  - id: \"{{ slug }}-design\"\n    \
+    title: \"Design {{ goal }}\"\n    \
+    template: {file: design-task.md}\n    \
+    answers: {topic: \"{{ goal }}\"}\n  \
+  - id: \"{{ slug }}-measure\"\n    \
+    title: \"Measure {{ goal }}\"\n    \
+    template: {loader: measure.loader.json}\n    \
+    answers: {metric: \"latency of {{ goal }}\"}\n    \
+    metadata: {myapp.size: 2}\n  \
+  - id: \"{{ slug }}-ship\"\n    \
+    title: \"Ship {{ goal }}\"\n    \
+    template: {file: design-task.md}\n    \
+    answers: {topic: \"shipping {{ goal }}\", steps: \"[{{ steps | join(', ') }}]\"}\n    \
+    depends_on: [\"{{ slug }}-design\", \"{{ slug }}-measure\"]\n    \
+    repositories: [github.com/acme/widgets]\n\
+---\n\
+The plan for {{ goal }}.\n";
+
+/// The first task template: a topic and a list of steps whose schema wants each capitalised.
+const DESIGN_TASK: &str = "---\n\
+onetaskgraph_template: 1\n\
+variables:\n  \
+  topic:\n    \
+    description: What the task covers\n  \
+  steps:\n    \
+    description: Its steps\n    \
+    type: list\n    \
+    default: []\n    \
+    schema: {type: array, items: {type: string, pattern: \"^[A-Z]\"}}\n\
+---\n\
+Design: {{ topic }}\n\
+{% for step in steps %}\n\
+- {{ step }}\n\
+{% endfor %}\n";
+
+/// The second task template, which the loader document states.
+const MEASURE_TASK: &str = "---\n\
+onetaskgraph_template: 1\n\
+variables:\n  \
+  metric:\n    \
+    description: What is measured\n\
+---\n\
+Measure: {{ metric }}\n";
+
+/// A project template with no members, which creates the project alone.
+const BARE: &str = "---\n\
+onetaskgraph_template: 1\n\
+variables:\n  \
+  goal:\n    \
+    description: What the plan is for\n\
+---\n\
+The plan for {{ goal }}.\n";
+
+struct Fixture {
+    sandbox: Sandbox,
+    notes: PathBuf,
+    templates: PathBuf,
+}
+
+impl Fixture {
+    fn new() -> Self {
+        let sandbox = Sandbox::new();
+        let notes = sandbox.subdirectory("notes");
+        let templates = sandbox.subdirectory("templates");
+        for (name, text) in [
+            ("plan.md", PLAN),
+            ("design-task.md", DESIGN_TASK),
+            ("measure-task.md", MEASURE_TASK),
+            ("bare.md", BARE),
+        ] {
+            std::fs::write(templates.join(name), text).expect("a template");
+        }
+        std::fs::write(
+            templates.join("measure.loader.json"),
+            json!({"reference": "plans/measure", "entry": "measure-task.md",
+                   "search_path": [templates]})
+            .to_string(),
+        )
+        .expect("a loader document");
+        sandbox.project_document(&document(&json!({
+            "notes": {"plugin": "local-md", "config": {"root": notes}},
+        })));
+        Self {
+            sandbox,
+            notes,
+            templates,
+        }
+    }
+
+    fn template(&self, name: &str) -> String {
+        path(&self.templates.join(name))
+    }
+
+    fn run(&self, arguments: &[&str]) -> Output {
+        self.sandbox
+            .command()
+            .args(arguments)
+            .assert()
+            .get_output()
+            .clone()
+    }
+
+    fn exits(&self, arguments: &[&str], code: i32) -> Output {
+        let output = self.run(arguments);
+        assert_eq!(
+            output.status.code(),
+            Some(code),
+            "`onetaskgraph {}` exited {:?}\nstdout:\n{}\nstderr:\n{}",
+            arguments.join(" "),
+            output.status.code(),
+            stdout(&output),
+            stderr(&output)
+        );
+        output
+    }
+
+    fn json(&self, arguments: &[&str]) -> Value {
+        let mut arguments = arguments.to_vec();
+        arguments.push("--json");
+        serde_json::from_str(&stdout(&self.exits(&arguments, 0))).expect("JSON on stdout")
+    }
+
+    fn task(&self, id: &str) -> Value {
+        self.json(&["task", "show", id])["items"][0]["item"].clone()
+    }
+
+    fn folder(&self) -> BTreeMap<PathBuf, Vec<u8>> {
+        let mut found = BTreeMap::new();
+        walk(&self.notes, &mut found);
+        found
+    }
+}
+
+fn walk(directory: &Path, found: &mut BTreeMap<PathBuf, Vec<u8>>) {
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries {
+        let path = entry.expect("a directory entry").path();
+        if path.is_dir() {
+            walk(&path, found);
+        } else {
+            found.insert(path.clone(), std::fs::read(&path).expect("a file"));
+        }
+    }
+}
+
+fn path(path: &Path) -> String {
+    path.to_str().expect("a UTF-8 path").to_owned()
+}
+
+fn sha256(text: &str) -> String {
+    format!("sha256:{:x}", Sha256::digest(text.as_bytes()))
+}
+
+/// `value` as canonical JSON: keys sorted at every depth, no insignificant whitespace.
+fn canonical(value: &Value) -> String {
+    match value {
+        Value::Object(entries) => {
+            let sorted: BTreeMap<&String, &Value> = entries.iter().collect();
+            let inner: Vec<String> = sorted
+                .into_iter()
+                .map(|(key, entry)| format!("{}:{}", Value::String(key.clone()), canonical(entry)))
+                .collect();
+            format!("{{{}}}", inner.join(","))
+        }
+        Value::Array(entries) => {
+            let inner: Vec<String> = entries.iter().map(canonical).collect();
+            format!("[{}]", inner.join(","))
+        }
+        scalar => scalar.to_string(),
+    }
+}
+
+/// The arguments of `project create notes --id plan-1 --title …` from `template`, `extra` after.
+fn create_arguments(template: &str, extra: &[&str]) -> Vec<String> {
+    let mut arguments: Vec<String> = [
+        "project",
+        "create",
+        "notes",
+        "--id",
+        "plan-1",
+        "--title",
+        "The widgets plan",
+        "--template",
+        template,
+        "--var",
+        "slug=w",
+        "--var",
+        "goal=widgets",
+        "--no-interactive",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect();
+    arguments.extend(extra.iter().map(|argument| (*argument).to_owned()));
+    arguments
+}
+
+fn borrowed(arguments: &[String]) -> Vec<&str> {
+    arguments.iter().map(String::as_str).collect()
+}
+
+#[test]
+fn a_project_template_with_members_creates_the_project_its_tasks_and_their_edges() {
+    let fixture = Fixture::new();
+    let arguments = create_arguments(&fixture.template("plan.md"), &[]);
+    let created = stdout(&fixture.exits(&borrowed(&arguments), 0));
+    let ids: Vec<&str> = created.lines().collect();
+    assert_eq!(
+        ids,
+        [
+            "notes:plan-1",
+            "notes:w-design",
+            "notes:w-measure",
+            "notes:w-ship"
+        ],
+        "the project, then each member in the order it was created"
+    );
+
+    let project = fixture.json(&["project", "show", "notes:plan-1"])["items"][0]["item"].clone();
+    assert_eq!(project["title"], "The widgets plan");
+    assert_eq!(project["content"], "The plan for widgets.\n");
+
+    let design_task = fixture.template("design-task.md");
+    let expected: [(&str, &str, &str, Value, &str); 3] = [
+        (
+            "notes:w-design",
+            "Design widgets",
+            "Design: widgets\n",
+            json!({"topic": "widgets", "steps": []}),
+            design_task.as_str(),
+        ),
+        (
+            "notes:w-measure",
+            "Measure widgets",
+            "Measure: latency of widgets\n",
+            json!({"metric": "latency of widgets"}),
+            "plans/measure",
+        ),
+        (
+            "notes:w-ship",
+            "Ship widgets",
+            "Design: shipping widgets\n- Build\n- Release\n",
+            json!({"topic": "shipping widgets", "steps": ["Build", "Release"]}),
+            design_task.as_str(),
+        ),
+    ];
+    for (id, title, content, answers, template) in &expected {
+        let task = fixture.task(id);
+        assert_eq!(task["title"], *title, "{id}");
+        assert_eq!(task["content"], *content, "{id}");
+        assert_eq!(task["project"], "plan-1", "{id} is filed under the project");
+        // Its answers are stored beside it, as `task create` stores them.
+        assert_eq!(&fixture.json(&["task", "answers", id]), answers, "{id}");
+        // Its provenance names its own template, and both hashes are its own.
+        let provenance = &task["metadata"]["onetaskgraph.template"];
+        assert_eq!(provenance["template"], *template, "{id}");
+        assert_eq!(provenance["body_digest"], json!(sha256(content)), "{id}");
+        assert_eq!(
+            provenance["answers_digest"],
+            json!(sha256(&canonical(answers))),
+            "{id}"
+        );
+        // So a provenance read accepts it: regenerating it from its recorded template and
+        // answers changes nothing.
+        // A loader document's reference is never turned into a location, so that member is
+        // regenerated from the document named again, as `task create` from one would be.
+        let search = path(&fixture.templates);
+        let loader = fixture.template("measure.loader.json");
+        let mut render = vec!["task", "render", id, "--dry-run", "--no-interactive"];
+        if *template == "plans/measure" {
+            render.extend(["--template-loader", loader.as_str()]);
+        } else {
+            render.extend(["--search-path", search.as_str()]);
+        }
+        let regenerated = fixture.json(&render);
+        assert_eq!(regenerated["changed"], false, "{id}: {regenerated}");
+    }
+    assert_eq!(fixture.task("notes:w-measure")["metadata"]["myapp.size"], 2);
+    assert_eq!(
+        fixture.task("notes:w-ship")["repositories"],
+        json!(["github.com/acme/widgets"])
+    );
+
+    // The dependency walk shows exactly the declared edges.
+    let edges = |id: &str, direction: &str| -> Vec<(String, String)> {
+        fixture.json(&["task", "deps", id, "--direction", direction])["items"]
+            .as_array()
+            .expect("edges")
+            .iter()
+            .map(|edge| {
+                (
+                    edge["from"]["id"].as_str().unwrap().to_owned(),
+                    edge["to"]["id"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect()
+    };
+    let mut shipping = edges("notes:w-ship", "depends-on");
+    shipping.sort();
+    assert_eq!(
+        shipping,
+        [
+            ("notes:w-ship".to_owned(), "notes:w-design".to_owned()),
+            ("notes:w-ship".to_owned(), "notes:w-measure".to_owned()),
+        ]
+    );
+    assert!(edges("notes:w-design", "depends-on").is_empty());
+    assert!(edges("notes:w-measure", "depends-on").is_empty());
+    assert_eq!(
+        edges("notes:w-design", "depended-on-by"),
+        [("notes:w-ship".to_owned(), "notes:w-design".to_owned())]
+    );
+    let listed = fixture.json(&["task", "list", "--project", "notes:plan-1"])["items"]
+        .as_array()
+        .expect("tasks")
+        .len();
+    assert_eq!(
+        listed, 3,
+        "the project holds its three members and nothing else"
+    );
+}
+
+#[test]
+fn a_member_whose_answer_its_schema_refuses_refuses_the_whole_create_writing_nothing() {
+    let fixture = Fixture::new();
+    let before = fixture.folder();
+    // `steps` reaches the ship member's `steps`, whose schema wants each capitalised.
+    let arguments = create_arguments(
+        &fixture.template("plan.md"),
+        &["--var", "steps=[Build, release]"],
+    );
+    let output = fixture.exits(&borrowed(&arguments), 2);
+    let message = stderr(&output);
+    assert!(
+        message.contains("member \"w-ship\""),
+        "the refusal names the member: {message}"
+    );
+    assert!(
+        message
+            .contains("the answer to \"steps\" does not satisfy its schema at JSON pointer \"/1\""),
+        "and the variable and pointer: {message}"
+    );
+    assert!(stdout(&output).is_empty());
+    assert_eq!(
+        fixture.folder(),
+        before,
+        "no project and no task of it is written"
+    );
+    let held = fixture.json(&["task", "list", "--source", "notes"])["items"]
+        .as_array()
+        .expect("tasks")
+        .len();
+    assert_eq!(held, 0);
+}
+
+#[test]
+fn a_dry_run_prints_the_project_and_its_members_and_writes_nothing() {
+    let fixture = Fixture::new();
+    let before = fixture.folder();
+    let arguments = create_arguments(&fixture.template("plan.md"), &["--dry-run", "--json"]);
+    let planned: Value =
+        serde_json::from_str(&stdout(&fixture.exits(&borrowed(&arguments), 0))).expect("JSON");
+    assert_eq!(fixture.folder(), before, "a dry run writes nothing");
+    assert_eq!(
+        (
+            &planned["source"],
+            &planned["id"],
+            &planned["title"],
+            &planned["content"]
+        ),
+        (
+            &json!("notes"),
+            &json!("plan-1"),
+            &json!("The widgets plan"),
+            &json!("The plan for widgets.\n")
+        )
+    );
+    let members = planned["members"].as_array().expect("members");
+    let ids: Vec<&str> = members
+        .iter()
+        .map(|member| member["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["w-design", "w-measure", "w-ship"]);
+    assert_eq!(members[2]["depends_on"], json!(["w-design", "w-measure"]));
+    assert_eq!(members[1]["template"], "plans/measure");
+    assert_eq!(members[1]["content"], "Measure: latency of widgets\n");
+    assert_eq!(members[1]["metadata"], json!({"myapp.size": 2}));
+    // The text rendering says the same, one line per member.
+    let text = create_arguments(&fixture.template("plan.md"), &["--dry-run"]);
+    let said = stdout(&fixture.exits(&borrowed(&text), 0));
+    assert!(
+        said.starts_with("would create project notes:plan-1"),
+        "{said}"
+    );
+    assert!(said.contains("w-ship \"Ship widgets\""), "{said}");
+    assert_eq!(fixture.folder(), before);
+}
+
+#[test]
+fn a_project_template_without_members_creates_the_project_alone_as_before() {
+    let fixture = Fixture::new();
+    let bare = fixture.template("bare.md");
+    let output = fixture.exits(
+        &[
+            "project",
+            "create",
+            "notes",
+            "--id",
+            "plan-1",
+            "--title",
+            "Bare",
+            "--template",
+            &bare,
+            "--var",
+            "goal=widgets",
+            "--no-interactive",
+        ],
+        0,
+    );
+    assert_eq!(
+        stdout(&output),
+        "notes:plan-1\n",
+        "one line, the project's id, as before"
+    );
+    let files: Vec<PathBuf> = fixture.folder().into_keys().collect();
+    assert_eq!(files, [fixture.notes.join("projects").join("plan-1.md")]);
+}
+
+#[test]
+fn a_member_graph_that_does_not_hold_together_is_refused_before_anything_is_written() {
+    let fixture = Fixture::new();
+    let before = fixture.folder();
+    for (name, members, says) in [
+        (
+            "cycle.md",
+            "  - {id: a, title: A, template: {file: design-task.md}, answers: {topic: t}, depends_on: [b]}\n  \
+               - {id: b, title: B, template: {file: design-task.md}, answers: {topic: t}, depends_on: [a]}\n",
+            "cycle",
+        ),
+        (
+            "unknown.md",
+            "  - {id: a, title: A, template: {file: design-task.md}, answers: {topic: t}, depends_on: [z]}\n",
+            "which no member is",
+        ),
+        (
+            "missing.md",
+            "  - {id: a, title: A, template: {file: no-such.md}, answers: {topic: t}}\n",
+            "no-such.md",
+        ),
+    ] {
+        let file = fixture.templates.join(name);
+        std::fs::write(
+            &file,
+            format!("---\nonetaskgraph_template: 1\nmembers:\n{members}---\nPlan\n"),
+        )
+        .expect("a template");
+        let output = fixture.exits(
+            &[
+                "project",
+                "create",
+                "notes",
+                "--id",
+                "plan-1",
+                "--title",
+                "P",
+                "--template",
+                &path(&file),
+                "--no-interactive",
+            ],
+            1,
+        );
+        assert!(
+            stderr(&output).contains(says),
+            "{name}: {}",
+            stderr(&output)
+        );
+        assert_eq!(fixture.folder(), before, "{name}: nothing written");
+    }
+}

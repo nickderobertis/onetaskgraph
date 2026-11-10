@@ -63,6 +63,7 @@
 mod answers;
 mod front_matter;
 mod input;
+mod members;
 mod provenance;
 mod scan;
 mod schema;
@@ -81,6 +82,7 @@ pub use answers::Answers;
 use answers::Given;
 pub use front_matter::{DECLARATION_KEYS, FRONT_MATTER_KEYS, is_variable_name};
 pub use input::{LoaderDocument, TemplateInput};
+pub use members::{MemberDeclaration, MemberTemplate, PreparedMember};
 pub use provenance::{Sha256Digest, TemplateProvenance, answers_digest, body_digest};
 
 /// What one variable holds.
@@ -557,6 +559,15 @@ pub enum TemplateError {
         /// What failed.
         message: String,
     },
+    /// One member of a project template's plan graph refused: its strings did not render, its
+    /// template could not be found or loaded, or its answers were refused.
+    #[error("member {member:?} of the project template: {error}")]
+    Member {
+        /// The member's id, rendered — or `members[<index>]` when its id is what failed.
+        member: String,
+        /// Why it was refused.
+        error: Box<TemplateError>,
+    },
     /// A template loader document that is not one this product reads.
     #[error(
         "the template loader document is refused: {message}\n\
@@ -600,6 +611,7 @@ impl TemplateError {
             Self::MissingRequired { .. } => "template-missing-required",
             Self::Render { .. } => "template-render",
             Self::MalformedLoader { .. } => "template-loader-malformed",
+            Self::Member { error, .. } => error.kind(),
             Self::LoaderDigest { .. } => "template-loader-digest",
         }
     }
@@ -609,6 +621,9 @@ impl TemplateError {
     /// variables left unanswered. The command line exits `2` for these.
     #[must_use]
     pub fn refuses_answers(&self) -> bool {
+        if let Self::Member { error, .. } = self {
+            return error.refuses_answers();
+        }
         matches!(
             self,
             Self::MalformedAnswers { .. }
@@ -765,6 +780,16 @@ impl TemplateLoader {
     fn load_chain(&self, root: String, source: String) -> Result<Template, TemplateError> {
         let resolutions = Resolutions::new();
         let files = self.build(root.clone(), source, &resolutions)?;
+        if let Some(named) = files.iter().skip(1).find(|file| !file.members.is_empty()) {
+            return Err(TemplateError::malformed(
+                &named.name,
+                Some("members"),
+                format!(
+                    "is declared in a template {root} names; only the rendered project template \
+                     declares members"
+                ),
+            ));
+        }
         let variables = merge(&files)?;
         let Discovered { read, .. } = discover(&root, &files, &variables, self, &Answers::new());
         let files = in_read_order(files, &read);
@@ -864,6 +889,7 @@ impl TemplateLoader {
                 body: split.body,
                 offset_lines: split.offset_lines,
                 declarations: split.declarations,
+                members: split.members,
                 names,
             });
         }
@@ -980,6 +1006,8 @@ struct ChainFile {
     body: String,
     offset_lines: usize,
     declarations: Vec<TemplateVariable>,
+    /// The plan-graph members its front matter declares: only the rendered file may.
+    members: Vec<MemberDeclaration>,
     /// The chain files its tags name, in the order they name them: what nearness is measured
     /// over.
     names: Vec<String>,
@@ -1278,6 +1306,31 @@ impl Template {
     /// [`Template::expand`] answers adds each template an expression names.
     pub fn chain(&self) -> impl Iterator<Item = &str> {
         self.files.iter().map(|file| file.name.as_str())
+    }
+
+    /// The plan-graph members the rendered template declares, as written: none for a template
+    /// that declares none, which is every task and document template.
+    #[must_use]
+    pub fn members(&self) -> &[MemberDeclaration] {
+        self.files
+            .first()
+            .map_or(&[], |file| file.members.as_slice())
+    }
+
+    /// Render every member from `answers` — this template's resolved answers, as a rendering
+    /// of it answers them — and each member's body from its own template, looking for a
+    /// relative member template in `base`; see [`members`](self::members).
+    ///
+    /// # Errors
+    ///
+    /// [`TemplateError::Malformed`] for a member graph that does not hold together, and
+    /// [`TemplateError::Member`] naming the member for every refusal of one.
+    pub fn prepare_members(
+        &self,
+        answers: &BTreeMap<String, Value>,
+        base: &[PathBuf],
+    ) -> Result<Vec<PreparedMember>, TemplateError> {
+        members::prepare(&self.name, self.members(), answers, base)
     }
 
     /// The declared set as `template variables` reports it.

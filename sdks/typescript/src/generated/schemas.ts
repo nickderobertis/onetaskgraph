@@ -10482,6 +10482,93 @@ export const runtimeSchemas = {
       }
     ]
   },
+  "MemberDeclaration": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "MemberDeclaration",
+    "description": "One member of a plan graph, as a project template's front matter declares it.",
+    "type": "object",
+    "properties": {
+      "id": {
+        "description": "The member task's native id, and how other members' `depends_on` name it.",
+        "type": "string"
+      },
+      "title": {
+        "description": "Its title.",
+        "type": "string"
+      },
+      "template": {
+        "description": "The task template its body is rendered from.",
+        "$ref": "#/$defs/MemberTemplate"
+      },
+      "answers": {
+        "description": "The answers its template is rendered with, by variable name.",
+        "type": "object",
+        "additionalProperties": true,
+        "default": {}
+      },
+      "depends_on": {
+        "description": "The ids of the members it depends on: each one a `blocks` edge, written before it.",
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "default": []
+      },
+      "metadata": {
+        "description": "Caller-owned metadata keys it is created with.",
+        "type": "object",
+        "additionalProperties": true,
+        "default": {}
+      },
+      "repositories": {
+        "description": "The repositories it concerns, as normalized origins.",
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "default": []
+      }
+    },
+    "additionalProperties": false,
+    "required": [
+      "id",
+      "title",
+      "template"
+    ],
+    "$defs": {
+      "MemberTemplate": {
+        "description": "Which task template a member's body is rendered from.",
+        "oneOf": [
+          {
+            "description": "A template file: an absolute path, or one relative to the directory the project template\nwas read from and then its search path.",
+            "type": "object",
+            "properties": {
+              "file": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "file"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "A template loader document's file, resolved as `file` is.",
+            "type": "object",
+            "properties": {
+              "loader": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "loader"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      }
+    }
+  },
   "MetadataSet": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "MetadataSet",
@@ -12380,6 +12467,117 @@ export const runtimeSchemas = {
         "description": "The name a configuration document gives one configured source.",
         "type": "string",
         "pattern": "^[a-z0-9][a-z0-9-]*$"
+      }
+    }
+  },
+  "PlannedProject": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "PlannedProject",
+    "description": "What `project create --dry-run` answers: the project and every member it would create, in\nthe order it would create them, and nothing written.",
+    "type": "object",
+    "properties": {
+      "source": {
+        "description": "The source it would be created in.",
+        "$ref": "#/$defs/SourceName"
+      },
+      "id": {
+        "description": "The id it would be written under.",
+        "$ref": "#/$defs/NativeId"
+      },
+      "title": {
+        "description": "Its title.",
+        "type": "string"
+      },
+      "content": {
+        "description": "Its description, as it would be written.",
+        "type": "string"
+      },
+      "members": {
+        "description": "Each member, in the order it would be created: after every member it depends on.",
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/PlannedMember"
+        }
+      }
+    },
+    "required": [
+      "source",
+      "id",
+      "title",
+      "content",
+      "members"
+    ],
+    "$defs": {
+      "SourceName": {
+        "description": "The name a configuration document gives one configured source.",
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9-]*$"
+      },
+      "NativeId": {
+        "description": "A source's own opaque identifier for one item.\n\nDeliberately unvalidated: a native id is whatever the upstream system says it\nis, colons included. The engine parses a qualified id by splitting on the\n*first* colon precisely so this stays true.",
+        "type": "string"
+      },
+      "PlannedMember": {
+        "description": "One member `project create --dry-run` would create.",
+        "type": "object",
+        "properties": {
+          "id": {
+            "description": "The id it would be offered to its source under.",
+            "$ref": "#/$defs/NativeId"
+          },
+          "title": {
+            "description": "Its title.",
+            "type": "string"
+          },
+          "template": {
+            "description": "The template its body is rendered from, as its provenance would record it; `null` for a\nbody given as it is.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "content": {
+            "description": "Its body, as it would be written.",
+            "type": "string"
+          },
+          "answers": {
+            "description": "The resolved answers its body was rendered with.",
+            "type": "object",
+            "additionalProperties": true
+          },
+          "depends_on": {
+            "description": "The members it would depend on, each a `blocks` edge.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/NativeId"
+            }
+          },
+          "metadata": {
+            "description": "The caller's metadata keys it would carry.",
+            "type": "object",
+            "additionalProperties": true
+          },
+          "repositories": {
+            "description": "The repositories it concerns.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Repository"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "content",
+          "answers",
+          "depends_on",
+          "metadata",
+          "repositories"
+        ]
+      },
+      "Repository": {
+        "description": "A repository identified by its normalized origin, without a URL scheme or `.git` suffix.",
+        "type": "string"
       }
     }
   },

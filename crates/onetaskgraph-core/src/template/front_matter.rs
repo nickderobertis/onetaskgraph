@@ -12,7 +12,10 @@ use std::fmt;
 use serde::de::{Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde_json::{Map, Number, Value};
 
-use super::{ItemType, TemplateError, TemplateVariable, VariableType, check_value, schema};
+use super::{
+    ItemType, MemberDeclaration, TemplateError, TemplateVariable, VariableType, check_value,
+    members, schema,
+};
 
 /// One node of front matter, as serde-saphyr reads it.
 #[derive(Clone)]
@@ -131,7 +134,7 @@ const VERSION_KEY: &str = "onetaskgraph_template";
 const VERSION: u64 = 1;
 
 /// Every key front matter may carry, and nothing else: any other is refused by name.
-pub const FRONT_MATTER_KEYS: [&str; 3] = [VERSION_KEY, "description", "variables"];
+pub const FRONT_MATTER_KEYS: [&str; 4] = [VERSION_KEY, "description", "variables", "members"];
 
 /// Every key one variable's declaration may carry, and nothing else: any other is refused by
 /// name.
@@ -158,6 +161,8 @@ pub(super) struct Split {
     /// The declarations the front matter made, in the order it made them, each
     /// `declared_in` this file until the chain is merged.
     pub declarations: Vec<TemplateVariable>,
+    /// The plan-graph members the front matter declares, in the order it declares them.
+    pub members: Vec<MemberDeclaration>,
     /// What the renderer compiles: everything after the closing `---` line.
     pub body: String,
     /// How many lines the front matter took, so a body line number can be reported as the
@@ -203,8 +208,10 @@ pub(super) fn split(file: &str, source: &str) -> Result<Split, TemplateError> {
     let parsed: Yaml = crate::yaml::from_str(&matter).map_err(|error| {
         TemplateError::malformed(file, None, format!("its front matter is not YAML: {error}"))
     })?;
+    let (declarations, members) = read(file, &parsed)?;
     Ok(Split {
-        declarations: read(file, &parsed)?,
+        declarations,
+        members,
         body: source[consumed..].to_owned(),
         offset_lines,
     })
@@ -214,6 +221,7 @@ pub(super) fn split(file: &str, source: &str) -> Result<Split, TemplateError> {
 fn unfronted(source: &str) -> Split {
     Split {
         declarations: Vec::new(),
+        members: Vec::new(),
         body: source.to_owned(),
         offset_lines: 0,
     }
@@ -224,8 +232,11 @@ fn trim_line_end(line: &str) -> &str {
     line.trim_end_matches('\n').trim_end_matches('\r')
 }
 
+/// The declarations and members front matter makes.
+type Declared = (Vec<TemplateVariable>, Vec<MemberDeclaration>);
+
 /// Read the front matter mapping, refusing any key C1 does not define.
-fn read(file: &str, matter: &Yaml) -> Result<Vec<TemplateVariable>, TemplateError> {
+fn read(file: &str, matter: &Yaml) -> Result<Declared, TemplateError> {
     let Yaml::Mapping(mapping) = matter else {
         return Err(TemplateError::malformed(
             file,
@@ -236,6 +247,7 @@ fn read(file: &str, matter: &Yaml) -> Result<Vec<TemplateVariable>, TemplateErro
 
     let mut version = None;
     let mut variables = None;
+    let mut declared_members = Vec::new();
     for (key, value) in mapping {
         // The list alone decides which keys are accepted; the arms below give each its meaning,
         // and `the_published_keys_are_exactly_the_ones_read` proves every listed key has one.
@@ -262,6 +274,7 @@ fn read(file: &str, matter: &Yaml) -> Result<Vec<TemplateVariable>, TemplateErro
                 }
             }
             "variables" => variables = Some(value),
+            "members" => declared_members = members::read(file, value.clone().into_json())?,
             other => {
                 return Err(TemplateError::malformed(
                     file,
@@ -291,10 +304,10 @@ fn read(file: &str, matter: &Yaml) -> Result<Vec<TemplateVariable>, TemplateErro
     }
 
     let Some(variables) = variables else {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), declared_members));
     };
     let variables = match variables {
-        Yaml::Null => return Ok(Vec::new()),
+        Yaml::Null => return Ok((Vec::new(), declared_members)),
         Yaml::Mapping(variables) => variables,
         _ => {
             return Err(TemplateError::malformed(
@@ -305,10 +318,11 @@ fn read(file: &str, matter: &Yaml) -> Result<Vec<TemplateVariable>, TemplateErro
         }
     };
 
-    variables
+    let declarations = variables
         .iter()
         .map(|(name, declaration)| declaration_of(file, name.clone(), declaration))
-        .collect()
+        .collect::<Result<_, _>>()?;
+    Ok((declarations, declared_members))
 }
 
 /// Whether `name` is one a variable can be declared with: `^[a-z][a-z0-9_]*$`.
@@ -515,6 +529,7 @@ mod tests {
         let every_key = "---\n\
 onetaskgraph_template: 1\n\
 description: all of it\n\
+members: []\n\
 variables:\n  \
   steps:\n    \
     description: d\n    \

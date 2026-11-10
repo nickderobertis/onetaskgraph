@@ -6676,8 +6676,9 @@ const FIFTY_SEVENTH_BUNDLE_SHAPE: [(&str, u64); 140] = [
 
 /// Version 58: a template variable gains its optional `schema`, and the attestation roots
 /// arrive: `Attested`, `Attestation`, `AttestationCheck`, `ProjectAttestationCheck`,
-/// `AttestationState` and `VoidReason`.
-const FIFTY_EIGHTH_BUNDLE_SHAPE: [(&str, u64); 146] = [
+/// `AttestationState` and `VoidReason` — and a project template's plan graph: `MemberDeclaration`
+/// and `PlannedProject`.
+const FIFTY_EIGHTH_BUNDLE_SHAPE: [(&str, u64); 148] = [
     ("Asset", 0x3861b2a394973652),
     ("AssetContentType", 0x045a0ea0dface7ec),
     ("AssetName", 0x0f5aa03142270839),
@@ -6738,6 +6739,7 @@ const FIFTY_EIGHTH_BUNDLE_SHAPE: [(&str, u64); 146] = [
     ("LinearConfig", 0x10a5b658053e0912),
     ("LocateReport", 0x3a7ddb314e58fd6c),
     ("Location", 0x0690620b049c989a),
+    ("MemberDeclaration", 0xa5e150677264c887),
     ("MetadataSet", 0x8ddb0294045540b9),
     ("NativeId", 0x0150d4025c258cb8),
     ("NewComment", 0xda981b6b61244e61),
@@ -6752,6 +6754,7 @@ const FIFTY_EIGHTH_BUNDLE_SHAPE: [(&str, u64); 146] = [
     ("PageRequest", 0x6c7be3975028b78c),
     ("PageToken", 0xc685683af2c78c39),
     ("Placement", 0xe5c1c0857f3cbaeb),
+    ("PlannedProject", 0xa05ee4833b5f8c0b),
     ("Predicate", 0x716a40e358d48364),
     ("Priority", 0xef323286b7a05b23),
     ("Project", 0x532ad3dad5ab19cb),

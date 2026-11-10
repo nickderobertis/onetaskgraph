@@ -1117,12 +1117,11 @@ fn the_readme_documents_the_command_surface_this_binary_actually_has() {
             "the README's exit-code table has no row for {code}"
         );
     }
-    for invented in ["| `5` |"] {
-        assert!(
-            !readme.contains(invented),
-            "the README documents {invented}, which this binary never exits with"
-        );
-    }
+    let invented = "| `5` |";
+    assert!(
+        !readme.contains(invented),
+        "the README documents {invented}, which this binary never exits with"
+    );
 }
 
 /// Command lines the README spells in full, each beside the argument — if any — whose values

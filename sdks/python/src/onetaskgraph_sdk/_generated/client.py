@@ -29,6 +29,7 @@ if TYPE_CHECKING:
         LocateReport,
         MetadataSet,
         NativeId,
+        PlannedProject,
         Priority,
         ProjectAttestationCheck,
         ProjectGraph,
@@ -1669,6 +1670,7 @@ class GeneratedClient:
         body_file: str | None = None,
         classification: Literal["public", "private"] | None = None,
         default_sources: list[str] | tuple[str, ...] | None = None,
+        dry_run: bool | None = None,
         label: list[str] | tuple[str, ...] | None = None,
         metadata: list[str] | tuple[str, ...] | None = None,
         page_size: int | None = None,
@@ -1688,7 +1690,7 @@ class GeneratedClient:
         var: list[str] | tuple[str, ...] | None = None,
         body: str | None = None,
         answers: Mapping[str, JsonValue] | None = None,
-    ) -> QueryResponseOfQualifiedProject: ...
+    ) -> QueryResponseOfQualifiedProject | PlannedProject: ...
 
     @overload
     async def project_create(
@@ -1700,6 +1702,7 @@ class GeneratedClient:
         body_file: str | None = None,
         classification: Literal["public", "private"] | None = None,
         default_sources: list[str] | tuple[str, ...] | None = None,
+        dry_run: bool | None = None,
         label: list[str] | tuple[str, ...] | None = None,
         metadata: list[str] | tuple[str, ...] | None = None,
         page_size: int | None = None,
@@ -1719,7 +1722,7 @@ class GeneratedClient:
         var: list[str] | tuple[str, ...] | None = None,
         body: str | None = None,
         answers: Mapping[str, JsonValue] | None = None,
-    ) -> QueryResponseOfQualifiedProject | SanitizeDryRun: ...
+    ) -> QueryResponseOfQualifiedProject | PlannedProject | SanitizeDryRun: ...
 
     @overload
     async def project_create(
@@ -1731,6 +1734,7 @@ class GeneratedClient:
         body_file: str | None = None,
         classification: Literal["public", "private"] | None = None,
         default_sources: list[str] | tuple[str, ...] | None = None,
+        dry_run: bool | None = None,
         label: list[str] | tuple[str, ...] | None = None,
         metadata: list[str] | tuple[str, ...] | None = None,
         page_size: int | None = None,
@@ -1750,7 +1754,7 @@ class GeneratedClient:
         var: list[str] | tuple[str, ...] | None = None,
         body: str | None = None,
         answers: Mapping[str, JsonValue] | None = None,
-    ) -> QueryResponseOfQualifiedProject | SanitizeDryRun: ...
+    ) -> QueryResponseOfQualifiedProject | PlannedProject | SanitizeDryRun: ...
 
     async def project_create(
         self,
@@ -1761,6 +1765,7 @@ class GeneratedClient:
         body_file: str | None = None,
         classification: Literal["public", "private"] | None = None,
         default_sources: list[str] | tuple[str, ...] | None = None,
+        dry_run: bool | None = None,
         label: list[str] | tuple[str, ...] | None = None,
         metadata: list[str] | tuple[str, ...] | None = None,
         page_size: int | None = None,
@@ -1780,17 +1785,20 @@ class GeneratedClient:
         var: list[str] | tuple[str, ...] | None = None,
         body: str | None = None,
         answers: Mapping[str, JsonValue] | None = None,
-    ) -> QueryResponseOfQualifiedProject | SanitizeDryRun:
+    ) -> QueryResponseOfQualifiedProject | PlannedProject | SanitizeDryRun:
         """Run ``onetaskgraph project create``."""
         return await self._invoke(
             ["project", "create"],
-            _models.QueryResponseOfQualifiedProject | _models.SanitizeDryRun,
+            _models.QueryResponseOfQualifiedProject
+            | _models.PlannedProject
+            | _models.SanitizeDryRun,
             source=source,
             id=id,
             title=title,
             body_file=body_file,
             classification=classification,
             default_sources=default_sources,
+            dry_run=dry_run,
             label=label,
             metadata=_strings("project_create", "metadata", metadata),
             page_size=page_size,

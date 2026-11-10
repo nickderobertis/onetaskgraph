@@ -33,6 +33,7 @@ mod join;
 mod local;
 mod metadata;
 mod narrow;
+mod plan_graph;
 mod projection;
 mod rendered;
 mod resume;
@@ -100,6 +101,7 @@ pub use graph::{
 pub use local::ProjectSelector;
 pub use metadata::MetadataSet;
 pub use narrow::{TaskContentSet, TaskPrioritySet};
+pub use plan_graph::{PlanCreated, PlanMember, PlannedMember, PlannedProject};
 pub use rendered::{
     Body, DocumentCreate, ProjectCreate, Regenerated, Regeneration, RenderRequest, RenderTemplate,
     RenderedRecord, TaskCreate, TaskCreated, TemplateAnswers, UnusedAnswers,

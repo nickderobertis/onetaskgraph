@@ -151,6 +151,10 @@ mod no_persistence;
 // Python stdio peer — with no credential and no network, in a few seconds. What it proves is
 // the engine's own refusal and the contract every plugin shares, so it cannot sit behind one
 // plugin crate's edge, which AGENTS.md forbids depending on the engine at any depth.
+// No credential and no network: each journey drives the binary against one folder of Markdown
+// in about a second. A plan graph is the template engine's and the engine's create, which every
+// source shares, so no plugin crate's edge is narrower.
+mod plan_graph;
 mod priority;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
 // narrower edge for it: every journey here drives the binary against folders of Markdown, an

@@ -359,6 +359,8 @@ export const commandAlternateRoots: Readonly<
   "sources fields": ["StatusNamesReport"],
   // `--tasks` answers one entry per task of the project.
   "project attestation check": ["ProjectAttestationCheck"],
+  // `--dry-run` answers the project and every member it would create.
+  "project create": ["PlannedProject"],
 };
 
 // Exit 4 is a whole answer with part of it missing: a read some sources could not answer, or a

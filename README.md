@@ -1241,6 +1241,7 @@ variables:                        # optional; name -> declaration
     required: true                # default: true without `default`, false with one
     default: <value of `type`>    # optional; `required: true` beside a default is refused
     schema: <JSON Schema>         # object and list only: draft 2020-12, inline; optional
+members: []                       # project templates only: the plan graph (below); optional
 ---
 # {{ title }}
 {% for criterion in criteria %}
@@ -1355,6 +1356,47 @@ else the render is refused naming that reference, because a reference is never t
 a location. `--dry-run` renders and writes nothing; `--json` prints `{id, digest,
 body_digest, changed, body}`, and a render that would change nothing reports `changed:
 false` and writes nothing.
+
+### Plan graphs from a project template
+
+A project template may declare `members`: the tasks one `project create` makes beside the
+project, each rendered from a task template of its own, and the edges between them.
+
+```yaml
+members:
+  - id: "{{ slug }}-design"              # the member's native id
+    title: "Design {{ goal }}"
+    template: {file: design-task.md}     # or {loader: design.loader.json}
+    answers: {topic: "{{ goal }}"}       # its template's answers
+  - id: "{{ slug }}-ship"
+    title: "Ship {{ goal }}"
+    template: {file: ship-task.md}
+    answers: {steps: "[{{ steps | join(', ') }}]"}
+    depends_on: ["{{ slug }}-design"]    # each a `blocks` edge, written first
+    metadata: {myapp.size: 3}            # caller-owned keys
+    repositories: [github.com/acme/widgets]
+```
+
+Every string in a member, at any depth, is rendered from the project template's own resolved
+answers, strictly. A rendered answer written as a string is read the way `--var` reads one —
+literally for a `string` or `text` variable, as YAML for any other — and any other value is
+taken as it is. A relative member template is looked for beside the file that named the
+project template (the template file, or the loader document) and then over its search path.
+Only the rendered project template declares members; one an `extends`, `include` or `import`
+names is refused.
+
+`project create` then renders every member and holds its answers to its own template —
+schemas included — **before anything is written**: a member refused for anything, a graph
+naming one id twice, naming a member nobody declares, or going round a cycle, refuses the
+whole create, naming the member, and writes nothing. Otherwise it creates the project, then
+each member under it, dependencies first, exactly as `task create` creates one — offered its
+`id`, its provenance recorded and its answers stored as that verb stores them — and prints the
+project's id and each member's, one per line (`--json`: the project as `project show` answers).
+`--dry-run` renders all of it and prints the plan instead — `--json`: `PlannedProject`, the
+project and each member with its content, answers and edges — writing nothing. A project
+template that declares no `members` creates exactly what it always did. `project render`
+regenerates the project's description alone and leaves its members as they are.
+`MemberDeclaration` and `PlannedProject` are roots of `onetaskgraph schema`.
 
 A caller that layers templates of its own states the result with a **template loader
 document** — `--template-loader FILE`, `-` for standard input, but never together with

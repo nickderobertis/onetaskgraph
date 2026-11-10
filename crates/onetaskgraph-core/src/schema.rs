@@ -30,8 +30,8 @@ use crate::config::{
 use crate::registry::registry;
 use crate::secrets::{CredentialLayer, ResolvedCredential, SecretsReport};
 use crate::template::{
-    ItemType, RenderedTemplate, TemplateProvenance, TemplateVariable, TemplateVariables,
-    VariableType,
+    ItemType, MemberDeclaration, RenderedTemplate, TemplateProvenance, TemplateVariable,
+    TemplateVariables, VariableType,
 };
 use crate::{
     CommentList, CommentWritten, CompleteAction, CopyAction, CopyLink, CopyOutcome, CopyReport,
@@ -292,6 +292,11 @@ pub fn schema_bundle() -> Value {
     roots.insert("VariableType", schema_for!(VariableType));
     roots.insert("ItemType", schema_for!(ItemType));
     roots.insert("RenderedTemplate", schema_for!(RenderedTemplate));
+    // One member of a project template's plan graph, as its front matter declares it, and
+    // what `project create --dry-run` answers with: the project and every member it would
+    // create.
+    roots.insert("MemberDeclaration", schema_for!(MemberDeclaration));
+    roots.insert("PlannedProject", schema_for!(crate::PlannedProject));
     // What `task render` and `document render` answer with, what `task answers` and
     // `document answers` answer with, and the `onetaskgraph.template` entry an item rendered
     // from a template records — named, because a caller checking a hand edit or a changed

@@ -6048,6 +6048,51 @@ path: string
 
 }
 export type Location = GeneratedLocation.Location;
+export namespace GeneratedMemberDeclaration {
+/**
+ * One member of a plan graph, as a project template's front matter declares it.
+ */
+export interface MemberDeclaration {
+/**
+ * The member task's native id, and how other members' `depends_on` name it.
+ */
+id: string
+/**
+ * Its title.
+ */
+title: string
+/**
+ * The task template its body is rendered from.
+ */
+template: ({
+file: string
+} | {
+loader: string
+})
+/**
+ * The answers its template is rendered with, by variable name.
+ */
+answers?: {
+[k: string]: any
+}
+/**
+ * The ids of the members it depends on: each one a `blocks` edge, written before it.
+ */
+depends_on?: string[]
+/**
+ * Caller-owned metadata keys it is created with.
+ */
+metadata?: {
+[k: string]: any
+}
+/**
+ * The repositories it concerns, as normalized origins.
+ */
+repositories?: string[]
+}
+
+}
+export type MemberDeclaration = GeneratedMemberDeclaration.MemberDeclaration;
 export namespace GeneratedMetadataSet {
 /**
  * Where an entity is, in the one form a consumer can act on without knowing the backend.
@@ -7229,6 +7274,93 @@ route?: (number | null)
 
 }
 export type Placement = GeneratedPlacement.Placement;
+export namespace GeneratedPlannedProject {
+/**
+ * A source's own opaque identifier for one item.
+ *
+ * Deliberately unvalidated: a native id is whatever the upstream system says it
+ * is, colons included. The engine parses a qualified id by splitting on the
+ * *first* colon precisely so this stays true.
+ */
+export type NativeId = string
+/**
+ * A repository identified by its normalized origin, without a URL scheme or `.git` suffix.
+ */
+export type Repository = string
+
+/**
+ * What `project create --dry-run` answers: the project and every member it would create, in
+ * the order it would create them, and nothing written.
+ */
+export interface PlannedProject {
+/**
+ * The source it would be created in.
+ */
+source: string
+/**
+ * The id it would be written under.
+ */
+id: string
+/**
+ * Its title.
+ */
+title: string
+/**
+ * Its description, as it would be written.
+ */
+content: string
+/**
+ * Each member, in the order it would be created: after every member it depends on.
+ */
+members: PlannedMember[]
+[k: string]: any
+}
+/**
+ * One member `project create --dry-run` would create.
+ */
+export interface PlannedMember {
+/**
+ * The id it would be offered to its source under.
+ */
+id: string
+/**
+ * Its title.
+ */
+title: string
+/**
+ * The template its body is rendered from, as its provenance would record it; `null` for a
+ * body given as it is.
+ */
+template?: (string | null)
+/**
+ * Its body, as it would be written.
+ */
+content: string
+/**
+ * The resolved answers its body was rendered with.
+ */
+answers: {
+[k: string]: any
+}
+/**
+ * The members it would depend on, each a `blocks` edge.
+ */
+depends_on: NativeId[]
+/**
+ * The caller's metadata keys it would carry.
+ */
+metadata: {
+[k: string]: any
+}
+/**
+ * The repositories it concerns.
+ */
+repositories: Repository[]
+[k: string]: any
+}
+
+}
+export type PlannedProject = GeneratedPlannedProject.PlannedProject;
 export namespace GeneratedPredicate {
 /**
  * One thing a query can ask of a source.

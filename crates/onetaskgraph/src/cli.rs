@@ -734,6 +734,11 @@ pub struct ProjectCreateArgs {
     #[arg(long = "classification", value_name = "CLASSIFICATION")]
     pub classification: Option<ClassificationArg>,
 
+    /// Render the project — and every member its template declares — and print what would be
+    /// created, writing nothing.
+    #[arg(long = "dry-run")]
+    pub dry_run: bool,
+
     #[command(flatten)]
     pub term_scope: TermScopeArgs,
 
@@ -1403,6 +1408,12 @@ pub enum ProjectCommand {
     /// (local-md) stores the answers beside it for a later `project render`. Replacing a
     /// project replaces its content, answers and provenance whole, and keeps its metadata,
     /// status, labels and repositories but for what is named here.
+    ///
+    /// A project template that declares `members` creates a plan graph: the project, then every
+    /// member task under it — each rendered from its own task template with its own answers and
+    /// recording its provenance as `task create` does — and each member's `depends_on` as a
+    /// `blocks` edge, dependencies first. Every member is rendered, and its answers held to its
+    /// template, before anything is written.
     Create(ProjectCreateArgs),
     /// Regenerate one project's description from its template in place, and nothing else
     /// about it.

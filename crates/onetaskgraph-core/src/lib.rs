@@ -60,8 +60,8 @@ pub use clock::{
 pub use config::{
     Config, ConfigError, CreateSettings, Loaded, OutputFormat, SourceCacheConfig, SourceConfig,
 };
-pub use engine::AttestRequest;
 pub use engine::boundary;
+pub use engine::{AttestRequest, PlanCreated, PlanMember, PlannedMember, PlannedProject};
 pub use engine::{
     Body, BudgetSpent, CommentCounts, CommentList, CommentWritten, CompleteAction, Completeness,
     ConfiguredSource, CopyAction, CopyConditions, CopyItems, CopyLink, CopyLookup, CopyOutcome,

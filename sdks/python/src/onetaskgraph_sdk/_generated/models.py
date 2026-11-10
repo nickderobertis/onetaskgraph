@@ -33,9 +33,11 @@ if TYPE_CHECKING:
     from .linear_config import LinearConfig as LinearConfig
     from .locate_report import LocateReport as LocateReport
     from .location import Location as Location
+    from .member_declaration import MemberDeclaration as MemberDeclaration
     from .metadata_set import MetadataSet as MetadataSet
     from .native_id import NativeId as NativeId
     from .page_of_document import Page as PageOfDocument
+    from .planned_project import PlannedProject as PlannedProject
     from .priority import Priority as Priority
     from .project_attestation_check import ProjectAttestationCheck as ProjectAttestationCheck
     from .project_graph import ProjectGraph as ProjectGraph
@@ -121,9 +123,11 @@ __all__ = [
     "LinearConfig",
     "LocateReport",
     "Location",
+    "MemberDeclaration",
     "MetadataSet",
     "NativeId",
     "PageOfDocument",
+    "PlannedProject",
     "Priority",
     "ProjectAttestationCheck",
     "ProjectGraph",
@@ -201,9 +205,11 @@ _MODULES: dict[str, tuple[str, str]] = {
     "LinearConfig": ("linear_config", "LinearConfig"),
     "LocateReport": ("locate_report", "LocateReport"),
     "Location": ("location", "Location"),
+    "MemberDeclaration": ("member_declaration", "MemberDeclaration"),
     "MetadataSet": ("metadata_set", "MetadataSet"),
     "NativeId": ("native_id", "NativeId"),
     "PageOfDocument": ("page_of_document", "Page"),
+    "PlannedProject": ("planned_project", "PlannedProject"),
     "Priority": ("priority", "Priority"),
     "ProjectAttestationCheck": ("project_attestation_check", "ProjectAttestationCheck"),
     "ProjectGraph": ("project_graph", "ProjectGraph"),
