@@ -351,10 +351,7 @@ test("a workflow suite leaving test-linux, or the rust-cache journey leaving a r
       `${expected}: ${JSON.stringify(placementProblems(edited))}`,
     );
   refused(
-    ciJob.replace(
-      "1 affected test tag:test-in-coverage:*,onetaskgraph-linear,onetaskgraph-linear-e2e\n",
-      "1 affected test tag:test-in-coverage:*,onetaskgraph-linear,onetaskgraph-linear-e2e,github-workflows\n",
-    ),
+    ciJob.replace("1 affected test *,!github-workflows --parallel=4\n", ""),
     /test-linux does not run github-workflows:test/,
   );
   refused(

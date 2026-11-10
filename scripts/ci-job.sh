@@ -87,7 +87,12 @@ case "$JOB" in
     # their telemetry are coverage's here, and scripts/rust-coverage.sh writes it where
     # `budgets` reads it. Their `test` has already run in this job, so it is not run again,
     # and the cache cannot answer for telemetry its key never saw.
-    phases="1 affected test tag:test-in-coverage:*,onetaskgraph-linear,onetaskgraph-linear-e2e
+    #
+    # The workflow suites have a phase of their own too, with a slot for each of their four
+    # journeys: their release CD journeys are the job's longest single task, and queued behind
+    # the other suites' slots they started eleven minutes in and ran the job past its timeout.
+    phases="1 affected test tag:test-in-coverage:*,onetaskgraph-linear,onetaskgraph-linear-e2e,github-workflows
+1 affected test *,!github-workflows --parallel=4
 1 affected test *,!onetaskgraph-linear,!onetaskgraph-linear-e2e
 1 affected test-uncovered,coverage *,!tag:layer:sdk
 1 run scripts:distribution-check -
