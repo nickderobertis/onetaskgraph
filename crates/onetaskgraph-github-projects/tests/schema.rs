@@ -1805,8 +1805,12 @@ fn wait_until_stopped(endpoint: &std::path::Path, port: u16) {
     while endpoint.exists() {
         assert!(
             asked.elapsed() < std::time::Duration::from_secs(30),
-            "the server stopped and removed {}",
-            endpoint.display()
+            "the server stopped and removed {}; its server.log reads:\n{}",
+            endpoint.display(),
+            endpoint
+                .parent()
+                .and_then(|directory| std::fs::read_to_string(directory.join("server.log")).ok())
+                .unwrap_or_else(|| "(unreadable)".to_owned())
         );
         std::thread::sleep(std::time::Duration::from_millis(20));
     }

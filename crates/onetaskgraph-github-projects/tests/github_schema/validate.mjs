@@ -324,13 +324,30 @@ function serve(directory) {
   const built = stamp();
   let open = 0;
   let idle;
+  // Removes the endpoint if it is still this server's. On Windows another process — a scanner
+  // reading the file — can make the read or the removal fail for a moment, and a server that
+  // gave up there exited with its endpoint left behind, so a client waited on a server that was
+  // gone. So a failure other than the file being absent is tried again for up to two seconds,
+  // and one that persists is said on standard error, which is the rendezvous's `server.log`.
+  const release = () => {
+    const pause = new Int32Array(new SharedArrayBuffer(4));
+    let failure;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      try {
+        if (JSON.parse(readFileSync(endpoint, "utf8")).pid === process.pid) rmSync(endpoint);
+        return;
+      } catch (error) {
+        // Already gone, or another server's half-written file: not this one's to remove.
+        if (error?.code === "ENOENT" || error instanceof SyntaxError) return;
+        failure = error;
+      }
+      Atomics.wait(pause, 0, 0, 20);
+    }
+    process.stderr.write(`the schema check could not remove ${endpoint}: ${failure}\n`);
+  };
   const stop = () => {
     server.close();
-    try {
-      if (JSON.parse(readFileSync(endpoint, "utf8")).pid === process.pid) rmSync(endpoint);
-    } catch {
-      // Already gone, or another server's: either way not this one's to remove.
-    }
+    release();
     process.exit(0);
   };
   const quiet = () => {
