@@ -2557,6 +2557,7 @@ async fn the_narrow_priority_and_content_writes_cross_the_wire_and_land_in_the_h
         Task {
             priority: Priority::Urgent,
             content: Some("replaced\r\nbody\n".to_owned()),
+            version: after.version.clone(),
             ..before
         }
     );

@@ -938,6 +938,10 @@ impl TaskSource for CachedSource {
         self.inner.order_versions(a, b)
     }
 
+    fn holds_versions(&self) -> bool {
+        self.inner.holds_versions()
+    }
+
     fn version_coverage(&self) -> VersionCoverage {
         self.inner.version_coverage()
     }

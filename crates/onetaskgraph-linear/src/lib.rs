@@ -1,5 +1,11 @@
 //! A read/write source over Linear's published GraphQL API.
 //!
+//! **A write held to a version** (`--if-version`) is checked immediately before its first
+//! mutation and not as one step with it: Linear takes no conditional write, so the engine reads
+//! the issue through this source just before writing it, and a change landing between that read
+//! and the mutation — the time one request takes — is Linear's residual race. The version is
+//! the `lin1` token its `updatedAt` and facets give.
+//!
 //! Linear `Issue` maps to [`Task`], `Project` to [`Project`], `Document` to [`Document`],
 //! `IssueLabel` and `ProjectLabel` to [`Label`], and an issue's `WorkflowState.name` and a
 //! project's `ProjectStatus.name` are preserved as the status's name while the source's

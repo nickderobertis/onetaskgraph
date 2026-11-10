@@ -206,15 +206,19 @@ async fn a_narrow_priority_or_content_write_answers_the_task_and_refuses_what_ca
         .set_task_priority(&id("work:T-1"), Priority::High)
         .await
         .expect("sets");
-    // What the task holds after the write, at no version: an in-memory source gives none.
+    // What the task holds after the write, at the token an in-memory source derives.
     let result = set
         .result
         .clone()
         .expect("a task write answers what it left");
-    assert_eq!(
-        (result.version, result.priority),
-        (None, Some(Priority::High))
+    assert!(
+        result
+            .version
+            .as_deref()
+            .is_some_and(|version| version.starts_with("mem1|")),
+        "{result:?}"
     );
+    assert_eq!(result.priority, Some(Priority::High));
     assert!(result.status.is_some());
     assert_eq!(
         set,

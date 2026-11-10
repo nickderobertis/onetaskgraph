@@ -154,6 +154,22 @@ pub struct ExpectArgs {
     pub expect: Option<String>,
 }
 
+/// The version of a task a write is held to: `--if-version`.
+#[derive(Debug, Default, Args)]
+pub struct IfVersionArgs {
+    /// Write only while the task is at this version, as a read of it reported (`task show`'s
+    /// `version`): a task at any other version — changed by somebody since that read — is
+    /// refused as `version-moved`, naming the version it is at, and nothing is written. A folder
+    /// of Markdown and an in-memory source check and write as one step; a GitHub board and
+    /// Linear, which take no conditional write, read the task immediately before writing it.
+    /// Unlike `--expect`, needs no cache, and the two may be given together.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — as `ExpectArgs::expect`: a version is
+    /// the source's own opaque token, which only the source that spelled it reads.
+    #[arg(long = "if-version", value_name = "VERSION")]
+    pub if_version: Option<String>,
+}
+
 /// What `onetaskgraph template` can do.
 #[derive(Debug, Subcommand)]
 pub enum TemplateCommand {
@@ -878,6 +894,9 @@ pub struct TaskUpdateArgs {
     pub expect: ExpectArgs,
 
     #[command(flatten)]
+    pub held: IfVersionArgs,
+
+    #[command(flatten)]
     pub term_scope: TermScopeArgs,
 }
 // llmlint: ignore-end[invalid_states_unrepresentable]
@@ -908,6 +927,9 @@ pub struct PrioritySetArgs {
     pub expect: ExpectArgs,
 
     #[command(flatten)]
+    pub held: IfVersionArgs,
+
+    #[command(flatten)]
     pub term_scope: TermScopeArgs,
 }
 
@@ -936,6 +958,9 @@ pub struct ContentSetArgs {
 
     #[command(flatten)]
     pub expect: ExpectArgs,
+
+    #[command(flatten)]
+    pub held: IfVersionArgs,
 
     #[command(flatten)]
     pub term_scope: TermScopeArgs,
@@ -986,6 +1011,9 @@ pub struct MetadataSetArgs {
     /// and refused, writing nothing, when it is at another.
     #[command(flatten)]
     pub expect: ExpectArgs,
+
+    #[command(flatten)]
+    pub held: IfVersionArgs,
 
     #[command(flatten)]
     pub term_scope: TermScopeArgs,
@@ -1102,6 +1130,9 @@ pub struct StatusSetArgs {
     pub expect: ExpectArgs,
 
     #[command(flatten)]
+    pub held: IfVersionArgs,
+
+    #[command(flatten)]
     pub term_scope: TermScopeArgs,
 }
 
@@ -1184,6 +1215,9 @@ pub struct CommentAddArgs {
     pub expect: ExpectArgs,
 
     #[command(flatten)]
+    pub held: IfVersionArgs,
+
+    #[command(flatten)]
     pub term_scope: TermScopeArgs,
 }
 
@@ -1222,6 +1256,9 @@ pub struct CommentEditArgs {
 
     #[command(flatten)]
     pub expect: ExpectArgs,
+
+    #[command(flatten)]
+    pub held: IfVersionArgs,
 
     #[command(flatten)]
     pub term_scope: TermScopeArgs,
@@ -2030,6 +2067,9 @@ pub struct TaskCopyArgs {
     /// value differs from that version, and no read of it.
     #[command(flatten)]
     pub expect: ExpectArgs,
+
+    #[command(flatten)]
+    pub held: IfVersionArgs,
     #[command(flatten)]
     pub copy: CopyArgs,
 }

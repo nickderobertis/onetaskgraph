@@ -1,5 +1,10 @@
 //! A stateless onetaskgraph source over one GitHub Projects v2 board.
 //!
+//! **A write held to a version** (`--if-version`) is checked immediately before its first
+//! mutation and not as one step with it: GitHub takes no conditional write, so the engine reads
+//! the task through this source just before writing it, and a change landing between that read
+//! and the mutation — the time one request takes — is GitHub's residual race.
+//!
 //! **A board is a container of projects, not a project.** Its own `title`,
 //! `shortDescription` and `readme` are never read as an item's fields and are never
 //! written: nothing in this source can rename the board a user configured.

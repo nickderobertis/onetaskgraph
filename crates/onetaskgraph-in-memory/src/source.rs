@@ -7,12 +7,12 @@ use chrono::Utc;
 use onetaskgraph_plugin_api::{
     Asset, AssetName, AssetPayload, AssetUpload, AssetUploads, AssetWrite, AssetsWritten,
     Capabilities, Comment, CommentBody, CommentOrigin, Cursor, DependencyEdge, DependencyEndpoint,
-    DependencySupport, Direction, Document, DocumentQuery, Health, ItemKind, ItemWrite, Label,
-    MetadataKey, NativeId, NewComment, Page, PageRequest, Priority, Project, ProjectFilter,
-    ProjectQuery, SecretResolver, SourceError, SourceName, SourcePlugin, Status, StatusCategory,
-    Task, TaskQuery, TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome, TextFields, TextQuery,
-    UpdatedField, Visibility, WriteSupport, WriteTarget, assetless, commentless, documentless,
-    serve_asset_references, unwritable, unwritable_field,
+    DependencySupport, Direction, Document, DocumentQuery, Health, HeldVersion, ItemKind,
+    ItemWrite, Label, MetadataKey, NativeId, NewComment, Page, PageRequest, Priority, Project,
+    ProjectFilter, ProjectQuery, SecretResolver, SourceError, SourceName, SourcePlugin, Status,
+    StatusCategory, Task, TaskQuery, TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome,
+    TextFields, TextQuery, UpdatedField, Visibility, WriteSupport, WriteTarget, asset_sha256,
+    assetless, commentless, documentless, serve_asset_references, unwritable, unwritable_field,
 };
 use schemars::{Schema, schema_for};
 
@@ -83,6 +83,43 @@ struct Held {
     /// the bytes it names even after the record itself was given others.
     blobs: BTreeMap<Digest, Vec<u8>>,
 }
+
+impl Held {
+    /// The change token of `task` as this source holds it: the SHA-256 of its fields, its
+    /// comments and its forward edges, so any write to any of them moves it, and a token read
+    /// twice off an untouched task is the same.
+    fn version_of(&self, task: &Task) -> String {
+        let fields = Task {
+            version: None,
+            ..task.clone()
+        };
+        let comments: Vec<&Comment> = self
+            .comments
+            .iter()
+            .filter(|comment| comment.task == task.id)
+            .map(|comment| &comment.comment)
+            .collect();
+        let edges: Vec<&DependencyEdge> = self
+            .task_dependencies
+            .iter()
+            .filter(|edge| edge.from == task.id)
+            .collect();
+        let bytes = serde_json::to_vec(&(fields, comments, edges))
+            .expect("a task, its comments and its edges serialise");
+        format!("{VERSION_PREFIX}{}", asset_sha256(&bytes))
+    }
+
+    /// `task`, carrying the token this source gives it.
+    fn versioned(&self, task: Task) -> Task {
+        Task {
+            version: Some(self.version_of(&task)),
+            ..task
+        }
+    }
+}
+
+/// What every token this source gives starts with.
+const VERSION_PREFIX: &str = "mem1|";
 
 /// The SHA-256 of an asset's bytes, as `asset_sha256` spells it: made only from a payload that
 /// [`AssetPayload::checked`] has accepted, so its digest is well formed and any bytes it carries
@@ -176,6 +213,24 @@ impl InMemorySource {
         self.held.lock().map_err(|_| SourceError::Unavailable {
             message: "this source's work was left half-written by an earlier panic".to_owned(),
         })
+    }
+
+    /// The work behind this source, locked for a write of the task `id` — and, when that write
+    /// is held to a version, refused under the same lock when the task is at any other: the
+    /// check and the write the caller then makes under the guard are one step, so no other write
+    /// to this source lands between them.
+    fn held_for(&self, id: Option<&NativeId>) -> Result<MutexGuard<'_, Held>, SourceError> {
+        let held = self.held()?;
+        if let Some((id, version)) =
+            id.and_then(|id| HeldVersion::expected(id).map(|version| (id, version)))
+            && let Some(task) = held.tasks.iter().find(|task| &task.id == id)
+        {
+            let found = held.version_of(task);
+            if found != version {
+                return Err(HeldVersion::moved(id, Some(found)));
+            }
+        }
+        Ok(held)
     }
 
     /// Slice `items` into the page `page` asks for.
@@ -398,6 +453,12 @@ impl TaskSource for InMemorySource {
         Capabilities::from(self.declared())
     }
 
+    /// A held write is checked and made under the one mutex over this source's work: see
+    /// `InMemorySource::held_for`.
+    fn holds_versions(&self) -> bool {
+        true
+    }
+
     async fn health(&self) -> Result<Health, SourceError> {
         let held = self.held()?;
         Ok(Health {
@@ -417,7 +478,13 @@ impl TaskSource for InMemorySource {
     }
 
     async fn get_task(&self, id: &NativeId) -> Result<Option<Task>, SourceError> {
-        Ok(self.held()?.tasks.iter().find(|t| &t.id == id).cloned())
+        let held = self.held()?;
+        Ok(held
+            .tasks
+            .iter()
+            .find(|t| &t.id == id)
+            .cloned()
+            .map(|task| held.versioned(task)))
     }
 
     async fn get_project(&self, id: &NativeId) -> Result<Option<Project>, SourceError> {
@@ -436,6 +503,7 @@ impl TaskSource for InMemorySource {
             .filter(|task| self.task_matches(task, query))
             .filter(|task| self.comment_activity_matches(&held.comments, task, query))
             .cloned()
+            .map(|task| held.versioned(task))
             .collect();
         drop(held);
         self.paginate(&matched, page)
@@ -532,7 +600,7 @@ impl TaskSource for InMemorySource {
         self.declared().writes
     }
 
-    /// The task as this process now holds it — no token, since this source gives none.
+    /// The task as this process now holds it, with the token a read of it gives.
     async fn written_task(&self, id: &NativeId) -> Option<Task> {
         self.get_task(id).await.ok().flatten()
     }
@@ -548,13 +616,13 @@ impl TaskSource for InMemorySource {
         listed("delivers", near, &write.item.delivers)?;
         listed("delivered_by", near, &write.item.delivered_by)?;
         self.creatable(write.target.as_ref(), &write.item.title)?;
-        let mut held = self.held()?;
+        let mut held = self.held_for(write.target.as_ref())?;
         let id = match &write.target {
             Some(target) => {
                 let position = position_of(held.tasks.iter().map(|task| &task.id), target)
                     .ok_or_else(|| missing(target, "task"))?;
-                // A token the written task arrives with is its source's, and this source gives
-                // none of its own: it is never stored.
+                // The token a written task arrives with is its source's; this source derives its
+                // own from what it holds whenever the task is read, so none is stored.
                 held.tasks[position] = Task {
                     id: target.clone(),
                     key: None,
@@ -761,7 +829,7 @@ impl TaskSource for InMemorySource {
         if !self.declared().writes.is_supported() {
             return Err(unwritable(KIND));
         }
-        let mut held = self.held()?;
+        let mut held = self.held_for(Some(id))?;
         let Some(task) = held.tasks.iter_mut().find(|task| &task.id == id) else {
             return Ok(None);
         };
@@ -797,7 +865,7 @@ impl TaskSource for InMemorySource {
         if !self.declared().priority.is_native() {
             return Err(unwritable_field(KIND, "priority"));
         }
-        let mut held = self.held()?;
+        let mut held = self.held_for(Some(id))?;
         Ok(held
             .tasks
             .iter_mut()
@@ -816,7 +884,7 @@ impl TaskSource for InMemorySource {
         if !self.declared().writes.is_supported() {
             return Err(unwritable(KIND));
         }
-        let mut held = self.held()?;
+        let mut held = self.held_for(Some(id))?;
         Ok(held
             .tasks
             .iter_mut()
@@ -836,7 +904,7 @@ impl TaskSource for InMemorySource {
         if !self.declared().writes.is_supported() {
             return Err(unwritable(KIND));
         }
-        let mut held = self.held()?;
+        let mut held = self.held_for(Some(id))?;
         Ok(held
             .tasks
             .iter_mut()
@@ -864,7 +932,7 @@ impl TaskSource for InMemorySource {
         }
         let uploads = self.uploads(assets)?;
         let served = {
-            let mut held = self.held()?;
+            let mut held = self.held_for(Some(id))?;
             let Some(task) = held.tasks.iter_mut().find(|task| &task.id == id) else {
                 return Ok(None);
             };
@@ -979,7 +1047,7 @@ impl TaskSource for InMemorySource {
             return Err(unwritable(KIND));
         }
         listed("delivered_by", id, delivered_by)?;
-        let mut held = self.held()?;
+        let mut held = self.held_for(Some(id))?;
         let Some(task) = held.tasks.iter_mut().find(|task| &task.id == id) else {
             return Ok(None);
         };
@@ -997,15 +1065,16 @@ impl TaskSource for InMemorySource {
         value: &serde_json::Value,
     ) -> Result<Option<Task>, SourceError> {
         self.metadata_writable(key)?;
-        let mut held = self.held()?;
-        Ok(held
+        let mut held = self.held_for(Some(id))?;
+        let written = held
             .tasks
             .iter_mut()
             .find(|task| &task.id == id)
             .map(|task| {
                 set_key(&mut task.metadata, key, value);
                 task.clone()
-            }))
+            });
+        Ok(written.map(|task| held.versioned(task)))
     }
 
     /// Apply every named field to the held task in place, under the one lock, and nothing
@@ -1035,7 +1104,7 @@ impl TaskSource for InMemorySource {
         if let Some(delivers) = &update.delivers {
             listed("delivers", id, delivers)?;
         }
-        let mut held = self.held()?;
+        let mut held = self.held_for(Some(id))?;
         let Some(position) = position_of(held.tasks.iter().map(|task| &task.id), id) else {
             return Ok(None);
         };
@@ -1058,7 +1127,7 @@ impl TaskSource for InMemorySource {
         }
         held.tasks[position] = after.clone();
         Ok(Some(TaskUpdateOutcome {
-            task: after,
+            task: held.versioned(after),
             written,
             delivers_before: before.delivers,
         }))
@@ -1151,7 +1220,7 @@ impl TaskSource for InMemorySource {
         if !self.declared().writes.is_supported() {
             return Err(unwritable(KIND));
         }
-        let mut held = self.held()?;
+        let mut held = self.held_for(Some(task))?;
         if !held.tasks.iter().any(|held_task| &held_task.id == task) {
             return Ok(None);
         }
@@ -1182,7 +1251,7 @@ impl TaskSource for InMemorySource {
         if !self.declared().writes.is_supported() {
             return Err(unwritable(KIND));
         }
-        let mut held = self.held()?;
+        let mut held = self.held_for(Some(task))?;
         let Some(found) = held
             .comments
             .iter_mut()
@@ -1207,7 +1276,7 @@ impl TaskSource for InMemorySource {
         if !self.declared().writes.is_supported() {
             return Err(unwritable(KIND));
         }
-        let mut held = self.held()?;
+        let mut held = self.held_for(Some(task))?;
         let before = held.comments.len();
         held.comments
             .retain(|held| !(&held.task == task && &held.comment.id == comment));

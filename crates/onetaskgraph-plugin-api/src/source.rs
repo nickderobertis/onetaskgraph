@@ -367,6 +367,18 @@ pub trait TaskSource: Send + Sync {
         let _ = id;
     }
 
+    /// Whether this source enforces a [`HeldVersion`](crate::HeldVersion) itself, as one step
+    /// with the write it holds: `true` for a source that serializes its own writes and, inside
+    /// every task write, refuses with [`HeldVersion::moved`](crate::HeldVersion::moved) a task
+    /// not at the version [`HeldVersion::expected`](crate::HeldVersion::expected) names.
+    ///
+    /// Defaulted to `false`: the engine then reads the task through this source immediately
+    /// before a held write and refuses it there, and the time between that read and the
+    /// mutation is the backend's residual race.
+    fn holds_versions(&self) -> bool {
+        false
+    }
+
     /// Start recording every request this source sends, for [`end_journal`](Self::end_journal).
     ///
     /// The engine opens one journal around one write at a time. Defaulted to recording

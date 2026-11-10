@@ -84,7 +84,8 @@ silence. See the note on `Health` below for the one difference it carries delibe
   metering types `Metering` and `Metered`; the `status_mapping` types `StatusMapping`,
   `StatusNames`, `StatusName` and `UnmappedStatus`; the image-asset types `Asset`,
   `AssetName`, `AssetContentType`, `AssetPayload`, `AssetUpload`, `AssetUploads`, `AssetWrite`
-  and `AssetsWritten`; the clock types `Clock`, `SharedClock` and `WaitCause`; the closure types `IssueRef`,
+  and `AssetsWritten`; the clock types `Clock`, `SharedClock` and `WaitCause`; the held-write type `HeldVersion`;
+  the closure types `IssueRef`,
   `IssueHolding`, `HeldTask`, `Completion`, `ClosedAs`, `StatusContradiction` and
   `ContradictedItem`; the local-cache types
   `Coverage`, `VersionCoverage`, `ProjectVersionCoverage`, `DocumentVersionCoverage`,

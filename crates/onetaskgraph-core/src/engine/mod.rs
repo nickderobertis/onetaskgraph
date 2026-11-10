@@ -28,6 +28,7 @@ pub use dependents::Completeness;
 mod fetch;
 mod graph;
 mod held_off;
+mod held_version;
 mod join;
 mod local;
 mod metadata;
@@ -837,21 +838,32 @@ pub enum EngineError {
     )]
     ExpectOneTask,
 
-    /// A document write expecting a version was refused because a read of the document answered
+    /// `task copy --if-version` named more than one task, a query, or something other than a
+    /// task.
+    #[error(
+        "--if-version names the version of one destination task, so it is taken by a copy of \
+         one task alone\n\
+         next: copy that one task by its id with --if-version, and the others without it"
+    )]
+    IfVersionOneTask,
+
+    /// A task or document write held to a version was refused because a read of it answered
     /// another — a change made at the source since the caller's read.
     #[error(
-        "document {id} is at version {found}, not the version {expected} this write expects — \
-         it changed since that version was read — so nothing was written\n\
-         next: read the document again (`onetaskgraph document show`), decide whether the write \
-         still applies, and pass the version that read reports"
+        "{id} is at version {found}, not the version {expected} this write expects — it changed \
+         since that version was read — so nothing was written\n\
+         next: read it again (`onetaskgraph task show` or `document show`), decide whether the \
+         write still applies, and pass the version that read reports"
     )]
     VersionMoved {
-        /// The qualified id of the document.
+        /// The qualified id of the task or document.
         id: String,
         /// The version the write expected.
         expected: String,
         /// The version the read answered.
         found: String,
+        /// What the item was found holding: its `version` the one found.
+        held: Box<crate::cache::WriteResult>,
     },
 
     /// `--expect` named a task of a source that keeps no local cache, which is where what an
@@ -1842,6 +1854,7 @@ impl EngineError {
     pub fn held(&self) -> Option<&crate::cache::WriteResult> {
         match self {
             Self::TargetTaskOrigin { held, .. } => held.as_deref(),
+            Self::VersionMoved { held, .. } => Some(held),
             _ => None,
         }
     }

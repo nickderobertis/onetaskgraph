@@ -37,8 +37,7 @@ pub(crate) async fn update_task(
         ));
     }
     let engine = expecting(loaded, &id, &args.expect)?;
-    let updated = engine
-        .update_task(&id, &update)
+    let updated = crate::held(&engine, &id, &args.held, engine.update_task(&id, &update))
         .await
         .map_err(|error| write_failed(&engine, &error))?;
     let rendered = rendering(loaded, &updated, render::task_updated, "the update")?;

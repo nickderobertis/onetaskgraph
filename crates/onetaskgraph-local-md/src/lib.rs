@@ -86,11 +86,11 @@ use onetaskgraph_plugin_api::{
     Asset, AssetName, AssetWrite, AssetsWritten, Capabilities, Classification, Comment,
     CommentBody, CommentCopy, CommentOrigin, Cursor, DependencyEdge, DependencyEndpoint,
     DependencyKind, DependencySupport, Designator, Direction, Document, DocumentQuery, Health,
-    ItemKind, ItemWrite, Label, LabelFilter, Location, MetadataKey, NativeId, NewComment, Page,
-    PageRequest, Priority, Project, ProjectFilter, ProjectQuery, Repository, SecretResolver,
-    SourceError, SourceName, SourcePlugin, Status, StatusCategory, Support, Task, TaskDetailRead,
-    TaskQuery, TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome, TextFields, TextQuery,
-    UpdatedField, Visibility, WriteSupport, WriteTarget,
+    HeldVersion, ItemKind, ItemWrite, Label, LabelFilter, Location, MetadataKey, NativeId,
+    NewComment, Page, PageRequest, Priority, Project, ProjectFilter, ProjectQuery, Repository,
+    SecretResolver, SourceError, SourceName, SourcePlugin, Status, StatusCategory, Support, Task,
+    TaskDetailRead, TaskQuery, TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome, TextFields,
+    TextQuery, UpdatedField, Visibility, WriteSupport, WriteTarget,
 };
 use schemars::{Schema, schema_for};
 use serde::{Deserialize, Serialize};
@@ -1206,6 +1206,52 @@ fn text_match(title: &str, body: Option<&str>, q: &TextQuery) -> bool {
     }
 }
 
+impl LocalMdSource {
+    /// Run `write`, a write of the task `id`, as one step with checking the task is at the
+    /// version the write in progress is held to, if it is held: the task's file is held under the
+    /// lock beside it — the same lock a copy's hold takes, which every held write of it in any
+    /// process waits for — its bytes read and their token compared, and `write` made only when
+    /// they match, before the lock is let go. So no other held write lands between the check and
+    /// the write. A write that is not held — and an edit made outside this store — takes no lock,
+    /// and is not excluded.
+    async fn held<T>(
+        &self,
+        id: Option<&NativeId>,
+        write: impl std::future::Future<Output = Result<T, SourceError>>,
+    ) -> Result<T, SourceError> {
+        let Some((id, version)) =
+            id.and_then(|id| HeldVersion::expected(id).map(|version| (id, version)))
+        else {
+            return write.await;
+        };
+        // A task this folder does not hold is answered as the write answers it.
+        let Some(file) = self.locate(Kind::Task, id)? else {
+            return write.await;
+        };
+        let record = held_as(onetaskgraph_plugin_api::MetadataRecord::Task, id);
+        self.holds.take(&record, &file)?;
+        let checked = match std::fs::read(&file) {
+            Ok(bytes) => {
+                let found = change_token::spell(&bytes);
+                if change_token::order(&found, &version) == Some(std::cmp::Ordering::Equal) {
+                    Ok(())
+                } else {
+                    Err(HeldVersion::moved(id, Some(found)))
+                }
+            }
+            Err(error) => Err(SourceError::Unavailable {
+                message: format!("could not read {}: {error}", file.display()),
+            }),
+        };
+        let written = match checked {
+            Ok(()) => write.await,
+            Err(refused) => Err(refused),
+        };
+        self.holds.release(&record);
+        written
+    }
+}
+
 #[async_trait::async_trait]
 impl TaskSource for LocalMdSource {
     fn kind(&self) -> &'static str {
@@ -1213,6 +1259,11 @@ impl TaskSource for LocalMdSource {
     }
     fn order_versions(&self, a: &str, b: &str) -> Option<std::cmp::Ordering> {
         change_token::order(a, b)
+    }
+    /// A held write is checked and made as one step under the lock beside the task's file: see
+    /// `LocalMdSource::held`.
+    fn holds_versions(&self) -> bool {
+        true
     }
     /// Every part: `md1` is the digest of the task's one file, which holds its fields, its
     /// comments and its forward edges alike.
@@ -1376,7 +1427,10 @@ impl TaskSource for LocalMdSource {
         self.edges(WorkKind::Project, id, d, p)
     }
     async fn write_task(&self, write: &ItemWrite<Task>) -> Result<NativeId, SourceError> {
-        self.write_task_with(write, None)
+        self.held(write.target.as_ref(), async {
+            self.write_task_with(write, None)
+        })
+        .await
     }
     /// The lock file beside the record's own file, as [`hold`] says.
     fn hold_item(
@@ -1428,32 +1482,39 @@ impl TaskSource for LocalMdSource {
         id: &NativeId,
         key: &MetadataKey,
     ) -> Result<Option<Option<String>>, SourceError> {
-        let Some(before) = self.record_metadata(record, id).await? else {
-            return Ok(None);
-        };
-        let Some(path) = self.locate(kind_of(record), id)? else {
-            return Ok(None);
-        };
-        if before.contains_key(key.as_str()) {
-            let text = Self::read_text(&path)?;
-            let edited = with_metadata_entry(&text, key.as_str(), None)
-                .map_err(|unnarrow| unnarrow.refusal_to("remove", &path, key.as_str()))?;
-            // Held to reading back as the record less that one key before anything is written,
-            // so a removal that would read back otherwise — or not at all — leaves the file as
-            // it was.
-            let mut wanted = before;
-            wanted.remove(key.as_str());
-            if self.metadata_in(record, &path, &edited).ok().as_ref() != Some(&wanted) {
-                return Err(Unnarrow {
-                    reason: "the edited file would read back as more than that one key removed"
-                        .to_owned(),
-                    next: TIDY_BLOCK,
+        self.held(
+            (record == onetaskgraph_plugin_api::MetadataRecord::Task).then_some(id),
+            async {
+                let Some(before) = self.record_metadata(record, id).await? else {
+                    return Ok(None);
+                };
+                let Some(path) = self.locate(kind_of(record), id)? else {
+                    return Ok(None);
+                };
+                if before.contains_key(key.as_str()) {
+                    let text = Self::read_text(&path)?;
+                    let edited = with_metadata_entry(&text, key.as_str(), None)
+                        .map_err(|unnarrow| unnarrow.refusal_to("remove", &path, key.as_str()))?;
+                    // Held to reading back as the record less that one key before anything is written,
+                    // so a removal that would read back otherwise — or not at all — leaves the file as
+                    // it was.
+                    let mut wanted = before;
+                    wanted.remove(key.as_str());
+                    if self.metadata_in(record, &path, &edited).ok().as_ref() != Some(&wanted) {
+                        return Err(Unnarrow {
+                            reason:
+                                "the edited file would read back as more than that one key removed"
+                                    .to_owned(),
+                            next: TIDY_BLOCK,
+                        }
+                        .refusal_to("remove", &path, key.as_str()));
+                    }
+                    replace_atomically(&path, &edited)?;
                 }
-                .refusal_to("remove", &path, key.as_str()));
-            }
-            replace_atomically(&path, &edited)?;
-        }
-        Ok(Some(self.written_version(record, id).await))
+                Ok(Some(self.written_version(record, id).await))
+            },
+        )
+        .await
     }
     /// Every record whose file carries `key` at the create key — read off this
     /// machine, where a create lands at once, so it never lags.
@@ -1571,7 +1632,10 @@ impl TaskSource for LocalMdSource {
         write: &ItemWrite<Task>,
         answers: &BTreeMap<String, serde_json::Value>,
     ) -> Result<NativeId, SourceError> {
-        self.write_task_with(write, Some(answers))
+        self.held(write.target.as_ref(), async {
+            self.write_task_with(write, Some(answers))
+        })
+        .await
     }
     /// One file under `projects/`. An update of a project whose file stores an answers block
     /// keeps that block byte for byte when the project written records a rendering's
@@ -1619,7 +1683,10 @@ impl TaskSource for LocalMdSource {
         id: &NativeId,
         category: StatusCategory,
     ) -> Result<Option<Status>, SourceError> {
-        self.set_status(WorkKind::Task, id, category)
+        self.held(Some(id), async {
+            self.set_status(WorkKind::Task, id, category)
+        })
+        .await
     }
 
     /// Rewrite the one `status:` entry of the project file's front matter, and nothing else,
@@ -1642,15 +1709,18 @@ impl TaskSource for LocalMdSource {
         id: &NativeId,
         priority: Priority,
     ) -> Result<Option<Priority>, SourceError> {
-        let Some(path) = self.locate(Kind::Task, id)? else {
-            return Ok(None);
-        };
-        if self.parse(WorkKind::Task, &path)?.priority == priority {
-            return Ok(Some(priority));
-        }
-        let written = (priority != Priority::None).then(|| priority.as_str());
-        self.rewrite_front_entry(&path, "priority", written)?;
-        Ok(Some(self.parse(WorkKind::Task, &path)?.priority))
+        self.held(Some(id), async {
+            let Some(path) = self.locate(Kind::Task, id)? else {
+                return Ok(None);
+            };
+            if self.parse(WorkKind::Task, &path)?.priority == priority {
+                return Ok(Some(priority));
+            }
+            let written = (priority != Priority::None).then(|| priority.as_str());
+            self.rewrite_front_entry(&path, "priority", written)?;
+            Ok(Some(self.parse(WorkKind::Task, &path)?.priority))
+        })
+        .await
     }
 
     /// Replace the task's content — the body between its front matter and its comments
@@ -1672,10 +1742,13 @@ impl TaskSource for LocalMdSource {
         id: &NativeId,
         content: &str,
     ) -> Result<Option<()>, SourceError> {
-        let Some(path) = self.locate(Kind::Task, id)? else {
-            return Ok(None);
-        };
-        self.replace_content(&path, content).map(Some)
+        self.held(Some(id), async {
+            let Some(path) = self.locate(Kind::Task, id)? else {
+                return Ok(None);
+            };
+            self.replace_content(&path, content).map(Some)
+        })
+        .await
     }
 
     /// Rewrite the one `delivered_by:` entry of the task's front matter, and nothing else —
@@ -1685,16 +1758,19 @@ impl TaskSource for LocalMdSource {
         id: &NativeId,
         delivered_by: &[TaskRef],
     ) -> Result<Option<()>, SourceError> {
-        self.representable_list("delivered_by", id, delivered_by)?;
-        let Some(path) = self.locate(Kind::Task, id)? else {
-            return Ok(None);
-        };
-        self.parse(WorkKind::Task, &path)?;
-        // A list of strings always renders as JSON, which is a YAML flow sequence.
-        let rendered = (!delivered_by.is_empty())
-            .then(|| serde_json::to_string(delivered_by).expect("a list of task ids renders"));
-        self.rewrite_front_entry(&path, "delivered_by", rendered.as_deref())?;
-        Ok(Some(()))
+        self.held(Some(id), async {
+            self.representable_list("delivered_by", id, delivered_by)?;
+            let Some(path) = self.locate(Kind::Task, id)? else {
+                return Ok(None);
+            };
+            self.parse(WorkKind::Task, &path)?;
+            // A list of strings always renders as JSON, which is a YAML flow sequence.
+            let rendered = (!delivered_by.is_empty())
+                .then(|| serde_json::to_string(delivered_by).expect("a list of task ids renders"));
+            self.rewrite_front_entry(&path, "delivered_by", rendered.as_deref())?;
+            Ok(Some(()))
+        })
+        .await
     }
 
     /// Edit the one entry for `key` in the task's front-matter `metadata:` block, and nothing
@@ -1705,29 +1781,32 @@ impl TaskSource for LocalMdSource {
         key: &MetadataKey,
         value: &serde_json::Value,
     ) -> Result<Option<Task>, SourceError> {
-        // Compared without the file's change token, which any edit moves, and answered with
-        // the token of the file as it was written.
-        let Some(written) = self.set_metadata(
-            Kind::Task,
-            id,
-            key,
-            value,
-            |path, text| {
-                self.parse_text(WorkKind::Task, path, text)
-                    .map(task)
-                    .map(unversioned)
-            },
-            |task| &mut task.metadata,
-        )?
-        else {
-            return Ok(None);
-        };
-        Ok(Some(Task {
-            version: self
-                .find(WorkKind::Task, id)?
-                .and_then(|entry| entry.version),
-            ..written
-        }))
+        self.held(Some(id), async {
+            // Compared without the file's change token, which any edit moves, and answered with
+            // the token of the file as it was written.
+            let Some(written) = self.set_metadata(
+                Kind::Task,
+                id,
+                key,
+                value,
+                |path, text| {
+                    self.parse_text(WorkKind::Task, path, text)
+                        .map(task)
+                        .map(unversioned)
+                },
+                |task| &mut task.metadata,
+            )?
+            else {
+                return Ok(None);
+            };
+            Ok(Some(Task {
+                version: self
+                    .find(WorkKind::Task, id)?
+                    .and_then(|entry| entry.version),
+                ..written
+            }))
+        })
+        .await
     }
 
     /// Edit every entry of the task file the update names — each front-matter key, each
@@ -1746,106 +1825,110 @@ impl TaskSource for LocalMdSource {
         id: &NativeId,
         update: &TaskUpdate,
     ) -> Result<Option<TaskUpdateOutcome>, SourceError> {
-        update.consistent()?;
-        // A status named by its category's own word, which this folder's mapping does not read
-        // as that category, is the category and nothing more: it is written in this folder's
-        // own word for it, exactly as `set_task_status` writes one. Any other name is written
-        // as it is, or refused when the mapping would read it as something else.
-        let status = update.status.as_ref().map(|status| {
-            let canonical = status.name == category_name(status.category);
-            if canonical
-                && self
-                    .representable_status(status, &StatusHolder::own(id))
-                    .is_err()
-            {
-                Status {
-                    category: status.category,
-                    name: self.word_for(status.category),
+        self.held(Some(id), async {
+            update.consistent()?;
+            // A status named by its category's own word, which this folder's mapping does not read
+            // as that category, is the category and nothing more: it is written in this folder's
+            // own word for it, exactly as `set_task_status` writes one. Any other name is written
+            // as it is, or refused when the mapping would read it as something else.
+            let status = update.status.as_ref().map(|status| {
+                let canonical = status.name == category_name(status.category);
+                if canonical
+                    && self
+                        .representable_status(status, &StatusHolder::own(id))
+                        .is_err()
+                {
+                    Status {
+                        category: status.category,
+                        name: self.word_for(status.category),
+                    }
+                } else {
+                    status.clone()
                 }
-            } else {
-                status.clone()
+            });
+            if let Some(status) = &status {
+                self.representable_status(status, &StatusHolder::own(id))?;
             }
-        });
-        if let Some(status) = &status {
-            self.representable_status(status, &StatusHolder::own(id))?;
-        }
-        let update = &TaskUpdate {
-            status,
-            ..update.clone()
-        };
-        if let Some(delivers) = &update.delivers {
-            self.representable_list("delivers", id, delivers)?;
-        }
-        let Some(path) = self.locate(Kind::Task, id)? else {
-            return Ok(None);
-        };
-        let text = Self::read_text(&path)?;
-        let entry = self.parse_text(WorkKind::Task, &path, &text)?;
-        let edges_before = entry.dependencies.clone();
-        let before = task(entry);
-        let wanted = update.applied_to(&before);
-        let edges = update.depends_on.as_ref().map(|edges| {
-            edges
-                .iter()
-                .map(|edge| DependencyEdge {
-                    from: DependencyEndpoint::from_native(id.clone(), ItemKind::Task),
-                    to: edge.to.clone(),
-                    kind: edge.kind,
-                })
-                .collect::<Vec<_>>()
-        });
-        // Edges are a set: the same far ends in another order are the edges the task holds.
-        let edges_differ = edges.as_ref().is_some_and(|edges| {
-            edges.len() != edges_before.len()
-                || edges.iter().any(|edge| !edges_before.contains(edge))
-        });
-        let edited = self.updated_text(
-            &path,
-            &text,
-            &before,
-            &wanted,
-            edges.as_deref().filter(|_| edges_differ),
-        )?;
-        if edited == text {
-            return Ok(Some(TaskUpdateOutcome {
-                delivers_before: before.delivers.clone(),
-                task: before,
-                written: std::collections::BTreeSet::new(),
-            }));
-        }
-        // Edited text that does not read at all — a key the edit added repeating one beyond the
-        // block this source sees, say — reads back as nothing like what was wanted.
-        let reads_back = self
-            .parse_text(WorkKind::Task, &path, &edited)
-            .is_ok_and(|reread| {
-                let edges_after = &reread.dependencies;
-                let edges_landed = edges.as_ref().is_none_or(|edges| {
-                    edges.len() == edges_after.len()
-                        && edges.iter().all(|edge| edges_after.contains(edge))
+            let update = &TaskUpdate {
+                status,
+                ..update.clone()
+            };
+            if let Some(delivers) = &update.delivers {
+                self.representable_list("delivers", id, delivers)?;
+            }
+            let Some(path) = self.locate(Kind::Task, id)? else {
+                return Ok(None);
+            };
+            let text = Self::read_text(&path)?;
+            let entry = self.parse_text(WorkKind::Task, &path, &text)?;
+            let edges_before = entry.dependencies.clone();
+            let before = task(entry);
+            let wanted = update.applied_to(&before);
+            let edges = update.depends_on.as_ref().map(|edges| {
+                edges
+                    .iter()
+                    .map(|edge| DependencyEdge {
+                        from: DependencyEndpoint::from_native(id.clone(), ItemKind::Task),
+                        to: edge.to.clone(),
+                        kind: edge.kind,
+                    })
+                    .collect::<Vec<_>>()
+            });
+            // Edges are a set: the same far ends in another order are the edges the task holds.
+            let edges_differ = edges.as_ref().is_some_and(|edges| {
+                edges.len() != edges_before.len()
+                    || edges.iter().any(|edge| !edges_before.contains(edge))
+            });
+            let edited = self.updated_text(
+                &path,
+                &text,
+                &before,
+                &wanted,
+                edges.as_deref().filter(|_| edges_differ),
+            )?;
+            if edited == text {
+                return Ok(Some(TaskUpdateOutcome {
+                    delivers_before: before.delivers.clone(),
+                    task: before,
+                    written: std::collections::BTreeSet::new(),
+                }));
+            }
+            // Edited text that does not read at all — a key the edit added repeating one beyond the
+            // block this source sees, say — reads back as nothing like what was wanted.
+            let reads_back = self
+                .parse_text(WorkKind::Task, &path, &edited)
+                .is_ok_and(|reread| {
+                    let edges_after = &reread.dependencies;
+                    let edges_landed = edges.as_ref().is_none_or(|edges| {
+                        edges.len() == edges_after.len()
+                            && edges.iter().all(|edge| edges_after.contains(edge))
+                    });
+                    unversioned(task(reread)) == unversioned(wanted)
+                        && (!edges_differ || edges_landed)
                 });
-                unversioned(task(reread)) == unversioned(wanted) && (!edges_differ || edges_landed)
-            });
-        if !reads_back {
-            return Err(SourceError::Refused {
-                message: format!(
-                    "{}: cannot update this task without changing more than the update names: \
-                     the edited file would read back otherwise; next: tidy the file's front \
-                     matter by hand, one `key: value` entry to a line, and update it again",
-                    path.display()
-                ),
-            });
-        }
-        replace_atomically(&path, &edited)?;
-        let after = task(self.parse(WorkKind::Task, &path)?);
-        let mut written = update.changed(&before, &after);
-        if edges_differ {
-            written.insert(UpdatedField::DependsOn);
-        }
-        Ok(Some(TaskUpdateOutcome {
-            task: after,
-            written,
-            delivers_before: before.delivers,
-        }))
+            if !reads_back {
+                return Err(SourceError::Refused {
+                    message: format!(
+                        "{}: cannot update this task without changing more than the update names: \
+                         the edited file would read back otherwise; next: tidy the file's front \
+                         matter by hand, one `key: value` entry to a line, and update it again",
+                        path.display()
+                    ),
+                });
+            }
+            replace_atomically(&path, &edited)?;
+            let after = task(self.parse(WorkKind::Task, &path)?);
+            let mut written = update.changed(&before, &after);
+            if edges_differ {
+                written.insert(UpdatedField::DependsOn);
+            }
+            Ok(Some(TaskUpdateOutcome {
+                task: after,
+                written,
+                delivers_before: before.delivers,
+            }))
+        })
+        .await
     }
 
     /// As [`set_task_metadata`](TaskSource::set_task_metadata), for a file under `projects/`.
@@ -1913,14 +1996,17 @@ impl TaskSource for LocalMdSource {
         answers: Option<&BTreeMap<String, serde_json::Value>>,
         assets: &AssetWrite,
     ) -> Result<AssetsWritten, SourceError> {
-        let files = self.asset_files(Kind::Task, write.target.as_ref(), assets)?;
-        let before = self.snapshot(Kind::Task, write.target.as_ref())?;
-        let id = self.write_task_with(write, answers)?;
-        self.install(Kind::Task, &id, &files, before)?;
-        Ok(AssetsWritten {
-            id,
-            content: write.item.content.clone(),
+        self.held(write.target.as_ref(), async {
+            let files = self.asset_files(Kind::Task, write.target.as_ref(), assets)?;
+            let before = self.snapshot(Kind::Task, write.target.as_ref())?;
+            let id = self.write_task_with(write, answers)?;
+            self.install(Kind::Task, &id, &files, before)?;
+            Ok(AssetsWritten {
+                id,
+                content: write.item.content.clone(),
+            })
         })
+        .await
     }
     /// The document's file and its asset directory, on the terms of
     /// [`write_task_with_assets`](TaskSource::write_task_with_assets).
@@ -1949,20 +2035,23 @@ impl TaskSource for LocalMdSource {
         answers: &BTreeMap<String, serde_json::Value>,
         assets: &AssetWrite,
     ) -> Result<Option<AssetsWritten>, SourceError> {
-        let files = self.asset_files(Kind::Task, Some(id), assets)?;
-        let before = self.snapshot(Kind::Task, Some(id))?;
-        if self
-            .set_task_rendering(id, content, provenance, answers)
-            .await?
-            .is_none()
-        {
-            return Ok(None);
-        }
-        self.install(Kind::Task, id, &files, before)?;
-        Ok(Some(AssetsWritten {
-            id: id.clone(),
-            content: (!content.is_empty()).then(|| content.to_owned()),
-        }))
+        self.held(Some(id), async {
+            let files = self.asset_files(Kind::Task, Some(id), assets)?;
+            let before = self.snapshot(Kind::Task, Some(id))?;
+            if self
+                .set_task_rendering(id, content, provenance, answers)
+                .await?
+                .is_none()
+            {
+                return Ok(None);
+            }
+            self.install(Kind::Task, id, &files, before)?;
+            Ok(Some(AssetsWritten {
+                id: id.clone(),
+                content: (!content.is_empty()).then(|| content.to_owned()),
+            }))
+        })
+        .await
     }
     /// The document's rendering and its asset directory, on the terms of
     /// [`set_task_rendering_with_assets`](TaskSource::set_task_rendering_with_assets).
@@ -2032,26 +2121,29 @@ impl TaskSource for LocalMdSource {
         provenance: &serde_json::Value,
         answers: &BTreeMap<String, serde_json::Value>,
     ) -> Result<Option<()>, SourceError> {
-        self.set_rendering(
-            Kind::Task,
-            id,
-            &Rendering {
-                content,
-                provenance,
-                answers,
-            },
-            |path, text| {
-                self.parse_text(WorkKind::Task, path, text)
-                    .map(task)
-                    .map(unversioned)
-            },
-            |task, content, provenance| {
-                task.content = (!content.is_empty()).then(|| content.to_owned());
-                task.metadata
-                    .insert(MetadataKey::TEMPLATE_KEY.to_owned(), provenance.clone());
-            },
-            |task| &task.title,
-        )
+        self.held(Some(id), async {
+            self.set_rendering(
+                Kind::Task,
+                id,
+                &Rendering {
+                    content,
+                    provenance,
+                    answers,
+                },
+                |path, text| {
+                    self.parse_text(WorkKind::Task, path, text)
+                        .map(task)
+                        .map(unversioned)
+                },
+                |task, content, provenance| {
+                    task.content = (!content.is_empty()).then(|| content.to_owned());
+                    task.metadata
+                        .insert(MetadataKey::TEMPLATE_KEY.to_owned(), provenance.clone());
+                },
+                |task| &task.title,
+            )
+        })
+        .await
     }
     /// Replace the document's content, provenance and stored answers in one write of its
     /// file, on the terms of [`set_task_rendering`](TaskSource::set_task_rendering).
@@ -2133,26 +2225,29 @@ impl TaskSource for LocalMdSource {
         task: &NativeId,
         comment: &NewComment,
     ) -> Result<Option<Comment>, SourceError> {
-        if let Some(author) = &comment.author {
-            representable_author(author)?;
-        }
-        representable_body(&comment.body)?;
-        let Some(mut file) = self.task_file(task)? else {
-            return Ok(None);
-        };
-        let (now, minted) = minted_comment_id(&file.comments);
-        let added = Comment {
-            origin: None,
-            id: minted,
-            author: comment.author.clone(),
-            created_at: Some(now),
-            updated_at: Some(now),
-            body: comment.body.as_str().to_owned(),
-            url: None,
-        };
-        file.comments.push(added.clone());
-        file.rewrite()?;
-        Ok(Some(added))
+        self.held(Some(task), async {
+            if let Some(author) = &comment.author {
+                representable_author(author)?;
+            }
+            representable_body(&comment.body)?;
+            let Some(mut file) = self.task_file(task)? else {
+                return Ok(None);
+            };
+            let (now, minted) = minted_comment_id(&file.comments);
+            let added = Comment {
+                origin: None,
+                id: minted,
+                author: comment.author.clone(),
+                created_at: Some(now),
+                updated_at: Some(now),
+                body: comment.body.as_str().to_owned(),
+                url: None,
+            };
+            file.comments.push(added.clone());
+            file.rewrite()?;
+            Ok(Some(added))
+        })
+        .await
     }
     async fn edit_comment(
         &self,
@@ -2160,33 +2255,39 @@ impl TaskSource for LocalMdSource {
         comment: &NativeId,
         body: &CommentBody,
     ) -> Result<Option<Comment>, SourceError> {
-        representable_body(body)?;
-        let Some(mut file) = self.task_file(task)? else {
-            return Ok(None);
-        };
-        let Some(edited) = file.comments.iter_mut().find(|held| &held.id == comment) else {
-            return Ok(None);
-        };
-        edited.body = body.as_str().to_owned();
-        edited.updated_at = Some(this_second());
-        let edited = edited.clone();
-        file.rewrite()?;
-        Ok(Some(edited))
+        self.held(Some(task), async {
+            representable_body(body)?;
+            let Some(mut file) = self.task_file(task)? else {
+                return Ok(None);
+            };
+            let Some(edited) = file.comments.iter_mut().find(|held| &held.id == comment) else {
+                return Ok(None);
+            };
+            edited.body = body.as_str().to_owned();
+            edited.updated_at = Some(this_second());
+            let edited = edited.clone();
+            file.rewrite()?;
+            Ok(Some(edited))
+        })
+        .await
     }
     async fn delete_comment(
         &self,
         task: &NativeId,
         comment: &NativeId,
     ) -> Result<Option<NativeId>, SourceError> {
-        let Some(mut file) = self.task_file(task)? else {
-            return Ok(None);
-        };
-        let Some(at) = file.comments.iter().position(|held| &held.id == comment) else {
-            return Ok(None);
-        };
-        file.comments.remove(at);
-        file.rewrite()?;
-        Ok(Some(comment.clone()))
+        self.held(Some(task), async {
+            let Some(mut file) = self.task_file(task)? else {
+                return Ok(None);
+            };
+            let Some(at) = file.comments.iter().position(|held| &held.id == comment) else {
+                return Ok(None);
+            };
+            file.comments.remove(at);
+            file.rewrite()?;
+            Ok(Some(comment.clone()))
+        })
+        .await
     }
     /// Write a copied comment with its origin stored natively: the comment takes the origin's
     /// own id, author and times, and its marker line records the origin's task and address.
@@ -2200,47 +2301,51 @@ impl TaskSource for LocalMdSource {
         existing: Option<&NativeId>,
         copy: &CommentCopy,
     ) -> Result<Option<Comment>, SourceError> {
-        if let Some(author) = &copy.origin.author {
-            representable_author(author)?;
-        }
-        representable_origin(&copy.origin)?;
-        representable_body(&copy.body)?;
-        let Some(mut file) = self.task_file(task)? else {
-            return Ok(None);
-        };
-        let now = this_second();
-        let written = |id: NativeId| Comment {
-            id,
-            author: copy.origin.author.clone(),
-            // To the second, as the marker records them: the answer is what a read gives back.
-            created_at: Some(to_the_second(copy.origin.created_at.unwrap_or(now))),
-            updated_at: Some(to_the_second(copy.origin.updated_at.unwrap_or(now))),
-            body: copy.body.as_str().to_owned(),
-            url: None,
-            origin: Some(copy.origin.clone()),
-        };
-        let held = match existing {
-            Some(existing) => {
-                let Some(held) = file.comments.iter_mut().find(|held| &held.id == existing) else {
-                    return Ok(None);
-                };
-                *held = written(existing.clone());
-                held.clone()
+        self.held(Some(task), async {
+            if let Some(author) = &copy.origin.author {
+                representable_author(author)?;
             }
-            None => {
-                let taken = file.comments.iter().any(|held| held.id == copy.origin.id);
-                let id = if taken || copy.origin.id.as_str().is_empty() {
-                    minted_comment_id(&file.comments).1
-                } else {
-                    copy.origin.id.clone()
-                };
-                let added = written(id);
-                file.comments.push(added.clone());
-                added
-            }
-        };
-        file.rewrite()?;
-        Ok(Some(held))
+            representable_origin(&copy.origin)?;
+            representable_body(&copy.body)?;
+            let Some(mut file) = self.task_file(task)? else {
+                return Ok(None);
+            };
+            let now = this_second();
+            let written = |id: NativeId| Comment {
+                id,
+                author: copy.origin.author.clone(),
+                // To the second, as the marker records them: the answer is what a read gives back.
+                created_at: Some(to_the_second(copy.origin.created_at.unwrap_or(now))),
+                updated_at: Some(to_the_second(copy.origin.updated_at.unwrap_or(now))),
+                body: copy.body.as_str().to_owned(),
+                url: None,
+                origin: Some(copy.origin.clone()),
+            };
+            let held = match existing {
+                Some(existing) => {
+                    let Some(held) = file.comments.iter_mut().find(|held| &held.id == existing)
+                    else {
+                        return Ok(None);
+                    };
+                    *held = written(existing.clone());
+                    held.clone()
+                }
+                None => {
+                    let taken = file.comments.iter().any(|held| held.id == copy.origin.id);
+                    let id = if taken || copy.origin.id.as_str().is_empty() {
+                        minted_comment_id(&file.comments).1
+                    } else {
+                        copy.origin.id.clone()
+                    };
+                    let added = written(id);
+                    file.comments.push(added.clone());
+                    added
+                }
+            };
+            file.rewrite()?;
+            Ok(Some(held))
+        })
+        .await
     }
 }
 

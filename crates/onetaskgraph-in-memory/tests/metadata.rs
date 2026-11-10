@@ -44,15 +44,13 @@ fn id(value: &str) -> NativeId {
     NativeId(value.to_owned())
 }
 
-/// Every field of the record as JSON, with the metadata taken out, so "nothing else changed"
-/// is one comparison.
+/// Every field of the record as JSON, with the metadata — and the change token, which any
+/// write moves — taken out, so "nothing else changed" is one comparison.
 fn without_metadata(record: &impl serde::Serialize) -> (Value, Value) {
     let mut value = serde_json::to_value(record).expect("a record serializes");
-    let metadata = value
-        .as_object_mut()
-        .expect("a record is an object")
-        .remove("metadata")
-        .unwrap_or(Value::Null);
+    let fields = value.as_object_mut().expect("a record is an object");
+    fields.remove("version");
+    let metadata = fields.remove("metadata").unwrap_or(Value::Null);
     (value, metadata)
 }
 
