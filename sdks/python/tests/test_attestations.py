@@ -22,6 +22,7 @@ from onetaskgraph_sdk import (
     AttestationState,
     Attested,
     Client,
+    GlobalId,
     OnetaskgraphError,
     ProjectAttestationCheck,
     VoidReason,
@@ -37,8 +38,8 @@ class Plan(NamedTuple):
     """A client over a seeded folder, and the qualified ids of what it holds."""
 
     client: Client
-    project: str
-    task: str
+    project: GlobalId
+    task: GlobalId
 
 
 def plan(binary: Path, tmp_path: Path) -> Plan:
@@ -53,7 +54,7 @@ def plan(binary: Path, tmp_path: Path) -> Plan:
     created = run(
         client.task_create("notes", "P-1", "Build", body="Build it.\n", metadata=["myapp.size=1"])
     )
-    return Plan(client, "notes:P-1", str(created.items[0].id.root))
+    return Plan(client, GlobalId("notes:P-1"), GlobalId(created.items[0].id.root))
 
 
 def test_a_record_reads_back_as_its_models_and_goes_void_when_content_moves(
@@ -108,7 +109,7 @@ def test_a_record_reads_back_as_its_models_and_goes_void_when_content_moves(
     tasks = run(client.project_attestation_check(project, "plan-review", tasks=True))
     assert isinstance(tasks, ProjectAttestationCheck)
     assert [(entry.id.root, entry.state) for entry in tasks.tasks] == [
-        (task, AttestationState("void"))
+        (task.root, AttestationState("void"))
     ]
 
 

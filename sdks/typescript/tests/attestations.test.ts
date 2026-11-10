@@ -92,6 +92,9 @@ test("an option of the wrong type is refused before the binary is started", asyn
     client.projectCreate("notes", "P-3", "Typed", { dryRun: "yes" as unknown as boolean }),
   ).rejects.toBeInstanceOf(TypeError);
   expect(() => client.taskAttest(task, 7 as unknown as string, "ada", "bar-1")).toThrow(TypeError);
+  expect(() =>
+    client.taskAttestationCheck(task, "plan-review", "bar-1" as unknown as { bar?: string }),
+  ).toThrow(TypeError);
 });
 
 test("a kind the binary refuses rejects with its failure", async () => {

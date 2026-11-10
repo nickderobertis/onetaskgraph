@@ -1358,3 +1358,49 @@ fn a_far_end_in_a_source_nothing_configures_is_named_by_its_id() {
         "the far end's id moved",
     );
 }
+
+#[test]
+fn a_stored_record_this_product_cannot_read_is_absent_and_another_kind_still_checks() {
+    let plan = Plan::new(false);
+    let seeded = plan.seed("notes");
+    let measure = seeded.measure.as_str();
+    plan.attest("task", measure);
+    // A person edits the entry: one kind's record loses its digest, and another kind's is filed
+    // under the wrong key.
+    let native = measure.split_once(':').expect("qualified").1;
+    let file = plan.notes.join("tasks").join(format!("{native}.md"));
+    let text = std::fs::read_to_string(&file).expect("the task file");
+    let start = text
+        .find("\"onetaskgraph.attestations\": ")
+        .expect("the entry");
+    let line_end = start + text[start..].find('\n').expect("one line");
+    let edited = format!(
+        "{}\"onetaskgraph.attestations\": {}{}",
+        &text[..start],
+        json!({
+            "broken": {"kind": "broken", "by": "ada"},
+            "misfiled": {"kind": "other", "by": "ada", "at": "2026-11-10T00:00:00Z",
+                         "content_digest": format!("sha256:{}", "0".repeat(64)), "bar": "b"},
+            KIND: serde_json::from_str::<Value>(
+                &text[start + "\"onetaskgraph.attestations\": ".len()..line_end]
+            )
+            .expect("the entry is JSON")[KIND],
+        }),
+        &text[line_end..]
+    );
+    std::fs::write(&file, edited).expect("an edit");
+    for kind in ["broken", "misfiled"] {
+        let output = plan.exits(
+            &["task", "attestation", "check", measure, "--kind", kind],
+            3,
+        );
+        assert_eq!(stdout(&output), format!("{kind}: absent\n"));
+    }
+    plan.holds(
+        "task",
+        measure,
+        "valid",
+        Value::Null,
+        "a readable kind beside them",
+    );
+}

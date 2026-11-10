@@ -4476,3 +4476,88 @@ fn a_plan_member_title_is_rewritten_and_its_offered_id_is_a_fixed_entry() {
         "nothing is written under the term"
     );
 }
+
+#[test]
+fn an_attestation_on_a_public_item_is_screened_rewritten_previewed_and_refused() {
+    let (store, _) = sanitizing(replaced());
+    store.record(
+        "site",
+        "tasks",
+        "clean",
+        "title: Clean\nstatus: todo\nproject: p",
+        PLAIN,
+    );
+    let attest = |by: &str, extra: &[&str]| {
+        let mut arguments = vec![
+            "task",
+            "attest",
+            "site:clean",
+            "--kind",
+            "plan-review",
+            "--by",
+            by,
+            "--bar",
+            "bar-1",
+        ];
+        arguments.extend_from_slice(extra);
+        arguments.into_iter().map(str::to_owned).collect::<Vec<_>>()
+    };
+
+    // Previewed over an item whose stored text carries the term, nothing is written — the
+    // attestation nor the item's own sanitisation.
+    stage_older(&store);
+    let before = tree(&store.folder("site"));
+    let answer: Value = serde_json::from_str(&store.ok(&[
+        "task",
+        "attest",
+        "site:older",
+        "--kind",
+        "plan-review",
+        "--by",
+        "ada",
+        "--bar",
+        "bar-1",
+        "--json",
+        "--sanitize-dry-run",
+    ]))
+    .expect("JSON");
+    assert_eq!(answer["sanitization"]["dry_run"], json!(true), "{answer}");
+    assert!(answer.get("record").is_none(), "{answer}");
+    assert_eq!(
+        tree(&store.folder("site")),
+        before,
+        "a dry run writes nothing"
+    );
+
+    // Written, the label carrying the term lands replaced, and the record still holds.
+    let written = attest(&format!("ada of {TERM}"), &["--json"]);
+    let answer: Value =
+        serde_json::from_str(&store.ok(&written.iter().map(String::as_str).collect::<Vec<_>>()))
+            .expect("JSON");
+    assert_eq!(
+        answer["record"]["by"],
+        json!(format!("ada of {WITH}")),
+        "{answer}"
+    );
+    let file = std::fs::read_to_string(store.folder("site").join("tasks").join("clean.md"))
+        .expect("the task file");
+    assert!(!file.contains(TERM), "{file}");
+    let checked = store.ok(&[
+        "task",
+        "attestation",
+        "check",
+        "site:clean",
+        "--kind",
+        "plan-review",
+        "--bar",
+        "bar-1",
+    ]);
+    assert_eq!(checked, "plan-review: valid\n");
+
+    // A term the caller refuses is refused, writing nothing.
+    let before = tree(&store.folder("site"));
+    let refused = attest("ada", &["--reject", "ada"]);
+    let (failure, _) = store.refused(&refused.iter().map(String::as_str).collect::<Vec<_>>());
+    assert_eq!(failure, "boundary-refused");
+    assert_eq!(tree(&store.folder("site")), before);
+}

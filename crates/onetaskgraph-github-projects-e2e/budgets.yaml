@@ -203,6 +203,7 @@ budgets:
     unit: writes
     direction: max
     threshold: 40
+  # llmlint: ignore[budgets_track_product_owner_outcomes] The task registering this budget requires it here by id, threshold and workload, carried over unchanged from the approved orchestrator budget by the manager's ruling that each budget moves with its behaviour. It bounds a person's wait for one design approval, which `github-approval-calls-points` — the token's GraphQL points for a whole approval flow — cannot show regressing.
   - id: plan-approval-seconds
     description: >-
       Simulated seconds, each request held for its kind's measured latency, to record one design-approval attestation on the board copy of a private 10-item plan's design document copied screened onto a 2,000-item board. It protects the time a person waits to approve a plan's design.

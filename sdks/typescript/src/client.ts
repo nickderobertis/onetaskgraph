@@ -934,6 +934,9 @@ function attestFlags(
   bar: string,
   options: AttestOptions,
 ): string[] {
+  if (!isPlainObject(options)) {
+    throw new TypeError(`${method}: options is not an object; next: pass them as a plain object`);
+  }
   const args = [
     "--kind",
     stringOption(method, "kind", kind),
@@ -951,6 +954,9 @@ function attestFlags(
 }
 
 function checkFlags(method: string, kind: string, options: AttestationCheckOptions): string[] {
+  if (!isPlainObject(options)) {
+    throw new TypeError(`${method}: options is not an object; next: pass them as a plain object`);
+  }
   const args = ["--kind", stringOption(method, "kind", kind)];
   if (options.bar !== undefined) args.push("--bar", stringOption(method, "bar", options.bar));
   return args;
