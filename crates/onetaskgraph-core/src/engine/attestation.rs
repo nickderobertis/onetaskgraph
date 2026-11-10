@@ -121,6 +121,11 @@ impl Engine {
     ) -> Result<Attested, EngineError> {
         let id = &request.id;
         let source = self.metadata_writable(id, record)?;
+        if record == MetadataRecord::Task {
+            // A write that sanitises the task as stored would otherwise replace the very text
+            // the digest is taken over, leaving the record void the moment it lands.
+            self.sanitise_stored_task(source, id).await?;
+        }
         let read = self.read_authored(source, record, id).await?;
         if let Some(expected) = &request.if_version {
             let at = read.version().unwrap_or_default().to_owned();
@@ -141,7 +146,7 @@ impl Engine {
         let mut excludes = request.excludes.clone();
         excludes.sort();
         excludes.dedup();
-        let mut attestation = Attestation {
+        let attestation = Attestation {
             kind: request.kind.clone(),
             by: request.by.clone(),
             at: now(),
@@ -150,16 +155,12 @@ impl Engine {
             note: request.note.clone(),
             excludes,
         };
-        let entries = |read: &Read, attestation: &Attestation| {
-            let mut entries: serde_json::Map<String, Value> =
-                records(read.metadata()).into_iter().collect();
-            entries.insert(request.kind.as_str().to_owned(), attestation.to_value());
-            Value::Object(entries)
-        };
+        let mut entries: serde_json::Map<String, Value> =
+            records(read.metadata()).into_iter().collect();
+        entries.insert(request.kind.as_str().to_owned(), attestation.to_value());
         let key = MetadataKey::attestations();
-        let value = entries(&read, &attestation);
-        let effects = self.side_effects_recorded();
-        let mut set = match read {
+        let value = Value::Object(entries);
+        let set = match read {
             Read::Document(document) => {
                 self.set_read_document_metadata(source, id, &key, &value, &document)
                     .await?
@@ -169,18 +170,6 @@ impl Engine {
             }
             Read::Work { .. } => self.set_task_metadata(id, &key, &value).await?,
         };
-        if record == MetadataRecord::Task && self.side_effects_recorded() > effects {
-            // The write sanitised the task as stored first (`sanitize_stored_on_write`), so the
-            // content the digest was taken over is no longer the task's: the record is taken
-            // again over what that sanitisation left, and written over the one just written.
-            let read = self.read_authored(source, record, id).await?;
-            let digest = read.digest(&attestation.excludes);
-            if digest != attestation.content_digest {
-                attestation.content_digest = digest;
-                let value = entries(&read, &attestation);
-                set = self.set_task_metadata(id, &key, &value).await?;
-            }
-        }
         // The record is what the source holds after the write — screening may have rewritten
         // a label on its way — and a write answering a record of another kind, or none this
         // product can read, is the source misanswering.
@@ -405,7 +394,7 @@ impl Engine {
             // An opaque far end names no configured source this read can follow: it is named by
             // its tracker and its id there, since the same id in another tracker is another item.
             return Ok(entry(FarEnd::Opaque {
-                designator: designator.to_string(),
+                designator: designator.clone(),
                 id: edge.to.id().to_owned(),
             }));
         }

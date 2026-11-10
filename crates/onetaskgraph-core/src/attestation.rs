@@ -53,7 +53,7 @@
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, SecondsFormat, SubsecRound as _, Utc};
-use onetaskgraph_plugin_api::{DependencyKind, ItemKind, MetadataKey, Repository};
+use onetaskgraph_plugin_api::{DependencyKind, Designator, ItemKind, MetadataKey, Repository};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -396,8 +396,8 @@ pub enum FarEnd {
     /// By the tracker its designator names and its id there, for an opaque far end: the same
     /// id in another tracker is another item.
     Opaque {
-        /// The tracker, as the endpoint's designator spells it.
-        designator: String,
+        /// The tracker the endpoint's designator names.
+        designator: Designator,
         /// Its id in that tracker.
         id: String,
     },

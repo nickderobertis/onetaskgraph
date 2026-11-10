@@ -1840,16 +1840,6 @@ impl Engine {
         self.sanitization_log().take()
     }
 
-    /// How many fields and comments of items this command's sanitisations have changed beyond
-    /// the writes themselves, read without taking them from the command's answer.
-    pub(crate) fn side_effects_recorded(&self) -> usize {
-        self.boundary
-            .sanitized
-            .lock()
-            .map(|sanitized| sanitized.side_effect.len())
-            .unwrap_or_default()
-    }
-
     /// A handle on what this engine's screened writes replaced and sanitised, which outlives a
     /// borrow of the engine: what the command line reads once a verb has answered.
     #[must_use]
@@ -3121,6 +3111,37 @@ impl Engine {
     fn sanitizes_whole_items(&self) -> bool {
         self.can_rewrite()
             && (self.boundary.sanitize_stored_on_write || self.boundary.sanitize_dry_run)
+    }
+
+    /// Sanitise the task `id` as stored ahead of a narrow write whose value is composed from
+    /// what the task holds — an attestation's digest — so that value is composed over the task
+    /// as the write will leave it, rather than over text the write's own sanitisation then
+    /// replaces. Only where that write would sanitise the stored task (`sanitize_stored_on_write`,
+    /// a policy that can rewrite, an active boundary and a destination not declared private);
+    /// anywhere else, and in a `--sanitize-dry-run` — which the write itself answers — it reads
+    /// and writes nothing. The write then finds the task clean and sanitises nothing more.
+    pub(crate) async fn sanitise_stored_task(
+        &self,
+        destination: &ResolvedSource,
+        id: &crate::GlobalId,
+    ) -> Result<(), EngineError> {
+        if !self.boundary.active
+            || !self.boundary.sanitize_stored_on_write
+            || self.boundary.sanitize_dry_run
+            || !self.can_rewrite()
+            || self.declared(destination.name()) == SourceVisibility::Private
+        {
+            return Ok(());
+        }
+        self.admit_existing(
+            destination,
+            &id.to_string(),
+            &id.native,
+            Held::Task,
+            &Exposure::default(),
+        )
+        .await
+        .map(|_| ())
     }
 
     /// Refuse a narrow write to a task already private by its own record, naming `repositories`
