@@ -432,6 +432,33 @@ pub fn priority_set(set: &TaskPrioritySet) -> String {
     columns(&rows)
 }
 
+/// What `task comments --since` found: each comment, oldest first, under the task it is on,
+/// and the watermark to read from next.
+pub fn comments_since(listed: &onetaskgraph_core::CommentsSince) -> String {
+    let mut rendered = String::new();
+    for comment in &listed.comments {
+        rendered.push_str(&format!(
+            "{} {} — {} ({}) at {}\n{}\n\n",
+            comment.item,
+            comment.id,
+            comment.author.as_deref().unwrap_or("(no author)"),
+            wire(&comment.author_kind),
+            comment.version,
+            comment.body.trim_end()
+        ));
+    }
+    if listed.comments.is_empty() {
+        rendered.push_str("no comment was made or edited since then\n");
+    }
+    rendered.push_str(&format!(
+        "watermark: {}\n",
+        listed
+            .watermark
+            .to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)
+    ));
+    rendered
+}
+
 /// What `task content set` did: the task whose content was replaced.
 pub fn content_set(set: &TaskContentSet) -> String {
     columns(&[vec!["id:".to_owned(), set.id.to_string()]])

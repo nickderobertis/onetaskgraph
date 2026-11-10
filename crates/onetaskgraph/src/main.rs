@@ -520,10 +520,12 @@ async fn run_inner(
                 include_members: args.members,
                 paging: paging(loaded, &args.paging)?,
             };
-            let response = engine
-                .tasks(&request)
-                .await
-                .map_err(|error| Failure::from(&error))?;
+            let response = if args.all {
+                engine.tasks_all(&request).await
+            } else {
+                engine.tasks(&request).await
+            }
+            .map_err(|error| Failure::from(&error))?;
             respond(out, loaded, response, render::tasks, &args.paging, "tasks")
         }
 
@@ -532,27 +534,44 @@ async fn run_inner(
         } => {
             let id = qualified(&args.item.id)?;
             let pin = args.pin.as_deref();
+            let engine = engine(loaded);
             let detail = if args.no_comments {
-                engine(loaded)
+                engine
                     .task_without_comments_pinned(&id, pin)
                     .await
                     .map_err(|error| Failure::from(&error))?
             } else {
-                engine(loaded)
+                engine
                     .task_detail_pinned(&id, pin)
                     .await
                     .map_err(|error| Failure::from(&error))?
+            };
+            let detail = if args.with_deps {
+                engine
+                    .with_task_dependencies(&id, detail)
+                    .await
+                    .map_err(|error| Failure::from(&error))?
+            } else {
+                detail
             };
             // The comments ride beside the task in the machine rendering, and after its body
             // in the human one — and not at all for a source whose tasks have none.
             let comments = detail.comments.as_deref();
             let assets = detail.assets.as_deref();
+            let depends_on = detail.depends_on.as_deref();
             show_rendered(
                 out,
                 loaded,
                 &detail.response,
                 &detail,
-                |task| render::task_with_comments(task, comments, assets),
+                |task| {
+                    let mut rendered = render::task_with_comments(task, comments, assets);
+                    if let Some(edges) = depends_on {
+                        rendered.push_str("\ndepends on:\n");
+                        rendered.push_str(&render::edges(edges));
+                    }
+                    rendered
+                },
                 &args.item,
                 "task",
             )
@@ -585,6 +604,33 @@ async fn run_inner(
         Command::Task {
             command: TaskCommand::Comment { command },
         } => comment(out, loaded, command).await,
+
+        Command::Task {
+            command: TaskCommand::Comments(args),
+        } => {
+            let Some(source) = usable_source(&args.source, loaded) else {
+                return Ok(EXIT_USAGE);
+            };
+            let request = onetaskgraph_core::CommentsSinceRequest {
+                source,
+                since: args.since,
+                metadata: args.metadata.clone(),
+                statuses: args.status.iter().map(|status| status.category()).collect(),
+                items: args
+                    .item
+                    .iter()
+                    .map(|id| qualified(id))
+                    .collect::<Result<_, _>>()?,
+                page_size: loaded.config.page_size(),
+            };
+            let listed = engine(loaded)
+                .comments_since(&request)
+                .await
+                .map_err(|error| Failure::from(&error))?;
+            let rendered = rendering(loaded, &listed, render::comments_since, "the comments")?;
+            emit(out, rendered.trim_end(), "the comments")?;
+            Ok(EXIT_OK)
+        }
 
         Command::Task {
             command:
@@ -2726,6 +2772,7 @@ mod tests {
                 "task comment list",
                 "task comment edit",
                 "task comment delete",
+                "task comments",
                 "task status set",
                 "task status reconcile",
                 "task status complete",

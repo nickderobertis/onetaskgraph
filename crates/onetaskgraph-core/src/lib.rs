@@ -61,7 +61,8 @@ pub use config::{
 };
 pub use engine::boundary;
 pub use engine::{
-    Body, BudgetSpent, CommentCounts, CommentList, CommentWritten, CompleteAction, Completeness,
+    Body, BudgetSpent, COMMENTS_SINCE_SCHEMA_VERSION, CommentActivity, CommentCounts, CommentList,
+    CommentWritten, CommentsSince, CommentsSinceRequest, CompleteAction, Completeness,
     ConfiguredSource, CopyAction, CopyConditions, CopyItems, CopyLink, CopyLookup, CopyOutcome,
     CopyReport, CopyRequest, CopyScope, CopyVia, CreateHolder, CreatesIn, DeletedComment,
     Delivered, DeliveryOutcome, DependencyRequest, DocumentDetail, DocumentFilters,

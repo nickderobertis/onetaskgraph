@@ -47,7 +47,8 @@ pub use cache::{
 pub use capability::{Capabilities, DependencySupport, Support};
 pub use clock::{Clock, SIMULATED_CLOCK_VARIABLE, SharedClock, WaitCause, system_clock};
 pub use comment::{
-    Comment, CommentBody, CommentCopy, CommentOrigin, NewComment, TaskDetailRead, commentless,
+    AuthorKind, Comment, CommentBody, CommentCopy, CommentOrigin, NewComment, TaskDetailRead,
+    commentless,
 };
 pub use error::SourceError;
 pub use guard::WriteGuard;

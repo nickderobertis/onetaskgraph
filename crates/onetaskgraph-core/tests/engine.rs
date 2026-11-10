@@ -6675,7 +6675,7 @@ const FIFTY_SEVENTH_BUNDLE_SHAPE: [(&str, u64); 140] = [
 ];
 
 /// What version 58 publishes of the engine's roots.
-const FIFTY_EIGHTH_BUNDLE_SHAPE: [(&str, u64); 140] = [
+const FIFTY_EIGHTH_BUNDLE_SHAPE: [(&str, u64); 144] = [
     ("Asset", 0x3861b2a394973652),
     ("AssetContentType", 0x045a0ea0dface7ec),
     ("AssetName", 0x0f5aa03142270839),
@@ -6684,14 +6684,17 @@ const FIFTY_EIGHTH_BUNDLE_SHAPE: [(&str, u64); 140] = [
     ("AssetUploads", 0xc07fc8afac6acde5),
     ("AssetWrite", 0x425ab5b21768c337),
     ("AssetsWritten", 0x5a394f7414967354),
+    ("AuthorKind", 0x961c398f01c98069),
     ("CacheCleared", 0x07f2024428115e02),
     ("CacheUse", 0x99e677fe6a710743),
     ("Capabilities", 0x0307809d59773695),
     ("Classification", 0xbac1e9e5c34a4675),
     ("ClosedAs", 0x61fad6b731146cda),
     ("Comment", 0xf4d10955d5040047),
+    ("CommentActivity", 0xfea5d6aff1c5d8c7),
     ("CommentList", 0x19a453e829b59921),
     ("CommentWritten", 0xf7d47e1c061d91d0),
+    ("CommentsSince", 0x2bb72983da36b305),
     ("CompleteAction", 0x5e0bba6a83c81f31),
     ("Completion", 0x5853ab75d4e5e2e3),
     ("ContradictedItem", 0x554446204e302ef5),
@@ -6731,6 +6734,7 @@ const FIFTY_EIGHTH_BUNDLE_SHAPE: [(&str, u64); 140] = [
     ("Label", 0x07555503d77a90c7),
     ("LinearConfig", 0x10a5b658053e0912),
     ("LocateReport", 0x3a7ddb314e58fd6c),
+    ("Located", 0x3abfdea58742c3d1),
     ("Location", 0x0690620b049c989a),
     ("MetadataSet", 0x8ddb0294045540b9),
     ("NativeId", 0x0150d4025c258cb8),
@@ -6798,8 +6802,8 @@ const FIFTY_EIGHTH_BUNDLE_SHAPE: [(&str, u64); 140] = [
     ("Task", 0x4552c888ea064e07),
     ("TaskAssetNames", 0xc964f4e9ef203e23),
     ("TaskContentSet", 0x07d008c3abe72ae3),
-    ("TaskDetail", 0x6bf5f67126aa3f3b),
-    ("TaskDetails", 0x9551707a78661091),
+    ("TaskDetail", 0x65ace6e90971e7b5),
+    ("TaskDetails", 0xddbaa824912dc297),
     ("TaskPrioritySet", 0x934f31f0d9eccef7),
     ("TaskQuery", 0x0efc24a7b89f2422),
     ("TaskRef", 0xad8ce2508e0797c7),

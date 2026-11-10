@@ -24,6 +24,12 @@ use onetaskgraph_e2e_support::{common, fixtures, linear_vocabulary, onevcs};
 // `onetaskgraph-core`, the binary's `--asset` — is the engine's and the binary's, so there is
 // no plugin crate's edge narrower than this suite's for it to sit behind, and the task that
 // added it places it here, as the suite for journeys not specific to one plugin.
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No credential and no network: the
+// journey drives the binary against folders of Markdown and three loopback Linear workspaces in
+// a few seconds. What it proves — that the follow-up features are adopted by configuration
+// alone — spans the engine, the binary and two plugins, so no one plugin crate's edge is
+// narrower.
+mod adoption;
 mod assets;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No credential and no network:
 // every journey drives the binary against folders of Markdown and the released onevcs
@@ -55,6 +61,11 @@ mod change_tokens;
 // — is the engine's reading of its own protocol, so no one plugin crate's edge is narrower.
 mod closure_answers;
 mod comments;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No credential and no network: the
+// journeys drive the binary against a folder of Markdown, an in-memory source, the loopback
+// board and the loopback Linear workspace, in seconds. The listing and its watermark are the
+// engine's, composed over every plugin's own reads, so no one plugin crate's edge is narrower.
+mod comments_since;
 mod copy;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No credential and no network: the
 // journeys drive the binary between loopback boards, a loopback Linear workspace and folders of
@@ -134,6 +145,11 @@ mod human_routes;
 mod journeys;
 // `task locate` against the copy after it: placement, counterpart and refusals.
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No credential and no network: the journeys drive the binary against folders of Markdown, the loopback board and a counting Linear stand-in, with the released onevcs boundary commands behind a recorder, in seconds. What they prove — that locate places and looks up through the copy's own path — is the engine's, so no plugin crate's edge is narrower, and AGENTS.md forbids any plugin crate to depend on the engine.
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No credential and no network: the
+// journeys drive the binary against the loopback board in about a second. Walking every page of
+// a listing is the engine's, over whatever cursor a plugin answers, so no one plugin crate's
+// edge is narrower.
+mod listing;
 mod locate;
 mod machine;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no

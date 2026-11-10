@@ -1615,6 +1615,10 @@ pub async fn status_names(
         .await
 }
 
+/// How long Linear's filtered reads may go on missing a comment after it was made or edited,
+/// which a read of the comments made since an instant sets its watermark back by.
+const COMMENT_FILTER_LAG: std::time::Duration = std::time::Duration::from_secs(60);
+
 struct LinearSource {
     clock: onetaskgraph_plugin_api::SharedClock,
     /// Built on the first request rather than with the source: building one loads the
@@ -3522,6 +3526,24 @@ const DOCUMENT_ASSETS_UNCOVERED: &str =
 
 #[async_trait::async_trait]
 impl TaskSource for LinearSource {
+    /// Linear names no `user` for a comment an integration or a bot made, and names one for
+    /// every comment a person made: so a comment with an author is a person's, and one with
+    /// none a bot's.
+    fn comment_author_kind(
+        &self,
+        comment: &onetaskgraph_plugin_api::Comment,
+    ) -> onetaskgraph_plugin_api::AuthorKind {
+        if comment.author.is_some() {
+            onetaskgraph_plugin_api::AuthorKind::Person
+        } else {
+            onetaskgraph_plugin_api::AuthorKind::Bot
+        }
+    }
+    /// Linear's filtered reads lag its writes by seconds, so a read of the comments made since
+    /// an instant sets its watermark back by [`COMMENT_FILTER_LAG`].
+    fn comment_consistency_window(&self) -> std::time::Duration {
+        COMMENT_FILTER_LAG
+    }
     fn kind(&self) -> &'static str {
         KIND
     }

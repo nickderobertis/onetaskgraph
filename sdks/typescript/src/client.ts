@@ -7,6 +7,7 @@ import type {
   CacheCleared,
   Classification,
   CommentList,
+  CommentsSince,
   CommentWritten,
   CopyReport,
   DeletedComment,
@@ -291,6 +292,8 @@ export const commandResponseRoots: Readonly<Record<string, keyof typeof runtimeS
   "task comment list": "CommentList",
   "task comment edit": "CommentWritten",
   "task comment delete": "DeletedComment",
+  // Every comment made or edited since an instant, and the watermark to read from next.
+  "task comments": "CommentsSince",
   "task status set": "TaskStatusSet",
   // Every card of one source brought in line with its issue's closure, or none for a source
   // whose status is its closure.
@@ -1208,6 +1211,24 @@ export class OnetaskgraphClient {
     args.push(...writePolicyFlags("taskCommentAdd", options));
     args.push(...expectFlags("taskCommentAdd", options));
     return this.run("task comment add", [id, ...args], input, options.sanitizeDryRun === true);
+  }
+  // Every comment `source`'s tasks hold that was made or edited at or after `since`, narrowed
+  // as `taskList` narrows, with the watermark the next read starts from.
+  taskComments(
+    source: string,
+    since: string,
+    options: { metadata?: string[]; statuses?: StatusCategory[]; items?: string[] } = {},
+  ): Promise<CommentsSince> {
+    const method = "taskComments";
+    const args = [source, "--since", stringOption(method, "since", since)];
+    for (const match of stringList(method, "metadata", options.metadata)) {
+      args.push("--metadata", match);
+    }
+    for (const status of stringList(method, "statuses", options.statuses)) {
+      args.push("--status", status);
+    }
+    for (const item of stringList(method, "items", options.items)) args.push("--item", item);
+    return this.run("task comments", args);
   }
   taskCommentList(id: string, options: { pin?: string } = {}): Promise<CommentList> {
     return this.run("task comment list", [id, ...pinFlags("taskCommentList", options.pin)]);

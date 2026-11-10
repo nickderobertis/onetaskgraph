@@ -23,13 +23,21 @@ from pydantic import BaseModel
 
 import onetaskgraph_sdk
 from onetaskgraph_sdk import (
+    AuthorKind,
     CacheCleared,
     CacheUse,
     Classification,
     Client,
+    Comment,
+    CommentActivity,
     CommentList,
+    CommentsSince,
     CommentWritten,
+    CopyAction,
+    CopyLink,
+    CopyOutcome,
     CopyReport,
+    CopyVia,
     DeletedComment,
     Delivered,
     DeliveryOutcome,
@@ -46,6 +54,7 @@ from onetaskgraph_sdk import (
     IssuesCompleted,
     ItemType,
     LinearConfig,
+    Located,
     LocateReport,
     Location,
     MetadataSet,
@@ -57,6 +66,7 @@ from onetaskgraph_sdk import (
     ProjectStatusSet,
     PublicProjections,
     PublicWriteInput,
+    QualifiedTask,
     QueryPlan,
     QueryResponseOfQualifiedDocument,
     QueryResponseOfQualifiedEdge,
@@ -80,6 +90,7 @@ from onetaskgraph_sdk import (
     StatusNamesReport,
     StatusOptionsReport,
     SweepReport,
+    Task,
     TaskAssetNames,
     TaskContentSet,
     TaskDetail,
@@ -94,11 +105,15 @@ from onetaskgraph_sdk import (
     TemplateVariables,
     UpdatedField,
     VariableType,
+    VersionMovedError,
     WritePolicyConfig,
     WriteVerdict,
     client,
 )
 from onetaskgraph_sdk._generated import models
+from onetaskgraph_sdk._generated.models import (
+    AuthorKind as ModelsAuthorKind,
+)
 from onetaskgraph_sdk._generated.models import (
     CacheCleared as ModelsCacheCleared,
 )
@@ -109,13 +124,34 @@ from onetaskgraph_sdk._generated.models import (
     Classification as ModelsClassification,
 )
 from onetaskgraph_sdk._generated.models import (
+    Comment as ModelsComment,
+)
+from onetaskgraph_sdk._generated.models import (
+    CommentActivity as ModelsCommentActivity,
+)
+from onetaskgraph_sdk._generated.models import (
     CommentList as ModelsCommentList,
+)
+from onetaskgraph_sdk._generated.models import (
+    CommentsSince as ModelsCommentsSince,
 )
 from onetaskgraph_sdk._generated.models import (
     CommentWritten as ModelsCommentWritten,
 )
 from onetaskgraph_sdk._generated.models import (
+    CopyAction as ModelsCopyAction,
+)
+from onetaskgraph_sdk._generated.models import (
+    CopyLink as ModelsCopyLink,
+)
+from onetaskgraph_sdk._generated.models import (
+    CopyOutcome as ModelsCopyOutcome,
+)
+from onetaskgraph_sdk._generated.models import (
     CopyReport as ModelsCopyReport,
+)
+from onetaskgraph_sdk._generated.models import (
+    CopyVia as ModelsCopyVia,
 )
 from onetaskgraph_sdk._generated.models import (
     DeletedComment as ModelsDeletedComment,
@@ -166,6 +202,9 @@ from onetaskgraph_sdk._generated.models import (
     LinearConfig as ModelsLinearConfig,
 )
 from onetaskgraph_sdk._generated.models import (
+    Located as ModelsLocated,
+)
+from onetaskgraph_sdk._generated.models import (
     LocateReport as ModelsLocateReport,
 )
 from onetaskgraph_sdk._generated.models import (
@@ -194,6 +233,9 @@ from onetaskgraph_sdk._generated.models import (
 )
 from onetaskgraph_sdk._generated.models import (
     PublicWriteInput as ModelsPublicWriteInput,
+)
+from onetaskgraph_sdk._generated.models import (
+    QualifiedTask as ModelsQualifiedTask,
 )
 from onetaskgraph_sdk._generated.models import (
     QueryPlan as ModelsQueryPlan,
@@ -263,6 +305,9 @@ from onetaskgraph_sdk._generated.models import (
 )
 from onetaskgraph_sdk._generated.models import (
     SweepReport as ModelsSweepReport,
+)
+from onetaskgraph_sdk._generated.models import (
+    Task as ModelsTask,
 )
 from onetaskgraph_sdk._generated.models import (
     TaskAssetNames as ModelsTaskAssetNames,
@@ -339,13 +384,21 @@ def test_this_file_imports_every_name_the_module_exports(module: object) -> None
 
 FROM_ROOT: dict[str, object] = {
     "client": client,
+    "AuthorKind": AuthorKind,
     "CacheCleared": CacheCleared,
     "CacheUse": CacheUse,
     "Classification": Classification,
     "Client": Client,
+    "Comment": Comment,
+    "CommentActivity": CommentActivity,
     "CommentList": CommentList,
     "CommentWritten": CommentWritten,
+    "CommentsSince": CommentsSince,
+    "CopyAction": CopyAction,
+    "CopyLink": CopyLink,
+    "CopyOutcome": CopyOutcome,
     "CopyReport": CopyReport,
+    "CopyVia": CopyVia,
     "DeletedComment": DeletedComment,
     "Delivered": Delivered,
     "DeliveryOutcome": DeliveryOutcome,
@@ -363,6 +416,7 @@ FROM_ROOT: dict[str, object] = {
     "ItemType": ItemType,
     "LinearConfig": LinearConfig,
     "LocateReport": LocateReport,
+    "Located": Located,
     "Location": Location,
     "MetadataSet": MetadataSet,
     "NativeId": NativeId,
@@ -373,6 +427,7 @@ FROM_ROOT: dict[str, object] = {
     "ProjectStatusSet": ProjectStatusSet,
     "PublicProjections": PublicProjections,
     "PublicWriteInput": PublicWriteInput,
+    "QualifiedTask": QualifiedTask,
     "QueryPlan": QueryPlan,
     "QueryResponseOfQualifiedDocument": QueryResponseOfQualifiedDocument,
     "QueryResponseOfQualifiedEdge": QueryResponseOfQualifiedEdge,
@@ -396,6 +451,7 @@ FROM_ROOT: dict[str, object] = {
     "StatusOptionsReport": StatusOptionsReport,
     "StatusesReconciled": StatusesReconciled,
     "SweepReport": SweepReport,
+    "Task": Task,
     "TaskAssetNames": TaskAssetNames,
     "TaskContentSet": TaskContentSet,
     "TaskDetail": TaskDetail,
@@ -410,18 +466,27 @@ FROM_ROOT: dict[str, object] = {
     "TemplateVariables": TemplateVariables,
     "UpdatedField": UpdatedField,
     "VariableType": VariableType,
+    "VersionMovedError": VersionMovedError,
     "WritePolicyConfig": WritePolicyConfig,
     "WriteVerdict": WriteVerdict,
 }
 """Every name imported from the package root, by the name it was imported as."""
 
 FROM_MODELS: dict[str, object] = {
+    "AuthorKind": ModelsAuthorKind,
     "CacheCleared": ModelsCacheCleared,
     "CacheUse": ModelsCacheUse,
     "Classification": ModelsClassification,
+    "Comment": ModelsComment,
+    "CommentActivity": ModelsCommentActivity,
     "CommentList": ModelsCommentList,
     "CommentWritten": ModelsCommentWritten,
+    "CommentsSince": ModelsCommentsSince,
+    "CopyAction": ModelsCopyAction,
+    "CopyLink": ModelsCopyLink,
+    "CopyOutcome": ModelsCopyOutcome,
     "CopyReport": ModelsCopyReport,
+    "CopyVia": ModelsCopyVia,
     "DeletedComment": ModelsDeletedComment,
     "Delivered": ModelsDelivered,
     "DeliveryOutcome": ModelsDeliveryOutcome,
@@ -439,6 +504,7 @@ FROM_MODELS: dict[str, object] = {
     "ItemType": ModelsItemType,
     "LinearConfig": ModelsLinearConfig,
     "LocateReport": ModelsLocateReport,
+    "Located": ModelsLocated,
     "Location": ModelsLocation,
     "MetadataSet": ModelsMetadataSet,
     "NativeId": ModelsNativeId,
@@ -448,6 +514,7 @@ FROM_MODELS: dict[str, object] = {
     "ProjectStatusSet": ModelsProjectStatusSet,
     "PublicProjections": ModelsPublicProjections,
     "PublicWriteInput": ModelsPublicWriteInput,
+    "QualifiedTask": ModelsQualifiedTask,
     "QueryPlan": ModelsQueryPlan,
     "QueryResponseOfQualifiedDocument": ModelsQueryResponseOfQualifiedDocument,
     "QueryResponseOfQualifiedEdge": ModelsQueryResponseOfQualifiedEdge,
@@ -471,6 +538,7 @@ FROM_MODELS: dict[str, object] = {
     "StatusOptionsReport": ModelsStatusOptionsReport,
     "StatusesReconciled": ModelsStatusesReconciled,
     "SweepReport": ModelsSweepReport,
+    "Task": ModelsTask,
     "TaskAssetNames": ModelsTaskAssetNames,
     "TaskContentSet": ModelsTaskContentSet,
     "TaskDetail": ModelsTaskDetail,
@@ -561,8 +629,13 @@ def test_client_methods_answer_with_the_types_they_declare(binary: Path, tmp_pat
 MODEL_CLASSES: dict[str, type[BaseModel]] = {
     "CacheCleared": CacheCleared,
     "CacheUse": CacheUse,
+    "Comment": Comment,
+    "CommentActivity": CommentActivity,
     "CommentList": CommentList,
     "CommentWritten": CommentWritten,
+    "CommentsSince": CommentsSince,
+    "CopyAction": CopyAction,
+    "CopyOutcome": CopyOutcome,
     "CopyReport": CopyReport,
     "DeletedComment": DeletedComment,
     "Delivered": Delivered,
@@ -580,6 +653,7 @@ MODEL_CLASSES: dict[str, type[BaseModel]] = {
     "IssuesCompleted": IssuesCompleted,
     "LinearConfig": LinearConfig,
     "LocateReport": LocateReport,
+    "Located": Located,
     "Location": Location,
     "MetadataSet": MetadataSet,
     "NativeId": NativeId,
@@ -588,6 +662,7 @@ MODEL_CLASSES: dict[str, type[BaseModel]] = {
     "ProjectStatusSet": ProjectStatusSet,
     "PublicProjections": PublicProjections,
     "PublicWriteInput": PublicWriteInput,
+    "QualifiedTask": QualifiedTask,
     "QueryPlan": QueryPlan,
     "QueryResponseOfQualifiedDocument": QueryResponseOfQualifiedDocument,
     "QueryResponseOfQualifiedEdge": QueryResponseOfQualifiedEdge,
@@ -608,6 +683,7 @@ MODEL_CLASSES: dict[str, type[BaseModel]] = {
     "StatusOptionsReport": StatusOptionsReport,
     "StatusesReconciled": StatusesReconciled,
     "SweepReport": SweepReport,
+    "Task": Task,
     "TaskAssetNames": TaskAssetNames,
     "TaskContentSet": TaskContentSet,
     "TaskDetail": TaskDetail,
@@ -628,8 +704,13 @@ MODEL_CLASSES: dict[str, type[BaseModel]] = {
 MODELS_MODEL_CLASSES: dict[str, type[BaseModel]] = {
     "CacheCleared": ModelsCacheCleared,
     "CacheUse": ModelsCacheUse,
+    "Comment": ModelsComment,
+    "CommentActivity": ModelsCommentActivity,
     "CommentList": ModelsCommentList,
     "CommentWritten": ModelsCommentWritten,
+    "CommentsSince": ModelsCommentsSince,
+    "CopyAction": ModelsCopyAction,
+    "CopyOutcome": ModelsCopyOutcome,
     "CopyReport": ModelsCopyReport,
     "DeletedComment": ModelsDeletedComment,
     "Delivered": ModelsDelivered,
@@ -647,6 +728,7 @@ MODELS_MODEL_CLASSES: dict[str, type[BaseModel]] = {
     "IssuesCompleted": ModelsIssuesCompleted,
     "LinearConfig": ModelsLinearConfig,
     "LocateReport": ModelsLocateReport,
+    "Located": ModelsLocated,
     "Location": ModelsLocation,
     "MetadataSet": ModelsMetadataSet,
     "NativeId": ModelsNativeId,
@@ -655,6 +737,7 @@ MODELS_MODEL_CLASSES: dict[str, type[BaseModel]] = {
     "ProjectStatusSet": ModelsProjectStatusSet,
     "PublicProjections": ModelsPublicProjections,
     "PublicWriteInput": ModelsPublicWriteInput,
+    "QualifiedTask": ModelsQualifiedTask,
     "QueryPlan": ModelsQueryPlan,
     "QueryResponseOfQualifiedDocument": ModelsQueryResponseOfQualifiedDocument,
     "QueryResponseOfQualifiedEdge": ModelsQueryResponseOfQualifiedEdge,
@@ -675,6 +758,7 @@ MODELS_MODEL_CLASSES: dict[str, type[BaseModel]] = {
     "StatusOptionsReport": ModelsStatusOptionsReport,
     "StatusesReconciled": ModelsStatusesReconciled,
     "SweepReport": ModelsSweepReport,
+    "Task": ModelsTask,
     "TaskAssetNames": ModelsTaskAssetNames,
     "TaskContentSet": ModelsTaskContentSet,
     "TaskDetail": ModelsTaskDetail,

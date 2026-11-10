@@ -15,7 +15,7 @@ from ._generated import GeneratedClient
 from ._generated.client import POSITIONALS
 
 if TYPE_CHECKING:
-    from ._generated.failure_document import Failure
+    from ._generated.failure_document import Failure, FailureDocument
 
 
 REPORTING_EXITS: dict[tuple[str, ...], frozenset[int]] = {
@@ -27,16 +27,44 @@ REPORTING_EXITS: dict[tuple[str, ...], frozenset[int]] = {
 class OnetaskgraphError(RuntimeError):
     """The command could not produce a response."""
 
-    def __init__(self, message: str, *, exit_code: int, failure: Failure | None = None) -> None:
-        """Remember the diagnostic, the stable process status and the binary's failure.
+    def __init__(
+        self,
+        message: str,
+        *,
+        exit_code: int,
+        failure: Failure | None = None,
+        document: FailureDocument | None = None,
+        answer: object = None,
+    ) -> None:
+        """Remember the diagnostic, the stable process status and the binary's whole answer.
 
-        ``failure`` is the failure document the binary wrote under ``--json`` when it refused
-        the command, so a caller branches on its ``kind`` rather than on the message's
-        wording; ``None`` when the process wrote none.
+        ``failure`` is the failure the binary wrote under ``--json`` when it refused the
+        command, so a caller branches on its ``kind`` rather than on the message's wording;
+        ``document`` is the whole failure document it is the member of — what the item held,
+        what an expected write came to — and ``answer`` that document as the JSON it was
+        written, so nothing the store answered is discarded. Each is ``None`` when the process
+        wrote none.
         """
         super().__init__(message)
         self.exit_code = exit_code
-        self.failure = failure
+        self.failure = failure if failure is not None else getattr(document, "failure", None)
+        self.document = document
+        self.answer = answer
+
+    @property
+    def kind(self) -> str | None:
+        """The failure's ``kind`` — ``version-moved``, ``no-such-item`` and so on."""
+        return None if self.failure is None else self.failure.kind
+
+
+class VersionMovedError(OnetaskgraphError):
+    """A write held to a version (``if_version``) found the item at another, and wrote nothing."""
+
+    @property
+    def current_version(self) -> str | None:
+        """The version the item is at now, as the store's refusal named it."""
+        held = None if self.document is None else self.document.held
+        return None if held is None else held.version
 
 
 class Client(GeneratedClient):
@@ -124,10 +152,17 @@ class Client(GeneratedClient):
             except ValidationError:
                 pass
         if completed.returncode not in {0, 4}:
-            raise OnetaskgraphError(
+            document = _failure_document_of(completed.stdout)
+            error = (
+                VersionMovedError
+                if document is not None and document.failure.kind == "version-moved"
+                else OnetaskgraphError
+            )
+            raise error(
                 completed.stderr.strip(),
                 exit_code=completed.returncode,
-                failure=_failure_of(completed.stdout),
+                document=document,
+                answer=_json_of(completed.stdout),
             )
         try:
             # TypeAdapter validates `model`; its dynamic constructor cannot preserve T.
@@ -166,13 +201,23 @@ class Client(GeneratedClient):
         )
 
 
-def _failure_of(stdout: str) -> Failure | None:
-    """The failure a refused command wrote, when it wrote a document its schema describes."""
+def _failure_document_of(stdout: str) -> FailureDocument | None:
+    """The failure document a refused command wrote, when its schema describes what it wrote."""
     from ._generated.failure_document import FailureDocument
 
     try:
-        return FailureDocument.model_validate_json(stdout).failure
+        return FailureDocument.model_validate_json(stdout)
     except ValidationError:
+        return None
+
+
+def _json_of(stdout: str) -> object:
+    """What a refused command wrote, as JSON, or ``None`` when it wrote no JSON."""
+    import json
+
+    try:
+        return json.loads(stdout)
+    except ValueError:
         return None
 
 

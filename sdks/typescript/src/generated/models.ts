@@ -219,6 +219,17 @@ content: (string | null)
 
 }
 export type AssetsWritten = GeneratedAssetsWritten.AssetsWritten;
+export namespace GeneratedAuthorKind {
+/**
+ * Who wrote a comment, as the source that holds it can tell: a person, a bot — an
+ * integration, an app, an automation acting on its own — or neither, when the source cannot
+ * say. Decided by the plugin, through
+ * [`TaskSource::comment_author_kind`](crate::TaskSource::comment_author_kind).
+ */
+export type AuthorKind = ("person" | "bot" | "unknown")
+
+}
+export type AuthorKind = GeneratedAuthorKind.AuthorKind;
 export namespace GeneratedCacheCleared {
 /**
  * What `cache clear` emptied: one entry per cache it reached.
@@ -570,6 +581,53 @@ url?: (string | null)
 
 }
 export type Comment = GeneratedComment.Comment;
+export namespace GeneratedCommentActivity {
+/**
+ * One comment of a [`CommentsSince`] answer.
+ */
+export interface CommentActivity {
+/**
+ * The task it is on, qualified: `<source>:<native id>`.
+ */
+item: string
+/**
+ * Its own id, exactly as its source issued it.
+ */
+id: string
+/**
+ * Where a person can open it, or `null`.
+ */
+url?: (string | null)
+/**
+ * Who wrote it, in the source's own spelling, or `null`.
+ */
+author?: (string | null)
+/**
+ * Whether that is a person, a bot, or neither the source can tell.
+ */
+author_kind: ("person" | "bot" | "unknown")
+/**
+ * When it was written.
+ */
+created_at: string
+/**
+ * When it last changed — its creation, for one never edited.
+ */
+updated_at: string
+/**
+ * The comment's version: when it last changed, at the backend's own precision. Two reads
+ * answering one comment unchanged answer the same version.
+ */
+version: string
+/**
+ * What it says, byte for byte.
+ */
+body: string
+[k: string]: any
+}
+
+}
+export type CommentActivity = GeneratedCommentActivity.CommentActivity;
 export namespace GeneratedCommentList {
 /**
  * Every comment on one task, oldest first: what `task comment list` answers with.
@@ -992,6 +1050,74 @@ ordinal: number
 
 }
 export type CommentWritten = GeneratedCommentWritten.CommentWritten;
+export namespace GeneratedCommentsSince {
+/**
+ * What `task comments <SOURCE> --since` answers with.
+ */
+export interface CommentsSince {
+/**
+ * The version of this document's shape: `1`.
+ */
+schema_version: number
+/**
+ * The instant a later read may start from: the earlier of the source's own time and this
+ * host's at the read's start, set back by the source's consistency window. A later read
+ * from it may return a comment again, with the same `id` and `version`.
+ */
+watermark: string
+/**
+ * Every comment made or edited at or after the instant on a matching task, oldest first by
+ * when it last changed.
+ */
+comments: CommentActivity[]
+[k: string]: any
+}
+/**
+ * One comment of a [`CommentsSince`] answer.
+ */
+export interface CommentActivity {
+/**
+ * The task it is on, qualified: `<source>:<native id>`.
+ */
+item: string
+/**
+ * Its own id, exactly as its source issued it.
+ */
+id: string
+/**
+ * Where a person can open it, or `null`.
+ */
+url?: (string | null)
+/**
+ * Who wrote it, in the source's own spelling, or `null`.
+ */
+author?: (string | null)
+/**
+ * Whether that is a person, a bot, or neither the source can tell.
+ */
+author_kind: ("person" | "bot" | "unknown")
+/**
+ * When it was written.
+ */
+created_at: string
+/**
+ * When it last changed — its creation, for one never edited.
+ */
+updated_at: string
+/**
+ * The comment's version: when it last changed, at the backend's own precision. Two reads
+ * answering one comment unchanged answer the same version.
+ */
+version: string
+/**
+ * What it says, byte for byte.
+ */
+body: string
+[k: string]: any
+}
+
+}
+export type CommentsSince = GeneratedCommentsSince.CommentsSince;
 export namespace GeneratedCompleteAction {
 /**
  * What moving one issue's item to `done` came to at one source.
@@ -5805,6 +5931,90 @@ lower_bound: boolean
 
 }
 export type LocateReport = GeneratedLocateReport.LocateReport;
+export namespace GeneratedLocated {
+/**
+ * One item, qualified by the source it came from.
+ *
+ * Rendered `<source>:<native>` and parsed by splitting on the **first** colon,
+ * so a native id may contain colons freely.
+ */
+export type GlobalId = string
+
+/**
+ * Where one task would land, what it would update there, and where a create would file it.
+ */
+export interface Located {
+/**
+ * The qualified id the task was read from.
+ */
+source: string
+/**
+ * The class it was placed as, as a copy classifies it: its own declaration and, while the
+ * store's boundary is active, its repositories' visibility. A source declared private does
+ * not by itself make it private; it withholds the task's provenance instead.
+ */
+classification: ("public" | "private")
+/**
+ * The source the item lands in: the routed one, or the source itself.
+ */
+destination: string
+/**
+ * The index of the route entry that matched, or `None` when none did and the item
+ * stays in the source itself.
+ */
+route?: (number | null)
+/**
+ * The item a copy would update, and the rule that found it — `null` when a copy would
+ * create one, and absent under `--no-counterpart`, which looks for none.
+ */
+counterpart?: (LocatedCounterpart | null)
+/**
+ * Every destination item the origin query found carrying this task's origin, in listing
+ * order — `[]` when the query did not run, and absent under `--no-counterpart`. When it ran,
+ * `counterpart` is the first.
+ */
+carriers?: (GlobalId[] | null)
+/**
+ * The repository a create there would file the task's issue in, or `null` where the
+ * destination files no issue in a repository. Where a create would file, whether or not a
+ * counterpart exists: an existing issue is never moved.
+ */
+creates_in?: (CreatesIn | null)
+[k: string]: any
+}
+/**
+ * The destination item a copy would update.
+ */
+export interface LocatedCounterpart {
+/**
+ * Its qualified id at the destination the task is placed in.
+ */
+id: string
+/**
+ * Which rule found it, as a copy's report spells it.
+ */
+via: ("target-task" | "link" | "origin" | "scan" | "match" | "intent")
+[k: string]: any
+}
+/**
+ * Where a create would file a task's issue.
+ */
+export interface CreatesIn {
+/**
+ * The repository, as a normalized origin `host/owner/name`.
+ */
+repository: string
+/**
+ * Why the destination's own policy on where it creates — a GitHub Projects source's
+ * `creation_owners` — would refuse a create there, as the copy's refusal says it; absent
+ * when it would not. The locate itself never fails for it.
+ */
+refused?: (string | null)
+[k: string]: any
+}
+
+}
+export type Located = GeneratedLocated.Located;
 export namespace GeneratedLocation {
 /**
  * Where an entity is, in the one form a consumer can act on without knowing the backend.
@@ -13182,6 +13392,12 @@ assets?: (Asset[] | null)
  * naming no configured source.
  */
 cache?: (CacheUse | null)
+/**
+ * The task's forward dependency edges, exactly as `task deps` answers them — present only
+ * when the read asked for them (`task show --with-deps`), and absent for a task that was not
+ * found, or whose edges could not be read, the failure then in the response's `errors`.
+ */
+depends_on?: (QualifiedEdge[] | null)
 sanitization?: (Sanitization | null)
 [k: string]: any
 }
@@ -13706,6 +13922,52 @@ bypassed?: (string | null)
 [k: string]: any
 }
 /**
+ * One dependency edge with both ends qualified.
+ *
+ * An end may belong to another source. The near plugin owns that qualified far id and the
+ * engine reports it without resolving or fetching the far source, so it holds no index.
+ */
+export interface QualifiedEdge {
+from: QualifiedEndpoint
+to: QualifiedEndpoint1
+/**
+ * What the edge means.
+ */
+kind: ("blocks" | "related")
+[k: string]: any
+}
+/**
+ * The item the edge starts at, and the one that **depends on** the other.
+ *
+ * The direction a caller asked in says which end they named, not which end the edge
+ * starts at: a forward read and the matching reverse read report the same edge.
+ */
+export interface QualifiedEndpoint {
+/**
+ * `<source>:<native>`, preserved when a plugin reports another source.
+ */
+id: string
+/**
+ * Whether this endpoint names a task or project.
+ */
+kind: ("task" | "project")
+[k: string]: any
+}
+/**
+ * The item the edge points at, and the one that must finish first.
+ */
+export interface QualifiedEndpoint1 {
+/**
+ * `<source>:<native>`, preserved when a plugin reports another source.
+ */
+id: string
+/**
+ * Whether this endpoint names a task or project.
+ */
+kind: ("task" | "project")
+[k: string]: any
+}
+/**
  * What the screened writes of one command replaced, and what sanitise-on-refusal changed:
  * the `sanitization` member a write's answer carries when it is not empty.
  */
@@ -13901,6 +14163,12 @@ assets?: (Asset[] | null)
  * naming no configured source.
  */
 cache?: (CacheUse | null)
+/**
+ * The task's forward dependency edges, exactly as `task deps` answers them — present only
+ * when the read asked for them (`task show --with-deps`), and absent for a task that was not
+ * found, or whose edges could not be read, the failure then in the response's `errors`.
+ */
+depends_on?: (QualifiedEdge[] | null)
 [k: string]: any
 }
 /**
@@ -14421,6 +14689,52 @@ served: ("cache" | "remote")
  * not cover, or a task that carries no token — or `null` when nothing kept it from being.
  */
 bypassed?: (string | null)
+[k: string]: any
+}
+/**
+ * One dependency edge with both ends qualified.
+ *
+ * An end may belong to another source. The near plugin owns that qualified far id and the
+ * engine reports it without resolving or fetching the far source, so it holds no index.
+ */
+export interface QualifiedEdge {
+from: QualifiedEndpoint
+to: QualifiedEndpoint1
+/**
+ * What the edge means.
+ */
+kind: ("blocks" | "related")
+[k: string]: any
+}
+/**
+ * The item the edge starts at, and the one that **depends on** the other.
+ *
+ * The direction a caller asked in says which end they named, not which end the edge
+ * starts at: a forward read and the matching reverse read report the same edge.
+ */
+export interface QualifiedEndpoint {
+/**
+ * `<source>:<native>`, preserved when a plugin reports another source.
+ */
+id: string
+/**
+ * Whether this endpoint names a task or project.
+ */
+kind: ("task" | "project")
+[k: string]: any
+}
+/**
+ * The item the edge points at, and the one that must finish first.
+ */
+export interface QualifiedEndpoint1 {
+/**
+ * `<source>:<native>`, preserved when a plugin reports another source.
+ */
+id: string
+/**
+ * Whether this endpoint names a task or project.
+ */
+kind: ("task" | "project")
 [k: string]: any
 }
 

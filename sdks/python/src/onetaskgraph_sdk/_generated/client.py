@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from .models import (
         CacheCleared,
         CommentList,
+        CommentsSince,
         CommentWritten,
         CopyReport,
         DeletedComment,
@@ -86,6 +87,7 @@ POSITIONALS: dict[tuple[str, ...], tuple[str, ...]] = {
     ("task", "comment", "delete"): ("id", "comment_id"),
     ("task", "comment", "edit"): ("id", "comment_id"),
     ("task", "comment", "list"): ("id",),
+    ("task", "comments"): ("source",),
     ("task", "content", "set"): ("id",),
     ("task", "copy"): ("ids",),
     ("task", "create"): ("source",),
@@ -3032,6 +3034,133 @@ class GeneratedClient:
         )
 
     @overload
+    async def task_comments(
+        self,
+        source: SourceName | str,
+        since: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        item: list[GlobalId | str] | tuple[GlobalId | str, ...] | None = None,
+        metadata: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        status: list[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ]
+        ]
+        | tuple[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ],
+            ...,
+        ]
+        | None = None,
+    ) -> CommentsSince: ...
+
+    @overload
+    async def task_comments(
+        self,
+        source: SourceName | str,
+        since: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        item: list[GlobalId | str] | tuple[GlobalId | str, ...] | None = None,
+        metadata: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+        status: list[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ]
+        ]
+        | tuple[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ],
+            ...,
+        ]
+        | None = None,
+    ) -> CommentsSince | SanitizeDryRun: ...
+
+    @overload
+    async def task_comments(
+        self,
+        source: SourceName | str,
+        since: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        item: list[GlobalId | str] | tuple[GlobalId | str, ...] | None = None,
+        metadata: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        status: list[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ]
+        ]
+        | tuple[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ],
+            ...,
+        ]
+        | None = None,
+    ) -> CommentsSince | SanitizeDryRun: ...
+
+    async def task_comments(
+        self,
+        source: SourceName | str,
+        since: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        item: list[GlobalId | str] | tuple[GlobalId | str, ...] | None = None,
+        metadata: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        status: list[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ]
+        ]
+        | tuple[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ],
+            ...,
+        ]
+        | None = None,
+    ) -> CommentsSince | SanitizeDryRun:
+        """Run ``onetaskgraph task comments``."""
+        return await self._invoke(
+            ["task", "comments"],
+            _models.CommentsSince | _models.SanitizeDryRun,
+            source=source,
+            since=since,
+            default_sources=default_sources,
+            item=item,
+            metadata=_strings("task_comments", "metadata", metadata),
+            page_size=page_size,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
+            set=set,
+            status=status,
+        )
+
+    @overload
     async def task_content_set(
         self,
         id: GlobalId | str,
@@ -3640,6 +3769,7 @@ class GeneratedClient:
     async def task_list(
         self,
         *,
+        all: bool | None = None,
         allow_partial: bool | None = None,
         commented_since: str | None = None,
         default_sources: list[str] | tuple[str, ...] | None = None,
@@ -3682,6 +3812,7 @@ class GeneratedClient:
     async def task_list(
         self,
         *,
+        all: bool | None = None,
         allow_partial: bool | None = None,
         commented_since: str | None = None,
         default_sources: list[str] | tuple[str, ...] | None = None,
@@ -3724,6 +3855,7 @@ class GeneratedClient:
     async def task_list(
         self,
         *,
+        all: bool | None = None,
         allow_partial: bool | None = None,
         commented_since: str | None = None,
         default_sources: list[str] | tuple[str, ...] | None = None,
@@ -3765,6 +3897,7 @@ class GeneratedClient:
     async def task_list(
         self,
         *,
+        all: bool | None = None,
         allow_partial: bool | None = None,
         commented_since: str | None = None,
         default_sources: list[str] | tuple[str, ...] | None = None,
@@ -3806,6 +3939,7 @@ class GeneratedClient:
         return await self._invoke(
             ["task", "list"],
             _models.QueryResponseOfQualifiedTask | _models.SanitizeDryRun,
+            all=all,
             allow_partial=allow_partial,
             commented_since=commented_since,
             default_sources=default_sources,
@@ -4280,6 +4414,7 @@ class GeneratedClient:
         replace: list[str] | tuple[str, ...] | None = None,
         sanitize_dry_run: Literal[False] | None = None,
         set: list[str] | tuple[str, ...] | None = None,
+        with_deps: bool | None = None,
     ) -> TaskDetail: ...
 
     @overload
@@ -4297,6 +4432,7 @@ class GeneratedClient:
         replace: list[str] | tuple[str, ...] | None = None,
         sanitize_dry_run: Literal[True],
         set: list[str] | tuple[str, ...] | None = None,
+        with_deps: bool | None = None,
     ) -> TaskDetail | SanitizeDryRun: ...
 
     @overload
@@ -4314,6 +4450,7 @@ class GeneratedClient:
         replace: list[str] | tuple[str, ...] | None = None,
         sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
+        with_deps: bool | None = None,
     ) -> TaskDetail | SanitizeDryRun: ...
 
     async def task_show(
@@ -4330,6 +4467,7 @@ class GeneratedClient:
         replace: list[str] | tuple[str, ...] | None = None,
         sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
+        with_deps: bool | None = None,
     ) -> TaskDetail | SanitizeDryRun:
         """Run ``onetaskgraph task show``."""
         return await self._invoke(
@@ -4346,6 +4484,7 @@ class GeneratedClient:
             replace=replace,
             sanitize_dry_run=sanitize_dry_run,
             set=set,
+            with_deps=with_deps,
         )
 
     @overload

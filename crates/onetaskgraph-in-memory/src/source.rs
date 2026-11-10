@@ -459,6 +459,12 @@ impl TaskSource for InMemorySource {
         true
     }
 
+    /// Every part: `mem1` is the digest of the task's fields, its comments and its forward
+    /// edges together, so any change to any of them moves it.
+    fn version_coverage(&self) -> onetaskgraph_plugin_api::VersionCoverage {
+        onetaskgraph_plugin_api::VersionCoverage::whole()
+    }
+
     async fn health(&self) -> Result<Health, SourceError> {
         let held = self.held()?;
         Ok(Health {

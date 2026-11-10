@@ -4491,7 +4491,32 @@ impl LocalMdSource {
                 [].as_slice(),
             ),
         };
-        if let Some(status) = status {
+        // A status named by its category's own word, which this folder's mapping does not read
+        // as that category, is the category and nothing more: it is written in this folder's own
+        // word for it, exactly as `update_task` and `set_task_status` write one. Any other name
+        // is written as it is, or refused when the mapping would read it as something else.
+        let status: Option<Status> = status.map(|status| {
+            let fields = outgoing.fields();
+            let holder = StatusHolder {
+                id: fields.id,
+                title: Some(fields.title),
+                origin: fields
+                    .metadata
+                    .get(TaskQuery::ORIGIN_KEY)
+                    .and_then(serde_json::Value::as_str),
+            };
+            if status.name == category_name(status.category)
+                && self.representable_status(status, &holder).is_err()
+            {
+                Status {
+                    category: status.category,
+                    name: self.word_for(status.category),
+                }
+            } else {
+                status.clone()
+            }
+        });
+        if let Some(status) = &status {
             let fields = outgoing.fields();
             self.representable_status(
                 status,
@@ -4505,6 +4530,7 @@ impl LocalMdSource {
                 },
             )?;
         }
+        let status = status.as_ref();
         let outgoing = outgoing.fields();
         let front = WrittenFrontMatter {
             title: outgoing.title.to_owned(),

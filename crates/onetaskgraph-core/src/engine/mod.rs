@@ -15,11 +15,13 @@
 //!
 //! Nothing here writes anything down. See [`fetch`] for the walk that makes that true.
 
+mod all_pages;
 mod assets;
 pub mod boundary;
 mod cached;
 mod closure;
 mod comment;
+mod comments_since;
 mod copy;
 mod delivery;
 mod dependents;
@@ -80,6 +82,9 @@ pub use closure::{
 };
 pub use comment::{
     CommentList, CommentWritten, DeletedComment, DocumentDetail, TaskDetail, TaskDetails,
+};
+pub use comments_since::{
+    COMMENTS_SINCE_SCHEMA_VERSION, CommentActivity, CommentsSince, CommentsSinceRequest,
 };
 pub use copy::MirrorTarget;
 pub(crate) use copy::spent_between;
@@ -837,6 +842,32 @@ pub enum EngineError {
          next: copy that one task by its id with --expect, and the others without it"
     )]
     ExpectOneTask,
+
+    /// `task comments --item` named a task of a source other than the one listed.
+    #[error(
+        "{item} is not a task of source {source_name}, whose comments this lists\n\
+         next: name only tasks of {source_name} with --item, or list the other source's comments \
+         on their own"
+    )]
+    ItemOutsideSource {
+        /// The qualified id named.
+        item: String,
+        /// The source listed.
+        source_name: String,
+    },
+
+    /// `task list --all` was answered a page token it had already followed: a source repeating
+    /// a cursor, which a walk to exhaustion would otherwise ask for forever.
+    #[error(
+        "a page answered the token {token}, which this listing had already followed, so walking \
+         every page would never end — a source repeated its cursor\n\
+         next: list without --all, a page at a time, and report the repeated cursor to whoever \
+         runs that source"
+    )]
+    RepeatedPage {
+        /// The page token answered a second time.
+        token: String,
+    },
 
     /// `task copy --if-version` named more than one task, a query, or something other than a
     /// task.

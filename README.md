@@ -77,8 +77,10 @@ onetaskgraph task list [--source S]... [--label L]... [--not-label L]...
                        [--project P [--members] | --no-project] [--commented-since RFC3339]
                        [--metadata KEY[/SEGMENT...]=VALUE]... [--origin SOURCE:ID]
                        [--search TEXT] [--in title|content|both]
-                       [--limit N] [--page TOKEN] [--explain] [--allow-partial] [--json]
-onetaskgraph task show <ID> [--no-comments] [--pin VERSION]
+                       [--limit N] [--page TOKEN] [--all] [--explain] [--allow-partial] [--json]
+                       # --all: every page at once; a repeated cursor is refused as repeated-page
+onetaskgraph task show <ID> [--no-comments] [--pin VERSION] [--with-deps]
+                       # --with-deps: the task's forward edges beside it, as `depends_on`
 onetaskgraph task show-many <ID>... [--no-comments] [--pin ID=VERSION]...
 onetaskgraph task deps <ID> [--direction depends-on|depended-on-by] [--pin VERSION] [--complete]
 onetaskgraph task copy <ID>... --to <SOURCE> [--match-by KEY] [--recreate] [--create] [--dry-run]
@@ -92,6 +94,9 @@ onetaskgraph task locate <ID>... --to <SOURCE> [--no-counterpart | --target-nati
 onetaskgraph task comment add    <ID> [--body-file PATH] [--author NAME] [--expect VERSION]
                                       [--if-version VERSION]
 onetaskgraph task comment list   <ID> [--pin VERSION]
+onetaskgraph task comments <SOURCE> --since RFC3339 [--metadata KEY[/SEGMENT...]=VALUE]...
+                           [--status S]... [--item ID]...
+                           # every comment made or edited since then, and the next watermark
 onetaskgraph task comment edit   <ID> <COMMENT-ID> [--body-file PATH] [--expect VERSION]
                                       [--if-version VERSION]
 onetaskgraph task comment delete <ID> <COMMENT-ID> [--expect VERSION]
@@ -1078,6 +1083,35 @@ Which guarantee a write gets is its source's:
 | `github-projects` | **Checked immediately before the write.** GitHub takes no conditional write, so the task is read just before the first mutation; a change landing between that read and the mutation is GitHub's residual race, the time one request takes. A token is given only once an item has settled (see "A local cache of a remote source"), so a task changed within the last minute reads with no version and every held write of it is refused until it settles. |
 | `linear` | **Checked immediately before the write.** Linear takes no conditional write either, so the race is the same one request wide. A Linear task's version is the token its `updatedAt` and facets give, which a comment does not move. |
 | a stdio plugin | **Checked immediately before the write**, as for a hosted backend. |
+
+### Reading the comments made since a watermark
+
+<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] The shape is
+     `CommentsSince` in `crates/onetaskgraph-core/src/engine/comments_since.rs`, published in
+     `onetaskgraph schema` and generated into both SDKs; the journeys in
+     `crates/onetaskgraph-e2e/tests/e2e/comments_since.rs` hold every answer to exactly these
+     members on every source kind. -->
+`task comments <SOURCE> --since <RFC3339>` lists every comment made or edited at or after the
+instant on that source's tasks — narrowed, as `task list` narrows, by `--metadata`, `--status` and
+`--item` — across every page of the tasks and of each one's comments, oldest first by when each
+last changed:
+
+```json
+{"schema_version": 1, "watermark": "<RFC3339>", "comments": [{"item": "<source>:<native id>",
+ "id": "<comment id>", "url": "<url or null>", "author": "<login or name or null>",
+ "author_kind": "person", "created_at": "<RFC3339>", "updated_at": "<RFC3339>",
+ "version": "<opaque>", "body": "<markdown>"}]}
+```
+
+`author_kind` is `person`, `bot` or `unknown`, the source's own call: a GitHub board reads a
+`Bot` author and spells it `<login>[bot]`; Linear names no user for an integration's or a bot's
+comment; a folder of Markdown and an in-memory source read a name ending `[bot]` as a bot. A
+comment's `version` is when it last changed, at the backend's own precision. The `watermark` is
+where the next read starts: the earlier of the source's own time (a hosted service's `Date`) and
+this host's at the read's start, set back by the source's consistency window — two minutes for
+a GitHub board, whose issue search lags the comments it indexes, one for Linear, none for a
+folder or an in-memory source. So a comment the source had not yet shown is read on the next
+pass, and a comment read twice carries the same `id` and `version`: deduplicate by the two.
 
 ### When an issue closes: reconciling and completing its card
 
