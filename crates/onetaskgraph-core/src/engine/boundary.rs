@@ -1379,6 +1379,13 @@ impl Exposure {
                 .flatten()
                 .map(|edge| edge.to.id().to_owned()),
         );
+        exposure.fixed.metadata.extend(
+            update
+                .repositories
+                .iter()
+                .flatten()
+                .map(|repository| repository.as_str().to_owned()),
+        );
         exposure
     }
 

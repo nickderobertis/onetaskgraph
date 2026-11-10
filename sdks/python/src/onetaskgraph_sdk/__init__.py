@@ -11,6 +11,8 @@ from . import client as client
 from ._generated import models as _models
 from .client import Client as Client
 from .client import OnetaskgraphError as OnetaskgraphError
+from .client import PartialWriteError as PartialWriteError
+from .client import VersionMovedError as VersionMovedError
 
 if TYPE_CHECKING:
     from ._generated.models import *  # noqa: F403  # Schema roots define the public set.
@@ -18,12 +20,12 @@ if TYPE_CHECKING:
 # Not `import *` at run time: it reads every name `__all__` lists, which would build every
 # model. `__all__ += <module>.__all__` is the spelling a type checker follows, so a strict
 # one reads every root as re-exported from here.
-__all__ = ["Client", "OnetaskgraphError", "client"]
+__all__ = ["Client", "OnetaskgraphError", "PartialWriteError", "VersionMovedError", "client"]
 __all__ += _models.__all__
 
 #: The version this package publishes. `pyproject.toml`, the Cargo workspace and the
 #: TypeScript package must all agree; scripts/check-workspace-config.sh reconciles them.
-__version__ = "0.14.9"
+__version__ = "0.14.10"
 
 if not TYPE_CHECKING:
 

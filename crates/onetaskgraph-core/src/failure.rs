@@ -232,6 +232,9 @@ fn cause(error: &EngineError) -> (String, Option<SourceName>, Option<&SourceErro
         }
         EngineError::NotCached { name } => ("not-cached".to_owned(), configured(name), None),
         EngineError::ExpectOneTask => ("expect-one-task".to_owned(), None, None),
+        EngineError::IfVersionOneTask => ("if-version-one-task".to_owned(), None, None),
+        EngineError::RepeatedPage { .. } => ("repeated-page".to_owned(), None, None),
+        EngineError::ItemOutsideSource { .. } => ("item-outside-source".to_owned(), None, None),
         EngineError::VersionMoved { .. } => ("version-moved".to_owned(), None, None),
         EngineError::PlanMember { error, .. } => cause(error),
         EngineError::NoComments { name, .. } | EngineError::CommentlessDestination { name, .. } => {

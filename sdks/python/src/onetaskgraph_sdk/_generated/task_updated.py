@@ -110,6 +110,7 @@ class UpdatedField(StrEnum):
     UpdatedFieldMetadata = "metadata"
     UpdatedFieldDelivers = "delivers"
     UpdatedFieldDependsOn = "depends-on"
+    UpdatedFieldRepositories = "repositories"
 
 
 class DeliveredWritten(BaseModel):

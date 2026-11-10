@@ -15,12 +15,14 @@
 //!
 //! Nothing here writes anything down. See [`fetch`] for the walk that makes that true.
 
+mod all_pages;
 mod assets;
 mod attestation;
 pub mod boundary;
 mod cached;
 mod closure;
 mod comment;
+mod comments_since;
 mod copy;
 mod delivery;
 mod dependents;
@@ -29,6 +31,7 @@ pub use dependents::Completeness;
 mod fetch;
 mod graph;
 mod held_off;
+mod held_version;
 mod join;
 mod local;
 mod metadata;
@@ -83,6 +86,9 @@ pub use closure::{
 pub use comment::{
     CommentList, CommentWritten, DeletedComment, DocumentDetail, TaskDetail, TaskDetails,
 };
+pub use comments_since::{
+    COMMENTS_SINCE_SCHEMA_VERSION, CommentActivity, CommentsSince, CommentsSinceRequest,
+};
 pub use copy::MirrorTarget;
 pub(crate) use copy::spent_between;
 pub use copy::{
@@ -100,7 +106,7 @@ pub use graph::{
 };
 pub use local::ProjectSelector;
 pub use metadata::MetadataSet;
-pub use narrow::{TaskContentSet, TaskPrioritySet};
+pub use narrow::{GuardOutcome, PriorityGuard, TaskContentSet, TaskPrioritySet};
 pub use plan_graph::{PlanCreated, PlanMember, PlannedMember, PlannedProject};
 pub use rendered::{
     Body, DocumentCreate, ProjectCreate, Regenerated, Regeneration, RenderRequest, RenderTemplate,
@@ -841,12 +847,47 @@ pub enum EngineError {
     )]
     ExpectOneTask,
 
-    /// A write held to a version — a document's metadata, or an attestation — was refused
-    /// because a read of the item answered another: a change made at the source since the
-    /// caller's read.
+    /// `task comments --item` named a task of a source other than the one listed.
     #[error(
-        "{id} is at version {found}, not the version {expected} this write expects — it \
-         changed since that version was read — so nothing was written\n\
+        "{item} is not a task of source {source_name}, whose comments this lists\n\
+         next: name only tasks of {source_name} with --item, or list the other source's comments \
+         on their own"
+    )]
+    ItemOutsideSource {
+        /// The qualified id named.
+        item: String,
+        /// The source listed.
+        source_name: String,
+    },
+
+    /// `task list --all` was answered a page token it had already followed: a source repeating
+    /// a cursor, which a walk to exhaustion would otherwise ask for forever.
+    #[error(
+        "a page answered the token {token}, which this listing had already followed, so walking \
+         every page would never end — a source repeated its cursor\n\
+         next: list without --all, a page at a time, and report the repeated cursor to whoever \
+         runs that source"
+    )]
+    RepeatedPage {
+        /// The page token answered a second time.
+        token: String,
+    },
+
+    /// `task copy --if-version` named more than one task, a query, or something other than a
+    /// task.
+    #[error(
+        "--if-version names the version of one destination task, so it is taken by a copy of \
+         one task alone\n\
+         next: copy that one task by its id with --if-version, and the others without it"
+    )]
+    IfVersionOneTask,
+
+    /// A write held to a version — a task write, a document's metadata, or an attestation — was
+    /// refused because a read of the item answered another: a change made at the source since
+    /// the caller's read.
+    #[error(
+        "{id} is at version {found}, not the version {expected} this write expects — it changed \
+         since that version was read — so nothing was written\n\
          next: read it again (`onetaskgraph <task|project|document> show`), decide whether the \
          write still applies, and pass the version that read reports"
     )]
@@ -857,6 +898,8 @@ pub enum EngineError {
         expected: String,
         /// The version the read answered.
         found: String,
+        /// What the item was found holding: its `version` the one found.
+        held: Box<crate::cache::WriteResult>,
     },
 
     /// One member of a plan graph could not be created after the project, and every member
@@ -1865,6 +1908,7 @@ impl EngineError {
     pub fn held(&self) -> Option<&crate::cache::WriteResult> {
         match self {
             Self::TargetTaskOrigin { held, .. } => held.as_deref(),
+            Self::VersionMoved { held, .. } => Some(held),
             _ => None,
         }
     }

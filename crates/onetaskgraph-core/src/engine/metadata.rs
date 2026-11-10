@@ -189,6 +189,12 @@ impl Engine {
                 return Err(EngineError::VersionMoved {
                     id: id.to_string(),
                     expected: version.to_owned(),
+                    held: Box::new(crate::cache::WriteResult {
+                        version: Some(at.clone()),
+                        parts: None,
+                        status: None,
+                        priority: None,
+                    }),
                     found: at,
                 });
             }

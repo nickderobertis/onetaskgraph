@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.10](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-local-md-v0.14.9...onetaskgraph-local-md-v0.14.10) - 2026-11-10
+
+### Added
+
+- hold writes to an item's version and list comments since a watermark ([#3969](https://github.com/nickderobertis/onetaskgraph/pull/3969))
+
 ## [0.12.14](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-local-md-v0.12.13...onetaskgraph-local-md-v0.12.14) - 2026-10-31
 
 ### Added

@@ -528,6 +528,15 @@ source to write before each heading — is ignored as the default ignores it. A 
 destination kind with no section form, so a copy into one carries each section link's fragment
 unchanged after the counterpart's location, and writes no markup into its bodies.
 
+The follow-up methods are not carried either, and a source hosted over this protocol is
+answered as the trait's defaults answer. `holds_versions` answers false, so a write held to a
+task's version (`--if-version`) is checked by the engine reading the task through the protocol
+immediately before the write, rather than inside the plugin as one step with it.
+`comment_author_kind` is decided by the name convention every source shares — an author ending
+`[bot]` is a bot, any other a person, none unknown — `comment_consistency_window` is none, and
+`served_at` states no time, so the watermark of a comment read from a hosted source is this host's
+clock at the read's start.
+
 ### 4.1 Common parameter shapes
 
 **`PageRequest`** — every paged method takes one under `page`:

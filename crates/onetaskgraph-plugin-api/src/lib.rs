@@ -21,6 +21,7 @@ mod clock;
 mod comment;
 mod error;
 mod guard;
+mod held;
 mod id;
 mod issue;
 mod metadata;
@@ -46,10 +47,12 @@ pub use cache::{
 pub use capability::{Capabilities, DependencySupport, Support};
 pub use clock::{Clock, SIMULATED_CLOCK_VARIABLE, SharedClock, WaitCause, system_clock};
 pub use comment::{
-    Comment, CommentBody, CommentCopy, CommentOrigin, NewComment, TaskDetailRead, commentless,
+    AuthorKind, Comment, CommentBody, CommentCopy, CommentOrigin, NewComment, TaskDetailRead,
+    commentless,
 };
 pub use error::SourceError;
 pub use guard::WriteGuard;
+pub use held::HeldVersion;
 pub use id::{NativeId, SOURCE_NAME_PATTERN, SourceName};
 pub use issue::{
     ClosedAs, Completion, ContradictedItem, HeldTask, ISSUE_REF_PATTERN, IssueHolding, IssueRef,

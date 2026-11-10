@@ -1,5 +1,9 @@
 //! A complete [`TaskSource`] held entirely in memory.
 //!
+//! **A write held to a version** (`--if-version`) is checked and made as one step under the one
+//! lock over this source's work, so no competing write lands between them. A task's version is
+//! `mem1|` and the SHA-256 of its fields, its comments and its forward edges.
+//!
 //! It exists so the engine has a source whose capability declaration a test can
 //! *choose*. Configure two of them over the same dependency graph — one
 //! [`DependencySupport::BothDirections`](onetaskgraph_plugin_api::DependencySupport::BothDirections),

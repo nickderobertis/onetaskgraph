@@ -34,12 +34,12 @@ use crate::template::{
     TemplateVariables, VariableType,
 };
 use crate::{
-    CommentList, CommentWritten, CompleteAction, CopyAction, CopyLink, CopyOutcome, CopyReport,
-    CopyVia, DeletedComment, Delivered, DeliveryOutcome, DocumentDetail, Failure, FailureClass,
-    FailureDocument, GlobalId, IssueCompleted, IssuesCompleted, LocateReport, MetadataSet,
-    PageToken, Predicate, ProjectGraph, ProjectStatusSet, PublicProjections, Qualified,
-    QualifiedEdge, QualifiedEndpoint, QueryPlan, QueryResponse, ReconcileOutcome, Regenerated,
-    SearchHit, SearchKind, SourceFailure, SourceListing, SourcePlan, StatusReconciled,
+    CommentList, CommentWritten, CommentsSince, CompleteAction, CopyAction, CopyLink, CopyOutcome,
+    CopyReport, CopyVia, DeletedComment, Delivered, DeliveryOutcome, DocumentDetail, Failure,
+    FailureClass, FailureDocument, GlobalId, IssueCompleted, IssuesCompleted, LocateReport,
+    MetadataSet, PageToken, Predicate, ProjectGraph, ProjectStatusSet, PublicProjections,
+    Qualified, QualifiedEdge, QualifiedEndpoint, QueryPlan, QueryResponse, ReconcileOutcome,
+    Regenerated, SearchHit, SearchKind, SourceFailure, SourceListing, SourcePlan, StatusReconciled,
     StatusesReconciled, TaskAssetNames, TaskContentSet, TaskDetail, TaskDetails, TaskPrioritySet,
     TaskStatusSet, TaskUpdated, TemplateAnswers,
 };
@@ -57,7 +57,7 @@ use crate::{
 /// that it moves whenever [`schema_bundle`] below emits a different document. The golden
 /// that holds it to that is `PUBLISHED_BUNDLES` in `tests/engine.rs`, which records every
 /// root's schema by digest from this version on.
-pub const SCHEMA_BUNDLE_VERSION: u32 = 58;
+pub const SCHEMA_BUNDLE_VERSION: u32 = 59;
 
 /// The same typed envelope the command line serializes, keeping the payload's root name.
 pub(crate) fn write_answer_schema<T: schemars::JsonSchema>() -> Schema {
@@ -184,6 +184,15 @@ pub fn schema_bundle() -> Value {
     roots.insert("TaskDetail", write_answer_schema::<TaskDetail>());
     // What `task show-many` answers with: one `TaskDetail` per id, in request order.
     roots.insert("TaskDetails", schema_for!(TaskDetails));
+    // What `task comments --since` answers with: every comment made or edited since an instant,
+    // each with who wrote it and its version, and the watermark a later read starts from.
+    roots.insert("CommentsSince", schema_for!(CommentsSince));
+    // One comment of that answer, named so a caller deduplicating them holds it by name.
+    roots.insert("CommentActivity", schema_for!(crate::CommentActivity));
+    roots.insert(
+        "AuthorKind",
+        schema_for!(onetaskgraph_plugin_api::AuthorKind),
+    );
     // What `project graph --format json` answers with: one project's tasks and the edges
     // between them, laid out as its Mermaid form draws them.
     roots.insert("ProjectGraph", schema_for!(ProjectGraph));
@@ -280,6 +289,8 @@ pub fn schema_bundle() -> Value {
     // What `task locate` answers: where a copy would land each task, what it would update and
     // where a create would file its issue.
     roots.insert("LocateReport", schema_for!(LocateReport));
+    // One task a locate placed, named so a caller holding one has it under its own name.
+    roots.insert("Located", schema_for!(crate::Located));
 
     // What `template variables` and `template render` answer with, and the declaration and
     // the two vocabularies inside the first, which a caller branches on by name.

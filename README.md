@@ -77,33 +77,45 @@ onetaskgraph task list [--source S]... [--label L]... [--not-label L]...
                        [--project P [--members] | --no-project] [--commented-since RFC3339]
                        [--metadata KEY[/SEGMENT...]=VALUE]... [--origin SOURCE:ID]
                        [--search TEXT] [--in title|content|both]
-                       [--limit N] [--page TOKEN] [--explain] [--allow-partial] [--json]
-onetaskgraph task show <ID> [--no-comments] [--pin VERSION]
+                       [--limit N] [--page TOKEN] [--all] [--explain] [--allow-partial] [--json]
+                       # --all: every page at once; a repeated cursor is refused as repeated-page
+onetaskgraph task show <ID> [--no-comments] [--pin VERSION] [--with-deps]
+                       # --with-deps: the task's forward edges beside it, as `depends_on`
 onetaskgraph task show-many <ID>... [--no-comments] [--pin ID=VERSION]...
 onetaskgraph task deps <ID> [--direction depends-on|depended-on-by] [--pin VERSION] [--complete]
 onetaskgraph task copy <ID>... --to <SOURCE> [--match-by KEY] [--recreate] [--create] [--dry-run]
                        [--status CATEGORY]... [--expect VERSION]  # --expect: one task, caching destination
+                       [--if-version VERSION]  # one task: refused as version-moved when it moved
 onetaskgraph task copy --to <SOURCE> [--source S]... [--commented-since RFC3339]
                        [--metadata KEY[/SEGMENT...]=VALUE]... [--status CATEGORY]...  # by query
 onetaskgraph task locate <ID>... --to <SOURCE> [--no-counterpart | --target-native NATIVE-ID]
                          # where that copy would land each task; writes nothing — see
                          # "Where a copy would land: task locate"
 onetaskgraph task comment add    <ID> [--body-file PATH] [--author NAME] [--expect VERSION]
+                                      [--if-version VERSION]
 onetaskgraph task comment list   <ID> [--pin VERSION]
+onetaskgraph task comments <SOURCE> --since RFC3339 [--metadata KEY[/SEGMENT...]=VALUE]...
+                           [--status S]... [--item ID]...
+                           # every comment made or edited since then, and the next watermark
 onetaskgraph task comment edit   <ID> <COMMENT-ID> [--body-file PATH] [--expect VERSION]
+                                      [--if-version VERSION]
 onetaskgraph task comment delete <ID> <COMMENT-ID> [--expect VERSION]
 onetaskgraph task status set <ID> draft|backlog|todo|queued|in-progress|done|cancelled|unknown
-                             [--expect VERSION]
+                             [--expect VERSION] [--if-version VERSION]
 onetaskgraph task status reconcile --source <SOURCE> [--dry-run]
 onetaskgraph task status complete --issue <OWNER/NAME#N>... [--source <SOURCE>]... [--dry-run]
 onetaskgraph task priority set <ID> none|urgent|high|medium|low [--expect VERSION]
-onetaskgraph task content set <ID> --file PATH [--expect VERSION]
-onetaskgraph task metadata set <ID> <KEY> <VALUE> [--expect VERSION]
+                               [--if-version VERSION] [--when-priority PRIORITY]...
+                               # --when-priority: write only over these; else `outcome: held`
+onetaskgraph task content set <ID> --file PATH [--expect VERSION] [--if-version VERSION]
+onetaskgraph task metadata set <ID> <KEY> <VALUE> [--expect VERSION] [--if-version VERSION]
 onetaskgraph task update <ID> [--title TITLE] [--body-file PATH]
                          [--status CATEGORY [--status-name NAME]] [--priority PRIORITY]
                          [--metadata KEY=JSON]... [--remove-metadata KEY]...
                          [--delivers ID... | --no-delivers] [--depends-on ID... | --no-depends-on]
-                         [--expect VERSION] [--term-scope REPOSITORY... | --term-scope-empty]
+                         [--repository ORIGIN... | --no-repositories]
+                         [--expect VERSION] [--if-version VERSION]
+                         [--term-scope REPOSITORY... | --term-scope-empty]
 onetaskgraph task create <SOURCE> --project P --title TITLE
                          [--template FILE [--search-path DIR]... | --template-loader FILE
                           | --body-file PATH]      # none of the three: the body on stdin
@@ -1043,6 +1055,64 @@ nothing and refused in the words a plugin with no such write refuses with
 `onetaskgraph_core::Engine::set_project_status(&self, id: &GlobalId, category: StatusCategory)
 -> Result<ProjectStatusSet, EngineError>`, answering `ProjectStatusSet { id, status }` — the
 document above — through the same public boundary a task's status write passes.
+<!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
+
+### Holding a write to the version you read
+
+<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by the journeys in
+     `crates/onetaskgraph-e2e/tests/e2e/held_writes.rs`, which drive every verb named here on a
+     folder, an in-memory source, the loopback board and the loopback Linear workspace, each
+     hosted one with its cache on and off. -->
+`--if-version VERSION` on `task update`, `task priority set`, `task content set`, `task metadata
+set`, `task status set`, `task comment add`, `task comment edit` and `task copy` makes the write a
+precondition: it lands only while the task is at the version a read of it reported (`task show`'s
+`version`), and otherwise exits `1` with nothing written and the failure kind `version-moved`,
+whose `held.version` — and message — name the version the task is at now. Read again, decide
+whether the write still applies, and write at that version. On `task copy` it names the version
+of the one destination task the copy writes over, and is refused beside more than one task, a
+query, a project or a document as `if-version-one-task`; a copy that creates its counterpart
+holds nothing. It needs no cache, and leaves `--expect`, which is about cost and never a
+precondition, exactly as it was.
+
+Which guarantee a write gets is its source's:
+
+| Source | Guarantee |
+| --- | --- |
+| `local-md` | **Atomic.** The check and the write are one step under the lock beside the task's file, which every held write of it in any process waits for, so of two held writes racing at one version exactly one lands. A write made without `--if-version`, and an edit made outside the store, take no lock and are not excluded. |
+| `in-memory` | **Atomic.** The check and the write are one step under the one lock over the source's work. Its version is a digest of the task, its comments and its forward edges. |
+| `github-projects` | **Checked immediately before the write.** GitHub takes no conditional write, so the task is read just before the first mutation; a change landing between that read and the mutation is GitHub's residual race, the time one request takes. A token is given only once an item has settled (see "A local cache of a remote source"), so a task changed within the last minute reads with no version and every held write of it is refused until it settles. |
+| `linear` | **Checked immediately before the write.** Linear takes no conditional write either, so the race is the same one request wide. A Linear task's version is the token its `updatedAt` and facets give, which a comment does not move. |
+| a stdio plugin | **Checked immediately before the write**, as for a hosted backend. |
+<!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
+
+### Reading the comments made since a watermark
+
+<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] The shape is
+     `CommentsSince` in `crates/onetaskgraph-core/src/engine/comments_since.rs`, published in
+     `onetaskgraph schema` and generated into both SDKs; the journeys in
+     `crates/onetaskgraph-e2e/tests/e2e/comments_since.rs` hold every answer to exactly these
+     members on every source kind. -->
+`task comments <SOURCE> --since <RFC3339>` lists every comment made or edited at or after the
+instant on that source's tasks — narrowed, as `task list` narrows, by `--metadata`, `--status` and
+`--item` — across every page of the tasks and of each one's comments, oldest first by when each
+last changed:
+
+```json
+{"schema_version": 1, "watermark": "<RFC3339>", "comments": [{"item": "<source>:<native id>",
+ "id": "<comment id>", "url": "<url or null>", "author": "<login or name or null>",
+ "author_kind": "person", "created_at": "<RFC3339>", "updated_at": "<RFC3339>",
+ "version": "<opaque>", "body": "<markdown>"}]}
+```
+
+`author_kind` is `person`, `bot` or `unknown`, the source's own call: a GitHub board reads a
+`Bot` author and spells it `<login>[bot]`; Linear names no user for an integration's or a bot's
+comment; a folder of Markdown and an in-memory source read a name ending `[bot]` as a bot. A
+comment's `version` is when it last changed, at the backend's own precision. The `watermark` is
+where the next read starts: the earlier of the source's own time (a hosted service's `Date`) and
+this host's at the read's start, set back by the source's consistency window — two minutes for
+a GitHub board, whose issue search lags the comments it indexes, one for Linear, none for a
+folder or an in-memory source. So a comment the source had not yet shown is read on the next
+pass, and a comment read twice carries the same `id` and `version`: deduplicate by the two.
 <!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 
 ### When an issue closes: reconciling and completing its card

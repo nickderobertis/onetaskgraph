@@ -53,6 +53,29 @@ impl HeldOff {
         }
     }
 
+    /// `write`, of the task `id`, held to the version the call in progress holds it to, if
+    /// any: see `held_version`.
+    async fn held<T>(
+        &self,
+        id: &NativeId,
+        write: impl std::future::Future<Output = Result<T, SourceError>>,
+    ) -> Result<T, SourceError> {
+        super::held_version::held(&self.name, self.inner.as_ref(), id, write).await
+    }
+
+    /// `write`, held as [`Self::held`] holds it when it writes over an existing task `target`,
+    /// and sent as it is when it creates one.
+    async fn held_target<T>(
+        &self,
+        target: Option<&NativeId>,
+        write: impl std::future::Future<Output = Result<T, SourceError>>,
+    ) -> Result<T, SourceError> {
+        match target {
+            Some(id) => self.held(id, write).await,
+            None => write.await,
+        }
+    }
+
     fn until(&self) -> std::sync::MutexGuard<'_, Option<Duration>> {
         self.until
             .lock()
@@ -136,6 +159,25 @@ impl TaskSource for HeldOff {
 
     fn order_versions(&self, a: &str, b: &str) -> Option<Ordering> {
         self.inner.order_versions(a, b)
+    }
+
+    fn holds_versions(&self) -> bool {
+        self.inner.holds_versions()
+    }
+
+    fn comment_author_kind(
+        &self,
+        comment: &onetaskgraph_plugin_api::Comment,
+    ) -> onetaskgraph_plugin_api::AuthorKind {
+        self.inner.comment_author_kind(comment)
+    }
+
+    fn comment_consistency_window(&self) -> std::time::Duration {
+        self.inner.comment_consistency_window()
+    }
+
+    fn served_at(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        self.inner.served_at()
     }
 
     fn version_coverage(&self) -> VersionCoverage {
@@ -275,7 +317,11 @@ impl TaskSource for HeldOff {
 
     async fn write_tasks(&self, writes: &[ItemWrite<Task>]) -> Result<Vec<NativeId>, SourceError> {
         self.refused()?;
-        self.noted(self.inner.write_tasks(writes).await)
+        let target = writes.iter().find_map(|write| write.target.as_ref());
+        self.noted(
+            self.held_target(target, self.inner.write_tasks(writes))
+                .await,
+        )
     }
 
     fn begin_deferred_writes(&self) {
@@ -434,7 +480,10 @@ impl TaskSource for HeldOff {
 
     async fn write_task(&self, write: &ItemWrite<Task>) -> Result<NativeId, SourceError> {
         self.refused()?;
-        self.noted(self.inner.write_task(write).await)
+        self.noted(
+            self.held_target(write.target.as_ref(), self.inner.write_task(write))
+                .await,
+        )
     }
 
     async fn write_project(&self, write: &ItemWrite<Project>) -> Result<NativeId, SourceError> {
@@ -462,7 +511,10 @@ impl TaskSource for HeldOff {
         category: StatusCategory,
     ) -> Result<Option<Status>, SourceError> {
         self.refused()?;
-        self.noted(self.inner.set_task_status(id, category).await)
+        self.noted(
+            self.held(id, self.inner.set_task_status(id, category))
+                .await,
+        )
     }
 
     async fn status_contradictions(&self) -> Result<Vec<StatusContradiction>, SourceError> {
@@ -486,7 +538,10 @@ impl TaskSource for HeldOff {
         category: StatusCategory,
     ) -> Result<Option<Task>, SourceError> {
         self.refused()?;
-        self.noted(self.inner.set_task_status_reading(id, category).await)
+        self.noted(
+            self.held(id, self.inner.set_task_status_reading(id, category))
+                .await,
+        )
     }
 
     async fn set_task_priority(
@@ -495,7 +550,10 @@ impl TaskSource for HeldOff {
         priority: Priority,
     ) -> Result<Option<Priority>, SourceError> {
         self.refused()?;
-        self.noted(self.inner.set_task_priority(id, priority).await)
+        self.noted(
+            self.held(id, self.inner.set_task_priority(id, priority))
+                .await,
+        )
     }
 
     async fn set_task_content(
@@ -504,7 +562,10 @@ impl TaskSource for HeldOff {
         content: &str,
     ) -> Result<Option<()>, SourceError> {
         self.refused()?;
-        self.noted(self.inner.set_task_content(id, content).await)
+        self.noted(
+            self.held(id, self.inner.set_task_content(id, content))
+                .await,
+        )
     }
 
     async fn set_delivered_by(
@@ -513,7 +574,10 @@ impl TaskSource for HeldOff {
         delivered_by: &[TaskRef],
     ) -> Result<Option<()>, SourceError> {
         self.refused()?;
-        self.noted(self.inner.set_delivered_by(id, delivered_by).await)
+        self.noted(
+            self.held(id, self.inner.set_delivered_by(id, delivered_by))
+                .await,
+        )
     }
 
     async fn set_task_metadata(
@@ -523,7 +587,10 @@ impl TaskSource for HeldOff {
         value: &Value,
     ) -> Result<Option<Task>, SourceError> {
         self.refused()?;
-        self.noted(self.inner.set_task_metadata(id, key, value).await)
+        self.noted(
+            self.held(id, self.inner.set_task_metadata(id, key, value))
+                .await,
+        )
     }
 
     async fn update_task(
@@ -532,7 +599,7 @@ impl TaskSource for HeldOff {
         update: &TaskUpdate,
     ) -> Result<Option<TaskUpdateOutcome>, SourceError> {
         self.refused()?;
-        self.noted(self.inner.update_task(id, update).await)
+        self.noted(self.held(id, self.inner.update_task(id, update)).await)
     }
 
     async fn set_project_status(
@@ -571,7 +638,11 @@ impl TaskSource for HeldOff {
         key: &MetadataKey,
     ) -> Result<Option<Option<String>>, SourceError> {
         self.refused()?;
-        self.noted(self.inner.remove_record_metadata(record, id, key).await)
+        let task = (record == MetadataRecord::Task).then_some(id);
+        self.noted(
+            self.held_target(task, self.inner.remove_record_metadata(record, id, key))
+                .await,
+        )
     }
 
     async fn delete_task(&self, id: &NativeId) -> Result<(), SourceError> {
@@ -632,7 +703,7 @@ impl TaskSource for HeldOff {
         comment: &NewComment,
     ) -> Result<Option<Comment>, SourceError> {
         self.refused()?;
-        self.noted(self.inner.add_comment(task, comment).await)
+        self.noted(self.held(task, self.inner.add_comment(task, comment)).await)
     }
 
     async fn edit_comment(
@@ -642,7 +713,10 @@ impl TaskSource for HeldOff {
         body: &CommentBody,
     ) -> Result<Option<Comment>, SourceError> {
         self.refused()?;
-        self.noted(self.inner.edit_comment(task, comment, body).await)
+        self.noted(
+            self.held(task, self.inner.edit_comment(task, comment, body))
+                .await,
+        )
     }
 
     async fn delete_comment(
@@ -651,7 +725,10 @@ impl TaskSource for HeldOff {
         comment: &NativeId,
     ) -> Result<Option<NativeId>, SourceError> {
         self.refused()?;
-        self.noted(self.inner.delete_comment(task, comment).await)
+        self.noted(
+            self.held(task, self.inner.delete_comment(task, comment))
+                .await,
+        )
     }
 
     async fn write_comment_copy(
@@ -661,7 +738,10 @@ impl TaskSource for HeldOff {
         copy: &CommentCopy,
     ) -> Result<Option<Comment>, SourceError> {
         self.refused()?;
-        self.noted(self.inner.write_comment_copy(task, existing, copy).await)
+        self.noted(
+            self.held(task, self.inner.write_comment_copy(task, existing, copy))
+                .await,
+        )
     }
 
     fn keeps_template_answers(&self) -> bool {
@@ -698,7 +778,13 @@ impl TaskSource for HeldOff {
         answers: &BTreeMap<String, Value>,
     ) -> Result<NativeId, SourceError> {
         self.refused()?;
-        self.noted(self.inner.write_task_rendered(write, answers).await)
+        self.noted(
+            self.held_target(
+                write.target.as_ref(),
+                self.inner.write_task_rendered(write, answers),
+            )
+            .await,
+        )
     }
 
     async fn write_document_rendered(
@@ -728,9 +814,12 @@ impl TaskSource for HeldOff {
     ) -> Result<Option<()>, SourceError> {
         self.refused()?;
         self.noted(
-            self.inner
-                .set_task_rendering(id, content, provenance, answers)
-                .await,
+            self.held(
+                id,
+                self.inner
+                    .set_task_rendering(id, content, provenance, answers),
+            )
+            .await,
         )
     }
 
@@ -800,9 +889,11 @@ impl TaskSource for HeldOff {
     ) -> Result<AssetsWritten, SourceError> {
         self.refused()?;
         self.noted(
-            self.inner
-                .write_task_with_assets(write, answers, assets)
-                .await,
+            self.held_target(
+                write.target.as_ref(),
+                self.inner.write_task_with_assets(write, answers, assets),
+            )
+            .await,
         )
     }
 
@@ -830,9 +921,12 @@ impl TaskSource for HeldOff {
     ) -> Result<Option<AssetsWritten>, SourceError> {
         self.refused()?;
         self.noted(
-            self.inner
-                .set_task_rendering_with_assets(id, content, provenance, answers, assets)
-                .await,
+            self.held(
+                id,
+                self.inner
+                    .set_task_rendering_with_assets(id, content, provenance, answers, assets),
+            )
+            .await,
         )
     }
 

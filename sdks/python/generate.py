@@ -34,6 +34,8 @@ RESPONSE_ROOTS = {
     "task_comment_list": "CommentList",
     "task_comment_edit": "CommentWritten",
     "task_comment_delete": "DeletedComment",
+    # Every comment made or edited since an instant, and the watermark to read from next.
+    "task_comments": "CommentsSince",
     "task_status_set": "TaskStatusSet",
     # Every card of one source brought in line with its issue's closure, or none for a source
     # whose status is its closure.
@@ -120,6 +122,20 @@ RESPONSE_ROOTS = {
 # create --id` takes by name.
 CONTRACT_ROOTS = {
     "FailureDocument",
+    # Who wrote a comment a `task comments` read answers: `person`, `bot` or `unknown`.
+    "AuthorKind",
+    # The item models a caller holds by name rather than reaching into a response's module
+    # for: a task and its qualified form, a comment and one of a `task comments` answer, one
+    # task a locate placed, and each of a copy's outcomes with the vocabularies it reports in.
+    "Task",
+    "QualifiedTask",
+    "Comment",
+    "CommentActivity",
+    "Located",
+    "CopyOutcome",
+    "CopyAction",
+    "CopyLink",
+    "CopyVia",
     "SourceFailure",
     "QueryPlan",
     "GlobalId",
@@ -216,8 +232,6 @@ OPTION_TYPES = {
     "dry_run": "bool",
     # Caller-owned metadata keys an attestation's digest leaves out.
     "exclude": "list[str] | tuple[str, ...]",
-    # The version of an item an attestation is recorded only at, as a read of it reported.
-    "if_version": "str",
     "note": "str",
     # Check every task of a project rather than the project itself.
     "tasks": "bool",
@@ -287,6 +301,20 @@ OPTION_TYPES = {
     "when_destination_status": "choice_list",
     "otherwise": "choices",
     "when_destination_priority": "choice_list",
+    # The version of the item a write (an attestation's included) is held to: refused as
+    # `version-moved` at any other.
+    "if_version": "VersionToken",
+    # The priorities a `task priority set` writes over; at any other it answers `held`.
+    "when_priority": "choice_list",
+    "no_repositories": "bool",
+    # The instant a comments listing starts from, RFC 3339 with its offset.
+    "since": "str",
+    # The tasks a comments listing keeps, each qualified.
+    "item": "list[GlobalId | str] | tuple[GlobalId | str, ...]",
+    # Every page of a listing at once.
+    "all": "bool",
+    # A task read with its forward dependency edges beside it.
+    "with_deps": "bool",
 }
 OPTION_PLACEHOLDERS = {
     "apply": None,
@@ -310,7 +338,6 @@ OPTION_PLACEHOLDERS = {
     "target_native": "NATIVE-ID",
     "dry_run": None,
     "exclude": "KEY",
-    "if_version": "VERSION",
     "note": "TEXT",
     "tasks": None,
     "default_sources": "NAMES",
@@ -367,6 +394,13 @@ OPTION_PLACEHOLDERS = {
     "when_destination_status": "CATEGORY",
     "otherwise": "WHAT",
     "when_destination_priority": "PRIORITY",
+    "if_version": "VERSION",
+    "when_priority": "PRIORITY",
+    "no_repositories": None,
+    "since": "RFC3339",
+    "item": "ID",
+    "all": None,
+    "with_deps": None,
 }
 
 
@@ -404,6 +438,12 @@ COMMAND_OPTIONS: dict[tuple[str, ...], dict[str, OptionShape]] = {
         # The status categories a copy keeps, beside ids or a query, named as a category.
         "status": OptionShape(type="choice_list", placeholder="CATEGORY"),
     },
+    # `task comments` keeps the tasks holding a metadata string exactly as `task list` does.
+    ("task", "comments"): {
+        "metadata": OptionShape(
+            type="list[str] | tuple[str, ...]", placeholder="KEY[/SEGMENT...]=VALUE"
+        )
+    },
     # `task show-many` pins each of several tasks, `<ID>=<VERSION>`, where `task show` pins one.
     ("task", "show-many"): {
         "pin": OptionShape(type="list[str] | tuple[str, ...]", placeholder="ID=VERSION")
@@ -424,6 +464,8 @@ COMMAND_OPTIONS: dict[tuple[str, ...], dict[str, OptionShape]] = {
     ("task", "update"): {
         "status": OptionShape(type="choices", placeholder="CATEGORY"),
         "priority": OptionShape(type="choices", placeholder="PRIORITY"),
+        # The repositories list it replaces, each an origin.
+        "repository": OptionShape(type="list[str] | tuple[str, ...]", placeholder="ORIGIN"),
     },
 }
 
@@ -707,7 +749,11 @@ def generate_models(bundle: SchemaBundle, destination: Path) -> None:
             encoding="utf-8",
         )
         generated_name = root
-        for generic, titled in (("QueryResponseOf", "QueryResponse"), ("PageOf", "Page")):
+        for generic, titled in (
+            ("QueryResponseOf", "QueryResponse"),
+            ("PageOf", "Page"),
+            ("QualifiedTask", "Qualified"),
+        ):
             if root.startswith(generic):
                 generated_name = titled
         exports[root] = (module, generated_name)
@@ -913,7 +959,7 @@ def operands(command: tuple[str, ...]) -> tuple[str, ...]:
             return ("file",)
         case ("cache", "clear"):
             return ("source",)
-        case ("task" | "project" | "document", "create"):
+        case ("task" | "project" | "document", "create") | ("task", "comments"):
             return ("source",)
         case ("task" | "project" | "document", "render" | "answers"):
             return ("id",)
@@ -944,6 +990,8 @@ REQUIRED_OPTIONS: dict[tuple[str, ...], tuple[str, ...]] = {
     # An attestation names its kind, who attests and the bar; a check names the kind.
     **{(noun, "attest"): ("kind", "by", "bar") for noun in ("task", "project", "document")},
     **{(noun, "attestation", "check"): ("kind",) for noun in ("task", "project", "document")},
+    # A comments listing has no instant to read from without `--since`.
+    ("task", "comments"): ("since",),
 }
 
 # Commands whose required options are keyword-only: named at every call rather than taken by

@@ -1157,7 +1157,10 @@ impl TaskSource for SubprocessSource {
         id: &NativeId,
         update: &TaskUpdate,
     ) -> Result<Option<TaskUpdateOutcome>, SourceError> {
-        if !self.targeted_updates {
+        // A peer's targeted update predates `repositories`, and one that does not know the
+        // member would drop it in silence: an update naming it is made the way every peer
+        // takes it, by rewriting the task whole.
+        if !self.targeted_updates || update.repositories.is_some() {
             return update.rewrite(self, id).await;
         }
         // The same guards a `write_task` of the updated task would pass, before anything is
