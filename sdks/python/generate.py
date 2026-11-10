@@ -45,6 +45,10 @@ RESPONSE_ROOTS = {
     "task_priority_set": "TaskPrioritySet",
     "task_content_set": "TaskContentSet",
     "task_metadata_set": "MetadataSet",
+    # The attestation record written, on the item it was written to.
+    "task_attest": "Attested",
+    # One kind of attestation on one item: valid, void with a reason, or absent.
+    "task_attestation_check": "AttestationCheck",
     "task_update": "TaskUpdated",
     "project_list": "QueryResponseOfQualifiedProject",
     "project_show": "QueryResponseOfQualifiedProject",
@@ -53,6 +57,10 @@ RESPONSE_ROOTS = {
     "project_graph": "ProjectGraph",
     "project_copy": "CopyReport",
     "project_metadata_set": "MetadataSet",
+    "project_attest": "Attested",
+    # The project's own record — or, with `tasks=True`, one entry per task of the project, the
+    # alternate shape below.
+    "project_attestation_check": "AttestationCheck",
     # One project's status set on its own, as its source reads it back.
     "project_status_set": "ProjectStatusSet",
     "document_list": "QueryResponseOfQualifiedDocument",
@@ -60,6 +68,8 @@ RESPONSE_ROOTS = {
     "document_show": "DocumentDetail",
     "document_copy": "CopyReport",
     "document_metadata_set": "MetadataSet",
+    "document_attest": "Attested",
+    "document_attestation_check": "AttestationCheck",
     "label_list": "QueryResponseOfQualifiedLabel",
     "search": "QueryResponseOfSearchHit",
     "sources_list": "SourceListing",
@@ -165,6 +175,14 @@ CONTRACT_ROOTS = {
     "SourceCacheConfig",
     "CacheUse",
     "ExpectedWrite",
+    # An attestation record as an item's metadata holds it, and the two vocabularies a check
+    # answers in, which a caller gating on one branches on by name.
+    "Attestation",
+    "AttestationState",
+    "VoidReason",
+    # One member of a project template's plan graph, which a caller writing a project template
+    # models by name.
+    "MemberDeclaration",
     # The v1 request `task project-human` reads from its input file, which a producer builds
     # by name from the one declaration the engine exports.
     "HumanTaskProjection",
@@ -173,7 +191,13 @@ CONTRACT_ROOTS = {
 # about: each command's RESPONSE_ROOTS entry is one shape, and these are the others. `sources
 # fields` answers a `FieldsReport` for a GitHub Projects board and a `StatusNamesReport` for a
 # Linear source. The generated method returns the union and validates against it.
-ALTERNATE_ROOTS: dict[str, tuple[str, ...]] = {"sources_fields": ("StatusNamesReport",)}
+ALTERNATE_ROOTS: dict[str, tuple[str, ...]] = {
+    "sources_fields": ("StatusNamesReport",),
+    # `project attestation check --tasks` answers one entry per task of the project.
+    "project_attestation_check": ("ProjectAttestationCheck",),
+    # `project create --dry-run` answers the project and every member it would create.
+    "project_create": ("PlannedProject",),
+}
 
 
 def response_roots() -> set[str]:
@@ -196,6 +220,9 @@ OPTION_TYPES = {
     "answers": "answers",
     "asset": "list[str] | tuple[str, ...]",
     "author": "str",
+    # Who attests, and the fingerprint of the bar an attestation clears content against.
+    "by": "str",
+    "bar": "str",
     "body_file": "str",
     "classification": "choices",
     "commented_since": "str",
@@ -204,6 +231,11 @@ OPTION_TYPES = {
     # A source's own id for the item a `task locate` names as the one task's counterpart.
     "target_native": "str",
     "dry_run": "bool",
+    # Caller-owned metadata keys an attestation's digest leaves out.
+    "exclude": "list[str] | tuple[str, ...]",
+    "note": "str",
+    # Check every task of a project rather than the project itself.
+    "tasks": "bool",
     "default_sources": "list[str] | tuple[str, ...]",
     "delivers": "list[GlobalId | str] | tuple[GlobalId | str, ...]",
     "depends_on": "list[GlobalId | str] | tuple[GlobalId | str, ...]",
@@ -270,7 +302,8 @@ OPTION_TYPES = {
     "when_destination_status": "choice_list",
     "otherwise": "choices",
     "when_destination_priority": "choice_list",
-    # The version of the task a write is held to: refused as `version-moved` at any other.
+    # The version of the item a write (an attestation's included) is held to: refused as
+    # `version-moved` at any other.
     "if_version": "VersionToken",
     # The priorities a `task priority set` writes over; at any other it answers `held`.
     "when_priority": "choice_list",
@@ -297,6 +330,8 @@ OPTION_PLACEHOLDERS = {
     "input": "FILE",
     "asset": "PATH",
     "author": "NAME",
+    "by": "LABEL",
+    "bar": "FINGERPRINT",
     "body_file": "PATH",
     "classification": "CLASSIFICATION",
     "commented_since": "RFC3339",
@@ -304,6 +339,9 @@ OPTION_PLACEHOLDERS = {
     "target_task": "QUALIFIED-ID",
     "target_native": "NATIVE-ID",
     "dry_run": None,
+    "exclude": "KEY",
+    "note": "TEXT",
+    "tasks": None,
     "default_sources": "NAMES",
     "delivers": "ID",
     "depends_on": "ID",
@@ -417,6 +455,12 @@ COMMAND_OPTIONS: dict[tuple[str, ...], dict[str, OptionShape]] = {
     # `task status complete` narrows the sources it asks, each by name.
     ("task", "status", "complete"): {
         "source": OptionShape(type="list[str] | tuple[str, ...]", placeholder="SOURCE")
+    },
+    # An attestation's kind is the caller's own word, where `search --kind` is a vocabulary.
+    **{
+        (noun, *verb): {"kind": OptionShape(type="str", placeholder="KIND")}
+        for noun in ("task", "project", "document")
+        for verb in (("attest",), ("attestation", "check"))
     },
     # `task update` names one status and one priority, the ones it writes.
     ("task", "update"): {
@@ -905,6 +949,10 @@ def operands(command: tuple[str, ...]) -> tuple[str, ...]:
             return ("id",)
         case ("task" | "project" | "document", "metadata", "set"):
             return ("id", "key", "value")
+        case ("task" | "project" | "document", "attest"):
+            return ("id",)
+        case ("task" | "project" | "document", "attestation", "check"):
+            return ("id",)
         case ("task" | "project" | "document", "show" | "deps" | "copy"):
             return ("id",)
         case ("project", "graph"):
@@ -941,6 +989,9 @@ REQUIRED_OPTIONS: dict[tuple[str, ...], tuple[str, ...]] = {
     ("task", "locate"): ("to",),
     # A projection has nothing to project without its request.
     ("task", "project-human"): ("input",),
+    # An attestation names its kind, who attests and the bar; a check names the kind.
+    **{(noun, "attest"): ("kind", "by", "bar") for noun in ("task", "project", "document")},
+    **{(noun, "attestation", "check"): ("kind",) for noun in ("task", "project", "document")},
     # A comments listing has no instant to read from without `--since`.
     ("task", "comments"): ("since",),
 }

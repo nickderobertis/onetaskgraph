@@ -1325,6 +1325,8 @@ variables:                        # optional; name -> declaration
     items: string                 # list only: string | object; default string
     required: true                # default: true without `default`, false with one
     default: <value of `type`>    # optional; `required: true` beside a default is refused
+    schema: <JSON Schema>         # object and list only: draft 2020-12, inline; optional
+members: []                       # project templates only: the plan graph (below); optional
 ---
 # {{ title }}
 {% for criterion in criteria %}
@@ -1338,7 +1340,7 @@ filters, loops, conditionals, macros, a variable used many times or not at all.
 `{% extends %}`, `{% include %}` and `{% import %}` find the files they name in the
 `--search-path` directories, in order, and never in the working directory unless you name
 it. The declared set is every chain file's front matter together: a redeclaration may change
-`description`, `default` and `required` — the file nearer the rendered one wins — but never
+`description`, `default`, `required` and `schema` — the file nearer the rendered one wins — but never
 `type` or `items`, which is refused naming both files. A template named by an expression —
 `{% include kind ~ ".md" %}` — is part of the chain too, for the answers that name it, and
 joins it at the tag that names it, exactly as a file a literal names would: its front matter
@@ -1347,6 +1349,17 @@ digest where rendering first reads it. Rendering is strict — a name that is
 neither declared nor set fails, naming it and its file — with no auto-escaping, trailing
 newlines kept, and `trim_blocks` and `lstrip_blocks` on. An optional variable with no
 answer and no default is `none`.
+
+An `object` or `list` variable may declare a `schema`: an inline JSON Schema (draft 2020-12,
+no remote references) its answer — and its `default` — must satisfy as well as its type. An
+answer the schema refuses is refused before anything renders or is written, by every verb
+that renders (`template render`, and `create` and `render` of a task, a project and a
+document), exit `2`, naming the variable and the JSON pointer of the first violation:
+`the answer to "plan" does not satisfy its schema at JSON pointer "/budgets/1": …`. A
+refused `render` leaves the item's content and stored answers as they were. A schema on a
+variable of any other type, or one that does not compile, is refused by its key; a variable
+with no `schema` is held to its type alone, exactly as before. `template variables --json`
+reports each declared schema, and a redeclaration nearer the rendered file gives its own.
 
 `template variables` lists the declared set and the template's **digest**: `sha256:` over
 every chain file's name and bytes, which moves whenever any file of the chain does. Each
@@ -1428,6 +1441,52 @@ else the render is refused naming that reference, because a reference is never t
 a location. `--dry-run` renders and writes nothing; `--json` prints `{id, digest,
 body_digest, changed, body}`, and a render that would change nothing reports `changed:
 false` and writes nothing.
+
+### Plan graphs from a project template
+
+A project template may declare `members`: the tasks one `project create` makes beside the
+project, each rendered from a task template of its own, and the edges between them.
+
+```yaml
+members:
+  - id: "{{ slug }}-design"              # the member's native id
+    title: "Design {{ goal }}"
+    template: {file: design-task.md}     # or {loader: design.loader.json}
+    answers: {topic: "{{ goal }}"}       # its template's answers
+  - id: "{{ slug }}-ship"
+    title: "Ship {{ goal }}"
+    template: {file: ship-task.md}
+    answers: {steps: "[{{ steps | join(', ') }}]"}
+    depends_on: ["{{ slug }}-design"]    # each a `blocks` edge, written first
+    metadata: {myapp.size: 3}            # caller-owned keys
+    repositories: [github.com/acme/widgets]
+```
+
+Every string in a member, at any depth, is rendered from the project template's own resolved
+answers, strictly. A rendered answer written as a string is read the way `--var` reads one —
+literally for a `string` or `text` variable, as YAML for any other — and any other value is
+taken as it is. A relative member template is looked for beside the file that named the
+project template (the template file, or the loader document) and then over its search path.
+Only the rendered project template declares members; one an `extends`, `include` or `import`
+names is refused.
+
+`project create` then renders every member and holds its answers to its own template —
+schemas included — **before anything is written**: a member refused for anything, a graph
+naming one id twice, naming a member nobody declares, or going round a cycle, refuses the
+whole create, naming the member, and writes nothing. Otherwise it creates the project, then
+each member under it, dependencies first, exactly as `task create` creates one — offered its
+`id`, its provenance recorded and its answers stored as that verb stores them — and prints the
+project's id and each member's, one per line (`--json`: the project as `project show` answers).
+A source that issues its own ids — a GitHub board, Linear — still issues them, and each edge names
+what it issued. On a public write a member's offered `id` is screened as a fixed entry, as an
+explicit project or document id is: a declared term in it is refused, never rewritten. A member
+whose write fails after the project and the members before it landed is reported naming it and
+every item already created (exit `1`); nothing that landed is taken back.
+`--dry-run` renders all of it and prints the plan instead — `--json`: `PlannedProject`, the
+project and each member with its content, answers and edges — writing nothing. A project
+template that declares no `members` creates exactly what it always did. `project render`
+regenerates the project's description alone and leaves its members as they are.
+`MemberDeclaration` and `PlannedProject` are roots of `onetaskgraph schema`.
 
 A caller that layers templates of its own states the result with a **template loader
 document** — `--template-loader FILE`, `-` for standard input, but never together with
@@ -1737,6 +1796,7 @@ plugin is sent.
 | `0` | Success — every source asked, every source answered. A dependency read (`task deps`, `project graph`) of an item outside a source declared private also asks that private source what it records of it; one that could not be asked is not a failure of the read, because the item lives elsewhere, and is reported in the answer's `unanswered` and on standard error as a notice. `--complete` makes it a failure. |
 | `1` | The command failed while running: an id that names nothing, a configuration it will not run on, a source name nothing configures. |
 | `2` | The invocation itself was wrong — an unknown flag, a value out of range, or answers a template refuses. |
+| `3` | An `attestation check` ran and the record it checked is not valid — `void`, or `absent`; its answer on standard output says which. (`sources sanitize` uses it for a sweep whose coverage is incomplete.) |
 | `4` | The query ran and at least one source did not answer. The others' results still stand and the failure is named on standard error. A write — a copy, `task status set`, `task update` or `task status complete` — also exits `4` when it landed and a task it delivers could not be kept in step; its `delivered` list says which. `task status reconcile` and `task status complete` exit `4` when an item they list failed while the others were written, and name each such item and why on standard error beside the report. A copy's `--dry-run` exits `4` when it answers an item `oversize`, which the copy itself would refuse, writing nothing. |
 
 `--allow-partial` says a partial answer is acceptable and turns `4` into `0`. Nothing else
@@ -3106,6 +3166,46 @@ the item a copy created keeps from then on — see [A create safe to retry](#a-c
 
 The far end of the second row is in another source. It is reported by qualified id and kind
 and never followed: opening it is a command of your own.
+
+## Attestations
+
+An **attestation** records that someone cleared an item's authored content against a bar —
+a review that passed a task, a person's approval of a design document — keyed on that content,
+so it goes void the moment the content it cleared moves, the same way in every source:
+
+```sh
+onetaskgraph document attest board:ISSUE-9 --kind design-approval --by "ada" \
+  --bar sha256:… [--exclude myapp.owner]… [--note "looks right"] [--if-version V]
+onetaskgraph document attestation check board:ISSUE-9 --kind design-approval [--bar sha256:…]
+onetaskgraph project attestation check notes:plan-1 --kind plan-review --tasks
+```
+
+Each of `task`, `project` and `document` has `attest` and `attestation check`. A record is
+held under the reserved metadata key `onetaskgraph.attestations`, one record per kind —
+`{"kind", "by", "at", "content_digest", "bar", "note"?, "excludes"?}` — and recording a kind
+again replaces that kind's record alone. The store computes `content_digest` itself: the
+SHA-256 of the item's title, body, template answers (the `answers_digest` of its
+`onetaskgraph.template` entry), repositories, its own dependency edges (each far end named by
+its lineage root — the root of its chain of copies, which a copy records on what it lands at
+`onetaskgraph.lineage` beside `onetaskgraph.origin`: one read of the far end, its lineage, else its
+origin, else its own id — so a copy that files it under another id keeps the edge, deleting a copy
+between it and its root keeps it, renaming it keeps it, and pointing the edge at another item voids
+the record whatever the two are titled; an opaque far end is named by its designator and its id
+there, so the same id in another tracker voids it too) and every caller-owned
+metadata key but those `--exclude` names. Never its status, priority, labels, ids, location or
+any store-reserved key — the attestations included — so a copy, which carries all of it,
+carries a record that still checks `valid` where it lands. `--if-version` records it only while
+the item is at that version, read first, writing nothing at any other. A write that sanitises a
+task as stored first (`write_policy.sanitize_stored_on_write`) records the digest of what that
+sanitisation left.
+
+A check answers `{"kind", "state", "reason", "record"}`: `valid` (exit `0`); `void` (exit `3`)
+with `reason` `content-moved` when the content is not what the record cleared, else
+`bar-moved` when `--bar` is given and is not the record's bar; or `absent` (exit `3`) when the
+item holds no record of the kind. `project attestation check --tasks` answers
+`{"project", "kind", "tasks": [{"id", …}]}`, one entry per task of the project, and exits `0`
+only when every one is valid. The store records and checks and decides nothing else: who may
+attest, and which kinds anything requires, are the caller's.
 
 ## Writing a source in another language
 

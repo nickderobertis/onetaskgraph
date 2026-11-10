@@ -18,6 +18,7 @@
 //!     items: string                 # list only: string | object; default string
 //!     required: true                # default: true without `default`, false with one
 //!     default: <value of `type`>    # optional; `required: true` beside one is refused
+//!     schema: <JSON Schema>         # object and list only: draft 2020-12, inline
 //! ---
 //! ```
 //!
@@ -29,8 +30,8 @@
 //! the directories it was given, in order, then the `(name, source)` pairs registered on it —
 //! and never the working directory. The **declared set** is the union of every chain file's
 //! front matter. When two files declare one variable, the file nearer the rendered one (fewer
-//! references away from it, then loaded first) gives its `description`, `default` and
-//! `required`; its `type` and `items` must be the other's, or the chain is refused naming both
+//! references away from it, then loaded first) gives its `description`, `default`,
+//! `required` and `schema`; its `type` and `items` must be the other's, or the chain is refused naming both
 //! files.
 //!
 //! # Rendering
@@ -39,6 +40,12 @@
 //! render, naming the name and the file. No auto-escaping, trailing newlines kept,
 //! `trim_blocks` and `lstrip_blocks` on. An optional variable given no answer and no default
 //! renders as `none`.
+//!
+//! An `object` or `list` variable that declares a `schema` holds its answer — and its
+//! `default` — to it, after holding it to its type: an answer the schema refuses is refused
+//! as [`TemplateError::SchemaViolation`], naming the variable and the JSON pointer of the
+//! first violation, before anything renders. A variable with no `schema` is held to its type
+//! alone.
 //!
 //! # The digest
 //!
@@ -56,8 +63,10 @@
 mod answers;
 mod front_matter;
 mod input;
+mod members;
 mod provenance;
 mod scan;
+mod schema;
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fmt;
@@ -73,6 +82,7 @@ pub use answers::Answers;
 use answers::Given;
 pub use front_matter::{DECLARATION_KEYS, FRONT_MATTER_KEYS, is_variable_name};
 pub use input::{LoaderDocument, TemplateInput};
+pub use members::{MemberDeclaration, MemberTemplate, PreparedMember};
 pub use provenance::{Sha256Digest, TemplateProvenance, answers_digest, body_digest};
 
 /// What one variable holds.
@@ -181,6 +191,10 @@ pub struct TemplateVariable {
     /// The value used when no answer is given.
     #[serde(skip_serializing_if = "Option::is_none")]
     default: Option<Value>,
+    /// The JSON Schema (draft 2020-12) every answer must satisfy, for an `object` or `list`
+    /// variable that declares one; absent for every other.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    schema: Option<Value>,
     /// The chain file whose declaration this is: the one nearest the rendered template.
     declared_in: String,
 }
@@ -221,6 +235,29 @@ impl TemplateVariable {
     #[must_use]
     pub fn default(&self) -> Option<&Value> {
         self.default.as_ref()
+    }
+
+    /// The JSON Schema every answer must satisfy, when the variable declares one.
+    #[must_use]
+    pub fn schema(&self) -> Option<&Value> {
+        self.schema.as_ref()
+    }
+
+    /// Hold `value` — already a value of the variable's type — to its declared schema.
+    ///
+    /// # Errors
+    ///
+    /// [`TemplateError::SchemaViolation`] naming the variable and the JSON pointer of the first
+    /// violation. A variable with no schema accepts every value of its type.
+    pub fn conform(&self, value: &Value) -> Result<(), TemplateError> {
+        let Some(declared) = &self.schema else {
+            return Ok(());
+        };
+        schema::conform(declared, value).map_err(|violation| TemplateError::SchemaViolation {
+            name: self.name.clone(),
+            pointer: violation.pointer,
+            problem: violation.problem,
+        })
     }
 
     /// The chain file whose declaration this is.
@@ -469,6 +506,22 @@ pub enum TemplateError {
         /// Why the answer is not one.
         problem: String,
     },
+    /// An answer of its variable's type that the variable's declared `schema` refuses.
+    #[error(
+        "the answer to {name:?} does not satisfy its schema at JSON pointer {pointer:?}: \
+         {problem}\n\
+         next: give {name} a value its template's `schema` accepts — `onetaskgraph template \
+         variables --json` prints the schema."
+    )]
+    SchemaViolation {
+        /// The variable.
+        name: String,
+        /// The JSON pointer (RFC 6901) of the first failing value inside the answer: `""` for
+        /// the answer as a whole.
+        pointer: String,
+        /// What the schema says is wrong there.
+        problem: String,
+    },
     /// Required variables no answer and no default covers.
     #[error(
         "{} unanswered: {}\n\
@@ -505,6 +558,15 @@ pub enum TemplateError {
         name: Option<String>,
         /// What failed.
         message: String,
+    },
+    /// One member of a project template's plan graph refused: its strings did not render, its
+    /// template could not be found or loaded, or its answers were refused.
+    #[error("member {member:?} of the project template: {error}")]
+    Member {
+        /// The member's id, rendered — or `members[<index>]` when its id is what failed.
+        member: String,
+        /// Why it was refused.
+        error: Box<TemplateError>,
     },
     /// A template loader document that is not one this product reads.
     #[error(
@@ -545,9 +607,11 @@ impl TemplateError {
             Self::MalformedAnswers { .. } => "template-answers-malformed",
             Self::UnknownAnswer { .. } => "template-unknown-answer",
             Self::MistypedAnswer { .. } => "template-mistyped-answer",
+            Self::SchemaViolation { .. } => "template-schema-violation",
             Self::MissingRequired { .. } => "template-missing-required",
             Self::Render { .. } => "template-render",
             Self::MalformedLoader { .. } => "template-loader-malformed",
+            Self::Member { error, .. } => error.kind(),
             Self::LoaderDigest { .. } => "template-loader-digest",
         }
     }
@@ -557,11 +621,15 @@ impl TemplateError {
     /// variables left unanswered. The command line exits `2` for these.
     #[must_use]
     pub fn refuses_answers(&self) -> bool {
+        if let Self::Member { error, .. } = self {
+            return error.refuses_answers();
+        }
         matches!(
             self,
             Self::MalformedAnswers { .. }
                 | Self::UnknownAnswer { .. }
                 | Self::MistypedAnswer { .. }
+                | Self::SchemaViolation { .. }
                 | Self::MissingRequired { .. }
         )
     }
@@ -712,6 +780,7 @@ impl TemplateLoader {
     fn load_chain(&self, root: String, source: String) -> Result<Template, TemplateError> {
         let resolutions = Resolutions::new();
         let files = self.build(root.clone(), source, &resolutions)?;
+        members_at_root(&root, &files)?;
         let variables = merge(&files)?;
         let Discovered { read, .. } = discover(&root, &files, &variables, self, &Answers::new());
         let files = in_read_order(files, &read);
@@ -811,6 +880,7 @@ impl TemplateLoader {
                 body: split.body,
                 offset_lines: split.offset_lines,
                 declarations: split.declarations,
+                members: split.members,
                 names,
             });
         }
@@ -919,6 +989,22 @@ fn compile_check(name: &str, body: &str, offset_lines: usize) -> Result<(), Temp
         })
 }
 
+/// Refuse `members` declared by any file of the chain but the rendered one, `root`: a plan
+/// graph is the project template's own, never one a file it names brings with it.
+fn members_at_root(root: &str, files: &[ChainFile]) -> Result<(), TemplateError> {
+    match files.iter().skip(1).find(|file| !file.members.is_empty()) {
+        Some(named) => Err(TemplateError::malformed(
+            &named.name,
+            Some("members"),
+            format!(
+                "is declared in a template {root} names; only the rendered project template \
+                 declares members"
+            ),
+        )),
+        None => Ok(()),
+    }
+}
+
 /// One file of a loaded chain.
 #[derive(Debug, Clone)]
 struct ChainFile {
@@ -927,6 +1013,8 @@ struct ChainFile {
     body: String,
     offset_lines: usize,
     declarations: Vec<TemplateVariable>,
+    /// The plan-graph members its front matter declares: only the rendered file may.
+    members: Vec<MemberDeclaration>,
     /// The chain files its tags name, in the order they name them: what nearness is measured
     /// over.
     names: Vec<String>,
@@ -1182,6 +1270,7 @@ impl Template {
             }
             named.push(resolutions.clone());
             let files = expanded.rebuild(&resolutions)?;
+            members_at_root(&self.name, &files)?;
             let variables = merge(&files)?;
             expanded = Self::assemble(
                 self.name.clone(),
@@ -1225,6 +1314,31 @@ impl Template {
     /// [`Template::expand`] answers adds each template an expression names.
     pub fn chain(&self) -> impl Iterator<Item = &str> {
         self.files.iter().map(|file| file.name.as_str())
+    }
+
+    /// The plan-graph members the rendered template declares, as written: none for a template
+    /// that declares none, which is every task and document template.
+    #[must_use]
+    pub fn members(&self) -> &[MemberDeclaration] {
+        self.files
+            .first()
+            .map_or(&[], |file| file.members.as_slice())
+    }
+
+    /// Render every member from `answers` — this template's resolved answers, as a rendering
+    /// of it answers them — and each member's body from its own template, looking for a
+    /// relative member template in `base`; see [`members`](self::members).
+    ///
+    /// # Errors
+    ///
+    /// [`TemplateError::Malformed`] for a member graph that does not hold together, and
+    /// [`TemplateError::Member`] naming the member for every refusal of one.
+    pub fn prepare_members(
+        &self,
+        answers: &BTreeMap<String, Value>,
+        base: &[PathBuf],
+    ) -> Result<Vec<PreparedMember>, TemplateError> {
+        members::prepare(&self.name, self.members(), answers, base)
     }
 
     /// The declared set as `template variables` reports it.
@@ -1364,6 +1478,7 @@ impl Template {
                 expected: article(variable.kind),
                 problem,
             })?;
+            variable.conform(&value)?;
             typed.insert(variable.name.clone(), value);
         }
         Ok(typed)

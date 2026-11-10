@@ -43,6 +43,13 @@ class TemplateVariable(BaseModel):
     default: Annotated[Any | None, Field(description="The value used when no answer is given.")] = (
         None
     )
+    schema_: Annotated[
+        Any | None,
+        Field(
+            alias="schema",
+            description="The JSON Schema (draft 2020-12) every answer must satisfy, for an `object` or `list`\nvariable that declares one; absent for every other.",
+        ),
+    ] = None
     declared_in: Annotated[
         str,
         Field(

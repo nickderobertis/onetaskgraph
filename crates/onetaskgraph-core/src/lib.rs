@@ -27,6 +27,7 @@
 ))]
 #![deny(missing_docs)]
 
+pub mod attestation;
 pub mod cache;
 mod clock;
 pub mod config;
@@ -60,6 +61,7 @@ pub use config::{
     Config, ConfigError, CreateSettings, Loaded, OutputFormat, SourceCacheConfig, SourceConfig,
 };
 pub use engine::boundary;
+pub use engine::{AttestRequest, PlanCreated, PlanMember, PlannedMember, PlannedProject};
 pub use engine::{
     Body, BudgetSpent, COMMENTS_SINCE_SCHEMA_VERSION, CommentActivity, CommentCounts, CommentList,
     CommentWritten, CommentsSince, CommentsSinceRequest, CompleteAction, Completeness,

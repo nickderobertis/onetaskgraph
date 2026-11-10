@@ -3166,6 +3166,38 @@ impl Engine {
             && (self.boundary.sanitize_stored_on_write || self.boundary.sanitize_dry_run)
     }
 
+    /// Sanitise the task `id` as stored ahead of a narrow write whose value is composed from
+    /// what the task holds — an attestation's digest — so that value is composed over the task
+    /// as the write will leave it, rather than over text the write's own sanitisation then
+    /// replaces. Only where that write would sanitise the stored task (`sanitize_stored_on_write`,
+    /// a policy that can rewrite, an active boundary and a destination not declared private);
+    /// anywhere else, and in a `--sanitize-dry-run` — which the write itself answers — it reads
+    /// and writes nothing, and answers `false`. The write then finds the task clean and
+    /// sanitises nothing more; `true` says the task was screened, and may since have changed.
+    pub(crate) async fn sanitise_stored_task(
+        &self,
+        destination: &ResolvedSource,
+        id: &crate::GlobalId,
+    ) -> Result<bool, EngineError> {
+        if !self.boundary.active
+            || !self.boundary.sanitize_stored_on_write
+            || self.boundary.sanitize_dry_run
+            || !self.can_rewrite()
+            || self.declared(destination.name()) == SourceVisibility::Private
+        {
+            return Ok(false);
+        }
+        self.admit_existing(
+            destination,
+            &id.to_string(),
+            &id.native,
+            Held::Task,
+            &Exposure::default(),
+        )
+        .await
+        .map(|_| true)
+    }
+
     /// Refuse a narrow write to a task already private by its own record, naming `repositories`
     /// only when they already named a private repository. Its locators are screened by one call
     /// on this refusal's path alone.

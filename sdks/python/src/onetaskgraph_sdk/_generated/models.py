@@ -5,6 +5,10 @@ import importlib
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from .attestation import Attestation as Attestation
+    from .attestation_check import AttestationCheck as AttestationCheck
+    from .attestation_state import AttestationState as AttestationState
+    from .attested import Attested as Attested
     from .author_kind import AuthorKind as AuthorKind
     from .cache_cleared import CacheCleared as CacheCleared
     from .cache_use import CacheUse as CacheUse
@@ -38,10 +42,13 @@ if TYPE_CHECKING:
     from .locate_report import LocateReport as LocateReport
     from .located import Located as Located
     from .location import Location as Location
+    from .member_declaration import MemberDeclaration as MemberDeclaration
     from .metadata_set import MetadataSet as MetadataSet
     from .native_id import NativeId as NativeId
     from .page_of_document import Page as PageOfDocument
+    from .planned_project import PlannedProject as PlannedProject
     from .priority import Priority as Priority
+    from .project_attestation_check import ProjectAttestationCheck as ProjectAttestationCheck
     from .project_graph import ProjectGraph as ProjectGraph
     from .project_status_set import ProjectStatusSet as ProjectStatusSet
     from .public_projections import PublicProjections as PublicProjections
@@ -89,6 +96,7 @@ if TYPE_CHECKING:
     from .template_variables import TemplateVariables as TemplateVariables
     from .updated_field import UpdatedField as UpdatedField
     from .variable_type import VariableType as VariableType
+    from .void_reason import VoidReason as VoidReason
     from .write_policy_config import WritePolicyConfig as WritePolicyConfig
     from .write_verdict import WriteVerdict as WriteVerdict
 
@@ -98,6 +106,10 @@ if TYPE_CHECKING:
 # private to this module rather than as a re-export. This list is what makes the
 # whole set public to one, here and through the package root's own `__all__`.
 __all__ = [
+    "Attestation",
+    "AttestationCheck",
+    "AttestationState",
+    "Attested",
     "AuthorKind",
     "CacheCleared",
     "CacheUse",
@@ -131,10 +143,13 @@ __all__ = [
     "LocateReport",
     "Located",
     "Location",
+    "MemberDeclaration",
     "MetadataSet",
     "NativeId",
     "PageOfDocument",
+    "PlannedProject",
     "Priority",
+    "ProjectAttestationCheck",
     "ProjectGraph",
     "ProjectStatusSet",
     "PublicProjections",
@@ -178,11 +193,16 @@ __all__ = [
     "TemplateVariables",
     "UpdatedField",
     "VariableType",
+    "VoidReason",
     "WritePolicyConfig",
     "WriteVerdict",
 ]
 
 _MODULES: dict[str, tuple[str, str]] = {
+    "Attestation": ("attestation", "Attestation"),
+    "AttestationCheck": ("attestation_check", "AttestationCheck"),
+    "AttestationState": ("attestation_state", "AttestationState"),
+    "Attested": ("attested", "Attested"),
     "AuthorKind": ("author_kind", "AuthorKind"),
     "CacheCleared": ("cache_cleared", "CacheCleared"),
     "CacheUse": ("cache_use", "CacheUse"),
@@ -216,10 +236,13 @@ _MODULES: dict[str, tuple[str, str]] = {
     "LocateReport": ("locate_report", "LocateReport"),
     "Located": ("located", "Located"),
     "Location": ("location", "Location"),
+    "MemberDeclaration": ("member_declaration", "MemberDeclaration"),
     "MetadataSet": ("metadata_set", "MetadataSet"),
     "NativeId": ("native_id", "NativeId"),
     "PageOfDocument": ("page_of_document", "Page"),
+    "PlannedProject": ("planned_project", "PlannedProject"),
     "Priority": ("priority", "Priority"),
+    "ProjectAttestationCheck": ("project_attestation_check", "ProjectAttestationCheck"),
     "ProjectGraph": ("project_graph", "ProjectGraph"),
     "ProjectStatusSet": ("project_status_set", "ProjectStatusSet"),
     "PublicProjections": ("public_projections", "PublicProjections"),
@@ -263,6 +286,7 @@ _MODULES: dict[str, tuple[str, str]] = {
     "TemplateVariables": ("template_variables", "TemplateVariables"),
     "UpdatedField": ("updated_field", "UpdatedField"),
     "VariableType": ("variable_type", "VariableType"),
+    "VoidReason": ("void_reason", "VoidReason"),
     "WritePolicyConfig": ("write_policy_config", "WritePolicyConfig"),
     "WriteVerdict": ("write_verdict", "WriteVerdict"),
 }

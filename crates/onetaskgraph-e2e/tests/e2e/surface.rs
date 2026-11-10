@@ -302,7 +302,7 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
     let bundle: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("schema output is valid JSON");
 
-    assert_eq!(bundle["version"], 59);
+    assert_eq!(bundle["version"], 60);
     assert!(bundle["roots"]["HumanTaskProjection"].is_object());
     assert!(bundle["roots"]["HumanTaskProjected"].is_object());
     assert!(bundle["roots"]["LocateReport"].is_object());
@@ -431,6 +431,8 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
             "task priority set",
             "task content set",
             "task metadata set",
+            "task attest",
+            "task attestation check",
             "task update",
             "task create",
             "task render",
@@ -443,6 +445,8 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
             "project graph",
             "project copy",
             "project metadata set",
+            "project attest",
+            "project attestation check",
             "project status set",
             "project create",
             "project render",
@@ -451,6 +455,8 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
             "document show",
             "document copy",
             "document metadata set",
+            "document attest",
+            "document attestation check",
             "document create",
             "document render",
             "document answers",
@@ -1005,9 +1011,11 @@ fn the_reserved_key_inventory_names_exactly_the_keys_the_code_spells() {
         MetadataKey::COPIED_WITH_COMMENTS_KEY,
         MetadataKey::COPIED_DESTINATION_VERSION_KEY,
         MetadataKey::EDGES_ON_RECORD_KEY,
+        MetadataKey::ATTESTATIONS_KEY,
         MetadataKey::CREATING_KEY,
         MetadataKey::CREATE_KEY,
         onetaskgraph_core::GlobalId::ORIGIN_KEY,
+        onetaskgraph_core::GlobalId::LINEAGE_KEY,
     ]
     .into_iter()
     .collect();
@@ -1048,6 +1056,8 @@ fn the_reserved_key_inventory_names_exactly_the_keys_the_code_spells() {
         "fifteen",
         "sixteen",
         "seventeen",
+        "eighteen",
+        "nineteen",
     ];
     assert!(
         bullet.contains(&format!("defines exactly {} keys", words[spelled.len()])),
@@ -1094,13 +1104,13 @@ fn the_readme_documents_the_command_surface_this_binary_actually_has() {
             .stdout,
     )
     .into_owned();
-    let documented: Vec<&str> = ["`0`", "`1`", "`2`", "`4`"]
+    let documented: Vec<&str> = ["`0`", "`1`", "`2`", "`3`", "`4`"]
         .into_iter()
         .filter(|code| help.contains(code))
         .collect();
     assert_eq!(
         documented.len(),
-        4,
+        5,
         "`--help` no longer names every exit code:\n{help}"
     );
     for code in documented {
@@ -1110,12 +1120,11 @@ fn the_readme_documents_the_command_surface_this_binary_actually_has() {
             "the README's exit-code table has no row for {code}"
         );
     }
-    for invented in ["| `3` |", "| `5` |"] {
-        assert!(
-            !readme.contains(invented),
-            "the README documents {invented}, which this binary never exits with"
-        );
-    }
+    let invented = "| `5` |";
+    assert!(
+        !readme.contains(invented),
+        "the README documents {invented}, which this binary never exits with"
+    );
 }
 
 /// Command lines the README spells in full, each beside the argument — if any — whose values

@@ -1363,6 +1363,40 @@ pub fn sweep(report: &onetaskgraph_core::SweepReport) -> String {
     out
 }
 
+/// What `project create --dry-run` would create, as a person reads it.
+pub fn planned(planned: &onetaskgraph_core::PlannedProject) -> String {
+    let mut lines = vec![format!(
+        "would create project {}:{} {:?} with {} member{}",
+        planned.source,
+        planned.id,
+        planned.title,
+        planned.members.len(),
+        if planned.members.len() == 1 { "" } else { "s" }
+    )];
+    for member in &planned.members {
+        let after = if member.depends_on.is_empty() {
+            String::new()
+        } else {
+            format!(
+                ", after {}",
+                member
+                    .depends_on
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+        lines.push(format!(
+            "  {} {:?} from {}{after}",
+            member.id,
+            member.title,
+            member.template.as_deref().unwrap_or("a plain body")
+        ));
+    }
+    lines.join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use onetaskgraph_plugin_api::{Asset, AssetName};

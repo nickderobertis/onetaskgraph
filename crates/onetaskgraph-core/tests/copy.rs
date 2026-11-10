@@ -433,6 +433,8 @@ async fn every_reserved_key_has_the_owner_docs_metadata_states_on_an_update() {
     let mut source = serde_json::Map::new();
     let mut destination = serde_json::Map::new();
     destination.insert(GlobalId::ORIGIN_KEY.to_owned(), json!("from:T-1"));
+    // A lineage the destination holds from elsewhere: the copy owns the key, so it is not kept.
+    destination.insert(GlobalId::LINEAGE_KEY.to_owned(), json!("elsewhere:T-0"));
     for (key, owner) in &owners {
         match owner.as_str() {
             // The copy's record of itself is held at both ends, and neither end's is kept.
@@ -491,6 +493,9 @@ async fn every_reserved_key_has_the_owner_docs_metadata_states_on_an_update() {
                 Some(json!(held))
             }
             "the copy" if key.starts_with("onetaskgraph.copied_") => None,
+            // The source records no origin, so the origin this copy records is the root and
+            // no lineage is recorded beside it.
+            "the copy" if key == GlobalId::LINEAGE_KEY => None,
             "the copy" => Some(json!("from:T-1")),
             "the destination" => Some(reserved_value(key, "destination")),
             _ => None,
@@ -5554,5 +5559,68 @@ async fn the_edges_a_copy_withheld_are_taken_once_and_each_copy_reports_its_own(
         engine.take_withheld_edges(),
         vec![withheld.to_owned()],
         "the re-copy reports its own withheld edge alone"
+    );
+}
+
+#[tokio::test]
+async fn a_copy_records_its_sources_root_and_never_one_naming_a_private_source_where_it_is_not() {
+    // `onetaskgraph.lineage` carries the root of a chain of copies from hop to hop, so an item's
+    // root is one read of it. A source item recording an origin of its own hands that root on;
+    // one whose root is a private source's hands nothing on to a destination not declared
+    // private, because the lineage would name that source where it may not be named — and a
+    // destination declared private takes it.
+    let status = json!({"category": "todo", "name": "Todo"});
+    let engine = engine_over(json!({
+        "from": {"plugin": "in-memory", "visibility": "public", "config": {"tasks": [
+            {"id": "T-1", "title": "Rooted in public", "status": status, "labels": [],
+             "metadata": {"onetaskgraph.origin": "root:R-1"}},
+            {"id": "T-2", "title": "Rooted in the vault", "status": status, "labels": [],
+             "metadata": {"onetaskgraph.origin": "vault:V-1"}},
+            {"id": "T-3", "title": "Copied from nowhere", "status": status, "labels": []},
+        ]}},
+        "into": {"plugin": "in-memory", "visibility": "public", "config": {}},
+        "sealed": {"plugin": "in-memory", "visibility": "private", "config": {}},
+        "root": {"plugin": "in-memory", "visibility": "public", "config": {}},
+        "vault": {"plugin": "in-memory", "visibility": "private", "config": {}},
+    }))
+    .with_write_policy(Arc::new(NothingPrivate));
+    let recorded = async |request: CopyRequest| {
+        let copied = engine.copy(&request).await.expect("the copy runs");
+        let landed = copied.items[0].destination().expect("it landed").clone();
+        let metadata = engine
+            .task(&landed)
+            .await
+            .expect("the show verb answers")
+            .items[0]
+            .item
+            .metadata
+            .clone();
+        (
+            metadata.get(GlobalId::ORIGIN_KEY).cloned(),
+            metadata.get(GlobalId::LINEAGE_KEY).cloned(),
+        )
+    };
+
+    assert_eq!(
+        recorded(one("from:T-1")).await,
+        (Some(json!("from:T-1")), Some(json!("root:R-1"))),
+        "a second hop records the root its source came from"
+    );
+    assert_eq!(
+        recorded(one("from:T-3")).await,
+        (Some(json!("from:T-3")), None),
+        "a first hop's origin is its root"
+    );
+    assert_eq!(
+        recorded(one("from:T-2")).await,
+        (Some(json!("from:T-2")), None),
+        "a root naming a private source is not written where the write is not private"
+    );
+    let mut sealed = one("from:T-2");
+    sealed.destination = name("sealed");
+    assert_eq!(
+        recorded(sealed).await,
+        (Some(json!("from:T-2")), Some(json!("vault:V-1"))),
+        "a destination declared private takes it"
     );
 }

@@ -17,6 +17,7 @@
 
 mod all_pages;
 mod assets;
+mod attestation;
 pub mod boundary;
 mod cached;
 mod closure;
@@ -35,6 +36,7 @@ mod join;
 mod local;
 mod metadata;
 mod narrow;
+mod plan_graph;
 mod projection;
 mod rendered;
 mod resume;
@@ -76,6 +78,7 @@ pub(crate) use resume::{Owed, Resumption, StreamState};
 use resume::{Resume, StreamKind};
 
 pub use assets::{HeldAsset, TaskAssetNames, TaskAssetsError};
+pub use attestation::AttestRequest;
 pub use closure::{
     CompleteAction, IssueCompleted, IssuesCompleted, ReconcileOutcome, StatusReconciled,
     StatusesReconciled,
@@ -104,6 +107,7 @@ pub use graph::{
 pub use local::ProjectSelector;
 pub use metadata::MetadataSet;
 pub use narrow::{GuardOutcome, PriorityGuard, TaskContentSet, TaskPrioritySet};
+pub use plan_graph::{PlanCreated, PlanMember, PlannedMember, PlannedProject};
 pub use rendered::{
     Body, DocumentCreate, ProjectCreate, Regenerated, Regeneration, RenderRequest, RenderTemplate,
     RenderedRecord, TaskCreate, TaskCreated, TemplateAnswers, UnusedAnswers,
@@ -892,16 +896,17 @@ pub enum EngineError {
     )]
     IfVersionOneTask,
 
-    /// A task or document write held to a version was refused because a read of it answered
-    /// another — a change made at the source since the caller's read.
+    /// A write held to a version — a task write, a document's metadata, or an attestation — was
+    /// refused because a read of the item answered another: a change made at the source since
+    /// the caller's read.
     #[error(
         "{id} is at version {found}, not the version {expected} this write expects — it changed \
          since that version was read — so nothing was written\n\
-         next: read it again (`onetaskgraph task show` or `document show`), decide whether the \
+         next: read it again (`onetaskgraph <task|project|document> show`), decide whether the \
          write still applies, and pass the version that read reports"
     )]
     VersionMoved {
-        /// The qualified id of the task or document.
+        /// The qualified id of the item.
         id: String,
         /// The version the write expected.
         expected: String,
@@ -909,6 +914,24 @@ pub enum EngineError {
         found: String,
         /// What the item was found holding: its `version` the one found.
         held: Box<crate::cache::WriteResult>,
+    },
+
+    /// One member of a plan graph could not be created after the project, and every member
+    /// before it, had landed: nothing is taken back, so what landed is named.
+    #[error(
+        "member {member} of the plan could not be created: {error}\n\
+         already created: {}\n\
+         next: fix what the member's failure names, then create the members not yet created \
+         with `task create`, or remove what landed and create the plan again",
+        landed.join(", ")
+    )]
+    PlanMember {
+        /// The member's declared id.
+        member: String,
+        /// The qualified ids already created — the project first — in the order they landed.
+        landed: Vec<String>,
+        /// Why the member could not be created.
+        error: Box<EngineError>,
     },
 
     /// `--expect` named a task of a source that keeps no local cache, which is where what an

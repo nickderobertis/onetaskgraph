@@ -23,6 +23,10 @@ from pydantic import BaseModel
 
 import onetaskgraph_sdk
 from onetaskgraph_sdk import (
+    Attestation,
+    AttestationCheck,
+    AttestationState,
+    Attested,
     AuthorKind,
     CacheCleared,
     CacheUse,
@@ -57,12 +61,15 @@ from onetaskgraph_sdk import (
     Located,
     LocateReport,
     Location,
+    MemberDeclaration,
     MetadataSet,
     NativeId,
     OnetaskgraphError,
     PageOfDocument,
     PartialWriteError,
+    PlannedProject,
     Priority,
+    ProjectAttestationCheck,
     ProjectGraph,
     ProjectStatusSet,
     PublicProjections,
@@ -107,11 +114,24 @@ from onetaskgraph_sdk import (
     UpdatedField,
     VariableType,
     VersionMovedError,
+    VoidReason,
     WritePolicyConfig,
     WriteVerdict,
     client,
 )
 from onetaskgraph_sdk._generated import models
+from onetaskgraph_sdk._generated.models import (
+    Attestation as ModelsAttestation,
+)
+from onetaskgraph_sdk._generated.models import (
+    AttestationCheck as ModelsAttestationCheck,
+)
+from onetaskgraph_sdk._generated.models import (
+    AttestationState as ModelsAttestationState,
+)
+from onetaskgraph_sdk._generated.models import (
+    Attested as ModelsAttested,
+)
 from onetaskgraph_sdk._generated.models import (
     AuthorKind as ModelsAuthorKind,
 )
@@ -212,6 +232,9 @@ from onetaskgraph_sdk._generated.models import (
     Location as ModelsLocation,
 )
 from onetaskgraph_sdk._generated.models import (
+    MemberDeclaration as ModelsMemberDeclaration,
+)
+from onetaskgraph_sdk._generated.models import (
     MetadataSet as ModelsMetadataSet,
 )
 from onetaskgraph_sdk._generated.models import (
@@ -221,7 +244,13 @@ from onetaskgraph_sdk._generated.models import (
     PageOfDocument as ModelsPageOfDocument,
 )
 from onetaskgraph_sdk._generated.models import (
+    PlannedProject as ModelsPlannedProject,
+)
+from onetaskgraph_sdk._generated.models import (
     Priority as ModelsPriority,
+)
+from onetaskgraph_sdk._generated.models import (
+    ProjectAttestationCheck as ModelsProjectAttestationCheck,
 )
 from onetaskgraph_sdk._generated.models import (
     ProjectGraph as ModelsProjectGraph,
@@ -353,6 +382,9 @@ from onetaskgraph_sdk._generated.models import (
     VariableType as ModelsVariableType,
 )
 from onetaskgraph_sdk._generated.models import (
+    VoidReason as ModelsVoidReason,
+)
+from onetaskgraph_sdk._generated.models import (
     WritePolicyConfig as ModelsWritePolicyConfig,
 )
 from onetaskgraph_sdk._generated.models import (
@@ -385,6 +417,14 @@ def test_this_file_imports_every_name_the_module_exports(module: object) -> None
 
 FROM_ROOT: dict[str, object] = {
     "client": client,
+    "Attestation": Attestation,
+    "AttestationCheck": AttestationCheck,
+    "AttestationState": AttestationState,
+    "Attested": Attested,
+    "MemberDeclaration": MemberDeclaration,
+    "PlannedProject": PlannedProject,
+    "ProjectAttestationCheck": ProjectAttestationCheck,
+    "VoidReason": VoidReason,
     "AuthorKind": AuthorKind,
     "CacheCleared": CacheCleared,
     "CacheUse": CacheUse,
@@ -475,6 +515,14 @@ FROM_ROOT: dict[str, object] = {
 """Every name imported from the package root, by the name it was imported as."""
 
 FROM_MODELS: dict[str, object] = {
+    "Attestation": ModelsAttestation,
+    "AttestationCheck": ModelsAttestationCheck,
+    "AttestationState": ModelsAttestationState,
+    "Attested": ModelsAttested,
+    "MemberDeclaration": ModelsMemberDeclaration,
+    "PlannedProject": ModelsPlannedProject,
+    "ProjectAttestationCheck": ModelsProjectAttestationCheck,
+    "VoidReason": ModelsVoidReason,
     "AuthorKind": ModelsAuthorKind,
     "CacheCleared": ModelsCacheCleared,
     "CacheUse": ModelsCacheUse,
@@ -629,6 +677,12 @@ def test_client_methods_answer_with_the_types_they_declare(binary: Path, tmp_pat
 
 
 MODEL_CLASSES: dict[str, type[BaseModel]] = {
+    "Attestation": Attestation,
+    "AttestationCheck": AttestationCheck,
+    "Attested": Attested,
+    "MemberDeclaration": MemberDeclaration,
+    "PlannedProject": PlannedProject,
+    "ProjectAttestationCheck": ProjectAttestationCheck,
     "CacheCleared": CacheCleared,
     "CacheUse": CacheUse,
     "Comment": Comment,
@@ -704,6 +758,12 @@ MODEL_CLASSES: dict[str, type[BaseModel]] = {
 """Every export that is a pydantic model, read from the package root as a model class."""
 
 MODELS_MODEL_CLASSES: dict[str, type[BaseModel]] = {
+    "Attestation": ModelsAttestation,
+    "AttestationCheck": ModelsAttestationCheck,
+    "Attested": ModelsAttested,
+    "MemberDeclaration": ModelsMemberDeclaration,
+    "PlannedProject": ModelsPlannedProject,
+    "ProjectAttestationCheck": ModelsProjectAttestationCheck,
     "CacheCleared": ModelsCacheCleared,
     "CacheUse": ModelsCacheUse,
     "Comment": ModelsComment,
