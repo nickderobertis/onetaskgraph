@@ -655,13 +655,13 @@ mod tests {
         let bar = |text: &str| AttestationLabel::new("--bar", text).expect("a bar");
         let valid = check(&kind, Some(record(&kind)), |_| held(), Some(&bar("bar-1")));
         assert_eq!((valid.state, valid.reason), (AttestationState::Valid, None));
-        let bar = check(&kind, Some(record(&kind)), |_| held(), Some("bar-2"));
-        assert_eq!(bar.reason, Some(VoidReason::BarMoved));
+        let other = check(&kind, Some(record(&kind)), |_| held(), Some(&bar("bar-2")));
+        assert_eq!(other.reason, Some(VoidReason::BarMoved));
         let moved = check(
             &kind,
             Some(record(&kind)),
             |_| Sha256Digest::of(b"y"),
-            Some("bar-2"),
+            Some(&bar("bar-2")),
         );
         assert_eq!(moved.reason, Some(VoidReason::ContentMoved));
         let absent = check(&kind, None, |_| unreachable!(), None);
