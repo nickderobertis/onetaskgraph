@@ -111,6 +111,10 @@ PARTIAL_WRITE_COMMANDS: frozenset[tuple[str, ...]] = frozenset(
         ("task", "metadata", "set"),
         ("project", "metadata", "set"),
         ("document", "metadata", "set"),
+        # An attestation is a metadata write of its reserved key, and fails as one does.
+        ("task", "attest"),
+        ("project", "attest"),
+        ("document", "attest"),
         ("task", "comment", "add"),
         ("task", "comment", "edit"),
         ("task", "comment", "delete"),
@@ -143,6 +147,10 @@ NOT_PARTIAL_WRITE_COMMANDS: frozenset[tuple[str, ...]] = frozenset(
         ("document", "list"),
         ("document", "show"),
         ("document", "answers"),
+        # A read: exit 3 says the record is not valid, never that anything was written.
+        ("task", "attestation", "check"),
+        ("project", "attestation", "check"),
+        ("document", "attestation", "check"),
         ("label", "list"),
         ("search",),
         # Empties this host's cache of a source, never anything of the source's own work.
