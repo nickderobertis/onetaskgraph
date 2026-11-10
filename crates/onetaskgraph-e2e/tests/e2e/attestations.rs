@@ -1650,6 +1650,132 @@ fn deleting_a_copy_between_a_far_end_and_its_root_leaves_the_record_valid() {
 }
 
 #[test]
+fn a_copy_hands_on_the_root_its_source_records_as_the_source_holds_it() {
+    // Every branch of what a copy records at `onetaskgraph.lineage`, through the binary over
+    // three folders of Markdown whose task files are written by hand.
+    let plan = Plan::new(false);
+    let middle = plan.sandbox.subdirectory("middle");
+    let last = plan.sandbox.subdirectory("last");
+    plan.sandbox.project_document(&document(&json!({
+        "notes": {"plugin": "local-md", "config": {"root": plan.notes}},
+        "middle": {"plugin": "local-md", "config": {"root": middle}},
+        "last": {"plugin": "local-md", "config": {"root": last}},
+    })));
+    let tasks = plan.notes.join("tasks");
+    std::fs::create_dir_all(&tasks).expect("the tasks folder");
+    let write = |id: &str, front: &str| {
+        std::fs::write(
+            tasks.join(format!("{id}.md")),
+            format!("---\ntitle: {id}\nstatus: todo\n{front}---\nBody.\n"),
+        )
+        .expect("a task file");
+    };
+    write(
+        "rooted",
+        "metadata:\n  onetaskgraph.lineage: root:R-1\n  onetaskgraph.origin: elsewhere:E-1\n",
+    );
+    write(
+        "own-root",
+        "metadata:\n  onetaskgraph.lineage: notes:own-root\n",
+    );
+    write(
+        "garbled-root",
+        "metadata:\n  onetaskgraph.lineage: not a qualified id\n  onetaskgraph.origin: notes:x\n",
+    );
+    write(
+        "on-garbled",
+        "depends_on:\n- id: garbled-root\n  kind: blocks\n  item: task\n",
+    );
+    write("plain", "");
+    let copy = |ids: &[&str], to: &str| -> Value {
+        let mut arguments = vec!["task", "copy"];
+        arguments.extend_from_slice(ids);
+        arguments.extend(["--to", to]);
+        plan.json(&arguments)
+    };
+    let landed = |report: &Value, source: &str| -> String {
+        report["items"]
+            .as_array()
+            .expect("outcomes")
+            .iter()
+            .find(|outcome| outcome["source"] == source)
+            .and_then(|outcome| outcome["destination"].as_str())
+            .unwrap_or_else(|| panic!("{source} landed: {report}"))
+            .to_owned()
+    };
+    let provenance = |id: &str| {
+        let metadata = plan.json(&["task", "show", id])["items"][0]["item"]["metadata"].clone();
+        (
+            metadata.get("onetaskgraph.origin").cloned(),
+            metadata.get("onetaskgraph.lineage").cloned(),
+        )
+    };
+
+    // A lineage the source records outranks the origin beside it, and survives another hop.
+    let rooted = landed(&copy(&["notes:rooted"], "middle"), "notes:rooted");
+    assert_eq!(
+        provenance(&rooted),
+        (Some(json!("notes:rooted")), Some(json!("root:R-1"))),
+        "the source's lineage, not its origin, is the root handed on"
+    );
+    let onward = landed(&copy(&[&rooted], "last"), &rooted);
+    assert_eq!(
+        provenance(&onward),
+        (Some(json!(rooted)), Some(json!("root:R-1"))),
+        "and the next hop hands the same root on"
+    );
+
+    // A source naming itself as its root is the origin its copy records: nothing beside it.
+    let own = landed(&copy(&["notes:own-root"], "middle"), "notes:own-root");
+    assert_eq!(
+        provenance(&own),
+        (Some(json!("notes:own-root")), None),
+        "a lineage equal to the copied item's own id is not recorded"
+    );
+
+    // A lineage that is no qualified id is carried as it is held, never replaced by the origin
+    // beside it, so the far end is exactly as refusable where it lands as where it was written.
+    let report = copy(&["notes:on-garbled", "notes:garbled-root"], "middle");
+    let garbled = landed(&report, "notes:garbled-root");
+    assert_eq!(
+        provenance(&garbled),
+        (
+            Some(json!("notes:garbled-root")),
+            Some(json!("not a qualified id"))
+        ),
+        "the malformed root is carried verbatim"
+    );
+    for near in ["notes:on-garbled", &landed(&report, "notes:on-garbled")] {
+        let refused = plan.exits(
+            &[
+                "task", "attest", near, "--kind", KIND, "--by", "ada", "--bar", BAR,
+            ],
+            1,
+        );
+        assert!(
+            stderr(&refused).contains("records the onetaskgraph.lineage \"not a qualified id\""),
+            "{near}: {}",
+            stderr(&refused)
+        );
+    }
+
+    // A copy back keeps the destination's own origin, and its own lineage with it.
+    let copied = landed(&copy(&["notes:plain"], "middle"), "notes:plain");
+    write("plain", "metadata:\n  onetaskgraph.lineage: kept:K-1\n");
+    let back = copy(&[&copied], "notes");
+    assert_eq!(
+        landed(&back, &copied),
+        "notes:plain",
+        "the copy back: {back}"
+    );
+    assert_eq!(
+        provenance("notes:plain"),
+        (None, Some(json!("kept:K-1"))),
+        "the original keeps its own provenance whole"
+    );
+}
+
+#[test]
 fn a_far_end_whose_lineage_cannot_be_named_refuses_the_attestation_writing_nothing() {
     let plan = Plan::new(false);
     plan.sandbox.project_document(&document(&json!({
