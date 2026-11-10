@@ -197,6 +197,10 @@ mod surface;
 // library half is proven in `onetaskgraph-core`'s own `tests/templates.rs`, behind that crate's
 // edge.
 mod templates;
+// No credential and no network: each journey drives the binary against one folder of Markdown
+// in well under a second. A variable's schema is the template engine's, which every rendering
+// verb shares, so no plugin crate's edge is narrower.
+mod template_schemas;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
 // narrower edge for it: every journey here drives the binary against the shared rows — folders
 // of Markdown, in-memory sources, the loopback Linear workspace and GitHub board, and the stdio

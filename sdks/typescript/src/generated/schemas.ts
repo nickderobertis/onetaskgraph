@@ -28421,6 +28421,9 @@ export const runtimeSchemas = {
       "default": {
         "description": "The value used when no answer is given."
       },
+      "schema": {
+        "description": "The JSON Schema (draft 2020-12) every answer must satisfy, for an `object` or `list`\nvariable that declares one; absent for every other."
+      },
       "declared_in": {
         "description": "The chain file whose declaration this is: the one nearest the rendered template.",
         "type": "string"
@@ -28547,6 +28550,9 @@ export const runtimeSchemas = {
           },
           "default": {
             "description": "The value used when no answer is given."
+          },
+          "schema": {
+            "description": "The JSON Schema (draft 2020-12) every answer must satisfy, for an `object` or `list`\nvariable that declares one; absent for every other."
           },
           "declared_in": {
             "description": "The chain file whose declaration this is: the one nearest the rendered template.",

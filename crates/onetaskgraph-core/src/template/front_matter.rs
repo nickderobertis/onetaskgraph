@@ -12,7 +12,7 @@ use std::fmt;
 use serde::de::{Deserialize, Deserializer, MapAccess, SeqAccess, Visitor};
 use serde_json::{Map, Number, Value};
 
-use super::{ItemType, TemplateError, TemplateVariable, VariableType, check_value};
+use super::{ItemType, TemplateError, TemplateVariable, VariableType, check_value, schema};
 
 /// One node of front matter, as serde-saphyr reads it.
 #[derive(Clone)]
@@ -135,7 +135,14 @@ pub const FRONT_MATTER_KEYS: [&str; 3] = [VERSION_KEY, "description", "variables
 
 /// Every key one variable's declaration may carry, and nothing else: any other is refused by
 /// name.
-pub const DECLARATION_KEYS: [&str; 5] = ["description", "type", "items", "required", "default"];
+pub const DECLARATION_KEYS: [&str; 6] = [
+    "description",
+    "type",
+    "items",
+    "required",
+    "default",
+    "schema",
+];
 
 /// `keys` as a message lists them: `` `a`, `b` and `c` ``.
 fn listed(keys: &[&str]) -> String {
@@ -341,6 +348,7 @@ fn declaration_of(
     let mut items = None;
     let mut required = None;
     let mut default = None;
+    let mut declared_schema = None;
     for (key, field) in fields {
         let path = format!("{base}.{key}");
         // As in `read`: the list decides which keys are accepted, the arms what each means.
@@ -401,6 +409,18 @@ fn declaration_of(
                 }
             },
             "default" => default = Some(field.clone().into_json()),
+            "schema" => match field {
+                Yaml::Mapping(_) | Yaml::Bool(_) => {
+                    declared_schema = Some(field.clone().into_json());
+                }
+                _ => {
+                    return Err(TemplateError::malformed(
+                        file,
+                        Some(&path),
+                        "is not a JSON Schema: a schema is a mapping (or `true` or `false`)",
+                    ));
+                }
+            },
             _ => {
                 return Err(TemplateError::malformed(
                     file,
@@ -443,8 +463,38 @@ fn declaration_of(
         ));
     }
 
+    if let Some(declared) = &declared_schema {
+        if !matches!(kind, VariableType::Object | VariableType::List) {
+            return Err(TemplateError::malformed(
+                file,
+                Some(&format!("{base}.schema")),
+                "is given for a variable whose type is neither `object` nor `list`",
+            ));
+        }
+        if let Err(problem) = schema::compile(declared) {
+            return Err(TemplateError::malformed(
+                file,
+                Some(&format!("{base}.schema")),
+                format!("is not a JSON Schema (draft 2020-12) this build compiles: {problem}"),
+            ));
+        }
+        if let Some(default) = &default
+            && let Err(violation) = schema::conform(declared, default)
+        {
+            return Err(TemplateError::malformed(
+                file,
+                Some(&format!("{base}.default")),
+                format!(
+                    "does not satisfy the variable's schema at JSON pointer {:?}: {}",
+                    violation.pointer, violation.problem
+                ),
+            ));
+        }
+    }
+
     Ok(TemplateVariable {
         required: required.unwrap_or(default.is_none()),
+        schema: declared_schema,
         name,
         description,
         kind,
@@ -471,7 +521,8 @@ variables:\n  \
     type: list\n    \
     items: string\n    \
     required: false\n    \
-    default: [a]\n\
+    default: [a]\n    \
+    schema: {type: array}\n\
 ---\n";
         let read = split("t.md", every_key).expect("every published key is read");
         assert_eq!(read.declarations.len(), 1);

@@ -18,6 +18,7 @@
 //!     items: string                 # list only: string | object; default string
 //!     required: true                # default: true without `default`, false with one
 //!     default: <value of `type`>    # optional; `required: true` beside one is refused
+//!     schema: <JSON Schema>         # object and list only: draft 2020-12, inline
 //! ---
 //! ```
 //!
@@ -29,8 +30,8 @@
 //! the directories it was given, in order, then the `(name, source)` pairs registered on it —
 //! and never the working directory. The **declared set** is the union of every chain file's
 //! front matter. When two files declare one variable, the file nearer the rendered one (fewer
-//! references away from it, then loaded first) gives its `description`, `default` and
-//! `required`; its `type` and `items` must be the other's, or the chain is refused naming both
+//! references away from it, then loaded first) gives its `description`, `default`,
+//! `required` and `schema`; its `type` and `items` must be the other's, or the chain is refused naming both
 //! files.
 //!
 //! # Rendering
@@ -39,6 +40,12 @@
 //! render, naming the name and the file. No auto-escaping, trailing newlines kept,
 //! `trim_blocks` and `lstrip_blocks` on. An optional variable given no answer and no default
 //! renders as `none`.
+//!
+//! An `object` or `list` variable that declares a `schema` holds its answer — and its
+//! `default` — to it, after holding it to its type: an answer the schema refuses is refused
+//! as [`TemplateError::SchemaViolation`], naming the variable and the JSON pointer of the
+//! first violation, before anything renders. A variable with no `schema` is held to its type
+//! alone.
 //!
 //! # The digest
 //!
@@ -58,6 +65,7 @@ mod front_matter;
 mod input;
 mod provenance;
 mod scan;
+mod schema;
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fmt;
@@ -181,6 +189,10 @@ pub struct TemplateVariable {
     /// The value used when no answer is given.
     #[serde(skip_serializing_if = "Option::is_none")]
     default: Option<Value>,
+    /// The JSON Schema (draft 2020-12) every answer must satisfy, for an `object` or `list`
+    /// variable that declares one; absent for every other.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    schema: Option<Value>,
     /// The chain file whose declaration this is: the one nearest the rendered template.
     declared_in: String,
 }
@@ -221,6 +233,29 @@ impl TemplateVariable {
     #[must_use]
     pub fn default(&self) -> Option<&Value> {
         self.default.as_ref()
+    }
+
+    /// The JSON Schema every answer must satisfy, when the variable declares one.
+    #[must_use]
+    pub fn schema(&self) -> Option<&Value> {
+        self.schema.as_ref()
+    }
+
+    /// Hold `value` — already a value of the variable's type — to its declared schema.
+    ///
+    /// # Errors
+    ///
+    /// [`TemplateError::SchemaViolation`] naming the variable and the JSON pointer of the first
+    /// violation. A variable with no schema accepts every value of its type.
+    pub fn conform(&self, value: &Value) -> Result<(), TemplateError> {
+        let Some(declared) = &self.schema else {
+            return Ok(());
+        };
+        schema::conform(declared, value).map_err(|violation| TemplateError::SchemaViolation {
+            name: self.name.clone(),
+            pointer: violation.pointer,
+            problem: violation.problem,
+        })
     }
 
     /// The chain file whose declaration this is.
@@ -469,6 +504,22 @@ pub enum TemplateError {
         /// Why the answer is not one.
         problem: String,
     },
+    /// An answer of its variable's type that the variable's declared `schema` refuses.
+    #[error(
+        "the answer to {name:?} does not satisfy its schema at JSON pointer {pointer:?}: \
+         {problem}\n\
+         next: give {name} a value its template's `schema` accepts — `onetaskgraph template \
+         variables --json` prints the schema."
+    )]
+    SchemaViolation {
+        /// The variable.
+        name: String,
+        /// The JSON pointer (RFC 6901) of the first failing value inside the answer: `""` for
+        /// the answer as a whole.
+        pointer: String,
+        /// What the schema says is wrong there.
+        problem: String,
+    },
     /// Required variables no answer and no default covers.
     #[error(
         "{} unanswered: {}\n\
@@ -545,6 +596,7 @@ impl TemplateError {
             Self::MalformedAnswers { .. } => "template-answers-malformed",
             Self::UnknownAnswer { .. } => "template-unknown-answer",
             Self::MistypedAnswer { .. } => "template-mistyped-answer",
+            Self::SchemaViolation { .. } => "template-schema-violation",
             Self::MissingRequired { .. } => "template-missing-required",
             Self::Render { .. } => "template-render",
             Self::MalformedLoader { .. } => "template-loader-malformed",
@@ -562,6 +614,7 @@ impl TemplateError {
             Self::MalformedAnswers { .. }
                 | Self::UnknownAnswer { .. }
                 | Self::MistypedAnswer { .. }
+                | Self::SchemaViolation { .. }
                 | Self::MissingRequired { .. }
         )
     }
@@ -1364,6 +1417,7 @@ impl Template {
                 expected: article(variable.kind),
                 problem,
             })?;
+            variable.conform(&value)?;
             typed.insert(variable.name.clone(), value);
         }
         Ok(typed)

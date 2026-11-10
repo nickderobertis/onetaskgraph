@@ -1240,6 +1240,7 @@ variables:                        # optional; name -> declaration
     items: string                 # list only: string | object; default string
     required: true                # default: true without `default`, false with one
     default: <value of `type`>    # optional; `required: true` beside a default is refused
+    schema: <JSON Schema>         # object and list only: draft 2020-12, inline; optional
 ---
 # {{ title }}
 {% for criterion in criteria %}
@@ -1253,7 +1254,7 @@ filters, loops, conditionals, macros, a variable used many times or not at all.
 `{% extends %}`, `{% include %}` and `{% import %}` find the files they name in the
 `--search-path` directories, in order, and never in the working directory unless you name
 it. The declared set is every chain file's front matter together: a redeclaration may change
-`description`, `default` and `required` — the file nearer the rendered one wins — but never
+`description`, `default`, `required` and `schema` — the file nearer the rendered one wins — but never
 `type` or `items`, which is refused naming both files. A template named by an expression —
 `{% include kind ~ ".md" %}` — is part of the chain too, for the answers that name it, and
 joins it at the tag that names it, exactly as a file a literal names would: its front matter
@@ -1262,6 +1263,17 @@ digest where rendering first reads it. Rendering is strict — a name that is
 neither declared nor set fails, naming it and its file — with no auto-escaping, trailing
 newlines kept, and `trim_blocks` and `lstrip_blocks` on. An optional variable with no
 answer and no default is `none`.
+
+An `object` or `list` variable may declare a `schema`: an inline JSON Schema (draft 2020-12,
+no remote references) its answer — and its `default` — must satisfy as well as its type. An
+answer the schema refuses is refused before anything renders or is written, by every verb
+that renders (`template render`, and `create` and `render` of a task, a project and a
+document), exit `2`, naming the variable and the JSON pointer of the first violation:
+`the answer to "plan" does not satisfy its schema at JSON pointer "/budgets/1": …`. A
+refused `render` leaves the item's content and stored answers as they were. A schema on a
+variable of any other type, or one that does not compile, is refused by its key; a variable
+with no `schema` is held to its type alone, exactly as before. `template variables --json`
+reports each declared schema, and a redeclaration nearer the rendered file gives its own.
 
 `template variables` lists the declared set and the template's **digest**: `sha256:` over
 every chain file's name and bytes, which moves whenever any file of the chain does. Each

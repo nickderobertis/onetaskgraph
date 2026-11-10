@@ -16254,6 +16254,11 @@ required: boolean
  */
 default?: unknown
 /**
+ * The JSON Schema (draft 2020-12) every answer must satisfy, for an `object` or `list`
+ * variable that declares one; absent for every other.
+ */
+schema?: unknown
+/**
  * The chain file whose declaration this is: the one nearest the rendered template.
  */
 declared_in: string
@@ -16320,6 +16325,11 @@ required: boolean
  * The value used when no answer is given.
  */
 default?: unknown
+/**
+ * The JSON Schema (draft 2020-12) every answer must satisfy, for an `object` or `list`
+ * variable that declares one; absent for every other.
+ */
+schema?: unknown
 /**
  * The chain file whose declaration this is: the one nearest the rendered template.
  */
