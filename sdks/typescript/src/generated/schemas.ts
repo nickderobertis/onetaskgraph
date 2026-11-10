@@ -342,6 +342,28 @@ export const runtimeSchemas = {
       }
     }
   },
+  "AuthorKind": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "AuthorKind",
+    "description": "Who wrote a comment, as the source that holds it can tell: a person, a bot — an\nintegration, an app, an automation acting on its own — or neither, when the source cannot\nsay. Decided by the plugin, through\n[`TaskSource::comment_author_kind`](crate::TaskSource::comment_author_kind).",
+    "oneOf": [
+      {
+        "description": "A person.",
+        "type": "string",
+        "const": "person"
+      },
+      {
+        "description": "A bot, an integration or an app.",
+        "type": "string",
+        "const": "bot"
+      },
+      {
+        "description": "The source cannot say — no author at all, a deleted account.",
+        "type": "string",
+        "const": "unknown"
+      }
+    ]
+  },
   "CacheCleared": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "CacheCleared",
@@ -715,6 +737,97 @@ export const runtimeSchemas = {
         "required": [
           "task",
           "id"
+        ]
+      }
+    }
+  },
+  "CommentActivity": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "CommentActivity",
+    "description": "One comment of a [`CommentsSince`] answer.",
+    "type": "object",
+    "properties": {
+      "item": {
+        "description": "The task it is on, qualified: `<source>:<native id>`.",
+        "$ref": "#/$defs/GlobalId"
+      },
+      "id": {
+        "description": "Its own id, exactly as its source issued it.",
+        "$ref": "#/$defs/NativeId"
+      },
+      "url": {
+        "description": "Where a person can open it, or `null`.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "author": {
+        "description": "Who wrote it, in the source's own spelling, or `null`.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "author_kind": {
+        "description": "Whether that is a person, a bot, or neither the source can tell.",
+        "$ref": "#/$defs/AuthorKind"
+      },
+      "created_at": {
+        "description": "When it was written.",
+        "type": "string",
+        "format": "date-time"
+      },
+      "updated_at": {
+        "description": "When it last changed — its creation, for one never edited.",
+        "type": "string",
+        "format": "date-time"
+      },
+      "version": {
+        "description": "The comment's version: when it last changed, at the backend's own precision. Two reads\nanswering one comment unchanged answer the same version.",
+        "type": "string"
+      },
+      "body": {
+        "description": "What it says, byte for byte.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "item",
+      "id",
+      "author_kind",
+      "created_at",
+      "updated_at",
+      "version",
+      "body"
+    ],
+    "$defs": {
+      "GlobalId": {
+        "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
+        "type": "string"
+      },
+      "NativeId": {
+        "description": "A source's own opaque identifier for one item.\n\nDeliberately unvalidated: a native id is whatever the upstream system says it\nis, colons included. The engine parses a qualified id by splitting on the\n*first* colon precisely so this stays true.",
+        "type": "string"
+      },
+      "AuthorKind": {
+        "description": "Who wrote a comment, as the source that holds it can tell: a person, a bot — an\nintegration, an app, an automation acting on its own — or neither, when the source cannot\nsay. Decided by the plugin, through\n[`TaskSource::comment_author_kind`](crate::TaskSource::comment_author_kind).",
+        "oneOf": [
+          {
+            "description": "A person.",
+            "type": "string",
+            "const": "person"
+          },
+          {
+            "description": "A bot, an integration or an app.",
+            "type": "string",
+            "const": "bot"
+          },
+          {
+            "description": "The source cannot say — no author at all, a deleted account.",
+            "type": "string",
+            "const": "unknown"
+          }
         ]
       }
     }
@@ -1465,6 +1578,126 @@ export const runtimeSchemas = {
             "description": "A repository identity.",
             "type": "string",
             "const": "identity"
+          }
+        ]
+      }
+    }
+  },
+  "CommentsSince": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "CommentsSince",
+    "description": "What `task comments <SOURCE> --since` answers with.",
+    "type": "object",
+    "properties": {
+      "schema_version": {
+        "description": "The version of this document's shape: `1`.",
+        "type": "integer",
+        "format": "uint32",
+        "minimum": 0
+      },
+      "watermark": {
+        "description": "The instant a later read may start from: the earlier of the source's own time and this\nhost's at the read's start, set back by the source's consistency window. A later read\nfrom it may return a comment again, with the same `id` and `version`.",
+        "type": "string",
+        "format": "date-time"
+      },
+      "comments": {
+        "description": "Every comment made or edited at or after the instant on a matching task, oldest first by\nwhen it last changed.",
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/CommentActivity"
+        }
+      }
+    },
+    "required": [
+      "schema_version",
+      "watermark",
+      "comments"
+    ],
+    "$defs": {
+      "CommentActivity": {
+        "description": "One comment of a [`CommentsSince`] answer.",
+        "type": "object",
+        "properties": {
+          "item": {
+            "description": "The task it is on, qualified: `<source>:<native id>`.",
+            "$ref": "#/$defs/GlobalId"
+          },
+          "id": {
+            "description": "Its own id, exactly as its source issued it.",
+            "$ref": "#/$defs/NativeId"
+          },
+          "url": {
+            "description": "Where a person can open it, or `null`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "author": {
+            "description": "Who wrote it, in the source's own spelling, or `null`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "author_kind": {
+            "description": "Whether that is a person, a bot, or neither the source can tell.",
+            "$ref": "#/$defs/AuthorKind"
+          },
+          "created_at": {
+            "description": "When it was written.",
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "description": "When it last changed — its creation, for one never edited.",
+            "type": "string",
+            "format": "date-time"
+          },
+          "version": {
+            "description": "The comment's version: when it last changed, at the backend's own precision. Two reads\nanswering one comment unchanged answer the same version.",
+            "type": "string"
+          },
+          "body": {
+            "description": "What it says, byte for byte.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "item",
+          "id",
+          "author_kind",
+          "created_at",
+          "updated_at",
+          "version",
+          "body"
+        ]
+      },
+      "GlobalId": {
+        "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
+        "type": "string"
+      },
+      "NativeId": {
+        "description": "A source's own opaque identifier for one item.\n\nDeliberately unvalidated: a native id is whatever the upstream system says it\nis, colons included. The engine parses a qualified id by splitting on the\n*first* colon precisely so this stays true.",
+        "type": "string"
+      },
+      "AuthorKind": {
+        "description": "Who wrote a comment, as the source that holds it can tell: a person, a bot — an\nintegration, an app, an automation acting on its own — or neither, when the source cannot\nsay. Decided by the plugin, through\n[`TaskSource::comment_author_kind`](crate::TaskSource::comment_author_kind).",
+        "oneOf": [
+          {
+            "description": "A person.",
+            "type": "string",
+            "const": "person"
+          },
+          {
+            "description": "A bot, an integration or an app.",
+            "type": "string",
+            "const": "bot"
+          },
+          {
+            "description": "The source cannot say — no author at all, a deleted account.",
+            "type": "string",
+            "const": "unknown"
           }
         ]
       }
@@ -10177,6 +10410,175 @@ export const runtimeSchemas = {
           "amount",
           "lower_bound"
         ]
+      }
+    }
+  },
+  "Located": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "Located",
+    "description": "Where one task would land, what it would update there, and where a create would file it.",
+    "type": "object",
+    "properties": {
+      "source": {
+        "description": "The qualified id the task was read from.",
+        "$ref": "#/$defs/GlobalId"
+      },
+      "classification": {
+        "description": "The class it was placed as, as a copy classifies it: its own declaration and, while the\nstore's boundary is active, its repositories' visibility. A source declared private does\nnot by itself make it private; it withholds the task's provenance instead.",
+        "$ref": "#/$defs/Classification"
+      },
+      "destination": {
+        "description": "The source the item lands in: the routed one, or the source itself.",
+        "$ref": "#/$defs/SourceName"
+      },
+      "route": {
+        "description": "The index of the route entry that matched, or `None` when none did and the item\nstays in the source itself.",
+        "type": [
+          "integer",
+          "null"
+        ],
+        "format": "uint32",
+        "minimum": 0
+      },
+      "counterpart": {
+        "description": "The item a copy would update, and the rule that found it — `null` when a copy would\ncreate one, and absent under `--no-counterpart`, which looks for none.",
+        "anyOf": [
+          {
+            "$ref": "#/$defs/LocatedCounterpart"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "carriers": {
+        "description": "Every destination item the origin query found carrying this task's origin, in listing\norder — `[]` when the query did not run, and absent under `--no-counterpart`. When it ran,\n`counterpart` is the first.",
+        "type": [
+          "array",
+          "null"
+        ],
+        "items": {
+          "$ref": "#/$defs/GlobalId"
+        }
+      },
+      "creates_in": {
+        "description": "The repository a create there would file the task's issue in, or `null` where the\ndestination files no issue in a repository. Where a create would file, whether or not a\ncounterpart exists: an existing issue is never moved.",
+        "anyOf": [
+          {
+            "$ref": "#/$defs/CreatesIn"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "required": [
+      "source",
+      "classification",
+      "destination"
+    ],
+    "$defs": {
+      "GlobalId": {
+        "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
+        "type": "string"
+      },
+      "Classification": {
+        "description": "Who may read an item: anybody, or only those who may read where it is kept.\n\nTwo values, ordered so the stricter is the greater: [`strictest`](Self::strictest) of\nany two is the one an item they both describe carries. Nothing combines them any other\nway, which is what makes an explicit `public` unable to loosen a private repository, or\na document's private project — a classification only ever tightens. A task's project\nnever tightens the task.\n\nIt is recorded on the item and travels with it. A source whose backend has no notion of\nits own records it under [`Self::METADATA_KEY`], exactly as it records\n[`Repository::METADATA_KEY`], and only while it is `private`: an item without it is\npublic, so every item written before this existed reads as it did.",
+        "oneOf": [
+          {
+            "description": "Anybody who may read the destination may read it.",
+            "type": "string",
+            "const": "public"
+          },
+          {
+            "description": "It may be written only to a destination verified private, and nothing of it may\nreach a public one.",
+            "type": "string",
+            "const": "private"
+          }
+        ]
+      },
+      "SourceName": {
+        "description": "The name a configuration document gives one configured source.",
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9-]*$"
+      },
+      "LocatedCounterpart": {
+        "description": "The destination item a copy would update.",
+        "type": "object",
+        "properties": {
+          "id": {
+            "description": "Its qualified id at the destination the task is placed in.",
+            "$ref": "#/$defs/GlobalId"
+          },
+          "via": {
+            "description": "Which rule found it, as a copy's report spells it.",
+            "$ref": "#/$defs/CopyVia"
+          }
+        },
+        "required": [
+          "id",
+          "via"
+        ]
+      },
+      "CopyVia": {
+        "description": "Which rule found the destination counterpart an item was updated at, or found already\nreading as it does.\n\nTried in this order, and the first that answers is the one reported: the explicit target\ntask, the link the item records, its own origin, a search of the destination for an item\nrecording it as its origin, and the caller's `--match-by`. When none answers, the item is created and says\nso as [`NoCounterpart`] instead.",
+        "oneOf": [
+          {
+            "description": "The destination task explicitly named by the caller and verified by origin.",
+            "type": "string",
+            "const": "target-task"
+          },
+          {
+            "description": "The item's `onetaskgraph.copies` entry for the destination named an item whose own\norigin names this one back. Found by one read by id, and no scan.",
+            "type": "string",
+            "const": "link"
+          },
+          {
+            "description": "The item's own `onetaskgraph.origin` named the destination item: a copy-back.",
+            "type": "string",
+            "const": "origin"
+          },
+          {
+            "description": "A search of the destination for an item recording this one as its origin.",
+            "type": "string",
+            "const": "scan"
+          },
+          {
+            "description": "A search of the destination by the caller's `--match-by`.",
+            "type": "string",
+            "const": "match"
+          },
+          {
+            "description": "The item the destination holds under the key of a create an earlier attempt of this\ncopy recorded its intent for, at `onetaskgraph.creating`: that attempt's create,\nfinished rather than made twice.",
+            "type": "string",
+            "const": "intent"
+          }
+        ]
+      },
+      "CreatesIn": {
+        "description": "Where a create would file a task's issue.",
+        "type": "object",
+        "properties": {
+          "repository": {
+            "description": "The repository, as a normalized origin `host/owner/name`.",
+            "$ref": "#/$defs/Repository"
+          },
+          "refused": {
+            "description": "Why the destination's own policy on where it creates — a GitHub Projects source's\n`creation_owners` — would refuse a create there, as the copy's refusal says it; absent\nwhen it would not. The locate itself never fails for it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "repository"
+        ]
+      },
+      "Repository": {
+        "description": "A repository identified by its normalized origin, without a URL scheme or `.git` suffix.",
+        "type": "string"
       }
     }
   },
@@ -23447,6 +23849,16 @@ export const runtimeSchemas = {
           }
         ]
       },
+      "depends_on": {
+        "description": "The task's forward dependency edges, exactly as `task deps` answers them — present only\nwhen the read asked for them (`task show --with-deps`), and absent for a task that was not\nfound, or whose edges could not be read, the failure then in the response's `errors`.",
+        "type": [
+          "array",
+          "null"
+        ],
+        "items": {
+          "$ref": "#/$defs/QualifiedEdge"
+        }
+      },
       "sanitization": {
         "anyOf": [
           {
@@ -24352,6 +24764,77 @@ export const runtimeSchemas = {
           }
         ]
       },
+      "QualifiedEdge": {
+        "description": "One dependency edge with both ends qualified.\n\nAn end may belong to another source. The near plugin owns that qualified far id and the\nengine reports it without resolving or fetching the far source, so it holds no index.",
+        "type": "object",
+        "properties": {
+          "from": {
+            "description": "The item the edge starts at, and the one that **depends on** the other.\n\nThe direction a caller asked in says which end they named, not which end the edge\nstarts at: a forward read and the matching reverse read report the same edge.",
+            "$ref": "#/$defs/QualifiedEndpoint"
+          },
+          "to": {
+            "description": "The item the edge points at, and the one that must finish first.",
+            "$ref": "#/$defs/QualifiedEndpoint"
+          },
+          "kind": {
+            "description": "What the edge means.",
+            "$ref": "#/$defs/DependencyKind"
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "kind"
+        ]
+      },
+      "QualifiedEndpoint": {
+        "description": "One typed, qualified endpoint in an engine dependency response.",
+        "type": "object",
+        "properties": {
+          "id": {
+            "description": "`<source>:<native>`, preserved when a plugin reports another source.",
+            "$ref": "#/$defs/GlobalId"
+          },
+          "kind": {
+            "description": "Whether this endpoint names a task or project.",
+            "$ref": "#/$defs/ItemKind"
+          }
+        },
+        "required": [
+          "id",
+          "kind"
+        ]
+      },
+      "ItemKind": {
+        "description": "The kind of work item named by a dependency endpoint.",
+        "oneOf": [
+          {
+            "description": "A task.",
+            "type": "string",
+            "const": "task"
+          },
+          {
+            "description": "A project.",
+            "type": "string",
+            "const": "project"
+          }
+        ]
+      },
+      "DependencyKind": {
+        "description": "What a [`DependencyEdge`] means.\n\nBoth variants are read in the one direction [`DependencyEdge::from`] fixes: `from`\ndepends on `to`. This enum said the opposite of that until the orientation was settled,\nwhich is why it is spelled out twice rather than once.",
+        "oneOf": [
+          {
+            "description": "`from` depends on `to`, and `to` must finish before `from` can.",
+            "type": "string",
+            "const": "blocks"
+          },
+          {
+            "description": "`from` and `to` are linked without an ordering.",
+            "type": "string",
+            "const": "related"
+          }
+        ]
+      },
       "Sanitization": {
         "description": "What the screened writes of one command replaced, and what sanitise-on-refusal changed:\nthe `sanitization` member a write's answer carries when it is not empty.",
         "type": "object",
@@ -24558,6 +25041,16 @@ export const runtimeSchemas = {
                 "type": "null"
               }
             ]
+          },
+          "depends_on": {
+            "description": "The task's forward dependency edges, exactly as `task deps` answers them — present only\nwhen the read asked for them (`task show --with-deps`), and absent for a task that was not\nfound, or whose edges could not be read, the failure then in the response's `errors`.",
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/$defs/QualifiedEdge"
+            }
           }
         },
         "required": [
@@ -25453,6 +25946,77 @@ export const runtimeSchemas = {
             "const": "remote"
           }
         ]
+      },
+      "QualifiedEdge": {
+        "description": "One dependency edge with both ends qualified.\n\nAn end may belong to another source. The near plugin owns that qualified far id and the\nengine reports it without resolving or fetching the far source, so it holds no index.",
+        "type": "object",
+        "properties": {
+          "from": {
+            "description": "The item the edge starts at, and the one that **depends on** the other.\n\nThe direction a caller asked in says which end they named, not which end the edge\nstarts at: a forward read and the matching reverse read report the same edge.",
+            "$ref": "#/$defs/QualifiedEndpoint"
+          },
+          "to": {
+            "description": "The item the edge points at, and the one that must finish first.",
+            "$ref": "#/$defs/QualifiedEndpoint"
+          },
+          "kind": {
+            "description": "What the edge means.",
+            "$ref": "#/$defs/DependencyKind"
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "kind"
+        ]
+      },
+      "QualifiedEndpoint": {
+        "description": "One typed, qualified endpoint in an engine dependency response.",
+        "type": "object",
+        "properties": {
+          "id": {
+            "description": "`<source>:<native>`, preserved when a plugin reports another source.",
+            "$ref": "#/$defs/GlobalId"
+          },
+          "kind": {
+            "description": "Whether this endpoint names a task or project.",
+            "$ref": "#/$defs/ItemKind"
+          }
+        },
+        "required": [
+          "id",
+          "kind"
+        ]
+      },
+      "ItemKind": {
+        "description": "The kind of work item named by a dependency endpoint.",
+        "oneOf": [
+          {
+            "description": "A task.",
+            "type": "string",
+            "const": "task"
+          },
+          {
+            "description": "A project.",
+            "type": "string",
+            "const": "project"
+          }
+        ]
+      },
+      "DependencyKind": {
+        "description": "What a [`DependencyEdge`] means.\n\nBoth variants are read in the one direction [`DependencyEdge::from`] fixes: `from`\ndepends on `to`. This enum said the opposite of that until the orientation was settled,\nwhich is why it is spelled out twice rather than once.",
+        "oneOf": [
+          {
+            "description": "`from` depends on `to`, and `to` must finish before `from` can.",
+            "type": "string",
+            "const": "blocks"
+          },
+          {
+            "description": "`from` and `to` are linked without an ordering.",
+            "type": "string",
+            "const": "related"
+          }
+        ]
       }
     }
   },
@@ -25502,6 +26066,30 @@ export const runtimeSchemas = {
             "type": "null"
           }
         ]
+      },
+      "outcome": {
+        "description": "`written` when the task held a priority the guard names, and `held` when it did not —\nabsent for a write made without the guard.",
+        "anyOf": [
+          {
+            "$ref": "#/$defs/GuardOutcome"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "priority_condition": {
+        "description": "What the guard found the task's priority at before the write, and whether that is one it\nnames — the shape `task copy --when-destination-priority` reports — absent for a write\nmade without the guard.",
+        "anyOf": [
+          {
+            "$ref": "#/$defs/PriorityCondition"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
       },
       "sanitization": {
         "anyOf": [
@@ -25807,6 +26395,39 @@ export const runtimeSchemas = {
           "unit",
           "amount",
           "lower_bound"
+        ]
+      },
+      "GuardOutcome": {
+        "description": "What a write guarded by a condition on the item's own value came to.",
+        "oneOf": [
+          {
+            "description": "The item held a value the guard names, and the write was made.",
+            "type": "string",
+            "const": "written"
+          },
+          {
+            "description": "The item held a value the guard does not name, and nothing was written.",
+            "type": "string",
+            "const": "held"
+          }
+        ]
+      },
+      "PriorityCondition": {
+        "description": "What a guarded copy found a counterpart's priority at, and whether that met the condition.",
+        "type": "object",
+        "properties": {
+          "held": {
+            "description": "The counterpart's priority, as the copy's own pre-write read held it.",
+            "$ref": "#/$defs/Priority"
+          },
+          "met": {
+            "description": "Whether that priority is one the condition names.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "held",
+          "met"
         ]
       },
       "Sanitization": {
@@ -26880,7 +27501,7 @@ export const runtimeSchemas = {
   "TaskUpdate": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "TaskUpdate",
-    "description": "A targeted update of one existing task. A member left `None` (or empty) leaves that field\nexactly as the source holds it.\n\nLabels, repositories and project membership are deliberately outside it — an existing\nitem is never moved, and no caller writes labels this way — and so is creation, which is a\ncopy's.",
+    "description": "A targeted update of one existing task. A member left `None` (or empty) leaves that field\nexactly as the source holds it.\n\nLabels and project membership are deliberately outside it — an existing item is never\nmoved, and no caller writes labels this way — and so is creation, which is a copy's. Its\n`repositories` list is a field of the item like its title, and is replaced whole.",
     "type": "object",
     "properties": {
       "title": {
@@ -26952,6 +27573,16 @@ export const runtimeSchemas = {
         ],
         "items": {
           "$ref": "#/$defs/DependencyEdge"
+        }
+      },
+      "repositories": {
+        "description": "Replaces the task's [`Task::repositories`] whole; an empty list clears it. Where the\nitem's issue lives is never moved by it: it is the list the item names, as a read\nreports it.",
+        "type": [
+          "array",
+          "null"
+        ],
+        "items": {
+          "$ref": "#/$defs/Repository"
         }
       }
     },
@@ -27150,6 +27781,10 @@ export const runtimeSchemas = {
             "const": "related"
           }
         ]
+      },
+      "Repository": {
+        "description": "A repository identified by its normalized origin, without a URL scheme or `.git` suffix.",
+        "type": "string"
       }
     }
   },
@@ -27537,6 +28172,11 @@ export const runtimeSchemas = {
             "description": "[`TaskUpdate::depends_on`].",
             "type": "string",
             "const": "depends-on"
+          },
+          {
+            "description": "[`TaskUpdate::repositories`].",
+            "type": "string",
+            "const": "repositories"
           }
         ]
       }
@@ -27989,6 +28629,11 @@ export const runtimeSchemas = {
             "description": "[`TaskUpdate::depends_on`].",
             "type": "string",
             "const": "depends-on"
+          },
+          {
+            "description": "[`TaskUpdate::repositories`].",
+            "type": "string",
+            "const": "repositories"
           }
         ]
       },
@@ -28817,6 +29462,11 @@ export const runtimeSchemas = {
         "description": "[`TaskUpdate::depends_on`].",
         "type": "string",
         "const": "depends-on"
+      },
+      {
+        "description": "[`TaskUpdate::repositories`].",
+        "type": "string",
+        "const": "repositories"
       }
     ]
   },

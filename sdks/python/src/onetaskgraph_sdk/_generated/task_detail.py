@@ -260,6 +260,16 @@ class Served(StrEnum):
     ServedRemote = "remote"
 
 
+class ItemKind(StrEnum):
+    ItemKindTask = "task"
+    ItemKindProject = "project"
+
+
+class DependencyKind(StrEnum):
+    DependencyKindBlocks = "blocks"
+    DependencyKindRelated = "related"
+
+
 class LocatorKind(StrEnum):
     LocatorKindSource = "source"
     LocatorKindItem = "item"
@@ -388,6 +398,14 @@ class CacheUse(BaseModel):
     ] = None
 
 
+class QualifiedEndpoint(BaseModel):
+    id: Annotated[
+        GlobalId,
+        Field(description="`<source>:<native>`, preserved when a plugin reports another source."),
+    ]
+    kind: Annotated[ItemKind, Field(description="Whether this endpoint names a task or project.")]
+
+
 class Locator1(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
@@ -502,6 +520,21 @@ class Unanswered(RootModel[SourceFailure | UnresolvedDesignator]):
     ]
 
 
+class QualifiedEdge(BaseModel):
+    from_: Annotated[
+        QualifiedEndpoint,
+        Field(
+            alias="from",
+            description="The item the edge starts at, and the one that **depends on** the other.\n\nThe direction a caller asked in says which end they named, not which end the edge\nstarts at: a forward read and the matching reverse read report the same edge.",
+        ),
+    ]
+    to: Annotated[
+        QualifiedEndpoint,
+        Field(description="The item the edge points at, and the one that must finish first."),
+    ]
+    kind: Annotated[DependencyKind, Field(description="What the edge means.")]
+
+
 class SideEffect(BaseModel):
     item: Annotated[Locator, Field(description="The item, by its qualified id as screened.")]
     field: Annotated[
@@ -576,6 +609,12 @@ class TaskDetail(BaseModel):
         CacheUse | None,
         Field(
             description='How the read used its source\'s local cache: `{"served": "cache" | "remote",\n"bypassed": null | "<reason>"}` — absent for a source keeping none, and for an id\nnaming no configured source.'
+        ),
+    ] = None
+    depends_on: Annotated[
+        list[QualifiedEdge] | None,
+        Field(
+            description="The task's forward dependency edges, exactly as `task deps` answers them — present only\nwhen the read asked for them (`task show --with-deps`), and absent for a task that was not\nfound, or whose edges could not be read, the failure then in the response's `errors`."
         ),
     ] = None
     sanitization: Sanitization | None = None

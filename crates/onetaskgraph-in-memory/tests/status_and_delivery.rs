@@ -113,6 +113,7 @@ async fn a_status_set_moves_the_status_alone_and_keeps_a_name_the_category_alrea
         after,
         Task {
             status: moved.expect("answered"),
+            version: after.version.clone(),
             ..before
         },
         "nothing but the status moved"
@@ -140,6 +141,7 @@ async fn delivered_by_is_replaced_whole_and_nothing_else_moves() {
         after,
         Task {
             delivered_by: vec![entry("work:T-1"), entry("plan:P-2")],
+            version: after.version.clone(),
             ..before
         }
     );

@@ -1186,6 +1186,9 @@ struct GitHubBoard {
     /// The board still holds it — every mutation below finds it — and only the *read* is
     /// behind, which is exactly what this models.
     lagging_reads: usize,
+    /// How many seconds of the board's own clock an issue's latest change stays out of its
+    /// issue search: GitHub's index lagging the writes it indexes. `None` indexes at once.
+    search_lag: Option<u64>,
     /// Every GraphQL document this board has received, in order.
     documents: Vec<String>,
     /// The bearer token each of those requests carried, at the same index — which of the
@@ -1205,6 +1208,9 @@ struct GitHubBoard {
     /// Whether the board's closed-items read answers its second page with the cursor it was
     /// asked from, as a connection that does not advance would.
     closed_cursor_stalls: bool,
+    /// Whether the board's own items read answers every page after the first with the cursor it
+    /// was asked from: [`GitHubBoardFields::stall_the_items_cursor`].
+    items_cursor_stalls: bool,
     /// Errors this board answers beside the data of the next request carrying each operation,
     /// once — an error GitHub reports about one part of a read it otherwise answered.
     erring_beside: Vec<(&'static str, String)>,
@@ -1625,6 +1631,12 @@ impl GitHubBoardFields {
     /// asked from, saying there is more — a connection that does not advance.
     pub fn stall_the_closed_items_cursor(&self) {
         self.board.lock().unwrap().closed_cursor_stalls = true;
+    }
+
+    /// Have the board's own items read answer every page after the first with the very cursor
+    /// it was asked from, saying there is more — a listing that never ends if walked blindly.
+    pub fn stall_the_items_cursor(&self) {
+        self.board.lock().unwrap().items_cursor_stalls = true;
     }
 
     /// Answer the next request carrying `operation` with `message` as an error beside its data,
@@ -2479,6 +2491,28 @@ impl GitHubBoardFields {
         added["id"].as_str().expect("a comment id").to_owned()
     }
 
+    /// [`Self::add_comment`], written by `author` — `<login>[bot]` for an app, as GitHub's own
+    /// pages spell one.
+    pub fn add_comment_by(&self, issue: &str, body: &str, author: &str) -> String {
+        let added = self.board.lock().unwrap().comment_by(issue, body, author);
+        added["id"].as_str().expect("a comment id").to_owned()
+    }
+
+    /// Keep each issue out of this board's issue search until `seconds` of the board's own
+    /// clock have passed since its latest change — a comment made or edited included — as
+    /// GitHub's index lags the writes it indexes.
+    pub fn lag_search_index(&self, seconds: u64) {
+        self.board.lock().unwrap().search_lag = Some(seconds);
+    }
+
+    /// Move this board's clock on by `seconds`, as time passing with no change to any issue.
+    pub fn pass_time(&self, seconds: u64) {
+        let mut board = self.board.lock().unwrap();
+        for _ in 0..seconds {
+            board.tick();
+        }
+    }
+
     /// Seed an issue's comments together before a journey starts. Each comment and the
     /// issue receive their ordinary timestamps, without looking up that same issue again
     /// for every comment of a large board.
@@ -2943,6 +2977,25 @@ impl GitHubBoard {
             .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
     }
 
+    /// Whether an issue last changed at `updated` is in this board's issue search yet: always,
+    /// unless [`GitHubBoardFields::lag_search_index`] keeps a recent change out of it.
+    fn indexed(&self, updated: &Value) -> bool {
+        let Some(lag) = self.search_lag else {
+            return true;
+        };
+        let epoch: chrono::DateTime<chrono::Utc> =
+            GITHUB_BOARD_EPOCH.parse().expect("the board's epoch");
+        let latest = self.held_second.unwrap_or(self.comment_ticks);
+        let now = epoch
+            + chrono::TimeDelta::seconds(i64::try_from(latest).expect("board seconds fit i64"));
+        updated
+            .as_str()
+            .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
+            .is_none_or(|at| {
+                at <= now - chrono::TimeDelta::seconds(i64::try_from(lag).expect("a lag fits i64"))
+            })
+    }
+
     /// The server's clock on an answer, as GitHub's `Date` header spells it: `read_lag`
     /// seconds past this board's latest change, or `None` when it answers without one.
     fn served_at(&self) -> Option<String> {
@@ -3058,9 +3111,15 @@ impl GitHubBoard {
     /// Put a comment on `issue`, signed as [`GITHUB_COMMENTER`] — the account this board's
     /// token belongs to, which is who GitHub records as the author of every comment.
     fn comment(&mut self, issue: &str, body: &str) -> Value {
+        self.comment_by(issue, body, GITHUB_COMMENTER)
+    }
+
+    /// [`Self::comment`], signed as `author` — `<login>[bot]` for an app, which this board
+    /// answers as a `Bot` actor of that login, as GitHub does.
+    fn comment_by(&mut self, issue: &str, body: &str, author: &str) -> Value {
         let at = self.tick();
         let held = json!({"id":format!("COMMENT-{}", self.comment_ticks),"issue":issue,
-                          "author":GITHUB_COMMENTER,"body":body,"createdAt":at,"updatedAt":at});
+                          "author":author,"body":body,"createdAt":at,"updatedAt":at});
         self.comments.push(held.clone());
         self.touch_issue(&json!(issue));
         held
@@ -3112,7 +3171,13 @@ impl GitHubBoard {
     }
     /// One held comment as every comment document selects it.
     fn comment_node(held: &Value) -> Value {
-        json!({"id":held["id"],"author":{"login":held["author"]},"createdAt":held["createdAt"],
+        let author = held["author"].as_str().map_or(Value::Null, |author| {
+            match author.strip_suffix("[bot]") {
+                Some(login) => json!({"__typename": "Bot", "login": login}),
+                None => json!({"__typename": "User", "login": author}),
+            }
+        });
+        json!({"id":held["id"],"author":author,"createdAt":held["createdAt"],
                "updatedAt":held["updatedAt"],"body":held["body"],
                "url":format!("https://example.invalid/{}#{}",
                              held["issue"].as_str().expect("a comment's issue"),
@@ -3813,6 +3878,7 @@ fn github_projects_board_at(
         relationship_log: Vec::new(),
         created: 0,
         lagging_reads,
+        search_lag: None,
         documents: Vec::new(),
         tokens: Vec::new(),
         arrivals: Vec::new(),
@@ -3824,6 +3890,7 @@ fn github_projects_board_at(
         issue_listing_bend: None,
         closed_filter_leaks: false,
         closed_cursor_stalls: false,
+        items_cursor_stalls: false,
         erring_beside: Vec::new(),
         reference_fault: None,
         variables: Vec::new(),
@@ -5538,6 +5605,7 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
                 );
                 wanted.admits(title, body)
                     && wanted.recent(&item["updatedAt"])
+                    && board.indexed(&item["updatedAt"])
                     && wanted.state.is_none_or(|state| item["state"] == state)
             })
             .collect::<Vec<_>>();
@@ -5849,10 +5917,16 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         })
         .collect::<Vec<_>>();
     let title = board.own["title"].clone();
+    // A connection that does not advance: every page after the first answered with the very
+    // cursor it was asked from, saying there is more.
+    let (more, cursor) = if board.items_cursor_stalls && offset > 0 {
+        (true, offset.to_string())
+    } else {
+        (end < visible, end.to_string())
+    };
     json!({"owner":{"projectV2":{"id":"PVT-board","title":title,
         "fields":board.fields(),
-        "items":{"nodes":nodes,"pageInfo":{"hasNextPage":end < visible,
-                                           "endCursor":end.to_string()}}}}})
+        "items":{"nodes":nodes,"pageInfo":{"hasNextPage":more,"endCursor":cursor}}}}})
 }
 
 /// GitHub's issue search, as far as this board models it: the qualifiers the source sends,
@@ -6661,6 +6735,21 @@ impl LinearWorkspace {
         let id = format!("C-P{tick}");
         let row = json!({"id": id, "issue": issue, "body": body, "createdAt": stamp,
                          "updatedAt": stamp, "user": {"displayName": "a person"}});
+        data["_linear_comments"]
+            .as_array_mut()
+            .expect("comments")
+            .push(row);
+        id
+    }
+
+    /// Add one comment to an issue as an integration or a bot writing it in Linear would — a
+    /// comment whose `user` Linear answers `null` — answering with its id.
+    pub fn add_bot_comment(&self, issue: &str, body: &str) -> String {
+        let mut data = self.state.lock().unwrap();
+        let (tick, stamp) = linear_tick(&mut data);
+        let id = format!("C-B{tick}");
+        let row = json!({"id": id, "issue": issue, "body": body, "createdAt": stamp,
+                         "updatedAt": stamp, "user": null});
         data["_linear_comments"]
             .as_array_mut()
             .expect("comments")

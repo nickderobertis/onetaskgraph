@@ -261,9 +261,12 @@ fn every_read_carries_the_token_its_source_gives() {
         let who = row.name;
         let sandbox = Sandbox::new();
         sandbox.project_document(&row.document(&sandbox));
-        // Every row whose source spells a token: a board, a folder of Markdown and Linear's
+        // Every row: a board, a folder of Markdown, Linear's
         // `lin1`, each from what its read already answers.
-        let tokened = matches!(row.plugin, "github-projects" | "local-md" | "linear");
+        let tokened = matches!(
+            row.plugin,
+            "github-projects" | "local-md" | "linear" | "in-memory" | "subprocess"
+        );
         let listed = listed(&sandbox, &[]);
         assert!(!listed.is_empty(), "{who}: the dataset holds tasks");
         for (id, token) in &listed {

@@ -5,12 +5,20 @@ import importlib
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from .author_kind import AuthorKind as AuthorKind
     from .cache_cleared import CacheCleared as CacheCleared
     from .cache_use import CacheUse as CacheUse
     from .classification import Classification as Classification
+    from .comment import Comment as Comment
+    from .comment_activity import CommentActivity as CommentActivity
     from .comment_list import CommentList as CommentList
     from .comment_written import CommentWritten as CommentWritten
+    from .comments_since import CommentsSince as CommentsSince
+    from .copy_action import CopyAction as CopyAction
+    from .copy_link import CopyLink as CopyLink
+    from .copy_outcome import CopyOutcome as CopyOutcome
     from .copy_report import CopyReport as CopyReport
+    from .copy_via import CopyVia as CopyVia
     from .deleted_comment import DeletedComment as DeletedComment
     from .delivered import Delivered as Delivered
     from .delivery_outcome import DeliveryOutcome as DeliveryOutcome
@@ -28,6 +36,7 @@ if TYPE_CHECKING:
     from .item_type import ItemType as ItemType
     from .linear_config import LinearConfig as LinearConfig
     from .locate_report import LocateReport as LocateReport
+    from .located import Located as Located
     from .location import Location as Location
     from .metadata_set import MetadataSet as MetadataSet
     from .native_id import NativeId as NativeId
@@ -37,6 +46,7 @@ if TYPE_CHECKING:
     from .project_status_set import ProjectStatusSet as ProjectStatusSet
     from .public_projections import PublicProjections as PublicProjections
     from .public_write_input import PublicWriteInput as PublicWriteInput
+    from .qualified_task import Qualified as QualifiedTask
     from .query_plan import QueryPlan as QueryPlan
     from .query_response_of_qualified_document import (
         QueryResponse as QueryResponseOfQualifiedDocument,
@@ -64,6 +74,7 @@ if TYPE_CHECKING:
     from .status_options_report import StatusOptionsReport as StatusOptionsReport
     from .statuses_reconciled import StatusesReconciled as StatusesReconciled
     from .sweep_report import SweepReport as SweepReport
+    from .task import Task as Task
     from .task_asset_names import TaskAssetNames as TaskAssetNames
     from .task_content_set import TaskContentSet as TaskContentSet
     from .task_detail import TaskDetail as TaskDetail
@@ -87,12 +98,20 @@ if TYPE_CHECKING:
 # private to this module rather than as a re-export. This list is what makes the
 # whole set public to one, here and through the package root's own `__all__`.
 __all__ = [
+    "AuthorKind",
     "CacheCleared",
     "CacheUse",
     "Classification",
+    "Comment",
+    "CommentActivity",
     "CommentList",
     "CommentWritten",
+    "CommentsSince",
+    "CopyAction",
+    "CopyLink",
+    "CopyOutcome",
     "CopyReport",
+    "CopyVia",
     "DeletedComment",
     "Delivered",
     "DeliveryOutcome",
@@ -110,6 +129,7 @@ __all__ = [
     "ItemType",
     "LinearConfig",
     "LocateReport",
+    "Located",
     "Location",
     "MetadataSet",
     "NativeId",
@@ -119,6 +139,7 @@ __all__ = [
     "ProjectStatusSet",
     "PublicProjections",
     "PublicWriteInput",
+    "QualifiedTask",
     "QueryPlan",
     "QueryResponseOfQualifiedDocument",
     "QueryResponseOfQualifiedEdge",
@@ -142,6 +163,7 @@ __all__ = [
     "StatusOptionsReport",
     "StatusesReconciled",
     "SweepReport",
+    "Task",
     "TaskAssetNames",
     "TaskContentSet",
     "TaskDetail",
@@ -161,12 +183,20 @@ __all__ = [
 ]
 
 _MODULES: dict[str, tuple[str, str]] = {
+    "AuthorKind": ("author_kind", "AuthorKind"),
     "CacheCleared": ("cache_cleared", "CacheCleared"),
     "CacheUse": ("cache_use", "CacheUse"),
     "Classification": ("classification", "Classification"),
+    "Comment": ("comment", "Comment"),
+    "CommentActivity": ("comment_activity", "CommentActivity"),
     "CommentList": ("comment_list", "CommentList"),
     "CommentWritten": ("comment_written", "CommentWritten"),
+    "CommentsSince": ("comments_since", "CommentsSince"),
+    "CopyAction": ("copy_action", "CopyAction"),
+    "CopyLink": ("copy_link", "CopyLink"),
+    "CopyOutcome": ("copy_outcome", "CopyOutcome"),
     "CopyReport": ("copy_report", "CopyReport"),
+    "CopyVia": ("copy_via", "CopyVia"),
     "DeletedComment": ("deleted_comment", "DeletedComment"),
     "Delivered": ("delivered", "Delivered"),
     "DeliveryOutcome": ("delivery_outcome", "DeliveryOutcome"),
@@ -184,6 +214,7 @@ _MODULES: dict[str, tuple[str, str]] = {
     "ItemType": ("item_type", "ItemType"),
     "LinearConfig": ("linear_config", "LinearConfig"),
     "LocateReport": ("locate_report", "LocateReport"),
+    "Located": ("located", "Located"),
     "Location": ("location", "Location"),
     "MetadataSet": ("metadata_set", "MetadataSet"),
     "NativeId": ("native_id", "NativeId"),
@@ -193,6 +224,7 @@ _MODULES: dict[str, tuple[str, str]] = {
     "ProjectStatusSet": ("project_status_set", "ProjectStatusSet"),
     "PublicProjections": ("public_projections", "PublicProjections"),
     "PublicWriteInput": ("public_write_input", "PublicWriteInput"),
+    "QualifiedTask": ("qualified_task", "Qualified"),
     "QueryPlan": ("query_plan", "QueryPlan"),
     "QueryResponseOfQualifiedDocument": ("query_response_of_qualified_document", "QueryResponse"),
     "QueryResponseOfQualifiedEdge": ("query_response_of_qualified_edge", "QueryResponse"),
@@ -216,6 +248,7 @@ _MODULES: dict[str, tuple[str, str]] = {
     "StatusOptionsReport": ("status_options_report", "StatusOptionsReport"),
     "StatusesReconciled": ("statuses_reconciled", "StatusesReconciled"),
     "SweepReport": ("sweep_report", "SweepReport"),
+    "Task": ("task", "Task"),
     "TaskAssetNames": ("task_asset_names", "TaskAssetNames"),
     "TaskContentSet": ("task_content_set", "TaskContentSet"),
     "TaskDetail": ("task_detail", "TaskDetail"),

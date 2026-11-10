@@ -32,13 +32,13 @@ pub(crate) async fn update_task(
         return Ok(refused(
             "task update names no field to write\n\
              next: name at least one of --title, --body-file, --status, --priority, --metadata, \
-             --remove-metadata, --delivers, --no-delivers, --depends-on or --no-depends-on — \
+             --remove-metadata, --delivers, --no-delivers, --depends-on, --no-depends-on, \
+             --repository or --no-repositories — \
              `onetaskgraph task update --help` describes each.",
         ));
     }
     let engine = expecting(loaded, &id, &args.expect)?;
-    let updated = engine
-        .update_task(&id, &update)
+    let updated = crate::held(&engine, &id, &args.held, engine.update_task(&id, &update))
         .await
         .map_err(|error| write_failed(&engine, &error))?;
     let rendered = rendering(loaded, &updated, render::task_updated, "the update")?;
@@ -110,6 +110,13 @@ fn request(id: &GlobalId, args: &TaskUpdateArgs) -> Result<TaskUpdate, Failure> 
         metadata_remove,
         delivers,
         depends_on,
+        repositories: if args.no_repositories {
+            Some(Vec::new())
+        } else if args.repository.is_empty() {
+            None
+        } else {
+            Some(args.repository.clone())
+        },
     })
 }
 

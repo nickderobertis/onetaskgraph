@@ -160,6 +160,22 @@ impl Engine {
                 &Exposure::of_update(&update),
             )
             .await?;
+        // The repositories it is to name classify it as a read would after the write: a list
+        // naming a private one is refused onto a source that is not private, as a create of it
+        // would be, before anything is sent.
+        if let Some(repositories) = update.repositories.as_ref().filter(|list| !list.is_empty())
+            && self.boundary_active()
+        {
+            self.admit_known(
+                source,
+                &id.to_string(),
+                &id.native,
+                onetaskgraph_plugin_api::Classification::Public,
+                repositories,
+                &Exposure::default(),
+            )
+            .await?;
+        }
         let mut update = update;
         rewrite.update(&mut update);
         let before = readings(&[source]).await;

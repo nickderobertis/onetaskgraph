@@ -525,10 +525,12 @@ async fn run_inner(
                 include_members: args.members,
                 paging: paging(loaded, &args.paging)?,
             };
-            let response = engine
-                .tasks(&request)
-                .await
-                .map_err(|error| Failure::from(&error))?;
+            let response = if args.all {
+                engine.tasks_all(&request).await
+            } else {
+                engine.tasks(&request).await
+            }
+            .map_err(|error| Failure::from(&error))?;
             respond(out, loaded, response, render::tasks, &args.paging, "tasks")
         }
 
@@ -537,27 +539,44 @@ async fn run_inner(
         } => {
             let id = qualified(&args.item.id)?;
             let pin = args.pin.as_deref();
+            let engine = engine(loaded);
             let detail = if args.no_comments {
-                engine(loaded)
+                engine
                     .task_without_comments_pinned(&id, pin)
                     .await
                     .map_err(|error| Failure::from(&error))?
             } else {
-                engine(loaded)
+                engine
                     .task_detail_pinned(&id, pin)
                     .await
                     .map_err(|error| Failure::from(&error))?
+            };
+            let detail = if args.with_deps {
+                engine
+                    .with_task_dependencies(&id, detail)
+                    .await
+                    .map_err(|error| Failure::from(&error))?
+            } else {
+                detail
             };
             // The comments ride beside the task in the machine rendering, and after its body
             // in the human one — and not at all for a source whose tasks have none.
             let comments = detail.comments.as_deref();
             let assets = detail.assets.as_deref();
+            let depends_on = detail.depends_on.as_deref();
             show_rendered(
                 out,
                 loaded,
                 &detail.response,
                 &detail,
-                |task| render::task_with_comments(task, comments, assets),
+                |task| {
+                    let mut rendered = render::task_with_comments(task, comments, assets);
+                    if let Some(edges) = depends_on {
+                        rendered.push_str("\ndepends on:\n");
+                        rendered.push_str(&render::edges(edges));
+                    }
+                    rendered
+                },
                 &args.item,
                 "task",
             )
@@ -592,6 +611,33 @@ async fn run_inner(
         } => comment(out, loaded, command).await,
 
         Command::Task {
+            command: TaskCommand::Comments(args),
+        } => {
+            let Some(source) = usable_source(&args.source, loaded) else {
+                return Ok(EXIT_USAGE);
+            };
+            let request = onetaskgraph_core::CommentsSinceRequest {
+                source,
+                since: args.since,
+                metadata: args.metadata.clone(),
+                statuses: args.status.iter().map(|status| status.category()).collect(),
+                items: args
+                    .item
+                    .iter()
+                    .map(|id| qualified(id))
+                    .collect::<Result<_, _>>()?,
+                page_size: loaded.config.page_size(),
+            };
+            let listed = engine(loaded)
+                .comments_since(&request)
+                .await
+                .map_err(|error| Failure::from(&error))?;
+            let rendered = rendering(loaded, &listed, render::comments_since, "the comments")?;
+            emit(out, rendered.trim_end(), "the comments")?;
+            Ok(EXIT_OK)
+        }
+
+        Command::Task {
             command:
                 TaskCommand::Status {
                     command: StatusCommand::Set(args),
@@ -599,10 +645,14 @@ async fn run_inner(
         } => {
             let task = qualified(&args.id)?;
             let engine = expecting(loaded, &task, &args.expect)?;
-            let set = engine
-                .set_task_status(&task, args.category.category())
-                .await
-                .map_err(|error| write_failed(&engine, &error))?;
+            let set = held(
+                &engine,
+                &task,
+                &args.held,
+                engine.set_task_status(&task, args.category.category()),
+            )
+            .await
+            .map_err(|error| write_failed(&engine, &error))?;
             let rendered = rendering(loaded, &set, render::status_set, "the status")?;
             emit(out, rendered.trim_end(), "the status")?;
             Ok(delivery_exit(&set.delivered))
@@ -698,10 +748,22 @@ async fn run_inner(
         } => {
             let task = qualified(&args.id)?;
             let engine = expecting(loaded, &task, &args.expect)?;
-            let set = engine
-                .set_task_priority(&task, args.priority.priority())
-                .await
-                .map_err(|error| write_failed(&engine, &error))?;
+            let set = held(
+                &engine,
+                &task,
+                &args.held,
+                engine.set_task_priority_when(
+                    &task,
+                    args.priority.priority(),
+                    &args
+                        .when_priority
+                        .iter()
+                        .map(|priority| priority.priority())
+                        .collect::<Vec<_>>(),
+                ),
+            )
+            .await
+            .map_err(|error| write_failed(&engine, &error))?;
             let rendered = rendering(loaded, &set, render::priority_set, "the priority")?;
             emit(out, rendered.trim_end(), "the priority")?;
             Ok(EXIT_OK)
@@ -718,10 +780,14 @@ async fn run_inner(
             let task = qualified(&args.id)?;
             let content = content(&args.file)?;
             let engine = expecting(loaded, &task, &args.expect)?;
-            let set = engine
-                .set_task_content(&task, &content)
-                .await
-                .map_err(|error| write_failed(&engine, &error))?;
+            let set = held(
+                &engine,
+                &task,
+                &args.held,
+                engine.set_task_content(&task, &content),
+            )
+            .await
+            .map_err(|error| write_failed(&engine, &error))?;
             let rendered = rendering(loaded, &set, render::content_set, "the content")?;
             emit(out, rendered.trim_end(), "the content")?;
             Ok(EXIT_OK)
@@ -872,7 +938,7 @@ async fn run_inner(
                     .map(|priority| priority.priority())
                     .collect(),
             };
-            copy(out, loaded, &request).await
+            copy(out, loaded, &request, args.held.if_version.as_deref()).await
         }
 
         Command::Task {
@@ -899,7 +965,7 @@ async fn run_inner(
                 copy_request(named(std::iter::once(args.id.as_str()))?, scope, &args.copy)?;
             request.comments = args.comments;
             request.status_policy = args.status_policy.into();
-            copy(out, loaded, &request).await
+            copy(out, loaded, &request, None).await
         }
 
         Command::Project {
@@ -1078,7 +1144,7 @@ async fn run_inner(
                 CopyScope::Documents,
                 &args.copy,
             )?;
-            copy(out, loaded, &request).await
+            copy(out, loaded, &request, None).await
         }
 
         Command::Label {
@@ -1259,6 +1325,19 @@ fn expecting(loaded: &Loaded, id: &GlobalId, expect: &ExpectArgs) -> Result<Engi
             .map_err(|error| Failure::from(&error))?;
     }
     Ok(engine)
+}
+
+/// `write`, a write of `id`, held to the version `--if-version` names when it names one.
+async fn held<T>(
+    engine: &Engine,
+    id: &GlobalId,
+    held: &cli::IfVersionArgs,
+    write: impl std::future::Future<Output = Result<T, onetaskgraph_core::EngineError>>,
+) -> Result<T, onetaskgraph_core::EngineError> {
+    match &held.if_version {
+        Some(version) => engine.held_write(id, version, write).await,
+        None => write.await,
+    }
 }
 
 /// The failure an expected write on `engine` came to, keeping what its parts came to for the
@@ -1646,10 +1725,14 @@ async fn comment(
             };
             let task = qualified(&args.id)?;
             let engine = expecting(loaded, &task, &args.expect)?;
-            let added = engine
-                .add_comment(&task, &comment)
-                .await
-                .map_err(|error| write_failed(&engine, &error))?;
+            let added = held(
+                &engine,
+                &task,
+                &args.held,
+                engine.add_comment(&task, &comment),
+            )
+            .await
+            .map_err(|error| write_failed(&engine, &error))?;
             let mut added = written_comment(&engine, &task, added);
             added.item = Some(task.clone());
             rendering(loaded, &added, render::comment_written, "the comment")?
@@ -1666,10 +1749,14 @@ async fn comment(
             let body = body(args.body_file.as_deref())?;
             let task = qualified(&args.id)?;
             let engine = expecting(loaded, &task, &args.expect)?;
-            let edited = engine
-                .edit_comment(&task, &args.comment_id, &body)
-                .await
-                .map_err(|error| write_failed(&engine, &error))?;
+            let edited = held(
+                &engine,
+                &task,
+                &args.held,
+                engine.edit_comment(&task, &args.comment_id, &body),
+            )
+            .await
+            .map_err(|error| write_failed(&engine, &error))?;
             let edited = written_comment(&engine, &task, edited);
             rendering(loaded, &edited, render::comment_written, "the comment")?
         }
@@ -1809,12 +1896,18 @@ fn content(path: &std::path::Path) -> Result<String, Failure> {
 /// The command line has no copy path of its own: this builds the one public request type
 /// and calls the one public method, so a copy typed at a shell and a copy a Rust caller
 /// makes cannot answer differently.
-async fn copy(out: &mut impl Write, loaded: &Loaded, request: &CopyRequest) -> Result<u8, Failure> {
+async fn copy(
+    out: &mut impl Write,
+    loaded: &Loaded,
+    request: &CopyRequest,
+    held: Option<&str>,
+) -> Result<u8, Failure> {
     let engine = engine(loaded);
-    let report = engine
-        .copy(request)
-        .await
-        .map_err(|error| write_failed(&engine, &error))?;
+    let report = match held {
+        Some(version) => engine.copy_held(request, version).await,
+        None => engine.copy(request).await,
+    }
+    .map_err(|error| write_failed(&engine, &error))?;
     // Each dependency the copy left out because it names something private, said where a
     // person reads it and kept out of the machine output, which is unchanged by it.
     for line in engine.take_withheld_edges() {
@@ -2022,6 +2115,15 @@ async fn metadata_set(
     let id = qualified(&args.id)?;
     let key = metadata_key(&args.key)?;
     let value = metadata_value(&args.value)?;
+    if args.held.if_version.is_some() && record != MetadataRecord::Task {
+        return Err(Failure::decided(
+            "if-version-one-task",
+            "--if-version holds a write to a task's version; a project's or a document's metadata \
+             is written without it\n\
+             next: leave --if-version out, and hold a document's write with --expect"
+                .to_owned(),
+        ));
+    }
     if args.expect.expect.is_some() && record == MetadataRecord::Project {
         return Err(Failure::decided(
             "expect-one-task",
@@ -2039,7 +2141,15 @@ async fn metadata_set(
         expecting(loaded, &id, &args.expect)?
     };
     let set = match (record, &args.expect.expect) {
-        (MetadataRecord::Task, _) => engine.set_task_metadata(&id, &key, &value).await,
+        (MetadataRecord::Task, _) => {
+            held(
+                &engine,
+                &id,
+                &args.held,
+                engine.set_task_metadata(&id, &key, &value),
+            )
+            .await
+        }
         (MetadataRecord::Project, _) => engine.set_project_metadata(&id, &key, &value).await,
         (MetadataRecord::Document, None) => engine.set_document_metadata(&id, &key, &value).await,
         (MetadataRecord::Document, Some(version)) => {
@@ -2683,6 +2793,7 @@ mod tests {
                 "task comment list",
                 "task comment edit",
                 "task comment delete",
+                "task comments",
                 "task status set",
                 "task status reconcile",
                 "task status complete",

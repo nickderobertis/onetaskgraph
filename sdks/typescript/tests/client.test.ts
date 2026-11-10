@@ -31,6 +31,7 @@ import {
   projectCopyFlags,
   projectGraphDirections,
   statusPolicies,
+  taskCommentsFlags,
   taskCopyFlags,
   taskUpdateFlags,
   taskUpdateOptionFlags,
@@ -946,8 +947,10 @@ test("taskUpdate sends exactly the flags the binary's task update reports, no mo
         dependsOn: ["work:T-3"],
         termScope: ["github.com/example-org/widget"],
         expect: "gh2|v",
+        ifVersion: "md1|v",
+        repositories: ["github.com/example-org/widget"],
       }),
-      ...taskUpdateFlags({ delivers: [], dependsOn: [], termScope: [] }),
+      ...taskUpdateFlags({ delivers: [], dependsOn: [], termScope: [], repositories: [] }),
     ].filter((argument) => argument.startsWith("--")),
   );
   expect([...sent].sort()).toEqual(own);
@@ -993,6 +996,7 @@ test("taskCopy sends exactly the flags the binary's task copy reports, no more a
         whenDestinationStatus: ["backlog"],
         otherwise: "refuse",
         whenDestinationPriority: ["none"],
+        ifVersion: "md1|v",
       }),
       ...taskCopyFlags({ termScope: [] }),
     ].filter((argument) => argument.startsWith("--")),
@@ -2585,4 +2589,115 @@ test("taskCopy guards its writes, reports what each held and left, and retries a
   } finally {
     rmSync(store, { recursive: true, force: true });
   }
+});
+
+test("a held copy, a repositories update and a comments listing drive the real binary", async () => {
+  const root = metadataFolder();
+  try {
+    mkdirSync(resolve(root, "into", "tasks"), { recursive: true });
+    writeFileSync(
+      resolve(root, "onetaskgraph.yaml"),
+      JSON.stringify({
+        sources: {
+          work: { plugin: "local-md", config: { root: resolve(root, "work") } },
+          into: { plugin: "local-md", config: { root: resolve(root, "into") } },
+        },
+      }),
+    );
+    const client = new OnetaskgraphClient({ binaryPath: binary, cwd: root });
+
+    // The repositories list alone, replaced and then cleared.
+    const updated = await client.taskUpdate("work:T-1", {
+      repositories: ["github.com/acme/widgets"],
+    });
+    expect(updated.task.repositories).toEqual(["github.com/acme/widgets"]);
+    expect(updated.written).toEqual(["repositories"]);
+    expect(updated.task.title).toBe("One");
+    const cleared = await client.taskUpdate("work:T-1", { repositories: [] });
+    expect(cleared.task.repositories).toEqual([]);
+
+    // A copy held to its destination task's version lands at it, and is refused at one another
+    // writer moved the task past.
+    const created = await client.taskCopy(["work:T-1"], "into");
+    const outcome = created.items[0];
+    if (outcome === undefined || !("destination" in outcome)) {
+      throw new Error(`the copy names what it created: ${JSON.stringify(created)}`);
+    }
+    const landed = String(outcome.destination);
+    const versionOf = async (id: string): Promise<string> => {
+      const version = (await client.taskShow(id)).items[0]?.item.version;
+      if (typeof version !== "string") throw new Error(`${id} is read with a version`);
+      return version;
+    };
+    const read = await versionOf(landed);
+    await client.taskUpdate("work:T-1", { title: "One, revised" });
+    await client.taskCopy(["work:T-1"], "into", { ifVersion: read });
+    expect((await client.taskShow(landed)).items[0]?.item.title).toBe("One, revised");
+    const written = await versionOf(landed);
+    await client.taskUpdate(landed, { title: "Moved by another writer" });
+    await client.taskUpdate("work:T-1", { title: "One, again" });
+    const stale = client.taskCopy(["work:T-1"], "into", { ifVersion: written });
+    await expect(stale).rejects.toBeInstanceOf(OnetaskgraphExecutionError);
+    await expect(stale).rejects.toMatchObject({ failure: { kind: "version-moved" } });
+    expect((await client.taskShow(landed)).items[0]?.item.title).toBe("Moved by another writer");
+
+    // An update held to the task's version lands at it, and is refused at one it moved past.
+    const before = await versionOf("work:T-1");
+    await client.taskUpdate("work:T-1", { title: "Held", ifVersion: before });
+    expect((await client.taskShow("work:T-1")).items[0]?.item.title).toBe("Held");
+    const refused = client.taskUpdate("work:T-1", { title: "Stale", ifVersion: before });
+    await expect(refused).rejects.toBeInstanceOf(OnetaskgraphExecutionError);
+    await expect(refused).rejects.toMatchObject({ failure: { kind: "version-moved" } });
+    expect((await client.taskShow("work:T-1")).items[0]?.item.title).toBe("Held");
+
+    // Every comment since an instant, who wrote it, and the watermark to read from next.
+    await client.taskCommentAdd("work:T-1", {
+      body: "A bot follows up.\n",
+      author: "ci-helper[bot]",
+    });
+    const listed = await client.taskComments("work", "2020-01-01T00:00:00Z", {
+      items: ["work:T-1"],
+    });
+    expect(listed.schema_version).toBe(1);
+    expect(listed.comments.map((comment) => comment.author_kind)).toEqual(["bot"]);
+    expect(listed.comments[0]?.item).toBe("work:T-1");
+    expect(typeof listed.watermark).toBe("string");
+    const none = await client.taskComments("work", "2020-01-01T00:00:00Z", { statuses: ["done"] });
+    expect(none.comments).toEqual([]);
+    const kept = await client.taskComments("work", "2020-01-01T00:00:00Z", {
+      metadata: ["myapp.kept=1"],
+    });
+    expect(kept.comments).toEqual([]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("taskComments sends exactly the flags the binary's task comments reports, no more and no fewer", () => {
+  // `TaskCommentsOptions` is a second statement of `task comments`'s command line, reconciled
+  // against the binary's own help both ways, as taskUpdate's options are.
+  const flags = (verb: string[]) => {
+    const help = spawnSync(binary, [...verb, "--help"], { encoding: "utf8" });
+    expect(help.status, help.stderr).toBe(0);
+    return new Set(
+      [...help.stdout.matchAll(/^\s+(?:-[a-zA-Z], )?(--[a-z][a-z-]*)/gm)].flatMap((found) =>
+        found[1] === undefined ? [] : [found[1]],
+      ),
+    );
+  };
+  const global = flags(["config", "show"]);
+  const own = [...flags(["task", "comments"])].filter((flag) => !global.has(flag)).sort();
+  const sent = new Set(
+    taskCommentsFlags("2026-01-01T00:00:00Z", {
+      metadata: ["myapp.a=1"],
+      statuses: ["done"],
+      items: ["work:T-1"],
+    }).filter((argument) => argument.startsWith("--")),
+  );
+  expect([...sent].sort()).toEqual(own);
+  // A narrowing it does not carry, or options that are not an object, are refused rather than
+  // dropped — either would widen the listing past what the caller asked for.
+  expect(() => taskCommentsFlags("2026-01-01T00:00:00Z", { status: ["done"] })).toThrow("status");
+  expect(() => taskCommentsFlags("2026-01-01T00:00:00Z", "done")).toThrow("not an object");
+  expect(() => taskCommentsFlags("2026-01-01T00:00:00Z", ["done"])).toThrow("not an object");
 });

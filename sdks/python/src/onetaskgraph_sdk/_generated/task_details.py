@@ -260,6 +260,16 @@ class Served(StrEnum):
     ServedRemote = "remote"
 
 
+class ItemKind(StrEnum):
+    ItemKindTask = "task"
+    ItemKindProject = "project"
+
+
+class DependencyKind(StrEnum):
+    DependencyKindBlocks = "blocks"
+    DependencyKindRelated = "related"
+
+
 class Status(BaseModel):
     category: Annotated[
         StatusCategory,
@@ -378,6 +388,14 @@ class CacheUse(BaseModel):
     ] = None
 
 
+class QualifiedEndpoint(BaseModel):
+    id: Annotated[
+        GlobalId,
+        Field(description="`<source>:<native>`, preserved when a plugin reports another source."),
+    ]
+    kind: Annotated[ItemKind, Field(description="Whether this endpoint names a task or project.")]
+
+
 class Task(BaseModel):
     id: Annotated[NativeId, Field(description="The source's own opaque identifier.")]
     key: Annotated[
@@ -476,6 +494,21 @@ class Unanswered(RootModel[SourceFailure | UnresolvedDesignator]):
     ]
 
 
+class QualifiedEdge(BaseModel):
+    from_: Annotated[
+        QualifiedEndpoint,
+        Field(
+            alias="from",
+            description="The item the edge starts at, and the one that **depends on** the other.\n\nThe direction a caller asked in says which end they named, not which end the edge\nstarts at: a forward read and the matching reverse read report the same edge.",
+        ),
+    ]
+    to: Annotated[
+        QualifiedEndpoint,
+        Field(description="The item the edge points at, and the one that must finish first."),
+    ]
+    kind: Annotated[DependencyKind, Field(description="What the edge means.")]
+
+
 class QualifiedTask(BaseModel):
     id: Annotated[
         GlobalId,
@@ -524,6 +557,12 @@ class TaskDetail(BaseModel):
         CacheUse | None,
         Field(
             description='How the read used its source\'s local cache: `{"served": "cache" | "remote",\n"bypassed": null | "<reason>"}` — absent for a source keeping none, and for an id\nnaming no configured source.'
+        ),
+    ] = None
+    depends_on: Annotated[
+        list[QualifiedEdge] | None,
+        Field(
+            description="The task's forward dependency edges, exactly as `task deps` answers them — present only\nwhen the read asked for them (`task show --with-deps`), and absent for a task that was not\nfound, or whose edges could not be read, the failure then in the response's `errors`."
         ),
     ] = None
 

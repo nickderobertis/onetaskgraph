@@ -938,6 +938,25 @@ impl TaskSource for CachedSource {
         self.inner.order_versions(a, b)
     }
 
+    fn holds_versions(&self) -> bool {
+        self.inner.holds_versions()
+    }
+
+    fn comment_author_kind(
+        &self,
+        comment: &onetaskgraph_plugin_api::Comment,
+    ) -> onetaskgraph_plugin_api::AuthorKind {
+        self.inner.comment_author_kind(comment)
+    }
+
+    fn comment_consistency_window(&self) -> std::time::Duration {
+        self.inner.comment_consistency_window()
+    }
+
+    fn served_at(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        self.inner.served_at()
+    }
+
     fn version_coverage(&self) -> VersionCoverage {
         self.inner.version_coverage()
     }

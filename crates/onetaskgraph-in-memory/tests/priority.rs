@@ -178,6 +178,7 @@ async fn a_priority_set_on_its_own_moves_nothing_else_and_none_clears_it() {
         after,
         Task {
             priority: Priority::Medium,
+            version: after.version.clone(),
             ..before.clone()
         }
     );
@@ -212,6 +213,7 @@ async fn a_content_set_on_its_own_replaces_the_body_byte_for_byte_and_moves_noth
         after,
         Task {
             content: Some(written.to_owned()),
+            version: after.version.clone(),
             ..before
         }
     );

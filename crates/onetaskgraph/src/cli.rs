@@ -154,6 +154,22 @@ pub struct ExpectArgs {
     pub expect: Option<String>,
 }
 
+/// The version of a task a write is held to: `--if-version`.
+#[derive(Debug, Default, Args)]
+pub struct IfVersionArgs {
+    /// Write only while the task is at this version, as a read of it reported (`task show`'s
+    /// `version`): a task at any other version — changed by somebody since that read — is
+    /// refused as `version-moved`, naming the version it is at, and nothing is written. A folder
+    /// of Markdown and an in-memory source check and write as one step; a GitHub board and
+    /// Linear, which take no conditional write, read the task immediately before writing it.
+    /// Unlike `--expect`, needs no cache, and the two may be given together.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — as `ExpectArgs::expect`: a version is
+    /// the source's own opaque token, which only the source that spelled it reads.
+    #[arg(long = "if-version", value_name = "VERSION")]
+    pub if_version: Option<String>,
+}
+
 /// What `onetaskgraph template` can do.
 #[derive(Debug, Subcommand)]
 pub enum TemplateCommand {
@@ -417,6 +433,15 @@ pub enum TaskCommand {
         #[command(subcommand)]
         command: CommentCommand,
     },
+    /// List every comment one source's tasks hold that was made or edited since an instant,
+    /// oldest first, across every page, with the watermark a later read may start from.
+    ///
+    /// Each comment carries the task it is on, its id, its URL, its author and whether that is
+    /// a `person`, a `bot` or `unknown` — the source's own call — its version at the backend's
+    /// own precision, and its body. The watermark is set back by the source's own consistency
+    /// window (a search index's lag included), so a caller reading again from it never loses a
+    /// comment the source had not yet shown; one read twice carries the same id and version.
+    Comments(TaskCommentsArgs),
     /// Set one task's status, and nothing else about it.
     ///
     /// Every task it delivers is kept in step with it afterwards, and each is reported.
@@ -484,6 +509,39 @@ pub enum TaskCommand {
     /// state is written once and a conflicting one refused.
     // llmlint: ignore[new_command_or_client_gets_its_own_project] The approved design places the human projection verb in the existing CLI over the existing task-write engine, with no alternate tracker client, and the manager ruled (c-adcfc828) that it stays here rather than in a crate of its own; its journeys stay in the per-plugin e2e projects so selection stays targeted. A drafted follow-up weighs moving it.
     ProjectHuman(TaskProjectHumanArgs),
+}
+
+/// `onetaskgraph task comments`.
+#[derive(Debug, Args)]
+pub struct TaskCommentsArgs {
+    /// The configured source whose tasks' comments to list.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — as `StatusReconcileArgs::source`: a
+    /// name that cannot be a source name and one naming no configured source are the same typo,
+    /// and both owe the same next action.
+    #[arg(value_name = "SOURCE")]
+    pub source: String,
+
+    /// List the comments made or edited at or after this instant, an RFC 3339 time with its
+    /// offset (`2026-09-28T12:00:00Z`) — the `watermark` an earlier read answered.
+    #[arg(long, value_name = "RFC3339", value_parser = instant)]
+    pub since: DateTime<Utc>,
+
+    /// Keep the tasks whose metadata holds this string, as `task list --metadata` does. Repeat
+    /// to require several.
+    #[arg(long = "metadata", value_name = "KEY[/SEGMENT...]=VALUE", value_parser = metadata_match)]
+    pub metadata: Vec<MetadataMatch>,
+
+    /// Keep the tasks in this status category. Repeat for several.
+    #[arg(long = "status", value_name = "S")]
+    pub status: Vec<StatusArg>,
+
+    /// Keep only this task, qualified, of SOURCE. Repeat for several.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — as `StatusSetArgs::id`: `qualified`
+    /// in `main` converts it with the next action a user needs.
+    #[arg(long = "item", value_name = "ID")]
+    pub item: Vec<String>,
 }
 
 /// `onetaskgraph task project-human`.
@@ -874,8 +932,26 @@ pub struct TaskUpdateArgs {
     #[arg(long = "no-depends-on")]
     pub no_depends_on: bool,
 
+    /// A repository it names, as its origin — `github.com/owner/name`. Repeat for several;
+    /// together they replace its repositories list, and nothing else about it. Where its issue
+    /// lives is never moved.
+    #[arg(
+        long = "repository",
+        value_name = "ORIGIN",
+        value_parser = repository,
+        conflicts_with = "no_repositories"
+    )]
+    pub repository: Vec<Repository>,
+
+    /// Replace its repositories list with none.
+    #[arg(long = "no-repositories")]
+    pub no_repositories: bool,
+
     #[command(flatten)]
     pub expect: ExpectArgs,
+
+    #[command(flatten)]
+    pub held: IfVersionArgs,
 
     #[command(flatten)]
     pub term_scope: TermScopeArgs,
@@ -904,8 +980,18 @@ pub struct PrioritySetArgs {
     #[arg(value_name = "PRIORITY")]
     pub priority: PriorityArg,
 
+    /// Write only while the task holds this priority — `none` for a task with none. Repeat for
+    /// several. At any other the task keeps its own, nothing is written, and the answer's
+    /// `outcome` is `held`, with `priority_condition` naming what it holds: the semantics of
+    /// `task copy --when-destination-priority`. Costs one read of the task before the write.
+    #[arg(long = "when-priority", value_name = "PRIORITY")]
+    pub when_priority: Vec<PriorityArg>,
+
     #[command(flatten)]
     pub expect: ExpectArgs,
+
+    #[command(flatten)]
+    pub held: IfVersionArgs,
 
     #[command(flatten)]
     pub term_scope: TermScopeArgs,
@@ -936,6 +1022,9 @@ pub struct ContentSetArgs {
 
     #[command(flatten)]
     pub expect: ExpectArgs,
+
+    #[command(flatten)]
+    pub held: IfVersionArgs,
 
     #[command(flatten)]
     pub term_scope: TermScopeArgs,
@@ -986,6 +1075,9 @@ pub struct MetadataSetArgs {
     /// and refused, writing nothing, when it is at another.
     #[command(flatten)]
     pub expect: ExpectArgs,
+
+    #[command(flatten)]
+    pub held: IfVersionArgs,
 
     #[command(flatten)]
     pub term_scope: TermScopeArgs,
@@ -1102,6 +1194,9 @@ pub struct StatusSetArgs {
     pub expect: ExpectArgs,
 
     #[command(flatten)]
+    pub held: IfVersionArgs,
+
+    #[command(flatten)]
     pub term_scope: TermScopeArgs,
 }
 
@@ -1184,6 +1279,9 @@ pub struct CommentAddArgs {
     pub expect: ExpectArgs,
 
     #[command(flatten)]
+    pub held: IfVersionArgs,
+
+    #[command(flatten)]
     pub term_scope: TermScopeArgs,
 }
 
@@ -1222,6 +1320,9 @@ pub struct CommentEditArgs {
 
     #[command(flatten)]
     pub expect: ExpectArgs,
+
+    #[command(flatten)]
+    pub held: IfVersionArgs,
 
     #[command(flatten)]
     pub term_scope: TermScopeArgs,
@@ -1485,6 +1586,12 @@ pub struct TaskListArgs {
     #[arg(long = "origin", value_name = "SOURCE:ID", value_parser = origin)]
     pub origin: Option<GlobalId>,
 
+    /// Follow every page to the last and answer every match at once, with no `next`. A page
+    /// answering a token already followed — a source repeating its cursor — is refused as
+    /// `repeated-page` rather than walked forever. `--limit` sets how many each page asks for.
+    #[arg(long)]
+    pub all: bool,
+
     #[command(flatten)]
     pub paging: PageArgs,
 }
@@ -1594,6 +1701,11 @@ pub struct TaskShowArgs {
     /// Read the record without requesting its comments.
     #[arg(long)]
     pub no_comments: bool,
+    /// Answer the task's forward dependency edges beside it, as `depends_on` — every edge
+    /// `task deps` answers for it — so the task and its edges are one read where its source
+    /// reads them together.
+    #[arg(long = "with-deps")]
+    pub with_deps: bool,
     /// A version of the task the caller already holds: answered from the source's local
     /// cache, with no request, when it holds the task at that version or a later one — which
     /// may predate a change nobody has read yet — and from the source otherwise.
@@ -2030,6 +2142,9 @@ pub struct TaskCopyArgs {
     /// value differs from that version, and no read of it.
     #[command(flatten)]
     pub expect: ExpectArgs,
+
+    #[command(flatten)]
+    pub held: IfVersionArgs,
     #[command(flatten)]
     pub copy: CopyArgs,
 }

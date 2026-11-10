@@ -13,10 +13,9 @@ use onetaskgraph_plugin_api::{MetadataRecord, Priority};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::Spent;
 use super::boundary::{Exposure, Held};
 use super::delivery::source_failed;
-use super::{Engine, EngineError};
+use super::{Engine, EngineError, PriorityCondition, Spent};
 use crate::GlobalId;
 use crate::cache::{WriteFallback, WriteResult};
 use crate::resolve::ResolvedSource;
@@ -40,6 +39,92 @@ pub struct TaskPrioritySet {
     /// fallback read included — absent for a write made without `--expect`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spent: Option<Spent>,
+    /// What a guard by `--when-priority` came to — its `outcome` and its `priority_condition`
+    /// beside the other members — absent for a write made without the guard.
+    #[serde(flatten, default, skip_serializing_if = "Option::is_none")]
+    pub guard: Option<PriorityGuard>,
+}
+
+/// What a write guarded by a condition on the item's own value came to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum GuardOutcome {
+    /// The item held a value the guard names, and the write was made.
+    Written,
+    /// The item held a value the guard does not name, and nothing was written.
+    Held,
+}
+
+/// What a write guarded by the priority its task holds came to: whether it was `written` or
+/// `held`, and the condition that decided it. Made only from the condition — read back off the
+/// wire too, whatever `outcome` it was written with — so the outcome is always the one its
+/// `met` says, and never stands without it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(try_from = "PriorityGuardWire")]
+pub struct PriorityGuard {
+    /// `written` when the task held a priority the guard names, and `held` when it did not.
+    outcome: GuardOutcome,
+    /// What the guard found the task's priority at before the write, and whether that is one it
+    /// names — the shape `task copy --when-destination-priority` reports.
+    priority_condition: PriorityCondition,
+}
+
+impl PriorityGuard {
+    /// The guard `condition` came to.
+    #[must_use]
+    pub const fn of(condition: PriorityCondition) -> Self {
+        Self {
+            outcome: if condition.met {
+                GuardOutcome::Written
+            } else {
+                GuardOutcome::Held
+            },
+            priority_condition: condition,
+        }
+    }
+
+    /// Whether the write was made.
+    #[must_use]
+    pub const fn outcome(&self) -> GuardOutcome {
+        self.outcome
+    }
+
+    /// The condition that decided it.
+    #[must_use]
+    pub const fn condition(&self) -> PriorityCondition {
+        self.priority_condition
+    }
+}
+
+/// [`PriorityGuard`] as it reads off the wire: its condition decides its outcome, and with no
+/// condition there is no guard. Each member is optional here because the members around them
+/// are: an answer written without a guard carries neither.
+#[derive(Deserialize, JsonSchema)]
+#[schemars(rename = "PriorityGuard")]
+struct PriorityGuardWire {
+    /// `written` when the task held a priority the guard names, and `held` when it did not —
+    /// absent for a write made without the guard.
+    #[allow(
+        dead_code,
+        reason = "read for the schema; the condition decides the outcome"
+    )]
+    #[serde(default)]
+    outcome: Option<GuardOutcome>,
+    /// What the guard found the task's priority at before the write, and whether that is one it
+    /// names — the shape `task copy --when-destination-priority` reports — absent for a write
+    /// made without the guard.
+    #[serde(default)]
+    priority_condition: Option<PriorityCondition>,
+}
+
+impl TryFrom<PriorityGuardWire> for PriorityGuard {
+    type Error = &'static str;
+
+    fn try_from(wire: PriorityGuardWire) -> Result<Self, Self::Error> {
+        wire.priority_condition
+            .map(Self::of)
+            .ok_or("no guard: no priority condition")
+    }
 }
 
 /// What `task content set` answers with.
@@ -121,7 +206,64 @@ impl Engine {
             result,
             fallback,
             spent,
+            guard: None,
         })
+    }
+
+    /// [`set_task_priority`](Self::set_task_priority), only while the task holds one of the
+    /// priorities `when` names — [`Priority::None`] matching a task with none: the task is read
+    /// first, and one at any other priority is answered [`GuardOutcome::Held`] with the priority
+    /// it holds and nothing written. The semantics of `task copy --when-destination-priority`,
+    /// on one task. An empty `when` sets no guard.
+    ///
+    /// The read and the write are two calls; beside [`Engine::held_write`] a change landing
+    /// between them is refused as the version having moved.
+    ///
+    /// # Errors
+    ///
+    /// As [`set_task_priority`](Self::set_task_priority).
+    pub async fn set_task_priority_when(
+        &self,
+        id: &GlobalId,
+        priority: Priority,
+        when: &[Priority],
+    ) -> Result<TaskPrioritySet, EngineError> {
+        if when.is_empty() {
+            return self.set_task_priority(id, priority).await;
+        }
+        let source = self.built(&id.source)?;
+        if !source.source().writes().is_supported() {
+            return Err(EngineError::PriorityNotWritable {
+                name: source.name().to_string(),
+                kind: source.kind().to_owned(),
+            });
+        }
+        if !source.source().capabilities().priority.is_native() {
+            return Err(no_priority(source, &id.to_string(), priority));
+        }
+        let task = source
+            .source()
+            .get_task(&id.native)
+            .await
+            .map_err(|error| source_failed(source, error))?
+            .ok_or_else(|| EngineError::NoSuchTask { id: id.to_string() })?;
+        let condition = PriorityCondition {
+            held: task.priority,
+            met: when.contains(&task.priority),
+        };
+        if !condition.met {
+            return Ok(TaskPrioritySet {
+                id: id.clone(),
+                priority: task.priority,
+                result: Some(WriteResult::of_task(&task, task.version.clone())),
+                fallback: None,
+                spent: None,
+                guard: Some(PriorityGuard::of(condition)),
+            });
+        }
+        let mut set = self.set_task_priority(id, priority).await?;
+        set.guard = Some(PriorityGuard::of(condition));
+        Ok(set)
     }
 
     /// Replace one task's content with `content`, byte for byte, and nothing else about it.

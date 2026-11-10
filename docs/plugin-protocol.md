@@ -534,6 +534,15 @@ holds — are answered as the trait's default does, with none, so a copy into a 
 none of its items before writing and refuses none of them as `oversize`; a body too large for
 the backend is refused by the plugin's own write, which the copy then takes back whole.
 
+The follow-up methods are not carried either, and a source hosted over this protocol is
+answered as the trait's defaults answer. `holds_versions` answers false, so a write held to a
+task's version (`--if-version`) is checked by the engine reading the task through the protocol
+immediately before the write, rather than inside the plugin as one step with it.
+`comment_author_kind` is decided by the name convention every source shares — an author ending
+`[bot]` is a bot, any other a person, none unknown — `comment_consistency_window` is none, and
+`served_at` states no time, so the watermark of a comment read from a hosted source is this host's
+clock at the read's start.
+
 ### 4.1 Common parameter shapes
 
 **`PageRequest`** — every paged method takes one under `page`:

@@ -367,6 +367,46 @@ pub trait TaskSource: Send + Sync {
         let _ = id;
     }
 
+    /// Who wrote `comment`, a comment this source answered: a person, a bot or unknown.
+    ///
+    /// Defaulted to [`AuthorKind::of_name`](crate::AuthorKind::of_name) over its author. A
+    /// source whose backend says more — a GitHub board, which reads each author's kind — answers
+    /// from what it read.
+    fn comment_author_kind(&self, comment: &crate::Comment) -> crate::AuthorKind {
+        crate::AuthorKind::of_name(comment.author.as_deref())
+    }
+
+    /// How long after a comment is made or edited a read of this source may still not see it —
+    /// a search index's lag behind the writes it indexes.
+    ///
+    /// A read of the comments made since an instant answers a watermark set back by this, so a
+    /// caller resuming from it reads again whatever this source had not yet shown. Defaulted to
+    /// none: a source whose reads see every write at once.
+    fn comment_consistency_window(&self) -> std::time::Duration {
+        std::time::Duration::ZERO
+    }
+
+    /// The time this source's backend last stated on an answer — a hosted service's `Date` —
+    /// or `None` for a source that states none, whose time is the engine's own clock's.
+    ///
+    /// The instant a watermark is set back from is the earlier of this and the engine's clock
+    /// at the read's start, so a backend whose clock is behind this host's loses no comment.
+    fn served_at(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        None
+    }
+
+    /// Whether this source enforces a [`HeldVersion`](crate::HeldVersion) itself, as one step
+    /// with the write it holds: `true` for a source that serializes its own writes and, inside
+    /// every task write, refuses with [`HeldVersion::moved`](crate::HeldVersion::moved) a task
+    /// not at the version [`HeldVersion::expected`](crate::HeldVersion::expected) names.
+    ///
+    /// Defaulted to `false`: the engine then reads the task through this source immediately
+    /// before a held write and refuses it there, and the time between that read and the
+    /// mutation is the backend's residual race.
+    fn holds_versions(&self) -> bool {
+        false
+    }
+
     /// Start recording every request this source sends, for [`end_journal`](Self::end_journal).
     ///
     /// The engine opens one journal around one write at a time. Defaulted to recording

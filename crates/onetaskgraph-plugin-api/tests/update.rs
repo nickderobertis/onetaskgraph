@@ -11,8 +11,8 @@ use std::sync::Mutex;
 use onetaskgraph_plugin_api::{
     Capabilities, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport, Direction,
     Health, ItemKind, ItemWrite, Label, MetadataKey, NativeId, Page, PageRequest, Priority,
-    Project, ProjectQuery, SourceError, Status, StatusCategory, Support, Task, TaskQuery, TaskRef,
-    TaskSource, TaskUpdate, TaskUpdateOutcome, UpdatedField, WriteSupport,
+    Project, ProjectQuery, Repository, SourceError, Status, StatusCategory, Support, Task,
+    TaskQuery, TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome, UpdatedField, WriteSupport,
 };
 use schemars::schema_for;
 use serde_json::{Value, json};
@@ -369,9 +369,14 @@ fn an_update_names_on_the_wire_only_what_it_names_and_round_trips() {
         metadata_remove: BTreeSet::from([key("team.b")]),
         delivers: Some(Vec::new()),
         depends_on: Some(Vec::new()),
+        repositories: Some(vec![
+            Repository::try_from("github.com/acme/widgets".to_owned())
+                .expect("a repository origin"),
+        ]),
     };
     let wire = serde_json::to_value(&whole).expect("serialises");
     assert_eq!(wire["delivers"], json!([]), "an empty list is named");
+    assert_eq!(wire["repositories"], json!(["github.com/acme/widgets"]));
     assert_eq!(wire["metadata_set"], json!({"team.a": null}));
     let back: TaskUpdate = serde_json::from_value(wire).expect("round trips");
     assert_eq!(back, whole);
@@ -385,6 +390,7 @@ fn an_update_names_on_the_wire_only_what_it_names_and_round_trips() {
         UpdatedField::Metadata,
         UpdatedField::Delivers,
         UpdatedField::DependsOn,
+        UpdatedField::Repositories,
     ] {
         assert!(whole.names(field), "{field:?}");
         assert!(!TaskUpdate::default().names(field), "{field:?}");

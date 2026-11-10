@@ -245,6 +245,15 @@ folder at the same moment reads the old file or the new one and never a part of 
 staging name does not end in `.md`, and a walk of the folder skips it by name, so it is never
 listed as a record.
 
+## A write held to a version
+
+A task's version here is `md1|` and the SHA-256 of its file. A write made with `--if-version`
+takes the lock beside the task's file — `<file>.lock`, the same exclusive, cross-process lock a
+copy takes — reads the file, compares its token and writes, all before letting go, so no other
+held write of that task, from any process, lands between the check and the write: of two racing
+at one version, exactly one lands and the other is refused as `version-moved`. A write without
+`--if-version`, and an edit made in an editor, take no lock, so they are not excluded.
+
 ## Documents
 
 A document is one piece of information that lives in a project and is not work — a design,

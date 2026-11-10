@@ -447,6 +447,7 @@ async fn an_update_the_task_already_holds_writes_nothing_and_says_so() {
                 to: DependencyEndpoint::from_native(NativeId::from("T-2"), ItemKind::Task),
                 kind: DependencyKind::Blocks,
             }]),
+            repositories: Some(before.repositories.clone()),
         };
         let answer = store.update(&update).await.expect("an answer");
         assert!(answer.written.is_empty(), "{kind:?}: {:?}", answer.written);

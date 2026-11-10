@@ -474,8 +474,8 @@ async fn every_reserved_key_has_the_owner_docs_metadata_states_on_an_update() {
     for (key, owner) in &owners {
         let expected = match owner.as_str() {
             // The record this copy wrote: no `copied_with_comments`, because this copy carried
-            // none, but a digest of what it left — and, an in-memory source giving no token, a
-            // digest of what it composed of the source.
+            // none, but a digest of what it left — or the token an in-memory source derives —
+            // and the source's own token, or a digest of what it composed of the source.
             "the copy"
                 if key == MetadataKey::COPIED_DESTINATION_VERSION_KEY
                     || key == MetadataKey::COPIED_VERSION_KEY =>
@@ -484,7 +484,10 @@ async fn every_reserved_key_has_the_owner_docs_metadata_states_on_an_update() {
                     .get(key)
                     .and_then(Value::as_str)
                     .unwrap_or_default();
-                assert!(held.starts_with("sha256:"), "{key}: {held:?}");
+                assert!(
+                    held.starts_with("sha256:") || held.starts_with("mem1|"),
+                    "{key}: {held:?}"
+                );
                 Some(json!(held))
             }
             "the copy" if key.starts_with("onetaskgraph.copied_") => None,
@@ -4980,9 +4983,9 @@ async fn create_lands_each_task_without_looking_and_refuses_what_says_there_is_a
 
 #[tokio::test]
 async fn a_destination_never_keeps_the_change_token_a_copied_task_arrives_with() {
-    // The source's token is the source's: the destination derives its own on a read, and an
-    // in-memory source derives none, so what a copy lands there carries none — on the create
-    // and on the update over it.
+    // The source's token is the source's: the destination derives its own on a read — an
+    // in-memory source a digest of what it holds — so what a copy lands there never carries the
+    // one it arrived with, on the create and on the update over it.
     let mut held = task("T-1", "Alpha engine");
     held["version"] = json!("from-v1");
     let engine = engine_over(json!({
@@ -5010,7 +5013,12 @@ async fn a_destination_never_keeps_the_change_token_a_copied_task_arrives_with()
             .expect("the list verb answers")
             .items;
         assert_eq!(landed.len(), 1);
-        assert_eq!(landed[0].item.version, None, "{:?}", landed[0].item);
+        let version = landed[0].item.version.as_deref().unwrap_or_default();
+        assert!(
+            version != "from-v1" && version.starts_with("mem1|"),
+            "{:?}",
+            landed[0].item
+        );
     }
 }
 
