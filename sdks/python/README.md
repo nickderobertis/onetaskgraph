@@ -18,7 +18,14 @@ on `PATH` by the packaged binary distribution. Pass `cwd=` to select the directo
 which configuration is discovered. Partial query exit status 4 is parsed and returned,
 so callers can inspect each typed `SourceFailure`; other non-zero statuses raise
 `OnetaskgraphError` with the exit code, and with the failure document the binary wrote as its
-`failure` — so a caller branches on `failure.kind` — or `None` when it wrote none.
+`failure` — so a caller branches on `failure.kind` — or `None` when it wrote none. Its
+`document` is the whole failure document and `answer` that document's JSON; a write held by
+`if_version` to a version the item has left raises the subclass `VersionMovedError`, whose
+`current_version` is the version the item is at. A write that lands in part (exit 4) is
+returned like a partial query by default; a client built with `Client(raise_on_partial=True)`
+raises `PartialWriteError` for it instead — a write command only, never a read — carrying the
+typed answer as `result` (a copy's `CopyReport`, every item's outcome in it) and its JSON as
+`answer`.
 
 Every call also passes `--no-interactive`, so no call ever waits on a prompt: a template
 variable nothing answers takes its default, and a required one left unanswered raises with

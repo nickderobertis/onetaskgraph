@@ -30,6 +30,7 @@ from onetaskgraph_sdk import (
     CopyVia,
     Located,
     OnetaskgraphError,
+    PartialWriteError,
     QualifiedTask,
     Task,
     VersionMovedError,
@@ -224,6 +225,51 @@ def test_a_partial_copy_answers_its_typed_result_with_every_item(client: Client)
     assert set(by_source) == {"plan:a", "plan:c"}
     assert by_source["plan:a"].action == "created"
     assert by_source["plan:c"].action == "failed"
+
+
+def test_a_partial_write_raises_its_whole_answer_only_for_a_client_that_asks(
+    binary: Path, store: Path
+) -> None:
+    """Opted in, a write answering exit 4 raises `PartialWriteError` carrying every item."""
+    environment = {**os.environ, "HOME": str(store), "XDG_CONFIG_HOME": str(store)}
+    strict = Client(binary, cwd=store, environment=environment, raise_on_partial=True)
+    with pytest.raises(PartialWriteError) as raised:
+        run(strict.task_copy(["plan:a", "plan:c"], to="work"))
+    error = raised.value
+    assert isinstance(error, OnetaskgraphError)
+    assert error.exit_code == 4
+    # The parsed answer, every per-item outcome in it.
+    assert isinstance(error.result, CopyReport)
+    by_source = {outcome.root.source.root: outcome.root for outcome in error.result.items}
+    assert by_source["plan:a"].action == "created"
+    assert by_source["plan:a"].destination is not None
+    assert by_source["plan:c"].action == "failed"
+    assert by_source["plan:c"].error is not None
+    # And the whole JSON answer the store wrote, as written.
+    assert isinstance(error.answer, dict)
+    answered = {item["source"]: item for item in error.answer["items"]}
+    assert answered["plan:a"]["action"] == "created"
+    assert answered["plan:c"]["action"] == "failed"
+    assert answered["plan:c"]["error"]["kind"]
+    # Exactly what landed is there: the created task, and nothing of the failed one.
+    listed = run(strict.task_list(source=["work"], all=True))
+    assert [task.item.title for task in listed.items] == ["a"]
+
+    # A read answering exit 4 — one source of a listing failing — is a partial answer, not a
+    # partial write, and is returned even so.
+    (store / "onetaskgraph.yaml").write_text(
+        json.dumps(
+            {
+                "sources": {
+                    "plan": {"plugin": "local-md", "config": {"root": str(store / "plan")}},
+                    "broken": {"plugin": "linear", "config": {}},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    partial = run(strict.task_list())
+    assert {failure.source.root for failure in partial.errors} == {"broken"}
 
 
 def test_a_guarded_priority_set_answers_held_and_a_repositories_update_replaces_alone(

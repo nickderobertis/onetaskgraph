@@ -67,6 +67,36 @@ class VersionMovedError(OnetaskgraphError):
         return None if held is None else held.version
 
 
+class PartialWriteError(OnetaskgraphError):
+    """A write that landed in part (exit 4), raised only by a client opted in to it.
+
+    ``result`` is the command's answer parsed into its typed model — for a copy, the
+    ``CopyReport`` with every item's outcome, the ones that landed and the ones that failed —
+    and ``answer`` the same answer as the JSON the store wrote. A client constructed without
+    ``raise_on_partial`` returns ``result`` instead, as it always has.
+    """
+
+    def __init__(self, message: str, *, exit_code: int, result: object, answer: object) -> None:
+        """Keep the typed answer beside its JSON."""
+        super().__init__(message, exit_code=exit_code, answer=answer)
+        self.result = result
+
+
+# The last words of every command that writes, and so can land in part: a read answering
+# exit 4 — one source of a listing failing — is a partial answer, and is never raised.
+WRITE_VERBS = frozenset(
+    {"copy", "create", "update", "set", "add", "edit", "delete", "complete", "reconcile"}
+    | {"project-human"}
+)
+
+
+def _writes(command: tuple[str, ...]) -> bool:
+    """Whether `command` writes: a `template render` reads, every other `render` writes."""
+    if command[-1] == "render":
+        return command[0] != "template"
+    return command[-1] in WRITE_VERBS
+
+
 class Client(GeneratedClient):
     """Typed client that invokes the real binary once per method call."""
 
@@ -76,9 +106,16 @@ class Client(GeneratedClient):
         *,
         cwd: str | Path | None = None,
         environment: Mapping[str, str] | None = None,
+        raise_on_partial: bool = False,
     ) -> None:
-        """Resolve the binary and establish the invocation directory."""
+        """Resolve the binary and establish the invocation directory.
+
+        With ``raise_on_partial``, a write that lands in part (exit 4) raises
+        `PartialWriteError` carrying its typed answer and its JSON; without it, the default,
+        that answer is returned, as it always has been.
+        """
         self.binary = _resolve_binary(binary, environment)
+        self.raise_on_partial = raise_on_partial
         self.cwd = Path(cwd) if cwd is not None else None
         self.environment = dict(environment if environment is not None else os.environ)
         self.environment.pop("ONETASKGRAPH_SDK_BINARY", None)
@@ -166,12 +203,20 @@ class Client(GeneratedClient):
             )
         try:
             # TypeAdapter validates `model`; its dynamic constructor cannot preserve T.
-            return cast(T, TypeAdapter(model).validate_json(completed.stdout))
+            result = cast(T, TypeAdapter(model).validate_json(completed.stdout))
         except ValidationError as error:
             raise OnetaskgraphError(
                 f"binary returned a response outside its emitted schema: {error}",
                 exit_code=completed.returncode,
             ) from error
+        if completed.returncode == 4 and self.raise_on_partial and _writes(tuple(command)):
+            raise PartialWriteError(
+                completed.stderr.strip() or "the write landed in part",
+                exit_code=completed.returncode,
+                result=result,
+                answer=_json_of(completed.stdout),
+            )
+        return result
 
     async def _invoke_process(
         self, arguments: list[str], stdin: str | None = None
