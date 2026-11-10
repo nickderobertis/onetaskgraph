@@ -71,4 +71,4 @@ pub use work::{
     Document, EndpointRefusal, ItemKind, Label, Location, Priority, Project, Repository, Status,
     StatusCategory, Task, TaskRef,
 };
-pub use write::{ItemWrite, WriteSupport, documentless, unwritable, unwritable_field};
+pub use write::{BodySize, ItemWrite, WriteSupport, documentless, unwritable, unwritable_field};

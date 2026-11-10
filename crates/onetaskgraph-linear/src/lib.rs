@@ -3905,6 +3905,63 @@ impl TaskSource for LinearSource {
         )
         .await
     }
+    fn task_body_size(
+        &self,
+        write: &ItemWrite<Task>,
+        assets: Option<&onetaskgraph_plugin_api::AssetWrite>,
+    ) -> Option<onetaskgraph_plugin_api::BodySize> {
+        let (content, mut metadata) = served(
+            write.item.content.as_deref(),
+            &write.item.metadata,
+            assets,
+        );
+        set_task_list(&mut metadata, TaskRef::DELIVERS_KEY, &write.item.delivers);
+        set_task_list(
+            &mut metadata,
+            TaskRef::DELIVERED_BY_KEY,
+            &write.item.delivered_by,
+        );
+        body_size(Self::long_form(
+            content.as_deref(),
+            &metadata,
+            &write.item.repositories,
+            write.item.classification,
+            self.recorded_ends(&write.depends_on, WriteKind::Task),
+        ))
+    }
+
+    fn project_body_size(
+        &self,
+        write: &ItemWrite<Project>,
+    ) -> Option<onetaskgraph_plugin_api::BodySize> {
+        body_size(Self::long_form(
+            write.item.content.as_deref(),
+            &write.item.metadata,
+            &write.item.repositories,
+            write.item.classification,
+            self.recorded_ends(&write.depends_on, WriteKind::Project),
+        ))
+    }
+
+    fn document_body_size(
+        &self,
+        write: &ItemWrite<Document>,
+        assets: Option<&onetaskgraph_plugin_api::AssetWrite>,
+    ) -> Option<onetaskgraph_plugin_api::BodySize> {
+        let (content, metadata) = served(
+            write.item.content.as_deref(),
+            &write.item.metadata,
+            assets,
+        );
+        body_size(Self::long_form(
+            content.as_deref(),
+            &metadata,
+            &write.item.repositories,
+            write.item.classification,
+            Vec::new(),
+        ))
+    }
+
     async fn write_task(&self, write: &ItemWrite<Task>) -> Result<NativeId, SourceError> {
         // Before anything is read or written, because nothing Linear could answer changes
         // either: neither list may name the task itself or name one task twice, a category
@@ -5759,6 +5816,57 @@ fn reslotted(
         return Ok((!visible.is_empty()).then(|| visible.to_owned()));
     }
     Ok(Some(format!("{above}{}", slot_text(slot)?)))
+}
+
+/// The address a new upload's URL is spelled at before it is uploaded, as long as the one
+/// `fileUpload` answers: three UUIDs under Linear's file storage host.
+const PREDICTED_UPLOAD_URL: &str = "https://uploads.linear.app/00000000-0000-0000-0000-000000000000/00000000-0000-0000-0000-000000000000/00000000-0000-0000-0000-000000000000";
+
+/// `content` and `metadata` as a write carrying `assets` sends them: every reference rewritten
+/// to its recorded URL, or to one as long as an upload's for an asset not uploaded yet.
+fn served(
+    content: Option<&str>,
+    metadata: &std::collections::BTreeMap<String, Value>,
+    assets: Option<&onetaskgraph_plugin_api::AssetWrite>,
+) -> (Option<String>, std::collections::BTreeMap<String, Value>) {
+    let mut metadata = metadata.clone();
+    let Some(assets) = assets else {
+        return (content.map(str::to_owned), metadata);
+    };
+    let mut uploads = onetaskgraph_plugin_api::AssetUploads::default();
+    for asset in &assets.assets {
+        let url = assets
+            .recorded_assets
+            .as_ref()
+            .and_then(|recorded| recorded.reusable(&asset.name, &asset.sha256))
+            .unwrap_or(PREDICTED_UPLOAD_URL)
+            .to_owned();
+        uploads.0.insert(
+            asset.name.clone(),
+            onetaskgraph_plugin_api::AssetUpload {
+                sha256: asset.sha256.clone(),
+                url,
+            },
+        );
+    }
+    let served = onetaskgraph_plugin_api::serve_asset_references(
+        content.unwrap_or_default(),
+        &mut metadata,
+        &uploads,
+    );
+    (content.map(|_| served), metadata)
+}
+
+/// The size of a composed long form, in characters, and no limit: Linear states none for an
+/// issue's description, a project's content or a document's.
+fn body_size(
+    composed: Result<Option<String>, SourceError>,
+) -> Option<onetaskgraph_plugin_api::BodySize> {
+    let size = composed.ok()?.map_or(0, |body| body.chars().count());
+    Some(onetaskgraph_plugin_api::BodySize {
+        size: u64::try_from(size).unwrap_or(u64::MAX),
+        limit: None,
+    })
 }
 
 /// Hold `entries` under `key` in one slot's metadata, or no such key when there are none.
