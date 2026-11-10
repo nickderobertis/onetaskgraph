@@ -1006,3 +1006,77 @@ fn a_guard_reads_as_held_or_written_to_a_person_and_metadata_off_a_task_takes_no
         "{refused:#}"
     );
 }
+
+/// A source hosted a process away over the stdio plugin protocol — the in-memory plugin
+/// served by `plugin-serve` — holding one task titled `title`.
+fn hosted(sandbox: &Sandbox, title: &str) {
+    sandbox.project_document(&document(&json!({
+        "hosted": {"plugin": "subprocess", "config": {
+            "command": onetaskgraph_e2e_support::binary(),
+            "args": ["plugin-serve", "in-memory"],
+            "settings": {
+                "capabilities": {"priority": "native"},
+                "tasks": [{"id": "T-1", "title": title, "labels": [], "priority": "high",
+                           "status": {"category": "todo", "name": "todo"}}],
+            },
+        }},
+    })));
+}
+
+#[test]
+fn a_write_held_across_the_stdio_plugin_protocol_lands_at_its_version_and_is_refused_at_another() {
+    let sandbox = Sandbox::new();
+    let run = |arguments: &[&str], code: i32| -> Value {
+        let mut full = vec!["--json"];
+        full.extend(arguments);
+        let output = sandbox.command().args(&full).assert().get_output().clone();
+        assert_eq!(
+            output.status.code(),
+            Some(code),
+            "`onetaskgraph {}`\n{}\n{}",
+            full.join(" "),
+            stdout(&output),
+            stderr(&output)
+        );
+        serde_json::from_str(&stdout(&output)).expect("JSON")
+    };
+    hosted(&sandbox, "As served");
+    let read = run(&["task", "show", "hosted:T-1"], 0)["items"][0]["item"]["version"]
+        .as_str()
+        .expect("a hosted task is read with its version")
+        .to_owned();
+    let landed = run(
+        &[
+            "task",
+            "priority",
+            "set",
+            "hosted:T-1",
+            "low",
+            "--if-version",
+            &read,
+        ],
+        0,
+    );
+    assert_eq!(landed["priority"], "low", "{landed:#}");
+
+    // Another writer: what the peer serves, changed after the read.
+    hosted(&sandbox, "Changed since the read");
+    let moved = run(&["task", "show", "hosted:T-1"], 0)["items"][0]["item"]["version"]
+        .as_str()
+        .expect("a version")
+        .to_owned();
+    let refused = run(
+        &[
+            "task",
+            "update",
+            "hosted:T-1",
+            "--title",
+            "Stale",
+            "--if-version",
+            &read,
+        ],
+        1,
+    );
+    assert_eq!(refused["failure"]["kind"], "version-moved", "{refused:#}");
+    assert_eq!(refused["held"]["version"], moved, "{refused:#}");
+}

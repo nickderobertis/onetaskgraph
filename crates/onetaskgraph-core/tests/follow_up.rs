@@ -83,6 +83,8 @@ struct Script {
     window: Duration,
     /// The time it says its backend last stated.
     served: Option<DateTime<Utc>>,
+    /// Every task read with no version, as a backend that gives none answers.
+    unversioned: bool,
 }
 
 /// An in-memory source behaving as its [`Script`] says.
@@ -115,7 +117,25 @@ impl TaskSource for Scripted {
         self.inner.health().await
     }
     async fn get_task(&self, id: &NativeId) -> Result<Option<Task>, SourceError> {
-        self.inner.get_task(id).await
+        let read = self.inner.get_task(id).await?;
+        Ok(read.map(|task| Task {
+            version: if self.script.unversioned {
+                None
+            } else {
+                task.version
+            },
+            ..task
+        }))
+    }
+    fn writes(&self) -> onetaskgraph_plugin_api::WriteSupport {
+        self.inner.writes()
+    }
+    async fn set_task_priority(
+        &self,
+        id: &NativeId,
+        priority: onetaskgraph_plugin_api::Priority,
+    ) -> Result<Option<onetaskgraph_plugin_api::Priority>, SourceError> {
+        self.inner.set_task_priority(id, priority).await
     }
     async fn get_project(&self, id: &NativeId) -> Result<Option<Project>, SourceError> {
         self.inner.get_project(id).await
@@ -488,4 +508,44 @@ fn a_guard_read_back_off_the_wire_is_held_to_its_condition() {
     let unguarded: TaskPrioritySet =
         serde_json::from_value(json!({"id": "work:T-1", "priority": "high"})).expect("read");
     assert!(unguarded.guard.is_none());
+}
+
+#[tokio::test]
+async fn a_held_write_of_a_task_its_backend_gives_no_version_is_refused_writing_nothing() {
+    let mut config = work();
+    config["capabilities"]["priority"] = json!("native");
+    let engine = engine_of(vec![(
+        "work",
+        Box::new(Scripted {
+            inner: in_memory("work", &config),
+            script: Script {
+                unversioned: true,
+                ..Script::default()
+            },
+        }),
+    )]);
+    let task = id("work:T-1");
+    let before = engine.task(&task).await.expect("read").items[0]
+        .item
+        .clone();
+    assert_eq!(before.version, None, "the backend gives no version");
+    let refused = engine
+        .held_write(
+            &task,
+            "mem1|any",
+            engine.set_task_priority(&task, onetaskgraph_plugin_api::Priority::Urgent),
+        )
+        .await
+        .expect_err("no version is not the version held");
+    match &refused {
+        EngineError::VersionMoved { found, held, .. } => {
+            assert_eq!(found, "", "the refusal says the task is at no version");
+            assert_eq!(held.version.as_deref(), Some(""));
+        }
+        other => panic!("{other}"),
+    }
+    let after = engine.task(&task).await.expect("read").items[0]
+        .item
+        .clone();
+    assert_eq!(after, before, "nothing was written");
 }
