@@ -5,7 +5,8 @@
 //! `onetaskgraph.attestations` entry, through the same seam `metadata set` writes through, so
 //! a public write is screened exactly as that one is. A document's write takes the read rather
 //! than reading again. Checking one is the read alone. A task's or a project's own forward
-//! edges are read beside it, and each far end once, for the title the digest names it by.
+//! edges are read beside it, and each far end followed back through the origins it records,
+//! for the lineage root the digest names it by.
 
 use onetaskgraph_plugin_api::{
     DependencyEdge, Document, ItemKind, MetadataKey, MetadataRecord, Repository, SourceName,
@@ -394,25 +395,39 @@ impl Engine {
     /// leads back to while the stores between are configured.
     ///
     /// A copy records on what it lands the id it copied from, so a far end and its counterpart
-    /// in another store reach one root, and two items sharing a title never do. The walk stops,
-    /// naming the last id reached, at an id this configuration cannot read — a source nothing
-    /// configures, an item that is not there — and refuses a chain longer than
-    /// [`MAX_LINEAGE`] or one that comes round to an id it has already read. A far end whose
-    /// source fails to answer fails the attestation rather than being named by a guess.
+    /// in another store reach one root, and two items sharing a title never do. The walk ends,
+    /// naming the last id reached, at an id this configuration does not name a source for or
+    /// an item its source does not hold: the edge still names that id, so it is still the same
+    /// edge.
+    ///
+    /// # Errors
+    ///
+    /// [`EngineError::SourceFailed`], with the source answering it, for an origin that is not
+    /// a qualified id and for a chain that comes round to an id it already read or runs past
+    /// [`MAX_LINEAGE`] — neither has a root every copy would agree on, so none is guessed —
+    /// and for a far end's source failing to answer; and the refusal a configured source that
+    /// cannot be built answers with.
     async fn lineage_root(&self, start: &str, kind: ItemKind) -> Result<FarEnd, EngineError> {
+        let malformed = |far: &ResolvedSource, message: String| {
+            source_failed(
+                far,
+                onetaskgraph_plugin_api::SourceError::Malformed { message },
+            )
+        };
         let mut current = start.to_owned();
         let mut seen: Vec<String> = Vec::new();
         loop {
-            if seen.contains(&current) || seen.len() >= MAX_LINEAGE {
-                return Ok(FarEnd::Lineage(current));
-            }
-            seen.push(current.clone());
             let Ok(id) = current.parse::<GlobalId>() else {
+                // Only the first id can be unqualified here: every later one was read off a
+                // source and refused below when it does not parse.
                 return Ok(FarEnd::Lineage(current));
             };
-            let Ok(far) = self.built(&id.source) else {
-                return Ok(FarEnd::Lineage(current));
+            let far = match self.built(&id.source) {
+                Ok(far) => far,
+                Err(EngineError::UnknownSource { .. }) => return Ok(FarEnd::Lineage(current)),
+                Err(error) => return Err(error),
             };
+            seen.push(current.clone());
             let metadata = match kind {
                 ItemKind::Task => far
                     .source()
@@ -427,14 +442,35 @@ impl Engine {
                     .map_err(|error| source_failed(far, error))?
                     .map(|project| project.metadata),
             };
-            match metadata
+            let Some(origin) = metadata
                 .as_ref()
                 .and_then(|metadata| metadata.get(GlobalId::ORIGIN_KEY))
-                .and_then(Value::as_str)
-            {
-                Some(origin) => current = origin.to_owned(),
-                None => return Ok(FarEnd::Lineage(current)),
+            else {
+                return Ok(FarEnd::Lineage(current));
+            };
+            let Some(origin) = origin
+                .as_str()
+                .filter(|origin| origin.parse::<GlobalId>().is_ok())
+            else {
+                return Err(malformed(
+                    far,
+                    format!(
+                        "{current} records the origin {origin}, which is not a qualified id, so the \
+                         dependency on it cannot be named for an attestation"
+                    ),
+                ));
+            };
+            if seen.iter().any(|read| read == origin) || seen.len() >= MAX_LINEAGE {
+                return Err(malformed(
+                    far,
+                    format!(
+                        "the origins recorded from {start} never reach an item copied from nowhere \
+                         ({}), so the dependency on it has no root to name for an attestation",
+                        seen.join(" → ")
+                    ),
+                ));
             }
+            current = origin.to_owned();
         }
     }
 }

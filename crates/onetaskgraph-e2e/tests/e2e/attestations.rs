@@ -1558,3 +1558,67 @@ fn a_task_record_with_edges_survives_two_hops_of_copying() {
         "two hops from where it was recorded, the record still holds"
     );
 }
+
+#[test]
+fn a_far_end_whose_lineage_cannot_be_named_refuses_the_attestation_writing_nothing() {
+    let plan = Plan::new(false);
+    plan.sandbox.project_document(&document(&json!({
+        "notes": {"plugin": "local-md", "config": {"root": plan.notes}},
+        "broken": {"plugin": "local-md", "config": {"root": "/nonexistent/onetaskgraph/root"}},
+    })));
+    let tasks = plan.notes.join("tasks");
+    std::fs::create_dir_all(&tasks).expect("the tasks folder");
+    let write = |id: &str, front: &str| {
+        std::fs::write(
+            tasks.join(format!("{id}.md")),
+            format!("---\ntitle: {id}\nstatus: todo\n{front}---\nBody.\n"),
+        )
+        .expect("a task file");
+    };
+    // Two tasks recording each other as their origin: a lineage with no root.
+    write("loop-a", "metadata:\n  onetaskgraph.origin: notes:loop-b\n");
+    write("loop-b", "metadata:\n  onetaskgraph.origin: notes:loop-a\n");
+    // A task recording an origin that is not a qualified id.
+    write(
+        "garbled",
+        "metadata:\n  onetaskgraph.origin: not a qualified id\n",
+    );
+    let near = |name: &str, far: &str| {
+        write(
+            name,
+            &format!("depends_on:\n- id: {far}\n  kind: blocks\n  item: task\n"),
+        );
+        format!("notes:{name}")
+    };
+    for (near, says) in [
+        (
+            near("on-loop", "loop-a"),
+            "never reach an item copied from nowhere",
+        ),
+        (near("on-garbled", "garbled"), "which is not a qualified id"),
+        (near("on-broken", "broken:x"), "broken"),
+    ] {
+        let before = std::fs::read_to_string(
+            tasks.join(format!("{}.md", near.split_once(':').expect("qualified").1)),
+        )
+        .expect("the near task");
+        let refused = plan.exits(
+            &[
+                "task", "attest", &near, "--kind", KIND, "--by", "ada", "--bar", BAR,
+            ],
+            1,
+        );
+        assert!(
+            stderr(&refused).contains(says),
+            "{near}: {}",
+            stderr(&refused)
+        );
+        let after = std::fs::read_to_string(
+            tasks.join(format!("{}.md", near.split_once(':').expect("qualified").1)),
+        )
+        .expect("the near task");
+        assert_eq!(after, before, "{near}: nothing written");
+        let check = plan.exits(&["task", "attestation", "check", &near, "--kind", KIND], 1);
+        assert!(stderr(&check).contains(says), "{near}: {}", stderr(&check));
+    }
+}
