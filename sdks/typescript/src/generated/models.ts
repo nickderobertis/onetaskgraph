@@ -14792,6 +14792,10 @@ outcome: "unknown"
  */
 export type Priority = ("none" | "urgent" | "high" | "medium" | "low")
 /**
+ * What a write guarded by a condition on the item's own value came to.
+ */
+export type GuardOutcome = ("written" | "held")
+/**
  * What a locator names.
  */
 export type LocatorKind = ("source" | "item" | "field" | "metadata-key" | "comment" | "path" | "identity")
@@ -14824,10 +14828,16 @@ fallback?: (WriteFallback | null)
  */
 spent?: (Spent | null)
 /**
- * `written` when the task held a priority the guard names, and `held` when it did not.
+ * `written` when the task held a priority the guard names, and `held` when it did not —
+ * absent for a write made without the guard.
  */
-outcome?: ("written" | "held")
-priority_condition?: PriorityCondition
+outcome?: (GuardOutcome | null)
+/**
+ * What the guard found the task's priority at before the write, and whether that is one it
+ * names — the shape `task copy --when-destination-priority` reports — absent for a write
+ * made without the guard.
+ */
+priority_condition?: (PriorityCondition | null)
 sanitization?: (Sanitization | null)
 [k: string]: any
 }
@@ -14938,8 +14948,7 @@ lower_bound: boolean
 [k: string]: any
 }
 /**
- * What the guard found the task's priority at before the write, and whether that is one it
- * names — the shape `task copy --when-destination-priority` reports.
+ * What a guarded copy found a counterpart's priority at, and whether that met the condition.
  */
 export interface PriorityCondition {
 /**

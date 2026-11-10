@@ -58,9 +58,9 @@ pub enum GuardOutcome {
 /// What a write guarded by the priority its task holds came to: whether it was `written` or
 /// `held`, and the condition that decided it. Made only from the condition — read back off the
 /// wire too, whatever `outcome` it was written with — so the outcome is always the one its
-/// `met` says.
+/// `met` says, and never stands without it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(from = "PriorityGuardWire")]
+#[serde(try_from = "PriorityGuardWire")]
 pub struct PriorityGuard {
     /// `written` when the task held a priority the guard names, and `held` when it did not.
     outcome: GuardOutcome,
@@ -96,24 +96,34 @@ impl PriorityGuard {
     }
 }
 
-/// [`PriorityGuard`] as it reads off the wire: its condition decides its outcome.
+/// [`PriorityGuard`] as it reads off the wire: its condition decides its outcome, and with no
+/// condition there is no guard. Each member is optional here because the members around them
+/// are: an answer written without a guard carries neither.
 #[derive(Deserialize, JsonSchema)]
 #[schemars(rename = "PriorityGuard")]
 struct PriorityGuardWire {
-    /// `written` when the task held a priority the guard names, and `held` when it did not.
+    /// `written` when the task held a priority the guard names, and `held` when it did not —
+    /// absent for a write made without the guard.
     #[allow(
         dead_code,
         reason = "read for the schema; the condition decides the outcome"
     )]
-    outcome: GuardOutcome,
+    #[serde(default)]
+    outcome: Option<GuardOutcome>,
     /// What the guard found the task's priority at before the write, and whether that is one it
-    /// names — the shape `task copy --when-destination-priority` reports.
-    priority_condition: PriorityCondition,
+    /// names — the shape `task copy --when-destination-priority` reports — absent for a write
+    /// made without the guard.
+    #[serde(default)]
+    priority_condition: Option<PriorityCondition>,
 }
 
-impl From<PriorityGuardWire> for PriorityGuard {
-    fn from(wire: PriorityGuardWire) -> Self {
-        Self::of(wire.priority_condition)
+impl TryFrom<PriorityGuardWire> for PriorityGuard {
+    type Error = &'static str;
+
+    fn try_from(wire: PriorityGuardWire) -> Result<Self, Self::Error> {
+        wire.priority_condition
+            .map(Self::of)
+            .ok_or("no guard: no priority condition")
     }
 }
 

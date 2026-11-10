@@ -6804,7 +6804,7 @@ const FIFTY_EIGHTH_BUNDLE_SHAPE: [(&str, u64); 144] = [
     ("TaskContentSet", 0x07d008c3abe72ae3),
     ("TaskDetail", 0x65ace6e90971e7b5),
     ("TaskDetails", 0xddbaa824912dc297),
-    ("TaskPrioritySet", 0xa8e19da222550104),
+    ("TaskPrioritySet", 0x48d8fdaa8fca9da4),
     ("TaskQuery", 0x0efc24a7b89f2422),
     ("TaskRef", 0xad8ce2508e0797c7),
     ("TaskStatusSet", 0xa66923b462f897bc),
