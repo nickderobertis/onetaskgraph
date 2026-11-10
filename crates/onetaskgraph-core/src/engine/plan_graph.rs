@@ -133,7 +133,17 @@ impl Engine {
         members: &[PlanMember],
     ) -> Result<PlanCreated, EngineError> {
         let mut earlier: Vec<&NativeId> = Vec::with_capacity(members.len());
+        let refused = |message: String| EngineError::Template {
+            error: TemplateError::Malformed {
+                file: "members".to_owned(),
+                key: Some("id".to_owned()),
+                message,
+            },
+        };
         for member in members {
+            if earlier.contains(&&member.id) {
+                return Err(refused(format!("name the member {} twice", member.id)));
+            }
             if let Some(later) = member
                 .depends_on
                 .iter()

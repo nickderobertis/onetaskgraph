@@ -453,3 +453,59 @@ fn a_schema_that_does_not_compile_or_types_a_scalar_is_refused_naming_its_key() 
         );
     }
 }
+
+#[test]
+fn a_nearer_declaration_gives_its_own_schema_or_none() {
+    let fixture = Fixture::new();
+    let inputs = fixture.sandbox.subdirectory("inputs");
+    // The base declares `steps` with the capitalised-steps schema; one child redeclares it with
+    // no schema, another with a schema of its own.
+    std::fs::write(
+        inputs.join("base.md"),
+        "---\nonetaskgraph_template: 1\nvariables:\n  steps:\n    description: s\n    type: list\n    schema: {type: array, items: {type: string, pattern: \"^[A-Z]\"}}\n---\n{% for step in steps %}* {{ step }}\n{% endfor %}",
+    )
+    .expect("a template");
+    std::fs::write(
+        inputs.join("loose.md"),
+        "---\nonetaskgraph_template: 1\nvariables:\n  steps:\n    description: s\n    type: list\n---\n{% extends \"base.md\" %}\n",
+    )
+    .expect("a template");
+    std::fs::write(
+        inputs.join("short.md"),
+        "---\nonetaskgraph_template: 1\nvariables:\n  steps:\n    description: s\n    type: list\n    schema: {type: array, maxItems: 1}\n---\n{% extends \"base.md\" %}\n",
+    )
+    .expect("a template");
+    let search = fixture.input("");
+    let render = |template: &str, steps: &str| {
+        let template = fixture.input(template);
+        fixture.run(&[
+            "template",
+            "render",
+            &template,
+            "--search-path",
+            &search,
+            "--var",
+            steps,
+            "--no-interactive",
+        ])
+    };
+    // The base's own schema refuses a lower-case step.
+    assert_eq!(
+        render("base.md", "steps=[Draft, review]").status.code(),
+        Some(2)
+    );
+    // Redeclared without one, the same answer renders.
+    let loose = render("loose.md", "steps=[Draft, review]");
+    assert_eq!(loose.status.code(), Some(0), "{}", stderr(&loose));
+    assert_eq!(stdout(&loose), "* Draft\n* review\n");
+    // Redeclared with its own, that schema decides: two capitalised steps are refused, at "".
+    let short = render("short.md", "steps=[Draft, Review]");
+    assert_eq!(short.status.code(), Some(2));
+    assert!(
+        stderr(&short)
+            .contains("the answer to \"steps\" does not satisfy its schema at JSON pointer \"\""),
+        "{}",
+        stderr(&short)
+    );
+    assert_eq!(stdout(&render("short.md", "steps=[lower]")), "* lower\n");
+}

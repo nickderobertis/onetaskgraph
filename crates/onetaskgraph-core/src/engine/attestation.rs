@@ -44,30 +44,60 @@ pub struct AttestRequest {
     pub if_version: Option<String>,
 }
 
-/// One item as the digest needs it.
-struct Read {
+/// What a task, a project or a document holds that the digest reads.
+struct Held {
     title: String,
     content: Option<String>,
     repositories: Vec<Repository>,
     metadata: std::collections::BTreeMap<String, Value>,
     version: Option<String>,
-    edges: Vec<AuthoredEdge>,
-    /// The document as it was read, which its write takes rather than reading again.
-    document: Option<Document>,
+}
+
+/// One item as the digest needs it: a task or a project with its own forward edges, or a
+/// document — which has none, and whose write takes this read rather than reading again.
+enum Read {
+    /// A task or a project.
+    Work {
+        held: Held,
+        edges: Vec<AuthoredEdge>,
+    },
+    /// A document, as it was read.
+    Document(Document),
 }
 
 impl Read {
+    fn metadata(&self) -> &std::collections::BTreeMap<String, Value> {
+        match self {
+            Self::Work { held, .. } => &held.metadata,
+            Self::Document(document) => &document.metadata,
+        }
+    }
+
+    fn version(&self) -> Option<&str> {
+        match self {
+            Self::Work { held, .. } => held.version.as_deref(),
+            Self::Document(document) => document.version.as_deref(),
+        }
+    }
+
     fn digest(&self, excludes: &[MetadataKey]) -> Sha256Digest {
-        content_digest(
-            &Authored {
-                title: &self.title,
-                content: self.content.as_deref(),
-                repositories: &self.repositories,
-                metadata: &self.metadata,
-                depends_on: self.edges.clone(),
+        let authored = match self {
+            Self::Work { held, edges } => Authored {
+                title: &held.title,
+                content: held.content.as_deref(),
+                repositories: &held.repositories,
+                metadata: &held.metadata,
+                depends_on: edges.clone(),
             },
-            excludes,
-        )
+            Self::Document(document) => Authored {
+                title: &document.title,
+                content: document.content.as_deref(),
+                repositories: &document.repositories,
+                metadata: &document.metadata,
+                depends_on: Vec::new(),
+            },
+        };
+        content_digest(&authored, excludes)
     }
 }
 
@@ -92,7 +122,7 @@ impl Engine {
         let source = self.metadata_writable(id, record)?;
         let read = self.read_authored(source, record, id).await?;
         if let Some(expected) = &request.if_version {
-            let at = read.version.clone().unwrap_or_default();
+            let at = read.version().unwrap_or_default().to_owned();
             if source.source().order_versions(&at, expected) != Some(std::cmp::Ordering::Equal) {
                 return Err(EngineError::VersionMoved {
                     id: id.to_string(),
@@ -114,27 +144,42 @@ impl Engine {
             excludes,
         };
         let mut entries: serde_json::Map<String, Value> =
-            records(&read.metadata).into_iter().collect();
+            records(read.metadata()).into_iter().collect();
         entries.insert(request.kind.as_str().to_owned(), attestation.to_value());
         let key = MetadataKey::attestations();
         let value = Value::Object(entries);
-        let set = match (record, read.document) {
-            (MetadataRecord::Task, _) => self.set_task_metadata(id, &key, &value).await?,
-            (MetadataRecord::Project, _) => self.set_project_metadata(id, &key, &value).await?,
-            (MetadataRecord::Document, Some(document)) => {
+        let set = match read {
+            Read::Document(document) => {
                 self.set_read_document_metadata(source, id, &key, &value, &document)
                     .await?
             }
-            (MetadataRecord::Document, None) => {
-                self.set_document_metadata(id, &key, &value).await?
+            Read::Work { .. } if record == MetadataRecord::Project => {
+                self.set_project_metadata(id, &key, &value).await?
             }
+            Read::Work { .. } => self.set_task_metadata(id, &key, &value).await?,
         };
-        // What the source holds under the key was read back by the write itself — a write that
-        // answers without the key is refused there — so the record answered is the one written.
-        let _ = set;
+        // The record is what the source holds after the write — screening may have rewritten
+        // a label on its way — and a write answering a record of another kind, or none this
+        // product can read, is the source misanswering.
+        let mut held = std::collections::BTreeMap::new();
+        held.insert(MetadataKey::ATTESTATIONS_KEY.to_owned(), set.value);
+        let record = record_of(&held, &request.kind)
+            .filter(|held| held.content_digest == attestation.content_digest)
+            .ok_or_else(|| {
+                source_failed(
+                    source,
+                    onetaskgraph_plugin_api::SourceError::Malformed {
+                        message: format!(
+                            "the record {id} it answered the write with does not hold the {} \
+                             attestation it was just written",
+                            request.kind
+                        ),
+                    },
+                )
+            })?;
         Ok(Attested {
             id: id.clone(),
-            record: attestation,
+            record,
         })
     }
 
@@ -167,7 +212,7 @@ impl Engine {
         let read = self.read_authored(source, record, id).await?;
         Ok(check(
             kind,
-            record_of(&read.metadata, kind),
+            record_of(read.metadata(), kind),
             |excludes| read.digest(excludes),
             bar,
         ))
@@ -205,13 +250,12 @@ impl Engine {
                     source,
                     &task.id,
                     ItemKind::Task,
-                    Authoring {
+                    Held {
                         title: task.item.title,
                         content: task.item.content,
                         repositories: task.item.repositories,
                         metadata: task.item.metadata,
                         version: task.item.version,
-                        document: None,
                     },
                 )
                 .await?;
@@ -219,7 +263,7 @@ impl Engine {
                 id: task.id,
                 check: check(
                     kind,
-                    record_of(&read.metadata, kind),
+                    record_of(read.metadata(), kind),
                     |excludes| read.digest(excludes),
                     bar,
                 ),
@@ -254,13 +298,12 @@ impl Engine {
                     .ok_or_else(missing)?;
                 (
                     ItemKind::Task,
-                    Authoring {
+                    Held {
                         title: task.title,
                         content: task.content,
                         repositories: task.repositories,
                         metadata: task.metadata,
                         version: task.version,
-                        document: None,
                     },
                 )
             }
@@ -273,13 +316,12 @@ impl Engine {
                     .ok_or_else(missing)?;
                 (
                     ItemKind::Project,
-                    Authoring {
+                    Held {
                         title: project.title,
                         content: project.content,
                         repositories: project.repositories,
                         metadata: project.metadata,
                         version: project.version,
-                        document: None,
                     },
                 )
             }
@@ -290,15 +332,7 @@ impl Engine {
                     .await
                     .map_err(|error| source_failed(source, error))?
                     .ok_or_else(missing)?;
-                return Ok(Read {
-                    title: document.title.clone(),
-                    content: document.content.clone(),
-                    repositories: document.repositories.clone(),
-                    metadata: document.metadata.clone(),
-                    version: document.version.clone(),
-                    edges: Vec::new(),
-                    document: Some(document),
-                });
+                return Ok(Read::Document(document));
             }
         };
         self.authored_from(source, id, kind, authoring).await
@@ -310,7 +344,7 @@ impl Engine {
         source: &ResolvedSource,
         id: &GlobalId,
         kind: ItemKind,
-        authoring: Authoring,
+        authoring: Held,
     ) -> Result<Read, EngineError> {
         let level = match kind {
             ItemKind::Task => Level::Task,
@@ -320,14 +354,9 @@ impl Engine {
         for edge in forward_edges(source, &id.native, level).await? {
             edges.push(self.edge_entry(source.name(), &edge).await?);
         }
-        Ok(Read {
-            title: authoring.title,
-            content: authoring.content,
-            repositories: authoring.repositories,
-            metadata: authoring.metadata,
-            version: authoring.version,
+        Ok(Read::Work {
+            held: authoring,
             edges,
-            document: authoring.document,
         })
     }
 
@@ -382,14 +411,4 @@ impl Engine {
             FarEnd::Title,
         )))
     }
-}
-
-/// The members of one item the digest reads, before its edges are.
-struct Authoring {
-    title: String,
-    content: Option<String>,
-    repositories: Vec<Repository>,
-    metadata: std::collections::BTreeMap<String, Value>,
-    version: Option<String>,
-    document: Option<Document>,
 }

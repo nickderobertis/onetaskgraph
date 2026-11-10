@@ -96,6 +96,11 @@ fn a_design_approval_on_a_copied_plan_is_one_read_and_one_screened_write() {
         "the design document carries one image: {shown}"
     );
 
+    // Approved at the version the person read, as the approval's own read is held to it.
+    let version = shown["items"][0]["item"]["version"]
+        .as_str()
+        .expect("a board document reports its version")
+        .to_owned();
     let screened_before = plan.boundary_calls().len();
     let started = plan.clock.now();
     let (attested, calls) = plan.measured(&[
@@ -110,6 +115,8 @@ fn a_design_approval_on_a_copied_plan_is_one_read_and_one_screened_write() {
         BAR,
         "--note",
         "approved as drafted",
+        "--if-version",
+        &version,
         "--json",
     ]);
     let seconds = (plan.clock.now() - started).as_secs_f64();
@@ -134,17 +141,39 @@ fn a_design_approval_on_a_copied_plan_is_one_read_and_one_screened_write() {
         plan.boundary_calls().len() > screened_before,
         "the approval's write was screened before it was sent"
     );
-    let mutations: Vec<&Call> = calls
-        .iter()
-        .filter(|call| matches!(call.kind, Kind::Mutation | Kind::AliasedMutations))
-        .collect();
-    assert_eq!(mutations.len(), 1, "one write: {:?}", by_kind(&calls));
-    assert!(
-        !calls
-            .iter()
-            .any(|call| matches!(call.kind, Kind::BoardPage | Kind::SearchPage)),
-        "an approval pages through nothing: {:?}",
+    let kinds: Vec<Kind> = calls.iter().map(|call| call.kind).collect();
+    assert_eq!(
+        kinds,
+        [Kind::ItemRead, Kind::Mutation],
+        "one read of the document, then one write: {:?}",
         by_kind(&calls)
+    );
+
+    // Held to a version the board has moved past, it is refused writing nothing.
+    let (refused, sent) = plan.measured_output(&[
+        "document",
+        "attest",
+        &design,
+        "--kind",
+        KIND,
+        "--by",
+        "ada",
+        "--bar",
+        BAR,
+        "--if-version",
+        &version,
+        "--json",
+    ]);
+    assert_eq!(refused.status.code(), Some(1), "{}", stderr(&refused));
+    assert!(
+        stderr(&refused).contains("is at version"),
+        "{}",
+        stderr(&refused)
+    );
+    assert!(
+        sent.iter()
+            .all(|call| !matches!(call.kind, Kind::Mutation | Kind::AliasedMutations)),
+        "a refused approval writes nothing"
     );
 
     // The record holds against the bar it was given, and a check is a read alone.

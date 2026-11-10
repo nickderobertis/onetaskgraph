@@ -516,23 +516,38 @@ fn a_member_graph_that_does_not_hold_together_is_refused_before_anything_is_writ
 }
 
 #[test]
-fn members_declared_by_a_template_the_project_template_includes_are_refused() {
+fn members_declared_by_a_template_the_project_template_names_are_refused() {
     let fixture = Fixture::new();
     std::fs::write(
         fixture.templates.join("inner.md"),
-        "---\nonetaskgraph_template: 1\nmembers:\n  - {id: a, title: A, template: {file: design-task.md}, answers: {topic: t}}\n---\nInner\n",
+        "---\nonetaskgraph_template: 1\nmembers:\n  - {id: a, title: A, template: {file: design-task.md}, answers: {topic: t}}\n---\n{% block body %}Inner{% endblock %}\n",
     )
     .expect("a template");
-    let outer = fixture.templates.join("outer.md");
-    std::fs::write(
-        &outer,
-        "---\nonetaskgraph_template: 1\n---\n{% include \"inner.md\" %}\n",
-    )
-    .expect("a template");
-    let before = fixture.folder();
     let search = path(&fixture.templates);
-    let output = fixture.exits(
-        &[
+    // Named by a literal include, by `extends`, and by an include whose name is an expression
+    // the answers decide.
+    for (name, body, extra) in [
+        (
+            "included.md",
+            "---\nonetaskgraph_template: 1\n---\n{% include \"inner.md\" %}\n",
+            None,
+        ),
+        (
+            "extended.md",
+            "---\nonetaskgraph_template: 1\n---\n{% extends \"inner.md\" %}\n",
+            None,
+        ),
+        (
+            "named.md",
+            "---\nonetaskgraph_template: 1\nvariables:\n  part:\n    description: p\n    default: header\n---\n{% include part ~ \".md\" ignore missing %}\n",
+            Some("part=inner"),
+        ),
+    ] {
+        let outer = fixture.templates.join(name);
+        std::fs::write(&outer, body).expect("a template");
+        let before = fixture.folder();
+        let outer = path(&outer);
+        let mut arguments = vec![
             "project",
             "create",
             "notes",
@@ -541,19 +556,22 @@ fn members_declared_by_a_template_the_project_template_includes_are_refused() {
             "--title",
             "P",
             "--template",
-            &path(&outer),
+            outer.as_str(),
             "--search-path",
-            &search,
+            search.as_str(),
             "--no-interactive",
-        ],
-        1,
-    );
-    let message = stderr(&output);
-    assert!(
-        message.contains("inner.md") && message.contains("only the rendered project template"),
-        "{message}"
-    );
-    assert_eq!(fixture.folder(), before, "nothing written");
+        ];
+        if let Some(answer) = extra {
+            arguments.extend(["--var", answer]);
+        }
+        let output = fixture.exits(&arguments, 1);
+        let message = stderr(&output);
+        assert!(
+            message.contains("inner.md") && message.contains("only the rendered project template"),
+            "{name}: {message}"
+        );
+        assert_eq!(fixture.folder(), before, "{name}: nothing written");
+    }
 }
 
 #[test]

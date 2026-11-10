@@ -780,16 +780,7 @@ impl TemplateLoader {
     fn load_chain(&self, root: String, source: String) -> Result<Template, TemplateError> {
         let resolutions = Resolutions::new();
         let files = self.build(root.clone(), source, &resolutions)?;
-        if let Some(named) = files.iter().skip(1).find(|file| !file.members.is_empty()) {
-            return Err(TemplateError::malformed(
-                &named.name,
-                Some("members"),
-                format!(
-                    "is declared in a template {root} names; only the rendered project template \
-                     declares members"
-                ),
-            ));
-        }
+        members_at_root(&root, &files)?;
         let variables = merge(&files)?;
         let Discovered { read, .. } = discover(&root, &files, &variables, self, &Answers::new());
         let files = in_read_order(files, &read);
@@ -996,6 +987,22 @@ fn compile_check(name: &str, body: &str, offset_lines: usize) -> Result<(), Temp
                 error.detail().unwrap_or("a syntax error")
             ),
         })
+}
+
+/// Refuse `members` declared by any file of the chain but the rendered one, `root`: a plan
+/// graph is the project template's own, never one a file it names brings with it.
+fn members_at_root(root: &str, files: &[ChainFile]) -> Result<(), TemplateError> {
+    match files.iter().skip(1).find(|file| !file.members.is_empty()) {
+        Some(named) => Err(TemplateError::malformed(
+            &named.name,
+            Some("members"),
+            format!(
+                "is declared in a template {root} names; only the rendered project template \
+                 declares members"
+            ),
+        )),
+        None => Ok(()),
+    }
 }
 
 /// One file of a loaded chain.
@@ -1263,6 +1270,7 @@ impl Template {
             }
             named.push(resolutions.clone());
             let files = expanded.rebuild(&resolutions)?;
+            members_at_root(&self.name, &files)?;
             let variables = merge(&files)?;
             expanded = Self::assemble(
                 self.name.clone(),

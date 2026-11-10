@@ -990,3 +990,152 @@ fn records_survive_a_project_copy_with_its_documents_and_go_void_where_they_land
         );
     }
 }
+
+#[test]
+fn an_attestation_held_to_the_version_the_item_is_at_is_recorded() {
+    let plan = Plan::new(false);
+    let seeded = plan.seed("notes");
+    // A folder of Markdown gives a task a version and a document none; a board document's is
+    // held in the GitHub Projects suite's approval journey.
+    let (noun, id) = ("task", seeded.ship.as_str());
+    let version = plan.json(&[noun, "show", id])["items"][0]["item"]["version"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{noun} {id} reports a version"))
+        .to_owned();
+    let attested = plan.json(&[
+        noun,
+        "attest",
+        id,
+        "--kind",
+        KIND,
+        "--by",
+        "ada",
+        "--bar",
+        BAR,
+        "--if-version",
+        &version,
+    ]);
+    assert_eq!(attested["record"]["kind"], KIND, "{noun}");
+    assert_eq!(plan.check(noun, id, Some(BAR))["state"], "valid", "{noun}");
+}
+
+#[test]
+fn an_edge_names_its_far_end_wherever_it_is_and_goes_void_when_it_moves() {
+    let plan = Plan::new(false);
+    let other = plan.sandbox.subdirectory("other");
+    plan.sandbox.project_document(&document(&json!({
+        "notes": {"plugin": "local-md", "config": {"root": plan.notes}},
+        "other": {"plugin": "local-md", "config": {"root": other}},
+    })));
+    let moved = json!("content-moved");
+    let body = plan.file("far.md", "Far.\n");
+
+    // A task depending on a task of another configured source.
+    let far = stdout(&plan.exits(
+        &[
+            "task",
+            "create",
+            "other",
+            "--project",
+            "elsewhere",
+            "--title",
+            "Upstream",
+            "--body-file",
+            &body,
+        ],
+        0,
+    ))
+    .trim()
+    .to_owned();
+    let near = stdout(&plan.exits(
+        &[
+            "task",
+            "create",
+            "notes",
+            "--project",
+            "plan-1",
+            "--title",
+            "Near",
+            "--body-file",
+            &body,
+            "--depends-on",
+            &far,
+        ],
+        0,
+    ))
+    .trim()
+    .to_owned();
+    plan.after(
+        "task",
+        &near,
+        &["task", "update", &far, "--title", "Upstream, renamed"],
+        "void",
+        moved.clone(),
+        "the far end in another source renamed",
+    );
+    // Its far end gone, the edge is named by its id instead: another edge.
+    plan.attest("task", &near);
+    let native = far.split_once(':').expect("qualified").1;
+    std::fs::remove_file(other.join("tasks").join(format!("{native}.md")))
+        .expect("a far end removed");
+    plan.holds("task", &near, "void", moved.clone(), "the far end removed");
+    plan.attest("task", &near);
+    plan.holds(
+        "task",
+        &near,
+        "valid",
+        Value::Null,
+        "named by its id, it holds again",
+    );
+
+    // A project depending on a project.
+    let template = plan.template("plan.md");
+    for (id, title) in [("upstream", "Upstream plan"), ("plan-1", "The plan")] {
+        plan.exits(
+            &[
+                "project",
+                "create",
+                "notes",
+                "--id",
+                id,
+                "--title",
+                title,
+                "--template",
+                &template,
+                "--var",
+                "goal=g",
+                "--no-interactive",
+            ],
+            0,
+        );
+    }
+    plan.hand_edit(
+        "projects",
+        "notes:plan-1",
+        "title: The plan",
+        "title: The plan\ndepends_on: [upstream]",
+    );
+    let edges = plan.json(&["project", "deps", "notes:plan-1"])["items"].clone();
+    assert_eq!(edges[0]["to"]["id"], "notes:upstream", "{edges}");
+    plan.after(
+        "project",
+        "notes:plan-1",
+        &[
+            "project",
+            "create",
+            "notes",
+            "--id",
+            "upstream",
+            "--title",
+            "Upstream plan, renamed",
+            "--template",
+            &template,
+            "--var",
+            "goal=g",
+            "--no-interactive",
+        ],
+        "void",
+        moved,
+        "the project it depends on renamed",
+    );
+}
