@@ -433,6 +433,11 @@ fn a_schema_that_does_not_compile_or_types_a_scalar_is_refused_naming_its_key() 
             "variables.plan.schema",
         ),
         (
+            "shape.md",
+            "  plan:\n    description: p\n    type: object\n    schema: [type, object]\n",
+            "variables.plan.schema",
+        ),
+        (
             "remote.md",
             "  plan:\n    description: p\n    type: object\n    schema: {$ref: \"https://example.com/plan.schema.json\"}\n",
             "variables.plan.schema",

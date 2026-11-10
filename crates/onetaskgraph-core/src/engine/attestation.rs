@@ -418,13 +418,14 @@ impl Engine {
         let mut seen: Vec<String> = Vec::new();
         loop {
             let Ok(id) = current.parse::<GlobalId>() else {
-                // Only the first id can be unqualified here: every later one was read off a
-                // source and refused below when it does not parse.
-                return Ok(FarEnd::Lineage(current));
+                // Only the first id can be unqualified here — an edge spelled with no source —
+                // since every later one was read off a source and refused below when it does
+                // not parse: it is named as it is spelled.
+                return Ok(FarEnd::Id(current));
             };
             let far = match self.built(&id.source) {
                 Ok(far) => far,
-                Err(EngineError::UnknownSource { .. }) => return Ok(FarEnd::Lineage(current)),
+                Err(EngineError::UnknownSource { .. }) => return Ok(FarEnd::Lineage(id)),
                 Err(error) => return Err(error),
             };
             seen.push(current.clone());
@@ -446,7 +447,7 @@ impl Engine {
                 .as_ref()
                 .and_then(|metadata| metadata.get(GlobalId::ORIGIN_KEY))
             else {
-                return Ok(FarEnd::Lineage(current));
+                return Ok(FarEnd::Lineage(id));
             };
             let Some(origin) = origin
                 .as_str()

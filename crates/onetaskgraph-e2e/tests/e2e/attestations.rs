@@ -1622,3 +1622,58 @@ fn a_far_end_whose_lineage_cannot_be_named_refuses_the_attestation_writing_nothi
         assert!(stderr(&check).contains(says), "{near}: {}", stderr(&check));
     }
 }
+
+#[test]
+fn a_lineage_longer_than_the_limit_refuses_and_one_within_it_records() {
+    let plan = Plan::new(false);
+    let tasks = plan.notes.join("tasks");
+    std::fs::create_dir_all(&tasks).expect("the tasks folder");
+    // A chain of `length` tasks, each recording the next as its origin, the last none.
+    let chain = |prefix: &str, length: usize| {
+        for at in 0..length {
+            let front = if at + 1 < length {
+                format!(
+                    "metadata:\n  onetaskgraph.origin: notes:{prefix}-{}\n",
+                    at + 1
+                )
+            } else {
+                String::new()
+            };
+            std::fs::write(
+                tasks.join(format!("{prefix}-{at}.md")),
+                format!("---\ntitle: {prefix} {at}\nstatus: todo\n{front}---\nBody.\n"),
+            )
+            .expect("a task file");
+        }
+        let near = format!("on-{prefix}");
+        std::fs::write(
+            tasks.join(format!("{near}.md")),
+            format!(
+                "---\ntitle: Near\nstatus: todo\ndepends_on:\n- id: {prefix}-0\n  kind: blocks\n  item: task\n---\nBody.\n"
+            ),
+        )
+        .expect("a task file");
+        format!("notes:{near}")
+    };
+    let within = chain("short", 16);
+    plan.attest("task", &within);
+    plan.holds(
+        "task",
+        &within,
+        "valid",
+        Value::Null,
+        "a lineage of sixteen ids",
+    );
+    let beyond = chain("long", 17);
+    let refused = plan.exits(
+        &[
+            "task", "attest", &beyond, "--kind", KIND, "--by", "ada", "--bar", BAR,
+        ],
+        1,
+    );
+    assert!(
+        stderr(&refused).contains("never reach an item copied from nowhere"),
+        "{}",
+        stderr(&refused)
+    );
+}

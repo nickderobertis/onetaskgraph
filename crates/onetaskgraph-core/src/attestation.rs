@@ -389,7 +389,7 @@ pub struct Attested {
 pub enum FarEnd {
     /// By its lineage root: the qualified id its chain of recorded origins leads back to — its
     /// own, for an item copied from nowhere — so it reads the same from every copy of it.
-    Lineage(String),
+    Lineage(GlobalId),
     /// By its spelling, for an opaque far end no configured source can be asked about.
     Id(String),
 }
@@ -587,7 +587,7 @@ mod tests {
             depends_on: vec![AuthoredEdge {
                 kind: DependencyKind::Blocks,
                 far: ItemKind::Task,
-                end: FarEnd::Lineage("src:1".into()),
+                end: FarEnd::Lineage("src:1".parse().expect("a qualified id")),
             }],
         }
     }

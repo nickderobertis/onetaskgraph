@@ -896,3 +896,60 @@ fn a_structured_member_answer_is_rendered_at_every_depth_and_stored_as_its_value
         json!({"budget": {"id": "approval-seconds", "steps": ["measure approval", "fixed"], "limit": 7}})
     );
 }
+
+#[test]
+fn a_malformed_member_declaration_or_one_that_does_not_render_is_refused_naming_it() {
+    let fixture = Fixture::new();
+    let before = fixture.folder();
+    for (name, members, says) in [
+        ("scalar.md", "members: three\n", "members` is not a list"),
+        (
+            "missing.md",
+            "members:\n  - {id: a, template: {file: design-task.md}}\n",
+            "members[0]` is not a member declaration: missing field `title`",
+        ),
+        (
+            "unknown.md",
+            "members:\n  - {id: a, title: A, template: {file: design-task.md}, owner: me}\n",
+            "unknown field `owner`",
+        ),
+        (
+            "selector.md",
+            "members:\n  - {id: a, title: A, template: {path: design-task.md}}\n",
+            "members[0]` is not a member declaration",
+        ),
+        (
+            "undefined.md",
+            "members:\n  - {id: a, title: \"{{ nowhere }}\", template: {file: design-task.md}, answers: {topic: t}}\n",
+            "member \"a\" of the project template: template ?: its `title` does not render",
+        ),
+    ] {
+        let file = fixture.templates.join(name);
+        std::fs::write(
+            &file,
+            format!("---\nonetaskgraph_template: 1\n{members}---\nPlan\n"),
+        )
+        .expect("a template");
+        let output = fixture.exits(
+            &[
+                "project",
+                "create",
+                "notes",
+                "--id",
+                "plan-1",
+                "--title",
+                "P",
+                "--template",
+                &path(&file),
+                "--no-interactive",
+            ],
+            1,
+        );
+        assert!(
+            stderr(&output).contains(says),
+            "{name}: {}",
+            stderr(&output)
+        );
+        assert_eq!(fixture.folder(), before, "{name}: nothing written");
+    }
+}
