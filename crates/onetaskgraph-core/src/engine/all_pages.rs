@@ -137,6 +137,12 @@ impl Engine {
         };
         match self.task_dependencies_all(&request).await {
             Ok(edges) => {
+                // Edges the task's own source could not answer are not its edges: absent, the
+                // failure beside the task.
+                let answered = !edges
+                    .errors
+                    .iter()
+                    .any(|failure| failure.source == id.source);
                 for error in edges.errors {
                     if !detail.response.errors.contains(&error) {
                         detail.response.errors.push(error);
@@ -147,7 +153,7 @@ impl Engine {
                         detail.response.unanswered.push(unanswered);
                     }
                 }
-                detail.depends_on = Some(edges.items);
+                detail.depends_on = answered.then_some(edges.items);
             }
             Err(error @ EngineError::RepeatedPage { .. }) => return Err(error),
             Err(error) => detail.response.errors.push(crate::SourceFailure {

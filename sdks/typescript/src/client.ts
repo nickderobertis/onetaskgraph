@@ -926,6 +926,36 @@ function pinFlags(method: string, pin: unknown): string[] {
   return ["--pin", stringOption(method, "pin", pin)];
 }
 
+// What `taskComments` narrows by: the narrowing `task list` takes.
+export type TaskCommentsOptions = {
+  // `<KEY>[/<SEGMENT>...]=<VALUE>`, as `taskList` takes it.
+  metadata?: string[];
+  statuses?: StatusCategory[];
+  // Qualified ids, each of the source listed.
+  items?: string[];
+};
+
+// Every option `TaskCommentsOptions` has, and the one flag each is sent as. Exported so
+// tests/client.test.ts can reconcile it against the flags `task comments --help` reports.
+export const taskCommentsOptionFlags: Readonly<Record<keyof TaskCommentsOptions, string>> = {
+  metadata: "--metadata",
+  statuses: "--status",
+  items: "--item",
+};
+
+// The flags `taskComments` sends, beside the source: `--since` and each narrowing.
+export function taskCommentsFlags(since: string, options: TaskCommentsOptions): string[] {
+  const method = "taskComments";
+  const args = ["--since", stringOption(method, "since", since)];
+  const names: readonly (keyof TaskCommentsOptions)[] = ["metadata", "statuses", "items"];
+  for (const name of names) {
+    for (const value of stringList(method, name, options[name])) {
+      args.push(taskCommentsOptionFlags[name], value);
+    }
+  }
+  return args;
+}
+
 // The flags `taskCopy` sends for `options`, beside the ids and `--to`: exported so the tests can
 // reconcile them against the binary's own `task copy --help`.
 export function taskCopyFlags(options: TaskCopyOptions): string[] {
@@ -1217,18 +1247,9 @@ export class OnetaskgraphClient {
   taskComments(
     source: string,
     since: string,
-    options: { metadata?: string[]; statuses?: StatusCategory[]; items?: string[] } = {},
+    options: TaskCommentsOptions = {},
   ): Promise<CommentsSince> {
-    const method = "taskComments";
-    const args = [source, "--since", stringOption(method, "since", since)];
-    for (const match of stringList(method, "metadata", options.metadata)) {
-      args.push("--metadata", match);
-    }
-    for (const status of stringList(method, "statuses", options.statuses)) {
-      args.push("--status", status);
-    }
-    for (const item of stringList(method, "items", options.items)) args.push("--item", item);
-    return this.run("task comments", args);
+    return this.run("task comments", [source, ...taskCommentsFlags(since, options)]);
   }
   taskCommentList(id: string, options: { pin?: string } = {}): Promise<CommentList> {
     return this.run("task comment list", [id, ...pinFlags("taskCommentList", options.pin)]);

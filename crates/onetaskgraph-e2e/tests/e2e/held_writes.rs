@@ -908,3 +908,101 @@ fn an_in_memory_task_takes_a_guarded_priority_and_a_repositories_update() {
     );
     assert_eq!(stale["failure"]["kind"], "version-moved", "{stale:#}");
 }
+
+#[test]
+fn a_guard_reads_as_held_or_written_to_a_person_and_metadata_off_a_task_takes_no_version() {
+    let stores = Stores::new(false);
+    stores.note("A", "Task A");
+    let text = |arguments: &[&str], code: i32| -> String {
+        let output = stores
+            .sandbox
+            .command()
+            .args(arguments)
+            .assert()
+            .get_output()
+            .clone();
+        assert_eq!(output.status.code(), Some(code), "{}", stderr(&output));
+        stdout(&output)
+    };
+    let held = text(
+        &[
+            "task",
+            "priority",
+            "set",
+            "notes:A",
+            "low",
+            "--when-priority",
+            "none",
+        ],
+        0,
+    );
+    assert!(held.contains("outcome:") && held.contains("held"), "{held}");
+    assert!(held.contains("high"), "the priority it keeps: {held}");
+    let written = text(
+        &[
+            "task",
+            "priority",
+            "set",
+            "notes:A",
+            "low",
+            "--when-priority",
+            "high",
+        ],
+        0,
+    );
+    assert!(written.contains("written"), "{written}");
+    let plain = text(&["task", "priority", "set", "notes:A", "medium"], 0);
+    assert!(!plain.contains("outcome:"), "no guard, no outcome: {plain}");
+
+    // A project's and a document's metadata are written without a version to hold, so naming one
+    // is refused before anything is written.
+    let projects = stores.notes.join("projects");
+    std::fs::create_dir_all(&projects).expect("a folder");
+    std::fs::write(
+        projects.join("P.md"),
+        "---\ntitle: Plan\nstatus: todo\n---\n",
+    )
+    .expect("a project");
+    let before = std::fs::read(projects.join("P.md")).expect("the project");
+    let refused = stores.exited(
+        &owned(&[
+            "project",
+            "metadata",
+            "set",
+            "notes:P",
+            "followup.k",
+            "1",
+            "--if-version",
+            "md1|x",
+        ]),
+        1,
+    );
+    assert_eq!(
+        refused["failure"]["kind"], "if-version-one-task",
+        "{refused:#}"
+    );
+    assert_eq!(
+        std::fs::read(projects.join("P.md")).expect("the project"),
+        before
+    );
+    let documents = stores.notes.join("documents");
+    std::fs::create_dir_all(&documents).expect("a folder");
+    std::fs::write(documents.join("D.md"), "---\ntitle: Design\n---\nprose\n").expect("a document");
+    let refused = stores.exited(
+        &owned(&[
+            "document",
+            "metadata",
+            "set",
+            "notes:D",
+            "followup.k",
+            "1",
+            "--if-version",
+            "md1|x",
+        ]),
+        1,
+    );
+    assert_eq!(
+        refused["failure"]["kind"], "if-version-one-task",
+        "{refused:#}"
+    );
+}

@@ -45,11 +45,22 @@ pub struct TaskPrioritySet {
     pub guard: Option<PriorityGuard>,
 }
 
-/// What a write guarded by the priority its task holds came to: whether it was `written` or
-/// `held`, and the condition that decided it. Made only from the condition, so the outcome is
-/// always the one its `met` says.
+/// What a write guarded by a condition on the item's own value came to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(try_from = "PriorityGuardWire")]
+#[serde(rename_all = "kebab-case")]
+pub enum GuardOutcome {
+    /// The item held a value the guard names, and the write was made.
+    Written,
+    /// The item held a value the guard does not name, and nothing was written.
+    Held,
+}
+
+/// What a write guarded by the priority its task holds came to: whether it was `written` or
+/// `held`, and the condition that decided it. Made only from the condition — read back off the
+/// wire too, whatever `outcome` it was written with — so the outcome is always the one its
+/// `met` says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(from = "PriorityGuardWire")]
 pub struct PriorityGuard {
     /// `written` when the task held a priority the guard names, and `held` when it did not.
     outcome: GuardOutcome,
@@ -85,41 +96,25 @@ impl PriorityGuard {
     }
 }
 
-/// [`PriorityGuard`] as it reads off the wire, before its outcome is held to its condition.
+/// [`PriorityGuard`] as it reads off the wire: its condition decides its outcome.
 #[derive(Deserialize, JsonSchema)]
 #[schemars(rename = "PriorityGuard")]
 struct PriorityGuardWire {
     /// `written` when the task held a priority the guard names, and `held` when it did not.
+    #[allow(
+        dead_code,
+        reason = "read for the schema; the condition decides the outcome"
+    )]
     outcome: GuardOutcome,
     /// What the guard found the task's priority at before the write, and whether that is one it
     /// names — the shape `task copy --when-destination-priority` reports.
     priority_condition: PriorityCondition,
 }
 
-impl TryFrom<PriorityGuardWire> for PriorityGuard {
-    type Error = String;
-
-    fn try_from(wire: PriorityGuardWire) -> Result<Self, Self::Error> {
-        let guard = Self::of(wire.priority_condition);
-        if guard.outcome == wire.outcome {
-            Ok(guard)
-        } else {
-            Err(format!(
-                "a guard's outcome {:?} contradicts its condition, met = {}",
-                wire.outcome, wire.priority_condition.met
-            ))
-        }
+impl From<PriorityGuardWire> for PriorityGuard {
+    fn from(wire: PriorityGuardWire) -> Self {
+        Self::of(wire.priority_condition)
     }
-}
-
-/// What a write guarded by a condition on the item's own value came to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "kebab-case")]
-pub enum GuardOutcome {
-    /// The item held a value the guard names, and the write was made.
-    Written,
-    /// The item held a value the guard does not name, and nothing was written.
-    Held,
 }
 
 /// What `task content set` answers with.

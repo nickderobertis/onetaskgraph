@@ -31,6 +31,7 @@ import {
   projectCopyFlags,
   projectGraphDirections,
   statusPolicies,
+  taskCommentsFlags,
   taskCopyFlags,
   taskUpdateFlags,
   taskUpdateOptionFlags,
@@ -2567,16 +2568,24 @@ test("a held copy, a repositories update and a comments listing drive the real b
     // A copy held to its destination task's version lands at it, and is refused at one another
     // writer moved the task past.
     const created = await client.taskCopy(["work:T-1"], "into");
-    const landed = (created.items[0] as { destination: string }).destination;
-    const read = (await client.taskShow(landed)).items[0]?.item.version;
-    expect(typeof read).toBe("string");
+    const outcome = created.items[0];
+    if (outcome === undefined || !("destination" in outcome)) {
+      throw new Error(`the copy names what it created: ${JSON.stringify(created)}`);
+    }
+    const landed = String(outcome.destination);
+    const versionOf = async (id: string): Promise<string> => {
+      const version = (await client.taskShow(id)).items[0]?.item.version;
+      if (typeof version !== "string") throw new Error(`${id} is read with a version`);
+      return version;
+    };
+    const read = await versionOf(landed);
     await client.taskUpdate("work:T-1", { title: "One, revised" });
-    await client.taskCopy(["work:T-1"], "into", { ifVersion: read as string });
-    const written = (await client.taskShow(landed)).items[0]?.item;
-    expect(written?.title).toBe("One, revised");
+    await client.taskCopy(["work:T-1"], "into", { ifVersion: read });
+    expect((await client.taskShow(landed)).items[0]?.item.title).toBe("One, revised");
+    const written = await versionOf(landed);
     await client.taskUpdate(landed, { title: "Moved by another writer" });
     await client.taskUpdate("work:T-1", { title: "One, again" });
-    const stale = client.taskCopy(["work:T-1"], "into", { ifVersion: written?.version as string });
+    const stale = client.taskCopy(["work:T-1"], "into", { ifVersion: written });
     await expect(stale).rejects.toBeInstanceOf(OnetaskgraphExecutionError);
     await expect(stale).rejects.toMatchObject({ failure: { kind: "version-moved" } });
     expect((await client.taskShow(landed)).items[0]?.item.title).toBe("Moved by another writer");
@@ -2595,7 +2604,35 @@ test("a held copy, a repositories update and a comments listing drive the real b
     expect(typeof listed.watermark).toBe("string");
     const none = await client.taskComments("work", "2020-01-01T00:00:00Z", { statuses: ["done"] });
     expect(none.comments).toEqual([]);
+    const kept = await client.taskComments("work", "2020-01-01T00:00:00Z", {
+      metadata: ["myapp.kept=1"],
+    });
+    expect(kept.comments).toEqual([]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test("taskComments sends exactly the flags the binary's task comments reports, no more and no fewer", () => {
+  // `TaskCommentsOptions` is a second statement of `task comments`'s command line, reconciled
+  // against the binary's own help both ways, as taskUpdate's options are.
+  const flags = (verb: string[]) => {
+    const help = spawnSync(binary, [...verb, "--help"], { encoding: "utf8" });
+    expect(help.status, help.stderr).toBe(0);
+    return new Set(
+      [...help.stdout.matchAll(/^\s+(?:-[a-zA-Z], )?(--[a-z][a-z-]*)/gm)].flatMap((found) =>
+        found[1] === undefined ? [] : [found[1]],
+      ),
+    );
+  };
+  const global = flags(["config", "show"]);
+  const own = [...flags(["task", "comments"])].filter((flag) => !global.has(flag)).sort();
+  const sent = new Set(
+    taskCommentsFlags("2026-01-01T00:00:00Z", {
+      metadata: ["myapp.a=1"],
+      statuses: ["done"],
+      items: ["work:T-1"],
+    }).filter((argument) => argument.startsWith("--")),
+  );
+  expect([...sent].sort()).toEqual(own);
 });

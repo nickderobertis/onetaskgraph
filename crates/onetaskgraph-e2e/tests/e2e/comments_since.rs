@@ -560,3 +560,67 @@ fn a_linear_source_lists_every_comment_made_or_edited_since_an_instant() {
     let one = since(&sandbox, "linear", &instant, &["--item", &tasks[1]]);
     assert_eq!(ids(&one), vec![bot.clone()]);
 }
+
+#[test]
+fn a_person_reads_the_comments_listing_and_a_task_with_its_edges() {
+    let sandbox = Sandbox::new();
+    let root = folder(&sandbox);
+    std::fs::write(
+        root.join("tasks").join("D.md"),
+        "---\ntitle: Task D\nstatus: todo\ndepends_on: [A]\n---\nBody.\n",
+    )
+    .expect("a task");
+    sandbox.project_document(&document(&json!({
+        "folder": {"plugin": "local-md",
+                   "config": {"root": root, "status_mapping": folder_mapping()}},
+    })));
+    let text = |arguments: &[&str]| -> String {
+        let output = sandbox
+            .command()
+            .args(arguments)
+            .assert()
+            .get_output()
+            .clone();
+        assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+        stdout(&output)
+    };
+    // Nothing since then: said so, with the watermark to read from next.
+    let empty = text(&[
+        "task",
+        "comments",
+        "folder",
+        "--since",
+        "2999-01-01T00:00:00Z",
+    ]);
+    assert!(
+        empty.contains("no comment was made or edited since then"),
+        "{empty}"
+    );
+    assert!(empty.contains("watermark: "), "{empty}");
+    // A comment with no author, and one by a bot.
+    let file = body_file(&sandbox, "Unsigned.\n");
+    text(&["task", "comment", "add", "folder:A", "--body-file", &file]);
+    added(&sandbox, "folder:B", "Signed.\n", Some("ci-helper[bot]"));
+    let listed = text(&[
+        "task",
+        "comments",
+        "folder",
+        "--since",
+        "2020-01-01T00:00:00Z",
+    ]);
+    assert!(
+        listed.contains("folder:A") && listed.contains("(no author) (unknown)"),
+        "{listed}"
+    );
+    assert!(
+        listed.contains("ci-helper[bot] (bot)") && listed.contains("Signed."),
+        "{listed}"
+    );
+    assert!(listed.contains("watermark: "), "{listed}");
+
+    let shown = text(&["task", "show", "folder:D", "--with-deps"]);
+    let (_, deps) = shown.split_once("depends on:").expect("the edges section");
+    assert!(deps.contains("folder:A"), "{shown}");
+    let plain = text(&["task", "show", "folder:D"]);
+    assert!(!plain.contains("depends on:"), "{plain}");
+}
