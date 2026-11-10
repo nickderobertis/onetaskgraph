@@ -1517,6 +1517,26 @@ them do; this is the inventory of what is owed, not a status board.
      a copy out of a folder declared private into a Linear source that is not sends no id derived
      from it and leaves nothing there naming it.
 
+152. Every task write verb — `task update`, `priority set`, `content set`, `metadata set`,
+     `status set`, `comment add`, `comment edit` and `task copy` — held by `--if-version` lands at
+     the task's version and, after another writer moved it, is refused as `version-moved` naming
+     the version it is at, writing nothing, on a folder, an in-memory source, a board and Linear,
+     each hosted one with its cache on and off; two held writes racing at one version land
+     exactly one, across processes on a folder and within one on an in-memory source.
+153. `task priority set --when-priority` writes over a priority it names (`none` a task with
+     none) and otherwise answers `held`; `task update --repository` replaces the repositories
+     alone and `--no-repositories` clears them; each refused at a stale `--if-version`.
+154. `task comments <SOURCE> --since` answers every newer and edited comment, oldest first, with
+     `author_kind` `bot` and `person`, across pages of tasks and of comments, narrowed by
+     `--metadata`, `--status` and `--item`, in exactly the contract's members; a comment read again
+     from the watermark carries the same id and version, and one a board's search indexed late,
+     inside its window, is read from the earlier read's watermark.
+155. `task list --all` answers every item of a board over three pages long once, and a source
+     repeating a cursor is refused; `task show --with-deps` answers the edges `task deps` does.
+156. An orchestrator configured with three Linear team sources and no route, folders of its own
+     named `drafts` and `authoring`, and its own personas, templates and status vocabulary drives
+     every feature above through the binary against a named team.
+
 ## The public boundary
 
 Classification, a source's declared `visibility`, classification routes and `write_policy`
