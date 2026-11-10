@@ -6674,8 +6674,10 @@ const FIFTY_SEVENTH_BUNDLE_SHAPE: [(&str, u64); 140] = [
     ("WriteVerdict", 0xfe9f3b7541b8efb0),
 ];
 
-/// Version 58: a template variable gains its optional `schema`.
-const FIFTY_EIGHTH_BUNDLE_SHAPE: [(&str, u64); 140] = [
+/// Version 58: a template variable gains its optional `schema`, and the attestation roots
+/// arrive: `Attested`, `Attestation`, `AttestationCheck`, `ProjectAttestationCheck`,
+/// `AttestationState` and `VoidReason`.
+const FIFTY_EIGHTH_BUNDLE_SHAPE: [(&str, u64); 146] = [
     ("Asset", 0x3861b2a394973652),
     ("AssetContentType", 0x045a0ea0dface7ec),
     ("AssetName", 0x0f5aa03142270839),
@@ -6684,6 +6686,10 @@ const FIFTY_EIGHTH_BUNDLE_SHAPE: [(&str, u64); 140] = [
     ("AssetUploads", 0xc07fc8afac6acde5),
     ("AssetWrite", 0x425ab5b21768c337),
     ("AssetsWritten", 0x5a394f7414967354),
+    ("Attestation", 0x7be770b4bfadc3e1),
+    ("AttestationCheck", 0xc45eedfa978775df),
+    ("AttestationState", 0x98e4cac624bac91d),
+    ("Attested", 0xd100bf018de175eb),
     ("CacheCleared", 0x07f2024428115e02),
     ("CacheUse", 0x99e677fe6a710743),
     ("Capabilities", 0x0307809d59773695),
@@ -6749,6 +6755,7 @@ const FIFTY_EIGHTH_BUNDLE_SHAPE: [(&str, u64); 140] = [
     ("Predicate", 0x716a40e358d48364),
     ("Priority", 0xef323286b7a05b23),
     ("Project", 0x532ad3dad5ab19cb),
+    ("ProjectAttestationCheck", 0x3bfa2e889d5f16b0),
     ("ProjectGraph", 0x5231b0aef0f2349d),
     ("ProjectQuery", 0x65c1348867b92915),
     ("ProjectStatusSet", 0x49281c1836786bf9),
@@ -6814,6 +6821,7 @@ const FIFTY_EIGHTH_BUNDLE_SHAPE: [(&str, u64); 140] = [
     ("TextFields", 0x7240bd05f9beff93),
     ("UpdatedField", 0xd9491e609db7475c),
     ("VariableType", 0x4310e29eba96791c),
+    ("VoidReason", 0x2cfececd538dd0ac),
     ("WritePolicyConfig", 0xf7f810b2996dcc46),
     ("WriteVerdict", 0xfe9f3b7541b8efb0),
 ];

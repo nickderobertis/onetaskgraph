@@ -1664,6 +1664,7 @@ plugin is sent.
 | `0` | Success — every source asked, every source answered. A dependency read (`task deps`, `project graph`) of an item outside a source declared private also asks that private source what it records of it; one that could not be asked is not a failure of the read, because the item lives elsewhere, and is reported in the answer's `unanswered` and on standard error as a notice. `--complete` makes it a failure. |
 | `1` | The command failed while running: an id that names nothing, a configuration it will not run on, a source name nothing configures. |
 | `2` | The invocation itself was wrong — an unknown flag, a value out of range, or answers a template refuses. |
+| `3` | An `attestation check` ran and the record it checked is not valid — `void`, or `absent`; its answer on standard output says which. (`sources sanitize` uses it for a sweep whose coverage is incomplete.) |
 | `4` | The query ran and at least one source did not answer. The others' results still stand and the failure is named on standard error. A write — a copy, `task status set`, `task update` or `task status complete` — also exits `4` when it landed and a task it delivers could not be kept in step; its `delivered` list says which. `task status reconcile` and `task status complete` exit `4` when an item they list failed while the others were written, and name each such item and why on standard error beside the report. |
 
 `--allow-partial` says a partial answer is acceptable and turns `4` into `0`. Nothing else
@@ -3020,6 +3021,39 @@ the item a copy created keeps from then on — see [A create safe to retry](#a-c
 
 The far end of the second row is in another source. It is reported by qualified id and kind
 and never followed: opening it is a command of your own.
+
+## Attestations
+
+An **attestation** records that someone cleared an item's authored content against a bar —
+a review that passed a task, a person's approval of a design document — keyed on that content,
+so it goes void the moment the content it cleared moves, the same way in every source:
+
+```sh
+onetaskgraph document attest board:ISSUE-9 --kind design-approval --by "ada" \
+  --bar sha256:… [--exclude myapp.owner]… [--note "looks right"] [--if-version V]
+onetaskgraph document attestation check board:ISSUE-9 --kind design-approval [--bar sha256:…]
+onetaskgraph project attestation check notes:plan-1 --kind plan-review --tasks
+```
+
+Each of `task`, `project` and `document` has `attest` and `attestation check`. A record is
+held under the reserved metadata key `onetaskgraph.attestations`, one record per kind —
+`{"kind", "by", "at", "content_digest", "bar", "note"?, "excludes"?}` — and recording a kind
+again replaces that kind's record alone. The store computes `content_digest` itself: the
+SHA-256 of the item's title, body, template answers (the `answers_digest` of its
+`onetaskgraph.template` entry), repositories, its own dependency edges (each far end named by
+its title, so a copy that files it under another id keeps the edge) and every caller-owned
+metadata key but those `--exclude` names. Never its status, priority, labels, ids, location or
+any store-reserved key — the attestations included — so a copy, which carries all of it,
+carries a record that still checks `valid` where it lands. `--if-version` records it only while
+the item is at that version, read first, writing nothing at any other.
+
+A check answers `{"kind", "state", "reason", "record"}`: `valid` (exit `0`); `void` (exit `3`)
+with `reason` `content-moved` when the content is not what the record cleared, else
+`bar-moved` when `--bar` is given and is not the record's bar; or `absent` (exit `3`) when the
+item holds no record of the kind. `project attestation check --tasks` answers
+`{"project", "kind", "tasks": [{"id", …}]}`, one entry per task of the project, and exits `0`
+only when every one is valid. The store records and checks and decides nothing else: who may
+attest, and which kinds anything requires, are the caller's.
 
 ## Writing a source in another language
 

@@ -18,6 +18,9 @@ import type {
   IssuesCompleted,
   LocateReport,
   MetadataSet,
+  Attested,
+  AttestationCheck,
+  ProjectAttestationCheck,
   NativeId,
   Priority,
   ProjectGraph,
@@ -90,6 +93,15 @@ export type WriteOptions = {
   reject?: string[];
   sanitizeDryRun?: boolean;
 };
+// An attestation's optional parts: caller keys its digest leaves out, a note, and the version
+// the item must be at for it to be recorded.
+export type AttestOptions = WriteOptions & {
+  exclude?: string[];
+  note?: string;
+  ifVersion?: string;
+};
+// The bar a check holds a record to; left out, the bar is not checked.
+export type AttestationCheckOptions = { bar?: string };
 // The version of the task a write says it knows, as a read of it reported: the write takes the
 // task's ids and current values from the source's local cache instead of reading it. Not a
 // precondition — see `docs/plugin-protocol.md`.
@@ -293,6 +305,9 @@ export const commandResponseRoots: Readonly<Record<string, keyof typeof runtimeS
   "task priority set": "TaskPrioritySet",
   "task content set": "TaskContentSet",
   "task metadata set": "MetadataSet",
+  // The attestation record written, and one kind of attestation checked.
+  "task attest": "Attested",
+  "task attestation check": "AttestationCheck",
   "task update": "TaskUpdated",
   "project list": "QueryResponseOfQualifiedProject",
   "project show": "QueryResponseOfQualifiedProject",
@@ -301,6 +316,9 @@ export const commandResponseRoots: Readonly<Record<string, keyof typeof runtimeS
   "project graph": "ProjectGraph",
   "project copy": "CopyReport",
   "project metadata set": "MetadataSet",
+  // The attestation record written, and one kind of attestation checked.
+  "project attest": "Attested",
+  "project attestation check": "AttestationCheck",
   // One project's status set on its own, as its source reads it back.
   "project status set": "ProjectStatusSet",
   // A created project as `project show` answers with it.
@@ -311,6 +329,9 @@ export const commandResponseRoots: Readonly<Record<string, keyof typeof runtimeS
   "document show": "DocumentDetail",
   "document copy": "CopyReport",
   "document metadata set": "MetadataSet",
+  // The attestation record written, and one kind of attestation checked.
+  "document attest": "Attested",
+  "document attestation check": "AttestationCheck",
   "label list": "QueryResponseOfQualifiedLabel",
   search: "QueryResponseOfSearchHit",
   "template variables": "TemplateVariables",
@@ -336,6 +357,8 @@ export const commandAlternateRoots: Readonly<
   Record<string, readonly (keyof typeof runtimeSchemas)[]>
 > = {
   "sources fields": ["StatusNamesReport"],
+  // `--tasks` answers one entry per task of the project.
+  "project attestation check": ["ProjectAttestationCheck"],
 };
 
 // Exit 4 is a whole answer with part of it missing: a read some sources could not answer, or a
@@ -371,6 +394,8 @@ const partialResponseCommands = new Set(
       !command.endsWith(" answers") &&
       command !== "task assets" &&
       command !== "task project-human" &&
+      !command.endsWith(" attest") &&
+      !command.endsWith(" attestation check") &&
       command !== "project create" &&
       command !== "document create",
   ),
@@ -895,6 +920,24 @@ function writePolicyFlags(method: string, options: WriteOptions): string[] {
   }
   if (options.sanitizeDryRun) args.push("--sanitize-dry-run");
   return args;
+}
+
+function attestFlags(
+  method: string,
+  kind: string,
+  by: string,
+  bar: string,
+  options: AttestOptions,
+): string[] {
+  const args = ["--kind", kind, "--by", by, "--bar", bar];
+  for (const key of stringList(method, "exclude", options.exclude)) args.push("--exclude", key);
+  if (options.note !== undefined) args.push("--note", options.note);
+  if (options.ifVersion !== undefined) args.push("--if-version", options.ifVersion);
+  return [...args, ...writePolicyFlags(method, options)];
+}
+
+function checkFlags(kind: string, options: AttestationCheckOptions): string[] {
+  return ["--kind", kind, ...(options.bar === undefined ? [] : ["--bar", options.bar])];
 }
 
 function expectFlags(method: string, options: { expect?: unknown }): string[] {
@@ -1644,6 +1687,119 @@ export class OnetaskgraphClient {
       options.sanitizeDryRun === true,
     );
   }
+  // Record one attestation on one task, replacing the record of its kind.
+  taskAttest(
+    id: string,
+    kind: string,
+    by: string,
+    bar: string,
+    options?: AttestOptions & { sanitizeDryRun?: false },
+  ): Promise<Attested>;
+  taskAttest(
+    id: string,
+    kind: string,
+    by: string,
+    bar: string,
+    options?: AttestOptions,
+  ): Promise<Attested | SanitizeDryRun>;
+  taskAttest(
+    id: string,
+    kind: string,
+    by: string,
+    bar: string,
+    options: AttestOptions = {},
+  ): Promise<Attested | SanitizeDryRun> {
+    return this.run(
+      "task attest",
+      [id, ...attestFlags("taskAttest", kind, by, bar, options)],
+      undefined,
+      options.sanitizeDryRun === true,
+    );
+  }
+  // Record one attestation on one project, replacing the record of its kind.
+  projectAttest(
+    id: string,
+    kind: string,
+    by: string,
+    bar: string,
+    options?: AttestOptions & { sanitizeDryRun?: false },
+  ): Promise<Attested>;
+  projectAttest(
+    id: string,
+    kind: string,
+    by: string,
+    bar: string,
+    options?: AttestOptions,
+  ): Promise<Attested | SanitizeDryRun>;
+  projectAttest(
+    id: string,
+    kind: string,
+    by: string,
+    bar: string,
+    options: AttestOptions = {},
+  ): Promise<Attested | SanitizeDryRun> {
+    return this.run(
+      "project attest",
+      [id, ...attestFlags("projectAttest", kind, by, bar, options)],
+      undefined,
+      options.sanitizeDryRun === true,
+    );
+  }
+  // Record one attestation on one document, replacing the record of its kind.
+  documentAttest(
+    id: string,
+    kind: string,
+    by: string,
+    bar: string,
+    options?: AttestOptions & { sanitizeDryRun?: false },
+  ): Promise<Attested>;
+  documentAttest(
+    id: string,
+    kind: string,
+    by: string,
+    bar: string,
+    options?: AttestOptions,
+  ): Promise<Attested | SanitizeDryRun>;
+  documentAttest(
+    id: string,
+    kind: string,
+    by: string,
+    bar: string,
+    options: AttestOptions = {},
+  ): Promise<Attested | SanitizeDryRun> {
+    return this.run(
+      "document attest",
+      [id, ...attestFlags("documentAttest", kind, by, bar, options)],
+      undefined,
+      options.sanitizeDryRun === true,
+    );
+  }
+  // Check one kind of attestation on one task: resolves with the check whether it is valid or
+  // not, and `state` says which.
+  taskAttestationCheck(
+    id: string,
+    kind: string,
+    options: AttestationCheckOptions = {},
+  ): Promise<AttestationCheck> {
+    return this.run("task attestation check", [id, ...checkFlags(kind, options)]);
+  }
+  documentAttestationCheck(
+    id: string,
+    kind: string,
+    options: AttestationCheckOptions = {},
+  ): Promise<AttestationCheck> {
+    return this.run("document attestation check", [id, ...checkFlags(kind, options)]);
+  }
+  // The project's own record, or with `tasks: true` one entry per task of the project.
+  projectAttestationCheck(
+    id: string,
+    kind: string,
+    options: AttestationCheckOptions & { tasks?: boolean } = {},
+  ): Promise<AttestationCheck | ProjectAttestationCheck> {
+    const args = [id, ...checkFlags(kind, options)];
+    if (options.tasks === true) args.push("--tasks");
+    return this.run("project attestation check", args);
+  }
   labelList(options: QueryOptions = {}): Promise<QueryResponseOfQualifiedLabel> {
     const args: string[] = [];
     addQuery(args, options);
@@ -1895,9 +2051,10 @@ export class OnetaskgraphClient {
         // A sweep answers its report on exit 1 (left unfixable or in conflict) and 3
         // (coverage incomplete); its refusals write a failure document, which has no
         // `coverage` and is refused below as the failure it is.
+        // A check answers its record on exit 3 when it is not valid — void or absent.
         const reporting =
-          command === "sources sanitize" &&
-          (code === 1 || code === 3) &&
+          ((command === "sources sanitize" && (code === 1 || code === 3)) ||
+            (command.endsWith(" attestation check") && code === 3)) &&
           !("failure" in (safeParse(stdout) ?? { failure: true }));
         if (
           stdout.length === 0 ||

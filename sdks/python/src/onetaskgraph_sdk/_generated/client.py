@@ -13,6 +13,8 @@ from . import models as _models
 
 if TYPE_CHECKING:
     from .models import (
+        AttestationCheck,
+        Attested,
         CacheCleared,
         CommentList,
         CommentWritten,
@@ -28,6 +30,7 @@ if TYPE_CHECKING:
         MetadataSet,
         NativeId,
         Priority,
+        ProjectAttestationCheck,
         ProjectGraph,
         ProjectStatusSet,
         QueryResponseOfQualifiedDocument,
@@ -61,12 +64,16 @@ if TYPE_CHECKING:
 POSITIONALS: dict[tuple[str, ...], tuple[str, ...]] = {
     ("cache", "clear"): ("source",),
     ("document", "answers"): ("id",),
+    ("document", "attest"): ("id",),
+    ("document", "attestation", "check"): ("id",),
     ("document", "copy"): ("ids",),
     ("document", "create"): ("source",),
     ("document", "metadata", "set"): ("id", "key", "value"),
     ("document", "render"): ("id",),
     ("document", "show"): ("id",),
     ("project", "answers"): ("id",),
+    ("project", "attest"): ("id",),
+    ("project", "attestation", "check"): ("id",),
     ("project", "copy"): ("id",),
     ("project", "create"): ("source",),
     ("project", "deps"): ("id",),
@@ -82,6 +89,8 @@ POSITIONALS: dict[tuple[str, ...], tuple[str, ...]] = {
     ("sources", "status-options"): ("source",),
     ("task", "answers"): ("id",),
     ("task", "assets"): ("id",),
+    ("task", "attest"): ("id",),
+    ("task", "attestation", "check"): ("id",),
     ("task", "comment", "add"): ("id",),
     ("task", "comment", "delete"): ("id", "comment_id"),
     ("task", "comment", "edit"): ("id", "comment_id"),
@@ -407,6 +416,177 @@ class GeneratedClient:
             ["document", "answers"],
             _models.TemplateAnswers | _models.SanitizeDryRun,
             id=id,
+            default_sources=default_sources,
+            page_size=page_size,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
+            set=set,
+        )
+
+    @overload
+    async def document_attest(
+        self,
+        id: GlobalId | str,
+        kind: str,
+        by: str,
+        bar: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        exclude: list[str] | tuple[str, ...] | None = None,
+        if_version: str | None = None,
+        note: str | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+    ) -> Attested: ...
+
+    @overload
+    async def document_attest(
+        self,
+        id: GlobalId | str,
+        kind: str,
+        by: str,
+        bar: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        exclude: list[str] | tuple[str, ...] | None = None,
+        if_version: str | None = None,
+        note: str | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+    ) -> Attested | SanitizeDryRun: ...
+
+    @overload
+    async def document_attest(
+        self,
+        id: GlobalId | str,
+        kind: str,
+        by: str,
+        bar: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        exclude: list[str] | tuple[str, ...] | None = None,
+        if_version: str | None = None,
+        note: str | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+    ) -> Attested | SanitizeDryRun: ...
+
+    async def document_attest(
+        self,
+        id: GlobalId | str,
+        kind: str,
+        by: str,
+        bar: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        exclude: list[str] | tuple[str, ...] | None = None,
+        if_version: str | None = None,
+        note: str | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+    ) -> Attested | SanitizeDryRun:
+        """Run ``onetaskgraph document attest``."""
+        return await self._invoke(
+            ["document", "attest"],
+            _models.Attested | _models.SanitizeDryRun,
+            id=id,
+            kind=kind,
+            by=by,
+            bar=bar,
+            default_sources=default_sources,
+            exclude=exclude,
+            if_version=if_version,
+            note=note,
+            page_size=page_size,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
+            set=set,
+            term_scope=_strings("document_attest", "term_scope", term_scope),
+        )
+
+    @overload
+    async def document_attestation_check(
+        self,
+        id: GlobalId | str,
+        kind: str,
+        *,
+        bar: str | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> AttestationCheck: ...
+
+    @overload
+    async def document_attestation_check(
+        self,
+        id: GlobalId | str,
+        kind: str,
+        *,
+        bar: str | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> AttestationCheck | SanitizeDryRun: ...
+
+    @overload
+    async def document_attestation_check(
+        self,
+        id: GlobalId | str,
+        kind: str,
+        *,
+        bar: str | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> AttestationCheck | SanitizeDryRun: ...
+
+    async def document_attestation_check(
+        self,
+        id: GlobalId | str,
+        kind: str,
+        *,
+        bar: str | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> AttestationCheck | SanitizeDryRun:
+        """Run ``onetaskgraph document attestation check``."""
+        return await self._invoke(
+            ["document", "attestation", "check"],
+            _models.AttestationCheck | _models.SanitizeDryRun,
+            id=id,
+            kind=kind,
+            bar=bar,
             default_sources=default_sources,
             page_size=page_size,
             reject=reject,
@@ -1183,6 +1363,182 @@ class GeneratedClient:
             replace=replace,
             sanitize_dry_run=sanitize_dry_run,
             set=set,
+        )
+
+    @overload
+    async def project_attest(
+        self,
+        id: GlobalId | str,
+        kind: str,
+        by: str,
+        bar: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        exclude: list[str] | tuple[str, ...] | None = None,
+        if_version: str | None = None,
+        note: str | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+    ) -> Attested: ...
+
+    @overload
+    async def project_attest(
+        self,
+        id: GlobalId | str,
+        kind: str,
+        by: str,
+        bar: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        exclude: list[str] | tuple[str, ...] | None = None,
+        if_version: str | None = None,
+        note: str | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+    ) -> Attested | SanitizeDryRun: ...
+
+    @overload
+    async def project_attest(
+        self,
+        id: GlobalId | str,
+        kind: str,
+        by: str,
+        bar: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        exclude: list[str] | tuple[str, ...] | None = None,
+        if_version: str | None = None,
+        note: str | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+    ) -> Attested | SanitizeDryRun: ...
+
+    async def project_attest(
+        self,
+        id: GlobalId | str,
+        kind: str,
+        by: str,
+        bar: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        exclude: list[str] | tuple[str, ...] | None = None,
+        if_version: str | None = None,
+        note: str | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+    ) -> Attested | SanitizeDryRun:
+        """Run ``onetaskgraph project attest``."""
+        return await self._invoke(
+            ["project", "attest"],
+            _models.Attested | _models.SanitizeDryRun,
+            id=id,
+            kind=kind,
+            by=by,
+            bar=bar,
+            default_sources=default_sources,
+            exclude=exclude,
+            if_version=if_version,
+            note=note,
+            page_size=page_size,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
+            set=set,
+            term_scope=_strings("project_attest", "term_scope", term_scope),
+        )
+
+    @overload
+    async def project_attestation_check(
+        self,
+        id: GlobalId | str,
+        kind: str,
+        *,
+        bar: str | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        tasks: bool | None = None,
+    ) -> AttestationCheck | ProjectAttestationCheck: ...
+
+    @overload
+    async def project_attestation_check(
+        self,
+        id: GlobalId | str,
+        kind: str,
+        *,
+        bar: str | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+        tasks: bool | None = None,
+    ) -> AttestationCheck | ProjectAttestationCheck | SanitizeDryRun: ...
+
+    @overload
+    async def project_attestation_check(
+        self,
+        id: GlobalId | str,
+        kind: str,
+        *,
+        bar: str | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        tasks: bool | None = None,
+    ) -> AttestationCheck | ProjectAttestationCheck | SanitizeDryRun: ...
+
+    async def project_attestation_check(
+        self,
+        id: GlobalId | str,
+        kind: str,
+        *,
+        bar: str | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        tasks: bool | None = None,
+    ) -> AttestationCheck | ProjectAttestationCheck | SanitizeDryRun:
+        """Run ``onetaskgraph project attestation check``."""
+        return await self._invoke(
+            ["project", "attestation", "check"],
+            _models.AttestationCheck | _models.ProjectAttestationCheck | _models.SanitizeDryRun,
+            id=id,
+            kind=kind,
+            bar=bar,
+            default_sources=default_sources,
+            page_size=page_size,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
+            set=set,
+            tasks=tasks,
         )
 
     @overload
@@ -2686,6 +3042,177 @@ class GeneratedClient:
             _models.TaskAssetNames | _models.SanitizeDryRun,
             id=id,
             output_dir=output_dir,
+            default_sources=default_sources,
+            page_size=page_size,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
+            set=set,
+        )
+
+    @overload
+    async def task_attest(
+        self,
+        id: GlobalId | str,
+        kind: str,
+        by: str,
+        bar: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        exclude: list[str] | tuple[str, ...] | None = None,
+        if_version: str | None = None,
+        note: str | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+    ) -> Attested: ...
+
+    @overload
+    async def task_attest(
+        self,
+        id: GlobalId | str,
+        kind: str,
+        by: str,
+        bar: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        exclude: list[str] | tuple[str, ...] | None = None,
+        if_version: str | None = None,
+        note: str | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+    ) -> Attested | SanitizeDryRun: ...
+
+    @overload
+    async def task_attest(
+        self,
+        id: GlobalId | str,
+        kind: str,
+        by: str,
+        bar: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        exclude: list[str] | tuple[str, ...] | None = None,
+        if_version: str | None = None,
+        note: str | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+    ) -> Attested | SanitizeDryRun: ...
+
+    async def task_attest(
+        self,
+        id: GlobalId | str,
+        kind: str,
+        by: str,
+        bar: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        exclude: list[str] | tuple[str, ...] | None = None,
+        if_version: str | None = None,
+        note: str | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+    ) -> Attested | SanitizeDryRun:
+        """Run ``onetaskgraph task attest``."""
+        return await self._invoke(
+            ["task", "attest"],
+            _models.Attested | _models.SanitizeDryRun,
+            id=id,
+            kind=kind,
+            by=by,
+            bar=bar,
+            default_sources=default_sources,
+            exclude=exclude,
+            if_version=if_version,
+            note=note,
+            page_size=page_size,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
+            set=set,
+            term_scope=_strings("task_attest", "term_scope", term_scope),
+        )
+
+    @overload
+    async def task_attestation_check(
+        self,
+        id: GlobalId | str,
+        kind: str,
+        *,
+        bar: str | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> AttestationCheck: ...
+
+    @overload
+    async def task_attestation_check(
+        self,
+        id: GlobalId | str,
+        kind: str,
+        *,
+        bar: str | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> AttestationCheck | SanitizeDryRun: ...
+
+    @overload
+    async def task_attestation_check(
+        self,
+        id: GlobalId | str,
+        kind: str,
+        *,
+        bar: str | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> AttestationCheck | SanitizeDryRun: ...
+
+    async def task_attestation_check(
+        self,
+        id: GlobalId | str,
+        kind: str,
+        *,
+        bar: str | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> AttestationCheck | SanitizeDryRun:
+        """Run ``onetaskgraph task attestation check``."""
+        return await self._invoke(
+            ["task", "attestation", "check"],
+            _models.AttestationCheck | _models.SanitizeDryRun,
+            id=id,
+            kind=kind,
+            bar=bar,
             default_sources=default_sources,
             page_size=page_size,
             reject=reject,

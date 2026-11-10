@@ -19,7 +19,7 @@ Keys are free-form, with two prefixes reserved:
      in `crates/onetaskgraph-e2e/tests/e2e/surface.rs` reads this bullet, and fails when the keys it
      lists or the count it states in words differ from the constants each key is spelled once
      as — `MetadataKey::COPIES_KEY` among them. -->
-- `onetaskgraph.` belongs to this product. It defines exactly seventeen keys, each spelled
+- `onetaskgraph.` belongs to this product. It defines exactly eighteen keys, each spelled
   once so no source can invent its own: `onetaskgraph.repositories`
   (`Repository::METADATA_KEY`), `onetaskgraph.depends_on`
   (`DependencyEdge::RECORDED_KEY`), `onetaskgraph.delivers` (`TaskRef::DELIVERS_KEY`),
@@ -31,7 +31,9 @@ Keys are free-form, with two prefixes reserved:
   `onetaskgraph.copied_version` (`MetadataKey::COPIED_VERSION_KEY`),
   `onetaskgraph.copied_with_comments` (`MetadataKey::COPIED_WITH_COMMENTS_KEY`) and
   `onetaskgraph.copied_destination_version` (`MetadataKey::COPIED_DESTINATION_VERSION_KEY`)
-  and `onetaskgraph.edges_on_record` (`MetadataKey::EDGES_ON_RECORD_KEY`), and the two that make
+  and `onetaskgraph.edges_on_record` (`MetadataKey::EDGES_ON_RECORD_KEY`), the attestations an
+  item holds by kind, `onetaskgraph.attestations` (`MetadataKey::ATTESTATIONS_KEY`; README,
+  "Attestations"), which a copy carries like a caller's own key, and the two that make
   a create safe to retry — `onetaskgraph.creating` (`MetadataKey::CREATING_KEY`), held by an item
   only while a copy is creating its counterpart, and `onetaskgraph.create_key`
   (`MetadataKey::CREATE_KEY`), which an item a copy created keeps (README, "A create safe to

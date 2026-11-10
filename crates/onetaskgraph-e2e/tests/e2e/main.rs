@@ -26,6 +26,12 @@ use onetaskgraph_e2e_support::{common, fixtures, linear_vocabulary, onevcs};
 // added it places it here, as the suite for journeys not specific to one plugin.
 mod assets;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No credential and no network:
+// every journey drives the binary against a folder of Markdown, the loopback board and the
+// loopback Linear workspace in seconds. Recording and checking an attestation, and its digest,
+// are the engine's, and the copy they survive crosses plugins, so no one plugin crate's edge is
+// narrower.
+mod attestations;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No credential and no network:
 // every journey drives the binary against folders of Markdown and the released onevcs
 // boundary commands over an onevcs home this run owns, holding synthetic identities, in a few
 // seconds. Classification, routing by it and the write gate are the engine's and the

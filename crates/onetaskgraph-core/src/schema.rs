@@ -18,6 +18,9 @@ use onetaskgraph_plugin_api::{
 use schemars::{Schema, schema_for};
 use serde_json::{Value, json};
 
+use crate::attestation::{
+    Attestation, AttestationCheck, AttestationState, Attested, ProjectAttestationCheck, VoidReason,
+};
 use crate::boundary::{PublicWriteInput, RepositoryVisibility, WriteVerdict};
 use crate::cache::{CacheCleared, CacheUse, ExpectedWrite};
 use crate::config::{
@@ -248,6 +251,21 @@ pub fn schema_bundle() -> Value {
 
     // What `task`, `project` and `document metadata set` answer with.
     roots.insert("MetadataSet", write_answer_schema::<MetadataSet>());
+
+    // Content-keyed attestations: what `attest` answers with, what `attestation check`
+    // answers for one item and — under `project attestation check --tasks` — for every task of
+    // a project, the record an item holds, and the two vocabularies a caller branches on.
+    // llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] The shapes are declared once, in `crate::attestation`; what lives here is their registration as roots, which is what both SDK generators read and `SCHEMA_BUNDLE_VERSION` and its golden track.
+    roots.insert("Attested", write_answer_schema::<Attested>());
+    roots.insert("Attestation", schema_for!(Attestation));
+    roots.insert("AttestationCheck", schema_for!(AttestationCheck));
+    roots.insert(
+        "ProjectAttestationCheck",
+        schema_for!(ProjectAttestationCheck),
+    );
+    roots.insert("AttestationState", schema_for!(AttestationState));
+    roots.insert("VoidReason", schema_for!(VoidReason));
+    // llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 
     roots.insert("CopyReport", write_answer_schema::<CopyReport>());
     // A root of its own, for the reason `StatusMapping` is one: every source's block takes the

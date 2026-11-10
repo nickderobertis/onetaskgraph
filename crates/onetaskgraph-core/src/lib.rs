@@ -27,6 +27,7 @@
 ))]
 #![deny(missing_docs)]
 
+pub mod attestation;
 pub mod cache;
 mod clock;
 pub mod config;
@@ -59,6 +60,7 @@ pub use clock::{
 pub use config::{
     Config, ConfigError, CreateSettings, Loaded, OutputFormat, SourceCacheConfig, SourceConfig,
 };
+pub use engine::AttestRequest;
 pub use engine::boundary;
 pub use engine::{
     Body, BudgetSpent, CommentCounts, CommentList, CommentWritten, CompleteAction, Completeness,

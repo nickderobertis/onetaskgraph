@@ -342,6 +342,418 @@ export const runtimeSchemas = {
       }
     }
   },
+  "Attestation": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "Attestation",
+    "description": "One attestation: who cleared the item's authored content, when, which content and against\nwhich bar.",
+    "type": "object",
+    "properties": {
+      "kind": {
+        "description": "The kind of attestation this is; the key it is held under.",
+        "$ref": "#/$defs/AttestationKind"
+      },
+      "by": {
+        "description": "Who attested, as the caller labels them.",
+        "type": "string"
+      },
+      "at": {
+        "description": "When it was recorded, in RFC 3339.",
+        "type": "string"
+      },
+      "content_digest": {
+        "description": "The digest of the item's authored content when it was recorded: `sha256:` and 64\nlowercase hex digits, computed by the store (see the module's documentation).",
+        "type": "string"
+      },
+      "bar": {
+        "description": "The fingerprint of the bar the content was cleared against, as the caller gave it.",
+        "type": "string"
+      },
+      "note": {
+        "description": "What the attester added, when they added anything.",
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "excludes": {
+        "description": "The caller-owned metadata keys left out of `content_digest`, sorted; empty when none\nwere.",
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "default": []
+      }
+    },
+    "required": [
+      "kind",
+      "by",
+      "at",
+      "content_digest",
+      "bar"
+    ],
+    "$defs": {
+      "AttestationKind": {
+        "description": "One kind of attestation, such as `plan-review` or `design-approval`: one to 200 letters,\ndigits, `.`, `_` or `-`.",
+        "type": "string"
+      }
+    }
+  },
+  "AttestationCheck": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "AttestationCheck",
+    "description": "What `attestation check` answers: one kind on one item.\n\nEvery member is always written, `reason` and `record` as `null` when they have nothing to\nsay.",
+    "type": "object",
+    "properties": {
+      "kind": {
+        "description": "The kind asked about.",
+        "$ref": "#/$defs/AttestationKind"
+      },
+      "state": {
+        "description": "What the check found.",
+        "$ref": "#/$defs/AttestationState"
+      },
+      "reason": {
+        "description": "Why the record is void: `null` unless `state` is `void`.",
+        "anyOf": [
+          {
+            "$ref": "#/$defs/VoidReason"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "record": {
+        "description": "The record of the kind the item holds, or `null` when it holds none.",
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Attestation"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "required": [
+      "kind",
+      "state"
+    ],
+    "$defs": {
+      "AttestationKind": {
+        "description": "One kind of attestation, such as `plan-review` or `design-approval`: one to 200 letters,\ndigits, `.`, `_` or `-`.",
+        "type": "string"
+      },
+      "AttestationState": {
+        "description": "What a check of one kind of attestation found.",
+        "oneOf": [
+          {
+            "description": "A record of the kind is there, the item's authored content is the content it cleared,\nand the bar asked about, when one was, is the bar it cleared it against.",
+            "type": "string",
+            "const": "valid"
+          },
+          {
+            "description": "A record of the kind is there and no longer holds: `reason` says why.",
+            "type": "string",
+            "const": "void"
+          },
+          {
+            "description": "The item holds no record of the kind.",
+            "type": "string",
+            "const": "absent"
+          }
+        ]
+      },
+      "VoidReason": {
+        "description": "Why a record of an attestation no longer holds.",
+        "oneOf": [
+          {
+            "description": "The item's authored content is not the content the record cleared.",
+            "type": "string",
+            "const": "content-moved"
+          },
+          {
+            "description": "The bar asked about is not the bar the record cleared the content against.",
+            "type": "string",
+            "const": "bar-moved"
+          }
+        ]
+      },
+      "Attestation": {
+        "description": "One attestation: who cleared the item's authored content, when, which content and against\nwhich bar.",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "description": "The kind of attestation this is; the key it is held under.",
+            "$ref": "#/$defs/AttestationKind"
+          },
+          "by": {
+            "description": "Who attested, as the caller labels them.",
+            "type": "string"
+          },
+          "at": {
+            "description": "When it was recorded, in RFC 3339.",
+            "type": "string"
+          },
+          "content_digest": {
+            "description": "The digest of the item's authored content when it was recorded: `sha256:` and 64\nlowercase hex digits, computed by the store (see the module's documentation).",
+            "type": "string"
+          },
+          "bar": {
+            "description": "The fingerprint of the bar the content was cleared against, as the caller gave it.",
+            "type": "string"
+          },
+          "note": {
+            "description": "What the attester added, when they added anything.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "excludes": {
+            "description": "The caller-owned metadata keys left out of `content_digest`, sorted; empty when none\nwere.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": []
+          }
+        },
+        "required": [
+          "kind",
+          "by",
+          "at",
+          "content_digest",
+          "bar"
+        ]
+      }
+    }
+  },
+  "AttestationState": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "AttestationState",
+    "description": "What a check of one kind of attestation found.",
+    "oneOf": [
+      {
+        "description": "A record of the kind is there, the item's authored content is the content it cleared,\nand the bar asked about, when one was, is the bar it cleared it against.",
+        "type": "string",
+        "const": "valid"
+      },
+      {
+        "description": "A record of the kind is there and no longer holds: `reason` says why.",
+        "type": "string",
+        "const": "void"
+      },
+      {
+        "description": "The item holds no record of the kind.",
+        "type": "string",
+        "const": "absent"
+      }
+    ]
+  },
+  "Attested": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "Attested",
+    "description": "What `attest` answers: the record it wrote, on the item it wrote it to.",
+    "type": "object",
+    "properties": {
+      "id": {
+        "description": "The item, by qualified id.",
+        "$ref": "#/$defs/GlobalId"
+      },
+      "record": {
+        "description": "The record as the source holds it after the write.",
+        "$ref": "#/$defs/Attestation"
+      },
+      "sanitization": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Sanitization"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "required": [
+      "id",
+      "record"
+    ],
+    "$defs": {
+      "GlobalId": {
+        "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
+        "type": "string"
+      },
+      "Attestation": {
+        "description": "One attestation: who cleared the item's authored content, when, which content and against\nwhich bar.",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "description": "The kind of attestation this is; the key it is held under.",
+            "$ref": "#/$defs/AttestationKind"
+          },
+          "by": {
+            "description": "Who attested, as the caller labels them.",
+            "type": "string"
+          },
+          "at": {
+            "description": "When it was recorded, in RFC 3339.",
+            "type": "string"
+          },
+          "content_digest": {
+            "description": "The digest of the item's authored content when it was recorded: `sha256:` and 64\nlowercase hex digits, computed by the store (see the module's documentation).",
+            "type": "string"
+          },
+          "bar": {
+            "description": "The fingerprint of the bar the content was cleared against, as the caller gave it.",
+            "type": "string"
+          },
+          "note": {
+            "description": "What the attester added, when they added anything.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "excludes": {
+            "description": "The caller-owned metadata keys left out of `content_digest`, sorted; empty when none\nwere.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": []
+          }
+        },
+        "required": [
+          "kind",
+          "by",
+          "at",
+          "content_digest",
+          "bar"
+        ]
+      },
+      "AttestationKind": {
+        "description": "One kind of attestation, such as `plan-review` or `design-approval`: one to 200 letters,\ndigits, `.`, `_` or `-`.",
+        "type": "string"
+      },
+      "Sanitization": {
+        "description": "What the screened writes of one command replaced, and what sanitise-on-refusal changed:\nthe `sanitization` member a write's answer carries when it is not empty.",
+        "type": "object",
+        "properties": {
+          "replaced": {
+            "description": "Spans the writes' own sanitisations rewrote.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "side_effect": {
+            "description": "Each field or comment of an item sanitisation changed beyond the write itself.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/SideEffect"
+            }
+          },
+          "dry_run": {
+            "description": "Whether nothing was written, the changes only reported.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "replaced",
+          "side_effect",
+          "dry_run"
+        ]
+      },
+      "SideEffect": {
+        "description": "One field or comment of an item a sanitisation changed, named by screened locators.",
+        "type": "object",
+        "properties": {
+          "item": {
+            "description": "The item, by its qualified id as screened.",
+            "$ref": "#/$defs/Locator"
+          },
+          "field": {
+            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`.",
+            "$ref": "#/$defs/Locator"
+          }
+        },
+        "required": [
+          "item",
+          "field"
+        ]
+      },
+      "Locator": {
+        "description": "A screened locator: the string verbatim, or its redacted form.",
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "redacted": {
+                "const": true
+              },
+              "kind": {
+                "$ref": "#/$defs/LocatorKind"
+              },
+              "ordinal": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "redacted",
+              "kind",
+              "ordinal"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "LocatorKind": {
+        "description": "What a locator names.",
+        "oneOf": [
+          {
+            "description": "A source name.",
+            "type": "string",
+            "const": "source"
+          },
+          {
+            "description": "An item id.",
+            "type": "string",
+            "const": "item"
+          },
+          {
+            "description": "A user-defined field name.",
+            "type": "string",
+            "const": "field"
+          },
+          {
+            "description": "A metadata key.",
+            "type": "string",
+            "const": "metadata-key"
+          },
+          {
+            "description": "A comment id.",
+            "type": "string",
+            "const": "comment"
+          },
+          {
+            "description": "A file path.",
+            "type": "string",
+            "const": "path"
+          },
+          {
+            "description": "A repository identity.",
+            "type": "string",
+            "const": "identity"
+          }
+        ]
+      }
+    }
+  },
   "CacheCleared": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "CacheCleared",
@@ -12306,6 +12718,172 @@ export const runtimeSchemas = {
             "type": "string",
             "const": "private"
           }
+        ]
+      }
+    }
+  },
+  "ProjectAttestationCheck": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "ProjectAttestationCheck",
+    "description": "What `project attestation check --tasks` answers: one entry per task filed under the\nproject, in the order the source lists them.",
+    "type": "object",
+    "properties": {
+      "project": {
+        "description": "The project, by qualified id.",
+        "$ref": "#/$defs/GlobalId"
+      },
+      "kind": {
+        "description": "The kind asked about.",
+        "$ref": "#/$defs/AttestationKind"
+      },
+      "tasks": {
+        "description": "One entry per task.",
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/TaskAttestationCheck"
+        }
+      }
+    },
+    "required": [
+      "project",
+      "kind",
+      "tasks"
+    ],
+    "$defs": {
+      "GlobalId": {
+        "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
+        "type": "string"
+      },
+      "AttestationKind": {
+        "description": "One kind of attestation, such as `plan-review` or `design-approval`: one to 200 letters,\ndigits, `.`, `_` or `-`.",
+        "type": "string"
+      },
+      "TaskAttestationCheck": {
+        "description": "One task's entry in a project's check: the task's qualified id beside what its check found.",
+        "type": "object",
+        "properties": {
+          "id": {
+            "description": "The task, by qualified id.",
+            "$ref": "#/$defs/GlobalId"
+          },
+          "kind": {
+            "description": "The kind asked about.",
+            "$ref": "#/$defs/AttestationKind"
+          },
+          "state": {
+            "description": "What the check found.",
+            "$ref": "#/$defs/AttestationState"
+          },
+          "reason": {
+            "description": "Why the record is void: `null` unless `state` is `void`.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/VoidReason"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "record": {
+            "description": "The record of the kind the item holds, or `null` when it holds none.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Attestation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "state"
+        ]
+      },
+      "AttestationState": {
+        "description": "What a check of one kind of attestation found.",
+        "oneOf": [
+          {
+            "description": "A record of the kind is there, the item's authored content is the content it cleared,\nand the bar asked about, when one was, is the bar it cleared it against.",
+            "type": "string",
+            "const": "valid"
+          },
+          {
+            "description": "A record of the kind is there and no longer holds: `reason` says why.",
+            "type": "string",
+            "const": "void"
+          },
+          {
+            "description": "The item holds no record of the kind.",
+            "type": "string",
+            "const": "absent"
+          }
+        ]
+      },
+      "VoidReason": {
+        "description": "Why a record of an attestation no longer holds.",
+        "oneOf": [
+          {
+            "description": "The item's authored content is not the content the record cleared.",
+            "type": "string",
+            "const": "content-moved"
+          },
+          {
+            "description": "The bar asked about is not the bar the record cleared the content against.",
+            "type": "string",
+            "const": "bar-moved"
+          }
+        ]
+      },
+      "Attestation": {
+        "description": "One attestation: who cleared the item's authored content, when, which content and against\nwhich bar.",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "description": "The kind of attestation this is; the key it is held under.",
+            "$ref": "#/$defs/AttestationKind"
+          },
+          "by": {
+            "description": "Who attested, as the caller labels them.",
+            "type": "string"
+          },
+          "at": {
+            "description": "When it was recorded, in RFC 3339.",
+            "type": "string"
+          },
+          "content_digest": {
+            "description": "The digest of the item's authored content when it was recorded: `sha256:` and 64\nlowercase hex digits, computed by the store (see the module's documentation).",
+            "type": "string"
+          },
+          "bar": {
+            "description": "The fingerprint of the bar the content was cleared against, as the caller gave it.",
+            "type": "string"
+          },
+          "note": {
+            "description": "What the attester added, when they added anything.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "excludes": {
+            "description": "The caller-owned metadata keys left out of `content_digest`, sorted; empty when none\nwere.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": []
+          }
+        },
+        "required": [
+          "kind",
+          "by",
+          "at",
+          "content_digest",
+          "bar"
         ]
       }
     }
@@ -28717,6 +29295,23 @@ export const runtimeSchemas = {
         "description": "A mapping from string keys to values.",
         "type": "string",
         "const": "object"
+      }
+    ]
+  },
+  "VoidReason": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "VoidReason",
+    "description": "Why a record of an attestation no longer holds.",
+    "oneOf": [
+      {
+        "description": "The item's authored content is not the content the record cleared.",
+        "type": "string",
+        "const": "content-moved"
+      },
+      {
+        "description": "The bar asked about is not the bar the record cleared the content against.",
+        "type": "string",
+        "const": "bar-moved"
       }
     ]
   },

@@ -16,6 +16,7 @@
 //! Nothing here writes anything down. See [`fetch`] for the walk that makes that true.
 
 mod assets;
+mod attestation;
 pub mod boundary;
 mod cached;
 mod closure;
@@ -73,6 +74,7 @@ pub(crate) use resume::{Owed, Resumption, StreamState};
 use resume::{Resume, StreamKind};
 
 pub use assets::{HeldAsset, TaskAssetNames, TaskAssetsError};
+pub use attestation::AttestRequest;
 pub use closure::{
     CompleteAction, IssueCompleted, IssuesCompleted, ReconcileOutcome, StatusReconciled,
     StatusesReconciled,

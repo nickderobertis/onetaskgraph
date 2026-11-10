@@ -19,7 +19,9 @@ if TYPE_CHECKING:
 
 
 REPORTING_EXITS: dict[tuple[str, ...], frozenset[int]] = {
-    ("sources", "sanitize"): frozenset({1, 3})
+    ("sources", "sanitize"): frozenset({1, 3}),
+    # A check answers its record on exit 3 when it is not valid — void or absent.
+    **{(noun, "attestation", "check"): frozenset({3}) for noun in ("task", "project", "document")},
 }
 """The exits beyond 0 and 4 on which a command still answers its own document."""
 

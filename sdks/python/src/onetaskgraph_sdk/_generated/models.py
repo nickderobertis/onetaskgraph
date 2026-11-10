@@ -5,6 +5,10 @@ import importlib
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from .attestation import Attestation as Attestation
+    from .attestation_check import AttestationCheck as AttestationCheck
+    from .attestation_state import AttestationState as AttestationState
+    from .attested import Attested as Attested
     from .cache_cleared import CacheCleared as CacheCleared
     from .cache_use import CacheUse as CacheUse
     from .classification import Classification as Classification
@@ -33,6 +37,7 @@ if TYPE_CHECKING:
     from .native_id import NativeId as NativeId
     from .page_of_document import Page as PageOfDocument
     from .priority import Priority as Priority
+    from .project_attestation_check import ProjectAttestationCheck as ProjectAttestationCheck
     from .project_graph import ProjectGraph as ProjectGraph
     from .project_status_set import ProjectStatusSet as ProjectStatusSet
     from .public_projections import PublicProjections as PublicProjections
@@ -78,6 +83,7 @@ if TYPE_CHECKING:
     from .template_variables import TemplateVariables as TemplateVariables
     from .updated_field import UpdatedField as UpdatedField
     from .variable_type import VariableType as VariableType
+    from .void_reason import VoidReason as VoidReason
     from .write_policy_config import WritePolicyConfig as WritePolicyConfig
     from .write_verdict import WriteVerdict as WriteVerdict
 
@@ -87,6 +93,10 @@ if TYPE_CHECKING:
 # private to this module rather than as a re-export. This list is what makes the
 # whole set public to one, here and through the package root's own `__all__`.
 __all__ = [
+    "Attestation",
+    "AttestationCheck",
+    "AttestationState",
+    "Attested",
     "CacheCleared",
     "CacheUse",
     "Classification",
@@ -115,6 +125,7 @@ __all__ = [
     "NativeId",
     "PageOfDocument",
     "Priority",
+    "ProjectAttestationCheck",
     "ProjectGraph",
     "ProjectStatusSet",
     "PublicProjections",
@@ -156,11 +167,16 @@ __all__ = [
     "TemplateVariables",
     "UpdatedField",
     "VariableType",
+    "VoidReason",
     "WritePolicyConfig",
     "WriteVerdict",
 ]
 
 _MODULES: dict[str, tuple[str, str]] = {
+    "Attestation": ("attestation", "Attestation"),
+    "AttestationCheck": ("attestation_check", "AttestationCheck"),
+    "AttestationState": ("attestation_state", "AttestationState"),
+    "Attested": ("attested", "Attested"),
     "CacheCleared": ("cache_cleared", "CacheCleared"),
     "CacheUse": ("cache_use", "CacheUse"),
     "Classification": ("classification", "Classification"),
@@ -189,6 +205,7 @@ _MODULES: dict[str, tuple[str, str]] = {
     "NativeId": ("native_id", "NativeId"),
     "PageOfDocument": ("page_of_document", "Page"),
     "Priority": ("priority", "Priority"),
+    "ProjectAttestationCheck": ("project_attestation_check", "ProjectAttestationCheck"),
     "ProjectGraph": ("project_graph", "ProjectGraph"),
     "ProjectStatusSet": ("project_status_set", "ProjectStatusSet"),
     "PublicProjections": ("public_projections", "PublicProjections"),
@@ -230,6 +247,7 @@ _MODULES: dict[str, tuple[str, str]] = {
     "TemplateVariables": ("template_variables", "TemplateVariables"),
     "UpdatedField": ("updated_field", "UpdatedField"),
     "VariableType": ("variable_type", "VariableType"),
+    "VoidReason": ("void_reason", "VoidReason"),
     "WritePolicyConfig": ("write_policy_config", "WritePolicyConfig"),
     "WriteVerdict": ("write_verdict", "WriteVerdict"),
 }

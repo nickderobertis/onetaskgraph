@@ -5,6 +5,7 @@
 //! proven by calling it in-process, because the thing being checked is what a user's
 //! shell sees.
 
+mod attest;
 mod cli;
 mod render;
 mod rendered;
@@ -36,11 +37,11 @@ use onetaskgraph_status_options::{
 use serde::Serialize;
 
 use crate::cli::{
-    CacheCommand, Cli, Command, CommentCommand, ConfigCommand, ContentCommand, CopyArgs,
-    DependencyArgs, DocumentCommand, DocumentFilterArgs, ExpectArgs, FilterArgs, GraphFormat,
-    LabelCommand, MetadataCommand, MetadataSetArgs, PageArgs, PriorityCommand, ProjectCommand,
-    ProjectStatusCommand, SelectionArgs, ShowArgs, SourcesCommand, StatusCommand, TaskAssetsArgs,
-    TaskCommand,
+    AttestationCommand, CacheCommand, Cli, Command, CommentCommand, ConfigCommand, ContentCommand,
+    CopyArgs, DependencyArgs, DocumentCommand, DocumentFilterArgs, ExpectArgs, FilterArgs,
+    GraphFormat, LabelCommand, MetadataCommand, MetadataSetArgs, PageArgs, PriorityCommand,
+    ProjectAttestationCommand, ProjectCommand, ProjectStatusCommand, SelectionArgs, ShowArgs,
+    SourcesCommand, StatusCommand, TaskAssetsArgs, TaskCommand,
 };
 
 /// Everything asked for was answered, by every source asked. Nothing else exits `0`. A
@@ -737,6 +738,34 @@ async fn run_inner(
         } => metadata_set(out, loaded, MetadataRecord::Project, args).await,
 
         Command::Task {
+            command: TaskCommand::Attest(args),
+        } => attest::attest(out, loaded, MetadataRecord::Task, args).await,
+        Command::Project {
+            command: ProjectCommand::Attest(args),
+        } => attest::attest(out, loaded, MetadataRecord::Project, args).await,
+        Command::Document {
+            command: DocumentCommand::Attest(args),
+        } => attest::attest(out, loaded, MetadataRecord::Document, args).await,
+        Command::Task {
+            command:
+                TaskCommand::Attestation {
+                    command: AttestationCommand::Check(args),
+                },
+        } => attest::check(out, loaded, MetadataRecord::Task, args).await,
+        Command::Document {
+            command:
+                DocumentCommand::Attestation {
+                    command: AttestationCommand::Check(args),
+                },
+        } => attest::check(out, loaded, MetadataRecord::Document, args).await,
+        Command::Project {
+            command:
+                ProjectCommand::Attestation {
+                    command: ProjectAttestationCommand::Check(args),
+                },
+        } => attest::check_project(out, loaded, args).await,
+
+        Command::Task {
             command: TaskCommand::Update(args),
         } => update::update_task(out, loaded, args).await,
 
@@ -1353,6 +1382,7 @@ fn term_scope(command: &Command) -> Option<Vec<String>> {
                 command: MetadataCommand::Set(args),
             } => &args.term_scope,
             TaskCommand::Update(args) => &args.term_scope,
+            TaskCommand::Attest(args) => &args.term_scope,
             TaskCommand::Create(args) => &args.item.term_scope,
             TaskCommand::Render(args) => &args.render.term_scope,
             TaskCommand::Comment {
@@ -1372,6 +1402,7 @@ fn term_scope(command: &Command) -> Option<Vec<String>> {
                 command: ProjectStatusCommand::Set(args),
             } => &args.term_scope,
             ProjectCommand::Create(args) => &args.term_scope,
+            ProjectCommand::Attest(args) => &args.term_scope,
             ProjectCommand::Render(args) => &args.term_scope,
             _ => return None,
         },
@@ -1381,6 +1412,7 @@ fn term_scope(command: &Command) -> Option<Vec<String>> {
                 command: MetadataCommand::Set(args),
             } => &args.term_scope,
             DocumentCommand::Create(args) => &args.item.term_scope,
+            DocumentCommand::Attest(args) => &args.term_scope,
             DocumentCommand::Render(args) => &args.render.term_scope,
             _ => return None,
         },
@@ -2668,6 +2700,8 @@ mod tests {
                 "task priority set",
                 "task content set",
                 "task metadata set",
+                "task attest",
+                "task attestation check",
                 "task update",
                 "task create",
                 "task render",
@@ -2680,6 +2714,8 @@ mod tests {
                 "project graph",
                 "project copy",
                 "project metadata set",
+                "project attest",
+                "project attestation check",
                 "project status set",
                 "project create",
                 "project render",
@@ -2688,6 +2724,8 @@ mod tests {
                 "document show",
                 "document copy",
                 "document metadata set",
+                "document attest",
+                "document attestation check",
                 "document create",
                 "document render",
                 "document answers",

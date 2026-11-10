@@ -21,7 +21,8 @@ use serde_json::Value;
 /// One interface over the ticketing systems your work lives in.
 ///
 /// Exit codes: `0` on success, `1` when a command failed while running, `2` when the
-/// invocation itself was wrong (clap's own code for that), `4` when a query succeeded
+/// invocation itself was wrong (clap's own code for that), `3` when an `attestation check`
+/// ran and the record it checked is not valid, `4` when a query succeeded
 /// for some sources and failed for others without `--allow-partial`, or when a write landed
 /// and a task it delivers could not be kept in step with it. `0` means success
 /// and nothing else: a run that reached no source, or lost one, never exits `0` unless
@@ -444,6 +445,18 @@ pub enum TaskCommand {
     Metadata {
         #[command(subcommand)]
         command: MetadataCommand,
+    },
+    /// Record one attestation on one task: who cleared its authored content, against which
+    /// bar, keyed on a digest of that content the store computes.
+    ///
+    /// A record of the same kind is replaced; every other kind's is kept. The record goes
+    /// void the moment the task's title, body, template answers, repositories, dependency
+    /// edges or a caller-owned metadata key not excluded moves.
+    Attest(AttestArgs),
+    /// Check attestations recorded on one task.
+    Attestation {
+        #[command(subcommand)]
+        command: AttestationCommand,
     },
     /// Update one task: every field named, and nothing else.
     ///
@@ -991,6 +1004,102 @@ pub struct MetadataSetArgs {
     pub term_scope: TermScopeArgs,
 }
 
+/// `onetaskgraph task attest`, `project attest` and `document attest`.
+#[derive(Debug, Args)]
+pub struct AttestArgs {
+    /// The item's qualified id, `<source>:<native-id>`.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — as `MetadataSetArgs::id`: `qualified`
+    /// in `main` converts it with the next action a user needs.
+    #[arg(value_name = "ID")]
+    pub id: String,
+
+    /// The kind of attestation, such as `design-approval`: letters, digits, `.`, `_` and `-`.
+    /// A record of this kind the item already holds is replaced.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — `attest` converts it through
+    /// `AttestationKind::new`, which names the flag and what is wrong, before anything is read.
+    #[arg(long, value_name = "KIND")]
+    pub kind: String,
+
+    /// Who attests, as you label them: one line.
+    #[arg(long, value_name = "LABEL")]
+    pub by: String,
+
+    /// The fingerprint of the bar the content is cleared against, as you compute it: a later
+    /// check given another bar answers `void` with `bar-moved`.
+    #[arg(long, value_name = "FINGERPRINT")]
+    pub bar: String,
+
+    /// Leave this caller-owned metadata key out of the digest, so a change to it does not
+    /// void the record. Repeat for several; the record lists them as `excludes`.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — as `MetadataSetArgs::key`: converted
+    /// through `MetadataKey::new` before anything is read.
+    #[arg(long = "exclude", value_name = "KEY")]
+    pub exclude: Vec<String>,
+
+    /// A note recorded with it.
+    #[arg(long, value_name = "TEXT")]
+    pub note: Option<String>,
+
+    /// Record it only while the item is at this version, as a read of it reported: it is
+    /// read first, and refused, writing nothing, at any other.
+    #[arg(long = "if-version", value_name = "VERSION")]
+    pub if_version: Option<String>,
+
+    #[command(flatten)]
+    pub term_scope: TermScopeArgs,
+}
+
+/// What `onetaskgraph task attestation` and `document attestation` can do.
+#[derive(Debug, Subcommand)]
+pub enum AttestationCommand {
+    /// Check one kind of attestation: `valid` (exit 0) when its record's content is the
+    /// item's and, given --bar, its bar is that bar; `void` with a reason, or `absent`, exit 3.
+    Check(AttestationCheckArgs),
+}
+
+/// What `onetaskgraph project attestation` can do.
+#[derive(Debug, Subcommand)]
+pub enum ProjectAttestationCommand {
+    /// Check one kind of attestation on the project — or, with --tasks, on every task filed
+    /// under it, one entry per task. Exit 0 only when every record checked is valid, else 3.
+    Check(ProjectAttestationCheckArgs),
+}
+
+/// `onetaskgraph task attestation check` and `document attestation check`.
+#[derive(Debug, Args)]
+pub struct AttestationCheckArgs {
+    /// The item's qualified id, `<source>:<native-id>`.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — as `AttestArgs::id`.
+    #[arg(value_name = "ID")]
+    pub id: String,
+
+    /// The kind of attestation to check.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — as `AttestArgs::kind`.
+    #[arg(long, value_name = "KIND")]
+    pub kind: String,
+
+    /// The fingerprint of the bar as it is now: a record cleared against another answers
+    /// `void` with `bar-moved`. Left out, the bar is not checked.
+    #[arg(long, value_name = "FINGERPRINT")]
+    pub bar: Option<String>,
+}
+
+/// `onetaskgraph project attestation check`.
+#[derive(Debug, Args)]
+pub struct ProjectAttestationCheckArgs {
+    #[command(flatten)]
+    pub check: AttestationCheckArgs,
+
+    /// Check every task filed under the project rather than the project itself.
+    #[arg(long)]
+    pub tasks: bool,
+}
+
 /// What `onetaskgraph task status` can do.
 #[derive(Debug, Subcommand)]
 pub enum StatusCommand {
@@ -1274,6 +1383,13 @@ pub enum ProjectCommand {
         #[command(subcommand)]
         command: MetadataCommand,
     },
+    /// Record one attestation on one project, as `task attest` records one on a task.
+    Attest(AttestArgs),
+    /// Check attestations recorded on one project, or on every task filed under it.
+    Attestation {
+        #[command(subcommand)]
+        command: ProjectAttestationCommand,
+    },
     /// Set one project's status, and nothing else about it.
     Status {
         #[command(subcommand)]
@@ -1314,6 +1430,16 @@ pub enum DocumentCommand {
     Metadata {
         #[command(subcommand)]
         command: MetadataCommand,
+    },
+    /// Record one attestation on one document, as `task attest` records one on a task.
+    ///
+    /// A document has no dependency edges, so its record is keyed on its title, body, template
+    /// answers, repositories and caller-owned metadata.
+    Attest(AttestArgs),
+    /// Check attestations recorded on one document.
+    Attestation {
+        #[command(subcommand)]
+        command: AttestationCommand,
     },
     /// Create — or, with --id naming one it holds, replace — a project document, its body
     /// rendered from a template or given as it is.
