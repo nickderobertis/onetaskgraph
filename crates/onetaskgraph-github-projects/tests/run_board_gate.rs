@@ -171,7 +171,8 @@ struct Account {
     /// (`"unanswered-draft"`), an item answered without its type (`"untyped-item"`), a copy
     /// answered without its id (`"copy-without-id"`) or as the template itself
     /// (`"copy-as-template"`), every copy made as one and the same board (`"shared-copy"`),
-    /// and a deletion refused (`"refused-delete"`).
+    /// a deletion refused (`"refused-delete"`), and a first copy that settles one draft short
+    /// (`"short-copy"`).
     faults: Vec<&'static str>,
     copy_reads: usize,
     /// Whether the per-minute secondary limits are enforced, over every request since the
@@ -348,6 +349,11 @@ impl Account {
                     TEMPLATE_DRAFTS
                 };
                 return json!({"data":{"repositoryOwner":{"projectV2":{"items":{"totalCount":count}}}}});
+            }
+            if self.has("short-copy") && number(variables) == TEMPLATE + 1 {
+                // The first copy, settled one draft short and staying there, as GitHub left
+                // run 42872346902's; every later copy is whole.
+                return json!({"data":{"repositoryOwner":{"projectV2":{"items":{"totalCount":TEMPLATE_DRAFTS - 1}}}}});
             }
             if self.has("last-draft-late") {
                 // The counts a real copy reported on its first thirty reads, and then the rest.
@@ -1294,6 +1300,78 @@ fn a_copy_that_never_settles_or_cannot_be_counted_is_refused_and_deleted() {
                 .any(|(_, document, _)| document.contains("LiveDeleteBoard("))
         );
     }
+}
+
+#[test]
+fn a_copy_that_settles_short_is_deleted_and_the_template_copied_once_more() {
+    let account = Arc::new(Mutex::new(Account::new()));
+    account.lock().unwrap().faults = vec!["short-copy"];
+    let origin = serve(Arc::clone(&account));
+    let output = Command::new(std::env::current_exe().unwrap())
+        .args(["session_child", "--exact", "--nocapture"])
+        .env("RUN_BOARD_GATE_ORIGIN", &origin)
+        .env("RUN_BOARD_GATE_ENTRY", "main")
+        .env("RUN_BOARD_GATE_TOKEN", "short")
+        .env("RUN_BOARD_GATE_RUN", "404")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let account = account.lock().unwrap();
+    let sent = |name: &str| {
+        account
+            .seen
+            .iter()
+            .filter(|(_, document, _)| document.contains(name))
+            .count()
+    };
+    // Two copies, the short one deleted before the second was made, and the session's own
+    // cleanup deleting the second: the account holds the template alone.
+    assert_eq!(sent("LiveCopyBoard("), 2);
+    let short_deleted = account
+        .seen
+        .iter()
+        .position(|(_, document, variables)| {
+            document.contains("LiveDeleteBoard(")
+                && variables["input"]["projectId"] == json!(format!("PVT_{}", TEMPLATE + 1))
+        })
+        .expect("the short copy was deleted");
+    let second_copied = account
+        .seen
+        .iter()
+        .rposition(|(_, document, _)| document.contains("LiveCopyBoard("))
+        .unwrap();
+    assert!(short_deleted < second_copied);
+    assert_eq!(
+        account.boards.keys().copied().collect::<Vec<_>>(),
+        vec![TEMPLATE]
+    );
+}
+
+#[test]
+fn a_second_copy_that_settles_short_too_is_refused_naming_both() {
+    let (said, account) = failing_session_with(&["short-copy", "stalled-copy"], "main");
+    assert!(
+        said.contains("deleted and the template copied again"),
+        "{said}"
+    );
+    assert!(said.contains("did not settle"), "{said}");
+    let account = account.lock().unwrap();
+    assert_eq!(
+        account
+            .seen
+            .iter()
+            .filter(|(_, document, _)| document.contains("LiveCopyBoard("))
+            .count(),
+        2
+    );
+    assert_eq!(
+        account.boards.keys().copied().collect::<Vec<_>>(),
+        vec![TEMPLATE]
+    );
 }
 
 #[test]

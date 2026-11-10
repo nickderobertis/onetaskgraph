@@ -216,20 +216,81 @@ pub async fn copy(
         .ok_or("GitHub did not answer the template item count")?;
     // Only draft items travel with copyProjectV2; issues and pull requests stay behind.
     let expected = count_drafts(send, &template_id).await?;
+    let target = Target {
+        owner,
+        owner_id: &owner_id,
+        template,
+        template_id: &template_id,
+        title: &title,
+        expected,
+    };
+    // GitHub has made a copy that settled one draft short and stayed there (run 42872346902:
+    // 59 of 60 for two minutes) while copies of the same template on either side of it were
+    // whole, so a copy that stops short is deleted and the template copied once more; any
+    // other refusal, or a second copy short too, ends the session.
+    match copy_once(send, &target).await {
+        Err(Copied::Short(first)) => copy_once(send, &target).await.map_err(|again| {
+            format!(
+                "{first}; it was deleted and the template copied again, and that copy failed \
+                 too: {}",
+                again.said()
+            )
+        }),
+        result => result.map_err(Copied::said),
+    }
+}
+
+/// What one copy is made from and must hold.
+struct Target<'a> {
+    owner: &'a str,
+    owner_id: &'a str,
+    template: u32,
+    template_id: &'a str,
+    title: &'a str,
+    expected: u64,
+}
+
+/// Why one copy was not this session's board.
+enum Copied {
+    /// It settled below the template's draft count, and was deleted.
+    Short(String),
+    /// Anything else.
+    Refused(String),
+}
+
+impl Copied {
+    fn said(self) -> String {
+        match self {
+            Self::Short(said) | Self::Refused(said) => said,
+        }
+    }
+}
+
+/// One copy of the template, waited on until it holds every draft.
+async fn copy_once(send: &impl Sender, target: &Target<'_>) -> Result<RunBoard, Copied> {
+    let Target {
+        owner,
+        owner_id,
+        template,
+        template_id,
+        title,
+        expected,
+    } = *target;
     let copied = send(
         COPY_BOARD_DOCUMENT,
         "live board copy",
         json!({"input":{"projectId":template_id,"ownerId":owner_id,"title":title,"includeDraftIssues":true}}),
     )
-    .await?;
+    .await
+    .map_err(Copied::Refused)?;
     let board = copied.pointer("/data/copyProjectV2/projectV2");
     let answered = board
         .and_then(|board| board.get("title"))
         .and_then(Value::as_str);
-    if answered != Some(title.as_str()) {
-        return Err(format!(
+    if answered != Some(title) {
+        return Err(Copied::Refused(format!(
             "GitHub answered the live board copy titled {answered:?}, not {title:?}"
-        ));
+        )));
     }
     let (Some(id), Some(number)) = (
         board
@@ -242,12 +303,14 @@ pub async fn copy(
             .and_then(|number| i32::try_from(number).ok())
             .and_then(|number| u32::try_from(number).ok()),
     ) else {
-        return Err("GitHub did not answer the live board copy with its id and number".into());
+        return Err(Copied::Refused(
+            "GitHub did not answer the live board copy with its id and number".into(),
+        ));
     };
     if !usable_id(id) || id == template_id || number == 0 || number == template {
-        return Err(format!(
+        return Err(Copied::Refused(format!(
             "the live board copy answered an unusable board: {id:?} #{number}"
-        ));
+        )));
     }
     let board = RunBoard {
         id: id.to_owned(),
@@ -264,7 +327,7 @@ pub async fn copy(
             .iter()
             .any(|(known, _)| *known == template_id)
         {
-            namespace.templates.push((template_id, template));
+            namespace.templates.push((template_id.to_owned(), template));
         }
     }
     // GitHub copies the draft items after it answers; the session starts once they are there.
@@ -272,11 +335,25 @@ pub async fn copy(
     // the same, and is deleted before the refusal is reported.
     match settle(send, owner, &board, expected).await {
         Ok(()) => Ok(board),
-        Err(error) => Err(match delete(send, &board).await {
-            Ok(()) => error,
-            Err(deleted) => format!("{error}; additionally, the copy was not deleted: {deleted}"),
-        }),
+        Err(error) => {
+            let short = error.short;
+            let error = error.said;
+            match delete(send, &board).await {
+                Ok(()) if short => Err(Copied::Short(error)),
+                Ok(()) => Err(Copied::Refused(error)),
+                Err(deleted) => Err(Copied::Refused(format!(
+                    "{error}; additionally, the copy was not deleted: {deleted}"
+                ))),
+            }
+        }
     }
+}
+
+/// Why a copy did not settle, and whether it stopped short of the template's draft count:
+/// its last two counts agreed on a number of drafts above none and below that count.
+struct Unsettled {
+    said: String,
+    short: bool,
 }
 
 async fn settle(
@@ -284,7 +361,7 @@ async fn settle(
     owner: &str,
     board: &RunBoard,
     expected: u64,
-) -> Result<(), String> {
+) -> Result<(), Unsettled> {
     let number = board.number;
     let mut counts = Vec::new();
     for read in 0..COPY_READS {
@@ -296,7 +373,8 @@ async fn settle(
             "live board copy item count",
             json!({"owner":owner,"number":number}),
         )
-        .await?;
+        .await
+        .map_err(|said| Unsettled { said, short: false })?;
         let items = answer
             .pointer("/data/repositoryOwner/projectV2/items/totalCount")
             .and_then(Value::as_u64);
@@ -305,10 +383,15 @@ async fn settle(
             return Ok(());
         }
     }
-    Err(format!(
-        "the live board copy #{number} did not settle across {COPY_READS} reads 2s apart \
-         (observed item counts {counts:?}); template holds {expected} draft items"
-    ))
+    let last = counts.last().copied().flatten();
+    Err(Unsettled {
+        said: format!(
+            "the live board copy #{number} did not settle across {COPY_READS} reads 2s apart \
+             (observed item counts {counts:?}); template holds {expected} draft items"
+        ),
+        short: last.is_some_and(|last| last > 0 && last < expected)
+            && counts.iter().rev().nth(1) == Some(&last),
+    })
 }
 
 /// How long GitHub's item listing has been seen to lag a draft's create: about twenty
