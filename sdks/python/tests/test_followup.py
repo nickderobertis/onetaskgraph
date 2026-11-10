@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import subprocess
 from collections.abc import Callable, Coroutine
 from pathlib import Path
 
@@ -270,6 +271,34 @@ def test_a_partial_write_raises_its_whole_answer_only_for_a_client_that_asks(
     )
     partial = run(strict.task_list())
     assert {failure.source.root for failure in partial.errors} == {"broken"}
+
+
+def test_every_command_is_classified_as_a_partial_write_or_not(
+    binary: Path, tmp_path: Path
+) -> None:
+    """The two hand-written sets are the binary's whole command list, and never overlap."""
+    from onetaskgraph_sdk.client import NOT_PARTIAL_WRITE_COMMANDS, PARTIAL_WRITE_COMMANDS
+
+    environment = {
+        **{k: v for k, v in os.environ.items() if not k.startswith("ONETASKGRAPH_")},
+        "HOME": str(tmp_path),
+        "XDG_CONFIG_HOME": str(tmp_path),
+    }
+    emitted = subprocess.run(
+        [str(binary), "schema"],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+    )
+    bundle = json.loads(emitted.stdout)
+    listed = {tuple(command.split(" ")) for command in bundle["commands"]}
+    assert not PARTIAL_WRITE_COMMANDS & NOT_PARTIAL_WRITE_COMMANDS
+    assert listed == PARTIAL_WRITE_COMMANDS | NOT_PARTIAL_WRITE_COMMANDS, (
+        "put each command the binary lists in exactly one of the two sets in client.py"
+    )
 
 
 def test_a_guarded_priority_set_answers_held_and_a_repositories_update_replaces_alone(

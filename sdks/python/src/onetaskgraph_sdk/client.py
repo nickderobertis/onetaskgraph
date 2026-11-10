@@ -73,7 +73,8 @@ class PartialWriteError(OnetaskgraphError):
     ``result`` is the command's answer parsed into its typed model — for a copy, the
     ``CopyReport`` with every item's outcome, the ones that landed and the ones that failed —
     and ``answer`` the same answer as the JSON the store wrote. A client constructed without
-    ``raise_on_partial`` returns ``result`` instead, as it always has.
+    ``raise_on_partial`` returns ``result`` instead, as it always has. Which commands those
+    are is `PARTIAL_WRITE_COMMANDS`.
     """
 
     def __init__(self, message: str, *, exit_code: int, result: object, answer: object) -> None:
@@ -82,19 +83,72 @@ class PartialWriteError(OnetaskgraphError):
         self.result = result
 
 
-# The last words of every command that writes, and so can land in part: a read answering
-# exit 4 — one source of a listing failing — is a partial answer, and is never raised.
-WRITE_VERBS = frozenset(
-    {"copy", "create", "update", "set", "add", "edit", "delete", "complete", "reconcile"}
-    | {"project-human"}
+# Every command of the binary, by whether its exit 4 means a write landed in part — the ones
+# `raise_on_partial` raises for — or not: a read whose exit 4 is a partial answer, or a command
+# that writes nothing of anybody's work. Both sets are written out whole, and
+# tests/test_followup.py reconciles their union against the commands the binary's own schema
+# bundle lists, so a command added there is refused until it is put in one of them.
+PARTIAL_WRITE_COMMANDS: frozenset[tuple[str, ...]] = frozenset(
+    {
+        ("task", "copy"),
+        ("project", "copy"),
+        ("document", "copy"),
+        ("task", "create"),
+        ("project", "create"),
+        ("document", "create"),
+        ("task", "render"),
+        ("project", "render"),
+        ("document", "render"),
+        ("task", "update"),
+        ("task", "status", "set"),
+        ("project", "status", "set"),
+        ("task", "status", "reconcile"),
+        ("task", "status", "complete"),
+        ("task", "priority", "set"),
+        ("task", "content", "set"),
+        ("task", "metadata", "set"),
+        ("project", "metadata", "set"),
+        ("document", "metadata", "set"),
+        ("task", "comment", "add"),
+        ("task", "comment", "edit"),
+        ("task", "comment", "delete"),
+        ("task", "project-human"),
+        ("sources", "fields"),
+        ("sources", "status-options"),
+        ("sources", "sanitize"),
+    }
 )
-
-
-def _writes(command: tuple[str, ...]) -> bool:
-    """Whether `command` writes: a `template render` reads, every other `render` writes."""
-    if command[-1] == "render":
-        return command[0] != "template"
-    return command[-1] in WRITE_VERBS
+NOT_PARTIAL_WRITE_COMMANDS: frozenset[tuple[str, ...]] = frozenset(
+    {
+        ("schema",),
+        ("config", "show"),
+        ("sources", "list"),
+        ("sources", "route"),
+        ("task", "list"),
+        ("task", "show"),
+        ("task", "show-many"),
+        ("task", "deps"),
+        ("task", "locate"),
+        ("task", "comment", "list"),
+        ("task", "comments"),
+        ("task", "answers"),
+        ("task", "assets"),
+        ("project", "list"),
+        ("project", "show"),
+        ("project", "deps"),
+        ("project", "graph"),
+        ("project", "answers"),
+        ("document", "list"),
+        ("document", "show"),
+        ("document", "answers"),
+        ("label", "list"),
+        ("search",),
+        # Empties this host's cache of a source, never anything of the source's own work.
+        ("cache", "clear"),
+        ("template", "variables"),
+        ("template", "render"),
+    }
+)
 
 
 class Client(GeneratedClient):
@@ -209,7 +263,11 @@ class Client(GeneratedClient):
                 f"binary returned a response outside its emitted schema: {error}",
                 exit_code=completed.returncode,
             ) from error
-        if completed.returncode == 4 and self.raise_on_partial and _writes(tuple(command)):
+        if (
+            completed.returncode == 4
+            and self.raise_on_partial
+            and tuple(command) in PARTIAL_WRITE_COMMANDS
+        ):
             raise PartialWriteError(
                 completed.stderr.strip() or "the write landed in part",
                 exit_code=completed.returncode,

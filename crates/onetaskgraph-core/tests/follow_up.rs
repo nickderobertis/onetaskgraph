@@ -417,6 +417,31 @@ async fn the_watermark_is_the_sources_own_time_set_back_and_an_undated_comment_i
         "the source's own time, set back by its window"
     );
 
+    // A backend clock ahead of this host's is never trusted past the read's own start.
+    let ahead = engine_of(vec![(
+        "work",
+        Box::new(Scripted {
+            inner: in_memory("work", &config),
+            script: Script {
+                window: Duration::from_secs(90),
+                served: Some("2999-01-01T00:00:00Z".parse().expect("an instant")),
+                ..Script::default()
+            },
+        }),
+    )]);
+    let before = Utc::now();
+    let clamped = ahead
+        .comments_since(&since("work", "2026-10-01T00:00:00Z"))
+        .await
+        .expect("listed");
+    let after = Utc::now();
+    let window = chrono::TimeDelta::seconds(90);
+    assert!(
+        clamped.watermark >= before - window && clamped.watermark <= after - window,
+        "the read's start, set back by the window: {}",
+        clamped.watermark
+    );
+
     // A source that could not be listed is a refusal, not an empty answer.
     let down = engine_of(vec![(
         "work",
