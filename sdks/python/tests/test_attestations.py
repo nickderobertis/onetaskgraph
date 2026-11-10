@@ -61,18 +61,21 @@ def test_a_record_reads_back_as_its_models_and_goes_void_when_content_moves(
     )
     assert isinstance(attested, Attested)
     record = attested.record
+    note = record.note
     # The record as an item's metadata holds it is the `Attestation` root, field for field.
     assert (
-        Attestation.model_validate(record.model_dump(mode="json", exclude_none=True)).bar == "bar-1"
+        Attestation.model_validate(record.model_dump(mode="json", exclude_none=True)).bar.root
+        == "bar-1"
     )
-    assert (record.kind.root, record.by, record.bar, record.note) == (
+    assert note is not None
+    assert (record.kind.root, record.by.root, record.bar.root, note.root) == (
         "plan-review",
         "ada",
         "bar-1",
         "fine",
     )
-    assert record.excludes == ["myapp.x"]
-    assert record.content_digest.startswith("sha256:")
+    assert [key.root for key in record.excludes or []] == ["myapp.x"]
+    assert record.content_digest.root.startswith("sha256:")
 
     valid = run(client.task_attestation_check(task, "plan-review", bar="bar-1"))
     assert valid.state == AttestationState("valid")

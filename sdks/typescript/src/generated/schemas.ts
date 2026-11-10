@@ -354,32 +354,37 @@ export const runtimeSchemas = {
       },
       "by": {
         "description": "Who attested, as the caller labels them.",
-        "type": "string"
+        "$ref": "#/$defs/AttestationLabel"
       },
       "at": {
-        "description": "When it was recorded, in RFC 3339.",
-        "type": "string"
+        "description": "When it was recorded, in RFC 3339 to the second.",
+        "type": "string",
+        "format": "date-time"
       },
       "content_digest": {
-        "description": "The digest of the item's authored content when it was recorded: `sha256:` and 64\nlowercase hex digits, computed by the store (see the module's documentation).",
-        "type": "string"
+        "description": "The digest of the item's authored content when it was recorded, computed by the store\n(see the module's documentation).",
+        "$ref": "#/$defs/Sha256Digest"
       },
       "bar": {
         "description": "The fingerprint of the bar the content was cleared against, as the caller gave it.",
-        "type": "string"
+        "$ref": "#/$defs/AttestationLabel"
       },
       "note": {
         "description": "What the attester added, when they added anything.",
-        "type": [
-          "string",
-          "null"
+        "anyOf": [
+          {
+            "$ref": "#/$defs/AttestationNote"
+          },
+          {
+            "type": "null"
+          }
         ]
       },
       "excludes": {
         "description": "The caller-owned metadata keys left out of `content_digest`, sorted; empty when none\nwere.",
         "type": "array",
         "items": {
-          "type": "string"
+          "$ref": "#/$defs/MetadataKey"
         },
         "default": []
       }
@@ -394,6 +399,23 @@ export const runtimeSchemas = {
     "$defs": {
       "AttestationKind": {
         "description": "One kind of attestation, such as `plan-review` or `design-approval`: one to 200 letters,\ndigits, `.`, `_` or `-`.",
+        "type": "string"
+      },
+      "AttestationLabel": {
+        "description": "Who attested, or the fingerprint of a bar: one line of one to 200 characters, not blank.",
+        "type": "string"
+      },
+      "Sha256Digest": {
+        "description": "`sha256:` and 64 lowercase hex digits.",
+        "type": "string",
+        "pattern": "^sha256:[0-9a-f]{64}$"
+      },
+      "AttestationNote": {
+        "description": "What an attester adds: text of any length and any number of lines, not blank.",
+        "type": "string"
+      },
+      "MetadataKey": {
+        "description": "One caller-owned metadata key: `<namespace>.<name>`, at least two non-empty segments\nseparated by dots, whose first segment is not [`MetadataKey::RESERVED_NAMESPACE`].\n\nValidated wherever one is built, deserialized included, so a plugin handed one never has\nto ask whether it names a key this product owns.",
         "type": "string"
       }
     }
@@ -489,32 +511,37 @@ export const runtimeSchemas = {
           },
           "by": {
             "description": "Who attested, as the caller labels them.",
-            "type": "string"
+            "$ref": "#/$defs/AttestationLabel"
           },
           "at": {
-            "description": "When it was recorded, in RFC 3339.",
-            "type": "string"
+            "description": "When it was recorded, in RFC 3339 to the second.",
+            "type": "string",
+            "format": "date-time"
           },
           "content_digest": {
-            "description": "The digest of the item's authored content when it was recorded: `sha256:` and 64\nlowercase hex digits, computed by the store (see the module's documentation).",
-            "type": "string"
+            "description": "The digest of the item's authored content when it was recorded, computed by the store\n(see the module's documentation).",
+            "$ref": "#/$defs/Sha256Digest"
           },
           "bar": {
             "description": "The fingerprint of the bar the content was cleared against, as the caller gave it.",
-            "type": "string"
+            "$ref": "#/$defs/AttestationLabel"
           },
           "note": {
             "description": "What the attester added, when they added anything.",
-            "type": [
-              "string",
-              "null"
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AttestationNote"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "excludes": {
             "description": "The caller-owned metadata keys left out of `content_digest`, sorted; empty when none\nwere.",
             "type": "array",
             "items": {
-              "type": "string"
+              "$ref": "#/$defs/MetadataKey"
             },
             "default": []
           }
@@ -526,6 +553,23 @@ export const runtimeSchemas = {
           "content_digest",
           "bar"
         ]
+      },
+      "AttestationLabel": {
+        "description": "Who attested, or the fingerprint of a bar: one line of one to 200 characters, not blank.",
+        "type": "string"
+      },
+      "Sha256Digest": {
+        "description": "`sha256:` and 64 lowercase hex digits.",
+        "type": "string",
+        "pattern": "^sha256:[0-9a-f]{64}$"
+      },
+      "AttestationNote": {
+        "description": "What an attester adds: text of any length and any number of lines, not blank.",
+        "type": "string"
+      },
+      "MetadataKey": {
+        "description": "One caller-owned metadata key: `<namespace>.<name>`, at least two non-empty segments\nseparated by dots, whose first segment is not [`MetadataKey::RESERVED_NAMESPACE`].\n\nValidated wherever one is built, deserialized included, so a plugin handed one never has\nto ask whether it names a key this product owns.",
+        "type": "string"
       }
     }
   },
@@ -595,32 +639,37 @@ export const runtimeSchemas = {
           },
           "by": {
             "description": "Who attested, as the caller labels them.",
-            "type": "string"
+            "$ref": "#/$defs/AttestationLabel"
           },
           "at": {
-            "description": "When it was recorded, in RFC 3339.",
-            "type": "string"
+            "description": "When it was recorded, in RFC 3339 to the second.",
+            "type": "string",
+            "format": "date-time"
           },
           "content_digest": {
-            "description": "The digest of the item's authored content when it was recorded: `sha256:` and 64\nlowercase hex digits, computed by the store (see the module's documentation).",
-            "type": "string"
+            "description": "The digest of the item's authored content when it was recorded, computed by the store\n(see the module's documentation).",
+            "$ref": "#/$defs/Sha256Digest"
           },
           "bar": {
             "description": "The fingerprint of the bar the content was cleared against, as the caller gave it.",
-            "type": "string"
+            "$ref": "#/$defs/AttestationLabel"
           },
           "note": {
             "description": "What the attester added, when they added anything.",
-            "type": [
-              "string",
-              "null"
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AttestationNote"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "excludes": {
             "description": "The caller-owned metadata keys left out of `content_digest`, sorted; empty when none\nwere.",
             "type": "array",
             "items": {
-              "type": "string"
+              "$ref": "#/$defs/MetadataKey"
             },
             "default": []
           }
@@ -635,6 +684,23 @@ export const runtimeSchemas = {
       },
       "AttestationKind": {
         "description": "One kind of attestation, such as `plan-review` or `design-approval`: one to 200 letters,\ndigits, `.`, `_` or `-`.",
+        "type": "string"
+      },
+      "AttestationLabel": {
+        "description": "Who attested, or the fingerprint of a bar: one line of one to 200 characters, not blank.",
+        "type": "string"
+      },
+      "Sha256Digest": {
+        "description": "`sha256:` and 64 lowercase hex digits.",
+        "type": "string",
+        "pattern": "^sha256:[0-9a-f]{64}$"
+      },
+      "AttestationNote": {
+        "description": "What an attester adds: text of any length and any number of lines, not blank.",
+        "type": "string"
+      },
+      "MetadataKey": {
+        "description": "One caller-owned metadata key: `<namespace>.<name>`, at least two non-empty segments\nseparated by dots, whose first segment is not [`MetadataKey::RESERVED_NAMESPACE`].\n\nValidated wherever one is built, deserialized included, so a plugin handed one never has\nto ask whether it names a key this product owns.",
         "type": "string"
       },
       "Sanitization": {
@@ -13046,32 +13112,37 @@ export const runtimeSchemas = {
           },
           "by": {
             "description": "Who attested, as the caller labels them.",
-            "type": "string"
+            "$ref": "#/$defs/AttestationLabel"
           },
           "at": {
-            "description": "When it was recorded, in RFC 3339.",
-            "type": "string"
+            "description": "When it was recorded, in RFC 3339 to the second.",
+            "type": "string",
+            "format": "date-time"
           },
           "content_digest": {
-            "description": "The digest of the item's authored content when it was recorded: `sha256:` and 64\nlowercase hex digits, computed by the store (see the module's documentation).",
-            "type": "string"
+            "description": "The digest of the item's authored content when it was recorded, computed by the store\n(see the module's documentation).",
+            "$ref": "#/$defs/Sha256Digest"
           },
           "bar": {
             "description": "The fingerprint of the bar the content was cleared against, as the caller gave it.",
-            "type": "string"
+            "$ref": "#/$defs/AttestationLabel"
           },
           "note": {
             "description": "What the attester added, when they added anything.",
-            "type": [
-              "string",
-              "null"
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AttestationNote"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "excludes": {
             "description": "The caller-owned metadata keys left out of `content_digest`, sorted; empty when none\nwere.",
             "type": "array",
             "items": {
-              "type": "string"
+              "$ref": "#/$defs/MetadataKey"
             },
             "default": []
           }
@@ -13083,6 +13154,23 @@ export const runtimeSchemas = {
           "content_digest",
           "bar"
         ]
+      },
+      "AttestationLabel": {
+        "description": "Who attested, or the fingerprint of a bar: one line of one to 200 characters, not blank.",
+        "type": "string"
+      },
+      "Sha256Digest": {
+        "description": "`sha256:` and 64 lowercase hex digits.",
+        "type": "string",
+        "pattern": "^sha256:[0-9a-f]{64}$"
+      },
+      "AttestationNote": {
+        "description": "What an attester adds: text of any length and any number of lines, not blank.",
+        "type": "string"
+      },
+      "MetadataKey": {
+        "description": "One caller-owned metadata key: `<namespace>.<name>`, at least two non-empty segments\nseparated by dots, whose first segment is not [`MetadataKey::RESERVED_NAMESPACE`].\n\nValidated wherever one is built, deserialized included, so a plugin handed one never has\nto ask whether it names a key this product owns.",
+        "type": "string"
       }
     }
   },

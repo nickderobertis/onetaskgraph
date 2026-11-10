@@ -171,6 +171,7 @@ impl MetadataKey {
     /// other key in the namespace. A copy carries it to the destination unchanged, like any
     /// other entry: the digest is over content a copy carries, so a record stays true of its
     /// copy.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] Composing and checking an attestation is the engine's, and none of that is here: this crate is where every reserved key is spelled once (`docs/metadata.md` is held to these constants), and the only way the engine can name a reserved key on the narrow metadata seam every plugin implements is a constructor of this type, whose field is private to this crate — the same seam `COPIES_KEY` and `CREATING_KEY` use.
     pub const ATTESTATIONS_KEY: &'static str = "onetaskgraph.attestations";
 
     /// [`Self::COPIES_KEY`], as the one reserved key a narrow metadata write may carry.
@@ -193,6 +194,7 @@ impl MetadataKey {
     /// write that sends it is an attestation the engine composed and checked.
     #[must_use]
     // llmlint: ignore[invalid_states_unrepresentable] The same seam as `copies`: a key type of its own would change the three narrow metadata writes every plugin implements, which this crate keeps still (AGENTS.md); `new`, deserialization, the command line and both SDKs refuse the key.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] As `ATTESTATIONS_KEY` above: `MetadataKey`'s field is private to this crate, so the engine names a reserved key on the narrow write only through a constructor here, as `copies` and `creating` do; the attestation itself is composed in the engine.
     pub fn attestations() -> Self {
         Self(Self::ATTESTATIONS_KEY.to_owned())
     }

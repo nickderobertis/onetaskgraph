@@ -49,14 +49,14 @@
 
 use std::collections::BTreeMap;
 
-use chrono::{DateTime, SecondsFormat, Utc};
-use onetaskgraph_plugin_api::{MetadataKey, Repository};
+use chrono::{DateTime, SecondsFormat, SubsecRound as _, Utc};
+use onetaskgraph_plugin_api::{DependencyKind, ItemKind, MetadataKey, Repository};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
-use sha2::{Digest as _, Sha256};
 
 use crate::GlobalId;
+use crate::template::Sha256Digest;
 
 /// What an attestation kind, an attester label or a bar fingerprint may be: a non-empty string
 /// of at most this many characters with no line break, so a record reads back on one line.
@@ -139,6 +139,109 @@ impl std::fmt::Display for AttestationKind {
     }
 }
 
+/// Who attested, or the fingerprint of a bar: one line of one to 200 characters, not blank.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(try_from = "String", into = "String")]
+pub struct AttestationLabel(String);
+
+impl AttestationLabel {
+    /// One label, once it is established it is one; `field` is the flag it came from, which a
+    /// refusal names.
+    ///
+    /// # Errors
+    ///
+    /// [`AttestationInputError`] naming `field` for a blank label, one longer than
+    /// [`MAX_LABEL`], or one holding a line break.
+    pub fn new(
+        field: &'static str,
+        value: impl Into<String>,
+    ) -> Result<Self, AttestationInputError> {
+        let value = value.into();
+        let problem = if value.trim().is_empty() {
+            Some("is empty".to_owned())
+        } else if value.chars().count() > MAX_LABEL {
+            Some(format!("is longer than {MAX_LABEL} characters"))
+        } else if value.contains(['\n', '\r']) {
+            Some("holds a line break".to_owned())
+        } else {
+            None
+        };
+        match problem {
+            Some(problem) => Err(AttestationInputError { field, problem }),
+            None => Ok(Self(value)),
+        }
+    }
+
+    /// The label as it is spelled.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for AttestationLabel {
+    type Error = AttestationInputError;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::new("label", value)
+    }
+}
+
+impl From<AttestationLabel> for String {
+    fn from(label: AttestationLabel) -> Self {
+        label.0
+    }
+}
+
+impl std::fmt::Display for AttestationLabel {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+/// What an attester adds: text of any length and any number of lines, not blank.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(try_from = "String", into = "String")]
+pub struct AttestationNote(String);
+
+impl AttestationNote {
+    /// One note, once it is established it is not blank.
+    ///
+    /// # Errors
+    ///
+    /// [`AttestationInputError`] naming `--note` for a blank one.
+    pub fn new(value: impl Into<String>) -> Result<Self, AttestationInputError> {
+        let value = value.into();
+        if value.trim().is_empty() {
+            return Err(AttestationInputError {
+                field: "--note",
+                problem: "is empty".to_owned(),
+            });
+        }
+        Ok(Self(value))
+    }
+
+    /// The note as it is written.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for AttestationNote {
+    type Error = AttestationInputError;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::new(value)
+    }
+}
+
+impl From<AttestationNote> for String {
+    fn from(note: AttestationNote) -> Self {
+        note.0
+    }
+}
+
 /// One attestation: who cleared the item's authored content, when, which content and against
 /// which bar.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -146,22 +249,22 @@ pub struct Attestation {
     /// The kind of attestation this is; the key it is held under.
     pub kind: AttestationKind,
     /// Who attested, as the caller labels them.
-    pub by: String,
-    /// When it was recorded, in RFC 3339.
-    pub at: String,
-    /// The digest of the item's authored content when it was recorded: `sha256:` and 64
-    /// lowercase hex digits, computed by the store (see the module's documentation).
-    pub content_digest: String,
+    pub by: AttestationLabel,
+    /// When it was recorded, in RFC 3339 to the second.
+    pub at: DateTime<Utc>,
+    /// The digest of the item's authored content when it was recorded, computed by the store
+    /// (see the module's documentation).
+    pub content_digest: Sha256Digest,
     /// The fingerprint of the bar the content was cleared against, as the caller gave it.
-    pub bar: String,
+    pub bar: AttestationLabel,
     /// What the attester added, when they added anything.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub note: Option<String>,
+    pub note: Option<AttestationNote>,
     /// The caller-owned metadata keys left out of `content_digest`, sorted; empty when none
     /// were.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     #[schemars(!skip_serializing_if)]
-    pub excludes: Vec<String>,
+    pub excludes: Vec<MetadataKey>,
 }
 
 /// What a check of one kind of attestation found.
@@ -191,6 +294,7 @@ pub enum VoidReason {
 ///
 /// Every member is always written, `reason` and `record` as `null` when they have nothing to
 /// say.
+// llmlint: ignore-block[invalid_states_unrepresentable] The task fixes this answer's JSON literally as `{"kind", "state", "reason": null|…, "record": {…}|null}`, four flat members every one always written, and both SDKs and the orchestrators gating on it read that shape; an enum carrying each state's fields would serialise differently. The one constructor, `check` below, only ever builds the three consistent combinations, and `a_check_says_content_before_bar` pins each.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct AttestationCheck {
     /// The kind asked about.
@@ -202,30 +306,29 @@ pub struct AttestationCheck {
     /// The record of the kind the item holds, or `null` when it holds none.
     pub record: Option<Attestation>,
 }
+// llmlint: ignore-end[invalid_states_unrepresentable]
 
 impl Attestation {
     /// The record as the item's metadata holds it.
     #[must_use]
     pub fn to_value(&self) -> Value {
+        let text = |text: &str| Value::String(text.to_owned());
         let mut record = Map::new();
-        record.insert(
-            "kind".to_owned(),
-            Value::String(self.kind.as_str().to_owned()),
-        );
-        record.insert("by".to_owned(), Value::String(self.by.clone()));
-        record.insert("at".to_owned(), Value::String(self.at.clone()));
+        record.insert("kind".to_owned(), text(self.kind.as_str()));
+        record.insert("by".to_owned(), text(self.by.as_str()));
+        record.insert("at".to_owned(), Value::String(stamp(self.at)));
         record.insert(
             "content_digest".to_owned(),
-            Value::String(self.content_digest.clone()),
+            text(self.content_digest.as_str()),
         );
-        record.insert("bar".to_owned(), Value::String(self.bar.clone()));
+        record.insert("bar".to_owned(), text(self.bar.as_str()));
         if let Some(note) = &self.note {
-            record.insert("note".to_owned(), Value::String(note.clone()));
+            record.insert("note".to_owned(), text(note.as_str()));
         }
         if !self.excludes.is_empty() {
             record.insert(
                 "excludes".to_owned(),
-                Value::Array(self.excludes.iter().cloned().map(Value::String).collect()),
+                Value::Array(self.excludes.iter().map(|key| text(key.as_str())).collect()),
             );
         }
         Value::Object(record)
@@ -279,6 +382,45 @@ pub struct Attested {
     pub record: Attestation,
 }
 
+/// One far end of an edge, as the digest names it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FarEnd {
+    /// By the title a configured source reads it at.
+    Title(String),
+    /// By its qualified id — or its spelling, for an opaque one — when no source can say.
+    Id(String),
+}
+
+/// One of an item's own forward dependency edges, as the digest reads it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthoredEdge {
+    /// What the edge means.
+    pub kind: DependencyKind,
+    /// What its far end is.
+    pub far: ItemKind,
+    /// Its far end.
+    pub end: FarEnd,
+}
+
+impl AuthoredEdge {
+    /// The edge as the digest spells it: `[<edge kind>, <far end's kind>, "title:…" | "id:…"]`.
+    fn spelled(&self) -> [String; 3] {
+        let kind = match self.kind {
+            DependencyKind::Blocks => "blocks",
+            DependencyKind::Related => "related",
+        };
+        let far = match self.far {
+            ItemKind::Task => "task",
+            ItemKind::Project => "project",
+        };
+        let end = match &self.end {
+            FarEnd::Title(title) => format!("title:{title}"),
+            FarEnd::Id(id) => format!("id:{id}"),
+        };
+        [kind.to_owned(), far.to_owned(), end]
+    }
+}
+
 /// The item's authored content, as the digest reads it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Authored<'a> {
@@ -291,18 +433,22 @@ pub struct Authored<'a> {
     /// Its whole metadata, as a read answers it: the caller's keys are taken from it, and the
     /// `onetaskgraph.template` entry's `answers_digest`.
     pub metadata: &'a BTreeMap<String, Value>,
-    /// Its own forward dependency edges, each `[edge kind, far end's kind, far end]`.
-    pub depends_on: Vec<[String; 3]>,
+    /// Its own forward dependency edges.
+    pub depends_on: Vec<AuthoredEdge>,
 }
 
 /// The digest of `authored`, leaving out the caller-owned metadata keys `excludes` names.
 #[must_use]
-pub fn content_digest(authored: &Authored<'_>, excludes: &[String]) -> String {
+pub fn content_digest(authored: &Authored<'_>, excludes: &[MetadataKey]) -> Sha256Digest {
     let metadata: Map<String, Value> = authored
         .metadata
         .iter()
         .filter(|(key, _)| MetadataKey::new(key.as_str()).is_ok())
-        .filter(|(key, _)| !excludes.iter().any(|excluded| excluded == *key))
+        .filter(|(key, _)| {
+            !excludes
+                .iter()
+                .any(|excluded| excluded.as_str() == key.as_str())
+        })
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect();
     let answers = authored
@@ -317,7 +463,11 @@ pub fn content_digest(authored: &Authored<'_>, excludes: &[String]) -> String {
         .map(Repository::as_str)
         .collect();
     repositories.sort_unstable();
-    let mut edges = authored.depends_on.clone();
+    let mut edges: Vec<[String; 3]> = authored
+        .depends_on
+        .iter()
+        .map(AuthoredEdge::spelled)
+        .collect();
     edges.sort();
     edges.dedup();
     let document = json!({
@@ -328,13 +478,7 @@ pub fn content_digest(authored: &Authored<'_>, excludes: &[String]) -> String {
         "depends_on": edges,
         "metadata": metadata,
     });
-    let hash = Sha256::digest(canonical(&document).as_bytes());
-    let mut digest = String::with_capacity(7 + hash.len() * 2);
-    digest.push_str("sha256:");
-    for byte in hash {
-        digest.push_str(&format!("{byte:02x}"));
-    }
-    digest
+    Sha256Digest::of(canonical(&document).as_bytes())
 }
 
 /// `value` as canonical JSON: keys sorted at every depth, no insignificant whitespace.
@@ -353,29 +497,6 @@ fn canonical(value: &Value) -> String {
             format!("[{}]", inner.join(","))
         }
         scalar => scalar.to_string(),
-    }
-}
-
-/// One label a record carries — `--by`, `--bar` or `--note` — once it is established it is one.
-///
-/// # Errors
-///
-/// [`AttestationInputError`] naming `field` for an empty label, one longer than [`MAX_LABEL`]
-/// (`--note` may be any length), or one holding a line break (`--note` may).
-pub fn label(field: &'static str, value: &str) -> Result<String, AttestationInputError> {
-    let note = field == "--note";
-    let problem = if value.trim().is_empty() {
-        Some("is empty".to_owned())
-    } else if !note && value.chars().count() > MAX_LABEL {
-        Some(format!("is longer than {MAX_LABEL} characters"))
-    } else if !note && value.contains(['\n', '\r']) {
-        Some("holds a line break".to_owned())
-    } else {
-        None
-    };
-    match problem {
-        Some(problem) => Err(AttestationInputError { field, problem }),
-        None => Ok(value.to_owned()),
     }
 }
 
@@ -410,7 +531,7 @@ pub fn record_of(
 pub fn check(
     kind: &AttestationKind,
     record: Option<Attestation>,
-    digest: impl FnOnce(&[String]) -> String,
+    digest: impl FnOnce(&[MetadataKey]) -> Sha256Digest,
     bar: Option<&str>,
 ) -> AttestationCheck {
     let Some(record) = record else {
@@ -423,7 +544,7 @@ pub fn check(
     };
     let reason = if digest(&record.excludes) != record.content_digest {
         Some(VoidReason::ContentMoved)
-    } else if bar.is_some_and(|bar| bar != record.bar) {
+    } else if bar.is_some_and(|bar| bar != record.bar.as_str()) {
         Some(VoidReason::BarMoved)
     } else {
         None
@@ -440,10 +561,10 @@ pub fn check(
     }
 }
 
-/// The instant a record is recorded at, as it spells it.
+/// The instant a record is recorded at: now, to the second.
 #[must_use]
-pub fn now() -> String {
-    stamp(Utc::now())
+pub fn now() -> DateTime<Utc> {
+    Utc::now().trunc_subsecs(0)
 }
 
 fn stamp(at: DateTime<Utc>) -> String {
@@ -460,8 +581,16 @@ mod tests {
             content: Some("body"),
             repositories: &[],
             metadata,
-            depends_on: vec![["blocks".into(), "task".into(), "Other".into()]],
+            depends_on: vec![AuthoredEdge {
+                kind: DependencyKind::Blocks,
+                far: ItemKind::Task,
+                end: FarEnd::Title("Other".into()),
+            }],
         }
+    }
+
+    fn key(key: &str) -> MetadataKey {
+        MetadataKey::new(key).expect("a caller key")
     }
 
     #[test]
@@ -469,7 +598,6 @@ mod tests {
         let mut metadata = BTreeMap::new();
         metadata.insert("myapp.size".to_owned(), json!(3));
         let first = content_digest(&authored(&metadata), &[]);
-        assert!(first.starts_with("sha256:") && first.len() == 71, "{first}");
 
         // A reserved key — the attestations themselves among them — never moves it.
         metadata.insert(MetadataKey::ATTESTATIONS_KEY.to_owned(), json!({"a": 1}));
@@ -492,43 +620,48 @@ mod tests {
         // A caller key moves it, unless it is excluded.
         metadata.insert("myapp.size".to_owned(), json!(4));
         assert_ne!(content_digest(&authored(&metadata), &[]), answered);
+        let mut without = metadata.clone();
+        without.remove("myapp.size");
         assert_eq!(
-            content_digest(&authored(&metadata), &["myapp.size".to_owned()]),
-            {
-                let mut without = metadata.clone();
-                without.remove("myapp.size");
-                content_digest(&authored(&without), &[])
-            }
+            content_digest(&authored(&metadata), &[key("myapp.size")]),
+            content_digest(&authored(&without), &[])
         );
+
+        // An edge to another far end moves it.
+        let mut moved = authored(&metadata);
+        moved.depends_on[0].end = FarEnd::Id("src:9".into());
+        assert_ne!(
+            content_digest(&moved, &[]),
+            content_digest(&authored(&metadata), &[])
+        );
+    }
+
+    fn record(kind: &AttestationKind) -> Attestation {
+        Attestation {
+            kind: kind.clone(),
+            by: AttestationLabel::new("--by", "ada").expect("a label"),
+            at: DateTime::UNIX_EPOCH,
+            content_digest: Sha256Digest::of(b"x"),
+            bar: AttestationLabel::new("--bar", "bar-1").expect("a label"),
+            note: None,
+            excludes: Vec::new(),
+        }
     }
 
     #[test]
     fn a_check_says_content_before_bar() {
         let kind = AttestationKind::new("design-approval").expect("a kind");
-        let record = Attestation {
-            kind: kind.clone(),
-            by: "ada".into(),
-            at: "2026-11-09T00:00:00Z".into(),
-            content_digest: "sha256:x".into(),
-            bar: "bar-1".into(),
-            note: None,
-            excludes: Vec::new(),
-        };
-        let valid = check(
-            &kind,
-            Some(record.clone()),
-            |_| "sha256:x".into(),
-            Some("bar-1"),
-        );
+        let held = || Sha256Digest::of(b"x");
+        let valid = check(&kind, Some(record(&kind)), |_| held(), Some("bar-1"));
         assert_eq!((valid.state, valid.reason), (AttestationState::Valid, None));
-        let bar = check(
+        let bar = check(&kind, Some(record(&kind)), |_| held(), Some("bar-2"));
+        assert_eq!(bar.reason, Some(VoidReason::BarMoved));
+        let moved = check(
             &kind,
-            Some(record.clone()),
-            |_| "sha256:x".into(),
+            Some(record(&kind)),
+            |_| Sha256Digest::of(b"y"),
             Some("bar-2"),
         );
-        assert_eq!(bar.reason, Some(VoidReason::BarMoved));
-        let moved = check(&kind, Some(record), |_| "sha256:y".into(), Some("bar-2"));
         assert_eq!(moved.reason, Some(VoidReason::ContentMoved));
         let absent = check(&kind, None, |_| unreachable!(), None);
         assert_eq!(
@@ -539,26 +672,32 @@ mod tests {
 
     #[test]
     fn a_record_reads_back_as_it_serialises() {
-        let record = Attestation {
-            kind: AttestationKind::new("plan-review").expect("a kind"),
-            by: "ada".into(),
-            at: "2026-11-09T00:00:00Z".into(),
-            content_digest: "sha256:x".into(),
-            bar: "b".into(),
-            note: Some("n".into()),
-            excludes: vec!["myapp.k".into()],
+        let kind = AttestationKind::new("plan-review").expect("a kind");
+        let noted = Attestation {
+            note: Some(AttestationNote::new("n").expect("a note")),
+            excludes: vec![key("myapp.k")],
+            ..record(&kind)
         };
         assert_eq!(
-            record.to_value(),
-            serde_json::to_value(&record).expect("JSON")
+            noted.to_value(),
+            serde_json::to_value(&noted).expect("JSON")
         );
-        let bare = Attestation {
-            note: None,
-            excludes: Vec::new(),
-            ..record
-        };
+        let bare = record(&kind);
         assert_eq!(bare.to_value(), serde_json::to_value(&bare).expect("JSON"));
         assert!(bare.to_value().get("note").is_none());
+        assert_eq!(bare.to_value()["at"], "1970-01-01T00:00:00Z");
+        let mut held = BTreeMap::new();
+        held.insert(
+            MetadataKey::ATTESTATIONS_KEY.to_owned(),
+            json!({"plan-review": noted.to_value(), "other": {"kind": "other"}}),
+        );
+        assert_eq!(record_of(&held, &kind), Some(noted));
+        let other = AttestationKind::new("other").expect("a kind");
+        assert_eq!(
+            record_of(&held, &other),
+            None,
+            "an unreadable record is passed over"
+        );
     }
 
     #[test]
@@ -566,8 +705,16 @@ mod tests {
         assert!(AttestationKind::new("plan-review").is_ok());
         assert_eq!(AttestationKind::new("").unwrap_err().field, "--kind");
         assert!(AttestationKind::new("two words").is_err());
-        assert_eq!(label("--by", "a\nb").unwrap_err().field, "--by");
-        assert!(label("--note", "a\nb").is_ok());
+        assert_eq!(
+            AttestationLabel::new("--by", "a\nb").unwrap_err().field,
+            "--by"
+        );
+        assert_eq!(
+            AttestationLabel::new("--bar", " ").unwrap_err().field,
+            "--bar"
+        );
+        assert!(AttestationNote::new("a\nb").is_ok());
+        assert_eq!(AttestationNote::new("").unwrap_err().field, "--note");
         assert_eq!(stamp(DateTime::UNIX_EPOCH), "1970-01-01T00:00:00Z");
     }
 }

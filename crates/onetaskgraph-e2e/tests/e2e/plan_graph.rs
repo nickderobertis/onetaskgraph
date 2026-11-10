@@ -514,3 +514,66 @@ fn a_member_graph_that_does_not_hold_together_is_refused_before_anything_is_writ
         assert_eq!(fixture.folder(), before, "{name}: nothing written");
     }
 }
+
+#[test]
+fn members_declared_by_a_template_the_project_template_includes_are_refused() {
+    let fixture = Fixture::new();
+    std::fs::write(
+        fixture.templates.join("inner.md"),
+        "---\nonetaskgraph_template: 1\nmembers:\n  - {id: a, title: A, template: {file: design-task.md}, answers: {topic: t}}\n---\nInner\n",
+    )
+    .expect("a template");
+    let outer = fixture.templates.join("outer.md");
+    std::fs::write(
+        &outer,
+        "---\nonetaskgraph_template: 1\n---\n{% include \"inner.md\" %}\n",
+    )
+    .expect("a template");
+    let before = fixture.folder();
+    let search = path(&fixture.templates);
+    let output = fixture.exits(
+        &[
+            "project",
+            "create",
+            "notes",
+            "--id",
+            "plan-1",
+            "--title",
+            "P",
+            "--template",
+            &path(&outer),
+            "--search-path",
+            &search,
+            "--no-interactive",
+        ],
+        1,
+    );
+    let message = stderr(&output);
+    assert!(
+        message.contains("inner.md") && message.contains("only the rendered project template"),
+        "{message}"
+    );
+    assert_eq!(fixture.folder(), before, "nothing written");
+}
+
+#[test]
+fn a_member_that_cannot_be_written_names_itself_and_what_already_landed() {
+    let fixture = Fixture::new();
+    // No task can be written: a file stands where the folder keeps its tasks. The project is
+    // written first, and lands.
+    std::fs::write(fixture.notes.join("tasks"), "not a directory").expect("a file in the way");
+    let arguments = create_arguments(&fixture.template("plan.md"), &[]);
+    let output = fixture.exits(&borrowed(&arguments), 1);
+    let message = stderr(&output);
+    assert!(
+        message.contains("member w-design of the plan could not be created"),
+        "the failure names the first member, the one that failed: {message}"
+    );
+    assert!(
+        message.contains("already created: notes:plan-1\n"),
+        "and what landed before it: {message}"
+    );
+    // What landed is left as it landed.
+    let project = fixture.json(&["project", "show", "notes:plan-1"])["items"][0]["item"].clone();
+    assert_eq!(project["title"], "The widgets plan");
+}

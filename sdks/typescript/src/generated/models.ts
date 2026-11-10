@@ -221,6 +221,19 @@ content: (string | null)
 export type AssetsWritten = GeneratedAssetsWritten.AssetsWritten;
 export namespace GeneratedAttestation {
 /**
+ * What an attester adds: text of any length and any number of lines, not blank.
+ */
+export type AttestationNote = string
+/**
+ * One caller-owned metadata key: `<namespace>.<name>`, at least two non-empty segments
+ * separated by dots, whose first segment is not [`MetadataKey::RESERVED_NAMESPACE`].
+ *
+ * Validated wherever one is built, deserialized included, so a plugin handed one never has
+ * to ask whether it names a key this product owns.
+ */
+export type MetadataKey = string
+
+/**
  * One attestation: who cleared the item's authored content, when, which content and against
  * which bar.
  */
@@ -234,12 +247,12 @@ kind: string
  */
 by: string
 /**
- * When it was recorded, in RFC 3339.
+ * When it was recorded, in RFC 3339 to the second.
  */
 at: string
 /**
- * The digest of the item's authored content when it was recorded: `sha256:` and 64
- * lowercase hex digits, computed by the store (see the module's documentation).
+ * The digest of the item's authored content when it was recorded, computed by the store
+ * (see the module's documentation).
  */
 content_digest: string
 /**
@@ -249,12 +262,12 @@ bar: string
 /**
  * What the attester added, when they added anything.
  */
-note?: (string | null)
+note?: (AttestationNote | null)
 /**
  * The caller-owned metadata keys left out of `content_digest`, sorted; empty when none
  * were.
  */
-excludes?: string[]
+excludes?: MetadataKey[]
 [k: string]: any
 }
 
@@ -265,6 +278,18 @@ export namespace GeneratedAttestationCheck {
  * Why a record of an attestation no longer holds.
  */
 export type VoidReason = ("content-moved" | "bar-moved")
+/**
+ * What an attester adds: text of any length and any number of lines, not blank.
+ */
+export type AttestationNote = string
+/**
+ * One caller-owned metadata key: `<namespace>.<name>`, at least two non-empty segments
+ * separated by dots, whose first segment is not [`MetadataKey::RESERVED_NAMESPACE`].
+ *
+ * Validated wherever one is built, deserialized included, so a plugin handed one never has
+ * to ask whether it names a key this product owns.
+ */
+export type MetadataKey = string
 
 /**
  * What `attestation check` answers: one kind on one item.
@@ -305,12 +330,12 @@ kind: string
  */
 by: string
 /**
- * When it was recorded, in RFC 3339.
+ * When it was recorded, in RFC 3339 to the second.
  */
 at: string
 /**
- * The digest of the item's authored content when it was recorded: `sha256:` and 64
- * lowercase hex digits, computed by the store (see the module's documentation).
+ * The digest of the item's authored content when it was recorded, computed by the store
+ * (see the module's documentation).
  */
 content_digest: string
 /**
@@ -320,12 +345,12 @@ bar: string
 /**
  * What the attester added, when they added anything.
  */
-note?: (string | null)
+note?: (AttestationNote | null)
 /**
  * The caller-owned metadata keys left out of `content_digest`, sorted; empty when none
  * were.
  */
-excludes?: string[]
+excludes?: MetadataKey[]
 [k: string]: any
 }
 
@@ -340,6 +365,18 @@ export type AttestationState = ("valid" | "void" | "absent")
 }
 export type AttestationState = GeneratedAttestationState.AttestationState;
 export namespace GeneratedAttested {
+/**
+ * What an attester adds: text of any length and any number of lines, not blank.
+ */
+export type AttestationNote = string
+/**
+ * One caller-owned metadata key: `<namespace>.<name>`, at least two non-empty segments
+ * separated by dots, whose first segment is not [`MetadataKey::RESERVED_NAMESPACE`].
+ *
+ * Validated wherever one is built, deserialized included, so a plugin handed one never has
+ * to ask whether it names a key this product owns.
+ */
+export type MetadataKey = string
 /**
  * What a locator names.
  */
@@ -370,12 +407,12 @@ kind: string
  */
 by: string
 /**
- * When it was recorded, in RFC 3339.
+ * When it was recorded, in RFC 3339 to the second.
  */
 at: string
 /**
- * The digest of the item's authored content when it was recorded: `sha256:` and 64
- * lowercase hex digits, computed by the store (see the module's documentation).
+ * The digest of the item's authored content when it was recorded, computed by the store
+ * (see the module's documentation).
  */
 content_digest: string
 /**
@@ -385,12 +422,12 @@ bar: string
 /**
  * What the attester added, when they added anything.
  */
-note?: (string | null)
+note?: (AttestationNote | null)
 /**
  * The caller-owned metadata keys left out of `content_digest`, sorted; empty when none
  * were.
  */
-excludes?: string[]
+excludes?: MetadataKey[]
 [k: string]: any
 }
 /**
@@ -7515,6 +7552,18 @@ export namespace GeneratedProjectAttestationCheck {
  * Why a record of an attestation no longer holds.
  */
 export type VoidReason = ("content-moved" | "bar-moved")
+/**
+ * What an attester adds: text of any length and any number of lines, not blank.
+ */
+export type AttestationNote = string
+/**
+ * One caller-owned metadata key: `<namespace>.<name>`, at least two non-empty segments
+ * separated by dots, whose first segment is not [`MetadataKey::RESERVED_NAMESPACE`].
+ *
+ * Validated wherever one is built, deserialized included, so a plugin handed one never has
+ * to ask whether it names a key this product owns.
+ */
+export type MetadataKey = string
 
 /**
  * What `project attestation check --tasks` answers: one entry per task filed under the
@@ -7575,12 +7624,12 @@ kind: string
  */
 by: string
 /**
- * When it was recorded, in RFC 3339.
+ * When it was recorded, in RFC 3339 to the second.
  */
 at: string
 /**
- * The digest of the item's authored content when it was recorded: `sha256:` and 64
- * lowercase hex digits, computed by the store (see the module's documentation).
+ * The digest of the item's authored content when it was recorded, computed by the store
+ * (see the module's documentation).
  */
 content_digest: string
 /**
@@ -7590,12 +7639,12 @@ bar: string
 /**
  * What the attester added, when they added anything.
  */
-note?: (string | null)
+note?: (AttestationNote | null)
 /**
  * The caller-owned metadata keys left out of `content_digest`, sorted; empty when none
  * were.
  */
-excludes?: string[]
+excludes?: MetadataKey[]
 [k: string]: any
 }
 

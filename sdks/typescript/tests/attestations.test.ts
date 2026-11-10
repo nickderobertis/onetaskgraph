@@ -56,6 +56,41 @@ test("an attestation is recorded, holds, and is void once the content it cleared
   expect("state" in own && own.state).toBe("valid");
 });
 
+test("a document's record and a planned project validate as their roots", async () => {
+  const design = await client.documentCreate("notes", "P-1", "Design", { body: "Design.\n" });
+  const doc = design.items[0]?.id ?? "";
+  const attested = await client.documentAttest(doc, "design-approval", "ada", "bar-1", {
+    exclude: ["myapp.owner"],
+  });
+  expect("record" in attested && attested.record.excludes).toEqual(["myapp.owner"]);
+  expect((await client.documentAttestationCheck(doc, "design-approval")).state).toBe("valid");
+
+  const planned = await client.projectCreate("notes", "P-2", "Planned", {
+    body: "Later.\n",
+    dryRun: true,
+  });
+  expect([planned.id, planned.title, planned.content, planned.members]).toEqual([
+    "P-2",
+    "Planned",
+    "Later.\n",
+    [],
+  ]);
+  const listed = await client.projectList();
+  expect(listed.items.map((project) => project.id)).toEqual(["notes:P-1"]);
+});
+
+test("an option of the wrong type is refused before the binary is started", async () => {
+  expect(() =>
+    client.projectAttestationCheck("notes:P-1", "plan-review", {
+      tasks: "yes" as unknown as boolean,
+    }),
+  ).toThrow(TypeError);
+  await expect(
+    client.projectCreate("notes", "P-3", "Typed", { dryRun: "yes" as unknown as boolean }),
+  ).rejects.toBeInstanceOf(TypeError);
+  expect(() => client.taskAttest(task, 7 as unknown as string, "ada", "bar-1")).toThrow(TypeError);
+});
+
 test("a kind the binary refuses rejects with its failure", async () => {
   const refused = client.taskAttest(task, "two words", "ada", "bar-1");
   await expect(refused).rejects.toBeInstanceOf(OnetaskgraphExecutionError);

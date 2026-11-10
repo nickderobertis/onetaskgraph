@@ -17,10 +17,12 @@ use super::delivery::source_failed;
 use super::{Engine, EngineError};
 use crate::GlobalId;
 use crate::attestation::{
-    Attestation, AttestationCheck, AttestationKind, Attested, Authored, ProjectAttestationCheck,
-    TaskAttestationCheck, check, content_digest, now, record_of, records,
+    Attestation, AttestationCheck, AttestationKind, AttestationLabel, AttestationNote, Attested,
+    Authored, AuthoredEdge, FarEnd, ProjectAttestationCheck, TaskAttestationCheck, check,
+    content_digest, now, record_of, records,
 };
 use crate::resolve::ResolvedSource;
+use crate::template::Sha256Digest;
 
 /// One attestation to record.
 #[derive(Debug, Clone, PartialEq)]
@@ -30,13 +32,13 @@ pub struct AttestRequest {
     /// Its kind: a record of this kind the item already holds is replaced.
     pub kind: AttestationKind,
     /// Who attests, as the caller labels them.
-    pub by: String,
+    pub by: AttestationLabel,
     /// The fingerprint of the bar the content is cleared against.
-    pub bar: String,
+    pub bar: AttestationLabel,
     /// Caller-owned metadata keys to leave out of the digest.
     pub excludes: Vec<MetadataKey>,
     /// What the attester adds, if anything.
-    pub note: Option<String>,
+    pub note: Option<AttestationNote>,
     /// Record it only while the item is at this version: the read it is composed from is
     /// refused, writing nothing, when it answers another.
     pub if_version: Option<String>,
@@ -49,13 +51,13 @@ struct Read {
     repositories: Vec<Repository>,
     metadata: std::collections::BTreeMap<String, Value>,
     version: Option<String>,
-    edges: Vec<[String; 3]>,
+    edges: Vec<AuthoredEdge>,
     /// The document as it was read, which its write takes rather than reading again.
     document: Option<Document>,
 }
 
 impl Read {
-    fn digest(&self, excludes: &[String]) -> String {
+    fn digest(&self, excludes: &[MetadataKey]) -> Sha256Digest {
         content_digest(
             &Authored {
                 title: &self.title,
@@ -99,11 +101,7 @@ impl Engine {
                 });
             }
         }
-        let mut excludes: Vec<String> = request
-            .excludes
-            .iter()
-            .map(|key| key.as_str().to_owned())
-            .collect();
+        let mut excludes = request.excludes.clone();
         excludes.sort();
         excludes.dedup();
         let attestation = Attestation {
@@ -131,23 +129,12 @@ impl Engine {
                 self.set_document_metadata(id, &key, &value).await?
             }
         };
-        let mut held = std::collections::BTreeMap::new();
-        held.insert(MetadataKey::ATTESTATIONS_KEY.to_owned(), set.value);
-        let record = record_of(&held, &request.kind).ok_or_else(|| {
-            source_failed(
-                source,
-                onetaskgraph_plugin_api::SourceError::Malformed {
-                    message: format!(
-                        "the record {id} it answered the write with does not hold the {} \
-                         attestation it was just written",
-                        request.kind
-                    ),
-                },
-            )
-        })?;
+        // What the source holds under the key was read back by the write itself — a write that
+        // answers without the key is refused there — so the record answered is the one written.
+        let _ = set;
         Ok(Attested {
             id: id.clone(),
-            record,
+            record: attestation,
         })
     }
 
@@ -350,14 +337,11 @@ impl Engine {
         &self,
         near: &SourceName,
         edge: &DependencyEdge,
-    ) -> Result<[String; 3], EngineError> {
-        let edge_kind = serde_json::to_value(edge.kind)
-            .ok()
-            .and_then(|value| value.as_str().map(str::to_owned))
-            .unwrap_or_default();
-        let far_kind = match edge.to.kind {
-            ItemKind::Task => "task",
-            ItemKind::Project => "project",
+    ) -> Result<AuthoredEdge, EngineError> {
+        let entry = |end: FarEnd| AuthoredEdge {
+            kind: edge.kind,
+            far: edge.to.kind,
+            end,
         };
         let (source_name, native) = if edge.to.is_native() {
             (near.to_string(), edge.to.id().to_owned())
@@ -366,7 +350,7 @@ impl Engine {
         {
             (source.to_owned(), native.to_owned())
         } else {
-            return Ok([edge_kind, far_kind.to_owned(), edge.to.id().to_owned()]);
+            return Ok(entry(FarEnd::Id(edge.to.id().to_owned())));
         };
         let named = SourceName::new(source_name.clone()).ok();
         let far = match named.as_ref().map(|name| self.built(name)) {
@@ -393,14 +377,10 @@ impl Engine {
             }
             None => None,
         };
-        Ok([
-            edge_kind,
-            far_kind.to_owned(),
-            title.map_or_else(
-                || format!("id:{source_name}:{native}"),
-                |title| format!("title:{title}"),
-            ),
-        ])
+        Ok(entry(title.map_or_else(
+            || FarEnd::Id(format!("{source_name}:{native}")),
+            FarEnd::Title,
+        )))
     }
 }
 

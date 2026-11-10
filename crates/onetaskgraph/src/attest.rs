@@ -6,7 +6,8 @@
 use std::io::Write;
 
 use onetaskgraph_core::attestation::{
-    AttestationCheck, AttestationKind, AttestationState, Attested, ProjectAttestationCheck, label,
+    AttestationCheck, AttestationKind, AttestationLabel, AttestationNote, AttestationState,
+    Attested, ProjectAttestationCheck,
 };
 use onetaskgraph_core::{AttestRequest, Failure, Loaded};
 use onetaskgraph_plugin_api::{MetadataKey, MetadataRecord};
@@ -29,8 +30,8 @@ pub(crate) async fn attest(
     let request = AttestRequest {
         id: qualified(&args.id)?,
         kind: kind(&args.kind)?,
-        by: label("--by", &args.by).map_err(refused)?,
-        bar: label("--bar", &args.bar).map_err(refused)?,
+        by: AttestationLabel::new("--by", args.by.as_str()).map_err(refused)?,
+        bar: AttestationLabel::new("--bar", args.bar.as_str()).map_err(refused)?,
         excludes: args
             .exclude
             .iter()
@@ -46,7 +47,7 @@ pub(crate) async fn attest(
         note: args
             .note
             .as_deref()
-            .map(|note| label("--note", note))
+            .map(AttestationNote::new)
             .transpose()
             .map_err(refused)?,
         if_version: args.if_version.clone(),

@@ -124,8 +124,9 @@ impl Engine {
     /// # Errors
     ///
     /// [`EngineError::Template`] — before anything is written — when a member depends on one
-    /// that is not created before it; and every refusal of [`Engine::create_project`] and
-    /// [`Engine::create_task`], a member's after the members before it landed.
+    /// that is not created before it; every refusal of [`Engine::create_project`]; and
+    /// [`EngineError::PlanMember`], naming the member and every item already created, wrapping a
+    /// member's refusal by [`Engine::create_task`] — nothing that landed is taken back.
     pub async fn create_plan(
         &self,
         project: &ProjectCreate,
@@ -174,7 +175,22 @@ impl Engine {
                 assets: Vec::new(),
                 classification: onetaskgraph_plugin_api::Classification::default(),
             };
-            let task = self.create_task_as(&request, Some(&member.id)).await?;
+            let task = match self.create_task_as(&request, Some(&member.id)).await {
+                Ok(task) => task,
+                Err(error) => {
+                    return Err(EngineError::PlanMember {
+                        member: member.id.to_string(),
+                        landed: std::iter::once(created.id.to_string())
+                            .chain(
+                                order
+                                    .iter()
+                                    .map(|(_, id): &(NativeId, GlobalId)| id.to_string()),
+                            )
+                            .collect(),
+                        error: Box::new(error),
+                    });
+                }
+            };
             landed.insert(&member.id, task.task.id.clone());
             order.push((member.id.clone(), task.task.id));
         }

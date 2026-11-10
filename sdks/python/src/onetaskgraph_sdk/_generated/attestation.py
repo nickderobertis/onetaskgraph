@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from pydantic import BaseModel, Field, RootModel
+from pydantic import AwareDatetime, BaseModel, Field, RootModel
 
 
 class AttestationKind(RootModel[str]):
@@ -18,32 +18,73 @@ class AttestationKind(RootModel[str]):
     ]
 
 
+class AttestationLabel(RootModel[str]):
+    root: Annotated[
+        str,
+        Field(
+            description="Who attested, or the fingerprint of a bar: one line of one to 200 characters, not blank."
+        ),
+    ]
+
+
+class Sha256Digest(RootModel[str]):
+    root: Annotated[
+        str,
+        Field(
+            description="`sha256:` and 64 lowercase hex digits.",
+            pattern="^sha256:[0-9a-f]{64}$",
+        ),
+    ]
+
+
+class AttestationNote(RootModel[str]):
+    root: Annotated[
+        str,
+        Field(
+            description="What an attester adds: text of any length and any number of lines, not blank."
+        ),
+    ]
+
+
+class MetadataKey(RootModel[str]):
+    root: Annotated[
+        str,
+        Field(
+            description="One caller-owned metadata key: `<namespace>.<name>`, at least two non-empty segments\nseparated by dots, whose first segment is not [`MetadataKey::RESERVED_NAMESPACE`].\n\nValidated wherever one is built, deserialized included, so a plugin handed one never has\nto ask whether it names a key this product owns."
+        ),
+    ]
+
+
 class Attestation(BaseModel):
     kind: Annotated[
         AttestationKind,
         Field(description="The kind of attestation this is; the key it is held under."),
     ]
-    by: Annotated[str, Field(description="Who attested, as the caller labels them.")]
-    at: Annotated[str, Field(description="When it was recorded, in RFC 3339.")]
+    by: Annotated[AttestationLabel, Field(description="Who attested, as the caller labels them.")]
+    at: Annotated[
+        AwareDatetime,
+        Field(description="When it was recorded, in RFC 3339 to the second."),
+    ]
     content_digest: Annotated[
-        str,
+        Sha256Digest,
         Field(
-            description="The digest of the item's authored content when it was recorded: `sha256:` and 64\nlowercase hex digits, computed by the store (see the module's documentation)."
+            description="The digest of the item's authored content when it was recorded, computed by the store\n(see the module's documentation)."
         ),
     ]
     bar: Annotated[
-        str,
+        AttestationLabel,
         Field(
             description="The fingerprint of the bar the content was cleared against, as the caller gave it."
         ),
     ]
     note: Annotated[
-        str | None,
+        AttestationNote | None,
         Field(description="What the attester added, when they added anything."),
     ] = None
     excludes: Annotated[
-        list[str],
+        list[MetadataKey],
         Field(
-            description="The caller-owned metadata keys left out of `content_digest`, sorted; empty when none\nwere."
+            description="The caller-owned metadata keys left out of `content_digest`, sorted; empty when none\nwere.",
+            validate_default=True,
         ),
     ] = []

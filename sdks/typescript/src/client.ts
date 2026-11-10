@@ -934,15 +934,35 @@ function attestFlags(
   bar: string,
   options: AttestOptions,
 ): string[] {
-  const args = ["--kind", kind, "--by", by, "--bar", bar];
+  const args = [
+    "--kind",
+    stringOption(method, "kind", kind),
+    "--by",
+    stringOption(method, "by", by),
+    "--bar",
+    stringOption(method, "bar", bar),
+  ];
   for (const key of stringList(method, "exclude", options.exclude)) args.push("--exclude", key);
-  if (options.note !== undefined) args.push("--note", options.note);
-  if (options.ifVersion !== undefined) args.push("--if-version", options.ifVersion);
+  if (options.note !== undefined) args.push("--note", stringOption(method, "note", options.note));
+  if (options.ifVersion !== undefined) {
+    args.push("--if-version", stringOption(method, "ifVersion", options.ifVersion));
+  }
   return [...args, ...writePolicyFlags(method, options)];
 }
 
-function checkFlags(kind: string, options: AttestationCheckOptions): string[] {
-  return ["--kind", kind, ...(options.bar === undefined ? [] : ["--bar", options.bar])];
+function checkFlags(method: string, kind: string, options: AttestationCheckOptions): string[] {
+  const args = ["--kind", stringOption(method, "kind", kind)];
+  if (options.bar !== undefined) args.push("--bar", stringOption(method, "bar", options.bar));
+  return args;
+}
+
+// A flag a caller asked for by `true`: refused, rather than read as `false`, when it is anything
+// but a boolean, so a requested dry run is never a write.
+function flagOption(method: string, name: string, value: unknown): boolean {
+  if (value !== undefined && typeof value !== "boolean") {
+    throw new TypeError(`${method}: ${name} is not a boolean; next: pass true or false`);
+  }
+  return value === true;
 }
 
 function expectFlags(method: string, options: { expect?: unknown }): string[] {
@@ -1786,14 +1806,20 @@ export class OnetaskgraphClient {
     kind: string,
     options: AttestationCheckOptions = {},
   ): Promise<AttestationCheck> {
-    return this.run("task attestation check", [id, ...checkFlags(kind, options)]);
+    return this.run("task attestation check", [
+      id,
+      ...checkFlags("taskAttestationCheck", kind, options),
+    ]);
   }
   documentAttestationCheck(
     id: string,
     kind: string,
     options: AttestationCheckOptions = {},
   ): Promise<AttestationCheck> {
-    return this.run("document attestation check", [id, ...checkFlags(kind, options)]);
+    return this.run("document attestation check", [
+      id,
+      ...checkFlags("documentAttestationCheck", kind, options),
+    ]);
   }
   // The project's own record, or with `tasks: true` one entry per task of the project.
   projectAttestationCheck(
@@ -1801,8 +1827,8 @@ export class OnetaskgraphClient {
     kind: string,
     options: AttestationCheckOptions & { tasks?: boolean } = {},
   ): Promise<AttestationCheck | ProjectAttestationCheck> {
-    const args = [id, ...checkFlags(kind, options)];
-    if (options.tasks === true) args.push("--tasks");
+    const args = [id, ...checkFlags("projectAttestationCheck", kind, options)];
+    if (flagOption("projectAttestationCheck", "tasks", options.tasks)) args.push("--tasks");
     return this.run("project attestation check", args);
   }
   labelList(options: QueryOptions = {}): Promise<QueryResponseOfQualifiedLabel> {
@@ -1955,7 +1981,7 @@ export class OnetaskgraphClient {
       options,
     );
     if (options.status !== undefined) args.push("--status", options.status);
-    if (options.dryRun === true) args.push("--dry-run");
+    if (flagOption("projectCreate", "dryRun", options.dryRun)) args.push("--dry-run");
     return this.run("project create", [source, ...args], input, options.sanitizeDryRun === true);
   }
   // Regenerate one project's description in place from its template, over its stored answers.

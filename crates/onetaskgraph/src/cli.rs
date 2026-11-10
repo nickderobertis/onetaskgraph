@@ -1028,11 +1028,17 @@ pub struct AttestArgs {
     pub kind: String,
 
     /// Who attests, as you label them: one line.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — as `kind`: `attest` converts it through
+    /// `AttestationLabel::new`, which names the flag and what is wrong, before anything is read;
+    /// a clap value parser would refuse it as a bad invocation without that next action.
     #[arg(long, value_name = "LABEL")]
     pub by: String,
 
     /// The fingerprint of the bar the content is cleared against, as you compute it: a later
     /// check given another bar answers `void` with `bar-moved`.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — as `by`, through `AttestationLabel::new`.
     #[arg(long, value_name = "FINGERPRINT")]
     pub bar: String,
 
@@ -1045,6 +1051,8 @@ pub struct AttestArgs {
     pub exclude: Vec<String>,
 
     /// A note recorded with it.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — as `by`, through `AttestationNote::new`.
     #[arg(long, value_name = "TEXT")]
     pub note: Option<String>,
 

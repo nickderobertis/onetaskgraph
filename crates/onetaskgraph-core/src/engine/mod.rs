@@ -841,21 +841,40 @@ pub enum EngineError {
     )]
     ExpectOneTask,
 
-    /// A document write expecting a version was refused because a read of the document answered
-    /// another — a change made at the source since the caller's read.
+    /// A write held to a version — a document's metadata, or an attestation — was refused
+    /// because a read of the item answered another: a change made at the source since the
+    /// caller's read.
     #[error(
-        "document {id} is at version {found}, not the version {expected} this write expects — \
-         it changed since that version was read — so nothing was written\n\
-         next: read the document again (`onetaskgraph document show`), decide whether the write \
-         still applies, and pass the version that read reports"
+        "{id} is at version {found}, not the version {expected} this write expects — it \
+         changed since that version was read — so nothing was written\n\
+         next: read it again (`onetaskgraph <task|project|document> show`), decide whether the \
+         write still applies, and pass the version that read reports"
     )]
     VersionMoved {
-        /// The qualified id of the document.
+        /// The qualified id of the item.
         id: String,
         /// The version the write expected.
         expected: String,
         /// The version the read answered.
         found: String,
+    },
+
+    /// One member of a plan graph could not be created after the project, and every member
+    /// before it, had landed: nothing is taken back, so what landed is named.
+    #[error(
+        "member {member} of the plan could not be created: {error}\n\
+         already created: {}\n\
+         next: fix what the member's failure names, then create the members not yet created \
+         with `task create`, or remove what landed and create the plan again",
+        landed.join(", ")
+    )]
+    PlanMember {
+        /// The member's declared id.
+        member: String,
+        /// The qualified ids already created — the project first — in the order they landed.
+        landed: Vec<String>,
+        /// Why the member could not be created.
+        error: Box<EngineError>,
     },
 
     /// `--expect` named a task of a source that keeps no local cache, which is where what an
