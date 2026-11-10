@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 
 use crate::common::{Sandbox, stderr, stdout};
-use crate::fixtures::document;
+use crate::fixtures::{document, github_projects_with_board};
 
 /// The project template: three members, the first two from different task templates — the
 /// second through a loader document — and the third depending on both.
@@ -726,4 +726,59 @@ fn a_project_template_from_a_loader_finds_its_members_beside_the_loader() {
         .clone();
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     assert_eq!(fixture.task("notes:p-ship")["title"], "Ship gadgets");
+}
+
+#[test]
+fn on_a_board_that_issues_its_own_ids_each_edge_names_the_id_the_board_gave() {
+    let fixture = Fixture::new();
+    let (board, _) = github_projects_with_board(&fixture.sandbox);
+    fixture.sandbox.project_document(&document(&json!({
+        "notes": {"plugin": "local-md", "config": {"root": fixture.notes}},
+        "board": {"plugin": "github-projects", "config": board},
+    })));
+    // The plan without its repository: a board files a member's issue in its own repository.
+    let without = PLAN.replace("    repositories: [github.com/acme/widgets]\n", "");
+    assert_ne!(without, PLAN);
+    std::fs::write(fixture.templates.join("board-plan.md"), without).expect("a template");
+    let template = fixture.template("board-plan.md");
+    let output = fixture.exits(
+        &[
+            "project",
+            "create",
+            "board",
+            "--id",
+            "plan-1",
+            "--title",
+            "On the board",
+            "--template",
+            &template,
+            "--var",
+            "slug=w",
+            "--var",
+            "goal=widgets",
+            "--no-interactive",
+        ],
+        0,
+    );
+    let ids: Vec<String> = stdout(&output).lines().map(str::to_owned).collect();
+    assert_eq!(ids.len(), 4, "the project and three members: {ids:?}");
+    for member in &ids[1..] {
+        assert!(member.starts_with("board:"), "{member}");
+        assert!(
+            !member.contains("w-"),
+            "the board issued {member}, not the offered id"
+        );
+    }
+    let (design, measure, ship) = (&ids[1], &ids[2], &ids[3]);
+    assert_eq!(fixture.task(ship)["title"], "Ship widgets");
+    let mut depended: Vec<String> = fixture.json(&["task", "deps", ship])["items"]
+        .as_array()
+        .expect("edges")
+        .iter()
+        .map(|edge| edge["to"]["id"].as_str().unwrap().to_owned())
+        .collect();
+    depended.sort();
+    let mut expected = vec![design.clone(), measure.clone()];
+    expected.sort();
+    assert_eq!(depended, expected, "the edges name what the board issued");
 }

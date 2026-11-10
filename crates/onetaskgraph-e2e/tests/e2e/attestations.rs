@@ -14,7 +14,7 @@ use std::process::Output;
 use serde_json::{Value, json};
 
 use crate::common::{Sandbox, stderr, stdout};
-use crate::fixtures::{document, github_projects_with_board, linear_workspace};
+use crate::fixtures::{LinearWorkspace, document, github_projects_with_board, linear_workspace};
 
 /// A task template: one required answer.
 const TASK: &str = "---\n\
@@ -55,6 +55,8 @@ pub(crate) struct Plan {
     pub(crate) sandbox: Sandbox,
     notes: PathBuf,
     templates: PathBuf,
+    /// The loopback Linear workspace, for the journeys about hosted destinations.
+    linear: Option<LinearWorkspace>,
 }
 
 impl Plan {
@@ -66,15 +68,17 @@ impl Plan {
             std::fs::write(templates.join(name), text).expect("a template");
         }
         let mut sources = json!({"notes": {"plugin": "local-md", "config": {"root": notes}}});
+        let mut workspace = None;
         if hosts {
             let (board, _) = github_projects_with_board(&sandbox);
             sources["board"] = json!({"plugin": "github-projects", "config": board});
-            let (linear, _) = linear_workspace(
+            let (linear, held) = linear_workspace(
                 &sandbox,
                 json!({"tasks": [], "projects": [], "documents": [], "labels": [],
                        "task_dependencies": [], "project_dependencies": []}),
             );
             sources["linear"] = json!({"plugin": "linear", "config": linear});
+            workspace = Some(held);
             sandbox.secrets_file(
                 "GITHUB_PROJECTS_FIXTURE_TOKEN=test-token\nLINEAR_API_KEY=fixture-key\n",
             );
@@ -84,6 +88,7 @@ impl Plan {
             sandbox,
             notes,
             templates,
+            linear: workspace,
         }
     }
 
@@ -1265,4 +1270,60 @@ fn a_person_reads_each_answer_in_text_and_excludes_are_recorded_once_each_in_ord
         "--tasks",
     ]);
     assert_eq!(json["tasks"], json!([]));
+}
+
+#[test]
+fn a_write_answered_with_another_record_than_the_one_written_is_refused() {
+    let plan = Plan::new(true);
+    let seeded = plan.seed("notes");
+    let copied = plan.json(&["project", "copy", &seeded.project, "--to", "linear"]);
+    let ship = copied["items"]
+        .as_array()
+        .expect("outcomes")
+        .iter()
+        .find(|outcome| outcome["source"] == seeded.ship.as_str())
+        .and_then(|outcome| outcome["destination"].as_str())
+        .expect("the task landed")
+        .to_owned();
+    // Linear answers the metadata write with the record's digest changed: what it says it holds
+    // is not what was written.
+    plan.linear.as_ref().expect("the workspace").bend_answers(
+        |query, _| query.contains("issueUpdate("),
+        1,
+        |_, body| {
+            for answered in body
+                .as_object_mut()
+                .into_iter()
+                .flat_map(|data| data.values_mut())
+            {
+                let held = &mut answered["issue"]["description"];
+                let Some(text) = held.as_str().map(str::to_owned) else {
+                    continue;
+                };
+                let marker = "\"content_digest\":\"sha256:";
+                if let Some(at) = text.find(marker) {
+                    let start = at + marker.len();
+                    *held = json!(format!(
+                        "{}{}{}",
+                        &text[..start],
+                        "0".repeat(64),
+                        &text[start + 64..]
+                    ));
+                }
+            }
+        },
+    );
+    let refused = plan.exits(
+        &[
+            "task", "attest", &ship, "--kind", KIND, "--by", "ada", "--bar", BAR,
+        ],
+        1,
+    );
+    assert!(
+        stderr(&refused).contains(&format!(
+            "does not hold the {KIND} attestation it was just written"
+        )),
+        "{}",
+        stderr(&refused)
+    );
 }
