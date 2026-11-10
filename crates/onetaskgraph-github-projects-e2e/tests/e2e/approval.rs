@@ -441,7 +441,12 @@ fn approving_a_plan_lists_each_kind_in_one_point_and_writes_its_approval_behind_
         .iter()
         .find(|call| call.creating)
         .expect("the write");
-    assert!(checks[0].finished < updated.wall, "checked before it wrote");
+    assert!(
+        updated
+            .screened
+            .is_some_and(|finished| finished > checks[0].position),
+        "checked before it wrote"
+    );
     for step in &screened[1..4] {
         assert!(step.screening.is_empty(), "{} screened nothing", step.what);
     }

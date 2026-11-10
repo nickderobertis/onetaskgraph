@@ -416,6 +416,7 @@ impl Plan {
             let mut home = OnevcsHome::new(&sandbox);
             home.public(owner, name);
             let record = home.recorded(&sandbox);
+            board.count_screening(record.counter());
             board_source["config"]["repository"] = json!(format!("{owner}/{name}"));
             github.use_repository(&format!("{owner}/{name}"));
             (home, record)
@@ -1454,7 +1455,9 @@ pub(super) fn screened_once_before_writing(what: &str, scenario: &Scenario, titl
                 .first()
                 .unwrap_or_else(|| panic!("{what}'s {} copy wrote without a check", phase.kind));
             assert!(
-                check.finished < mutation.wall,
+                mutation
+                    .screened
+                    .is_some_and(|finished| finished > check.position),
                 "{what}'s {} copy wrote {} before its check finished",
                 phase.kind,
                 operation(mutation)

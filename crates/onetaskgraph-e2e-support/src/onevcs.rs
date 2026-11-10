@@ -313,8 +313,14 @@ pub struct BoundaryCall {
     pub input: Value,
     /// What it exited with.
     pub exit: Option<i64>,
-    /// The wall-clock time it finished, since the Unix epoch.
+    /// The wall-clock time it finished, since the Unix epoch. A host's clock can be stepped
+    /// back while a journey runs, so this orders nothing against a reading of another process;
+    /// [`Self::position`] does.
     pub finished: std::time::Duration,
+    /// Where it stands in the record, from 0: the recorder appends it before the command it
+    /// wraps exits, and the store waits for that exit, so anything a
+    /// [`BoundaryRecord::counter`] counted past this position happened after it finished.
+    pub position: usize,
 }
 
 const RECORDER: &str = r#"import json, subprocess, sys, time
@@ -445,6 +451,18 @@ impl BoundaryRecord {
         &self.policy
     }
 
+    /// How many boundary commands have finished, read afresh at each call: a witness another
+    /// process — a loopback answering the store — holds to learn which commands finished
+    /// before something it saw, an order no clock reading of two processes can give.
+    pub fn counter(&self) -> impl Fn() -> usize + Send + Sync + 'static {
+        let log = self.log.clone();
+        move || {
+            std::fs::read_to_string(&log)
+                .map(|text| text.lines().count())
+                .unwrap_or(0)
+        }
+    }
+
     /// Every boundary command run so far, in order.
     #[must_use]
     pub fn calls(&self) -> Vec<BoundaryCall> {
@@ -452,7 +470,8 @@ impl BoundaryRecord {
             return Vec::new();
         };
         text.lines()
-            .map(|line| {
+            .enumerate()
+            .map(|(position, line)| {
                 let call: Value = serde_json::from_str(line).expect("a recorded call");
                 BoundaryCall {
                     command: match call["command"].as_str() {
@@ -467,6 +486,7 @@ impl BoundaryRecord {
                     finished: std::time::Duration::from_secs_f64(
                         call["finished"].as_f64().expect("when it finished"),
                     ),
+                    position,
                 }
             })
             .collect()

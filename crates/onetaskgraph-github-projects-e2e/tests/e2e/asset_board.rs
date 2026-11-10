@@ -256,10 +256,11 @@ pub(super) struct Call {
     pub kind: Kind,
     /// The virtual time the board released its answer, after holding it for its latency.
     pub answered: Duration,
-    /// The wall-clock time the request arrived, since the Unix epoch: what orders it against
-    /// what happened outside the board — a boundary command the binary ran — which the
-    /// simulated clock, standing still while the binary works, cannot.
-    pub wall: Duration,
+    /// How many boundary commands its manager's store had finished when the request arrived,
+    /// when [`Board::count_screening`] gave this board a counter: what orders it against a
+    /// boundary command the binary ran, which neither the simulated clock, standing still while
+    /// the binary works, nor the wall clock, which a host may step back, can.
+    pub screened: Option<usize>,
 }
 
 #[derive(Default)]
@@ -289,10 +290,13 @@ struct State {
     /// Told the virtual time each answer was released at, once it is: one per board behind a
     /// host several share.
     answered: Vec<Arc<dyn Fn(Duration) + Send + Sync>>,
+    /// Each manager's count of its store's finished boundary commands, by client.
+    screening: BTreeMap<usize, Arc<dyn Fn() -> usize + Send + Sync>>,
 }
 
 pub(super) struct Board {
     pub endpoint: String,
+    client: usize,
     state: Arc<Mutex<State>>,
     stop: Arc<AtomicBool>,
 }
@@ -348,6 +352,8 @@ impl Board {
                         .trim_start()
                         .starts_with("mutation"));
             let at = clock.now();
+            let counter = held.lock().unwrap().screening.get(&client).cloned();
+            let screened = counter.map(|count| count());
             let mut answer = None;
             let mut disconnect = false;
             let mut truncate = false;
@@ -517,9 +523,7 @@ impl Board {
                         creating,
                         kind,
                         answered: at,
-                        wall: std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default(),
+                        screened,
                     });
                 }
             }
@@ -592,6 +596,7 @@ impl Board {
         });
         Self {
             endpoint,
+            client,
             state,
             stop,
         }
@@ -645,6 +650,15 @@ impl Board {
     /// placing created issues some time after their create was answered keeps that time by.
     pub fn on_answered(&self, answered: impl Fn(Duration) + Send + Sync + 'static) {
         self.state.lock().unwrap().answered.push(Arc::new(answered));
+    }
+    /// Count, as each of this board's requests arrives, how many boundary commands its
+    /// manager's store has finished: [`Call::screened`].
+    pub fn count_screening(&self, counter: impl Fn() -> usize + Send + Sync + 'static) {
+        self.state
+            .lock()
+            .unwrap()
+            .screening
+            .insert(self.client, Arc::new(counter));
     }
     /// Hold every answer for the spike's measured latency of its kind,
     /// [`Kind::measured_millis`], instead of 200 ms, or 800 ms for an upload.
