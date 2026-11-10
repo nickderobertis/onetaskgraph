@@ -1083,6 +1083,7 @@ Which guarantee a write gets is its source's:
 | `github-projects` | **Checked immediately before the write.** GitHub takes no conditional write, so the task is read just before the first mutation; a change landing between that read and the mutation is GitHub's residual race, the time one request takes. A token is given only once an item has settled (see "A local cache of a remote source"), so a task changed within the last minute reads with no version and every held write of it is refused until it settles. |
 | `linear` | **Checked immediately before the write.** Linear takes no conditional write either, so the race is the same one request wide. A Linear task's version is the token its `updatedAt` and facets give, which a comment does not move. |
 | a stdio plugin | **Checked immediately before the write**, as for a hosted backend. |
+<!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 
 ### Reading the comments made since a watermark
 
@@ -1112,6 +1113,7 @@ this host's at the read's start, set back by the source's consistency window —
 a GitHub board, whose issue search lags the comments it indexes, one for Linear, none for a
 folder or an in-memory source. So a comment the source had not yet shown is read on the next
 pass, and a comment read twice carries the same `id` and `version`: deduplicate by the two.
+<!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 
 ### When an issue closes: reconciling and completing its card
 
