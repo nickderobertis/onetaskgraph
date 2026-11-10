@@ -398,3 +398,44 @@ fn an_updates_dry_run_sizes_the_body_the_board_then_stores_its_recorded_image_re
         "the update's dry run sized what the board stores"
     );
 }
+
+/// Rewrite the plan's project with `content`, its front matter kept.
+fn rewrite_project(plan: &Plan, content: &str) {
+    let path = plan.root.join("projects/P.md");
+    let held = std::fs::read_to_string(&path).unwrap();
+    let (front, _) = held.split_once("\n---\n").unwrap();
+    std::fs::write(&path, format!("{front}\n---\n{content}")).unwrap();
+}
+
+#[test]
+fn a_project_too_large_is_refused_and_one_that_fits_is_sized_as_the_board_stores_it() {
+    let plan = Plan::new(0, Vec::new());
+    rewrite_project(&plan, &prose(72_000));
+    let arguments = ["project", "copy", "notes:P", "--no-tasks", "--to", "board"];
+    let report = dry_run(&plan, &arguments);
+    let size = reported_oversize(&report, "notes:P");
+    refused(&plan, &arguments, &[("notes:P", size)]);
+
+    // Within the limit, the dry run sizes the issue body the board then stores for it.
+    rewrite_project(&plan, &plan.generated.project);
+    let mut dry = arguments.to_vec();
+    dry.extend(["--dry-run", "--json"]);
+    let report = success(&plan.run(&dry));
+    let item = outcome(&report, "notes:P");
+    assert_eq!(item["action"], json!("created"), "{item}");
+    let sized = item["body_size"].as_u64().unwrap();
+    let mut write = arguments.to_vec();
+    write.push("--json");
+    let landed = success(&plan.run(&write));
+    let id = outcome(&landed, "notes:P")["destination"]
+        .as_str()
+        .unwrap()
+        .strip_prefix("board:")
+        .unwrap()
+        .to_owned();
+    let stored = plan.github.body(&id).as_str().unwrap().chars().count() as u64;
+    assert_eq!(
+        sized, stored,
+        "the dry run sized the body the board then stored"
+    );
+}
