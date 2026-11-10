@@ -2318,7 +2318,7 @@ impl Engine {
     /// A dry run writes nothing, and a copy expecting a version of its target records each write
     /// whole for the store's cache, so neither holds anything back.
     fn hold_back(&self, request: &CopyRequest) -> Vec<&ResolvedSource> {
-        if request.dry_run || self.expects_copy() {
+        if request.dry_run || self.expects_copy() || self.holds_copy() {
             return Vec::new();
         }
         let mut holding: Vec<&ResolvedSource> = Vec::new();
@@ -2342,7 +2342,7 @@ impl Engine {
         request: &CopyRequest,
         journal: &mut Journal,
     ) -> Result<(), EngineError> {
-        if request.dry_run || self.expects_copy() {
+        if request.dry_run || self.expects_copy() || self.holds_copy() {
             return Ok(());
         }
         let mut finished: Vec<SourceName> = Vec::new();
@@ -2990,6 +2990,13 @@ impl Engine {
                 Undo::Allocated { home, .. } => home.clone(),
             };
             if entry.kind() == Level::Project && kept.contains(&item) {
+                continue;
+            }
+            // A write held to a version that its check refused sent nothing, so there is
+            // nothing of it to put back — and putting it back would itself move the version.
+            if matches!(entry, Undo::Updated { .. })
+                && self.hold_refused(&item.source, &item.native)
+            {
                 continue;
             }
             let outcome = match self.writable(entry.at()) {
@@ -5545,6 +5552,7 @@ impl Engine {
         // copy that can skip — `--comments`, or by query — leaves for the next one.
         let created = if request.dry_run
             || self.expects_copy()
+            || self.holds_copy()
             || Stamping::of(request, false) == Stamping::Always
         {
             BTreeMap::new()
@@ -6580,7 +6588,7 @@ impl Engine {
     /// detail read that carries them, and a source with one counterpart to read reads it by
     /// itself — so none of those is read ahead.
     async fn read_ahead(&self, request: &CopyRequest, reads: &[Read], running: &mut Running) {
-        if request.create || self.expects_copy() {
+        if request.create || self.expects_copy() || self.holds_copy() {
             return;
         }
         let reachable = self.routes.reachable(&request.destination);
@@ -9074,6 +9082,7 @@ impl Engine {
         let held = match kind {
             Level::Task if comments && destination.source().capabilities().comments.is_native() => {
                 self.expect_copied(destination.name(), id);
+                self.hold_copied(destination.name(), id);
                 let mut whole = None;
                 for _ in 0..2 {
                     let Some(read) = snapshot::first(destination, id)
@@ -9111,6 +9120,7 @@ impl Engine {
             }
             Level::Task => {
                 self.expect_copied(destination.name(), id);
+                self.hold_copied(destination.name(), id);
                 destination
                     .source()
                     .get_task(id)

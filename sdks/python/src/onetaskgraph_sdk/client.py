@@ -15,7 +15,7 @@ from ._generated import GeneratedClient
 from ._generated.client import POSITIONALS
 
 if TYPE_CHECKING:
-    from ._generated.failure_document import Failure
+    from ._generated.failure_document import Failure, FailureDocument
 
 
 REPORTING_EXITS: dict[tuple[str, ...], frozenset[int]] = {
@@ -27,16 +27,128 @@ REPORTING_EXITS: dict[tuple[str, ...], frozenset[int]] = {
 class OnetaskgraphError(RuntimeError):
     """The command could not produce a response."""
 
-    def __init__(self, message: str, *, exit_code: int, failure: Failure | None = None) -> None:
-        """Remember the diagnostic, the stable process status and the binary's failure.
+    def __init__(
+        self,
+        message: str,
+        *,
+        exit_code: int,
+        failure: Failure | None = None,
+        document: FailureDocument | None = None,
+        answer: object = None,
+    ) -> None:
+        """Remember the diagnostic, the stable process status and the binary's whole answer.
 
-        ``failure`` is the failure document the binary wrote under ``--json`` when it refused
-        the command, so a caller branches on its ``kind`` rather than on the message's
-        wording; ``None`` when the process wrote none.
+        ``failure`` is the failure the binary wrote under ``--json`` when it refused the
+        command, so a caller branches on its ``kind`` rather than on the message's wording;
+        ``document`` is the whole failure document it is the member of — what the item held,
+        what an expected write came to — and ``answer`` that document as the JSON it was
+        written, so nothing the store answered is discarded. Each is ``None`` when the process
+        wrote none.
         """
         super().__init__(message)
         self.exit_code = exit_code
-        self.failure = failure
+        self.failure = failure if failure is not None else getattr(document, "failure", None)
+        self.document = document
+        self.answer = answer
+
+    @property
+    def kind(self) -> str | None:
+        """The failure's ``kind`` — ``version-moved``, ``no-such-item`` and so on."""
+        return None if self.failure is None else self.failure.kind
+
+
+class VersionMovedError(OnetaskgraphError):
+    """A write held to a version (``if_version``) found the item at another, and wrote nothing."""
+
+    @property
+    def current_version(self) -> str | None:
+        """The version the item is at now, as the store's refusal named it."""
+        held = None if self.document is None else self.document.held
+        return None if held is None else held.version
+
+
+class PartialWriteError(OnetaskgraphError):
+    """A write that landed in part (exit 4), raised only by a client opted in to it.
+
+    ``result`` is the command's answer parsed into its typed model — for a copy, the
+    ``CopyReport`` with every item's outcome, the ones that landed and the ones that failed —
+    and ``answer`` the same answer as the JSON the store wrote. A client constructed without
+    ``raise_on_partial`` returns ``result`` instead, as it always has. Which commands those
+    are is `PARTIAL_WRITE_COMMANDS`.
+    """
+
+    def __init__(self, message: str, *, exit_code: int, result: object, answer: object) -> None:
+        """Keep the typed answer beside its JSON."""
+        super().__init__(message, exit_code=exit_code, answer=answer)
+        self.result = result
+
+
+# Every command of the binary, by whether its exit 4 means a write landed in part — the ones
+# `raise_on_partial` raises for — or not: a read whose exit 4 is a partial answer, or a command
+# that writes nothing of anybody's work. Both sets are written out whole, and
+# tests/test_followup.py reconciles their union against the commands the binary's own schema
+# bundle lists, so a command added there is refused until it is put in one of them.
+PARTIAL_WRITE_COMMANDS: frozenset[tuple[str, ...]] = frozenset(
+    {
+        ("task", "copy"),
+        ("project", "copy"),
+        ("document", "copy"),
+        ("task", "create"),
+        ("project", "create"),
+        ("document", "create"),
+        ("task", "render"),
+        ("project", "render"),
+        ("document", "render"),
+        ("task", "update"),
+        ("task", "status", "set"),
+        ("project", "status", "set"),
+        ("task", "status", "reconcile"),
+        ("task", "status", "complete"),
+        ("task", "priority", "set"),
+        ("task", "content", "set"),
+        ("task", "metadata", "set"),
+        ("project", "metadata", "set"),
+        ("document", "metadata", "set"),
+        ("task", "comment", "add"),
+        ("task", "comment", "edit"),
+        ("task", "comment", "delete"),
+        ("task", "project-human"),
+        ("sources", "fields"),
+        ("sources", "status-options"),
+        ("sources", "sanitize"),
+    }
+)
+NOT_PARTIAL_WRITE_COMMANDS: frozenset[tuple[str, ...]] = frozenset(
+    {
+        ("schema",),
+        ("config", "show"),
+        ("sources", "list"),
+        ("sources", "route"),
+        ("task", "list"),
+        ("task", "show"),
+        ("task", "show-many"),
+        ("task", "deps"),
+        ("task", "locate"),
+        ("task", "comment", "list"),
+        ("task", "comments"),
+        ("task", "answers"),
+        ("task", "assets"),
+        ("project", "list"),
+        ("project", "show"),
+        ("project", "deps"),
+        ("project", "graph"),
+        ("project", "answers"),
+        ("document", "list"),
+        ("document", "show"),
+        ("document", "answers"),
+        ("label", "list"),
+        ("search",),
+        # Empties this host's cache of a source, never anything of the source's own work.
+        ("cache", "clear"),
+        ("template", "variables"),
+        ("template", "render"),
+    }
+)
 
 
 class Client(GeneratedClient):
@@ -48,9 +160,16 @@ class Client(GeneratedClient):
         *,
         cwd: str | Path | None = None,
         environment: Mapping[str, str] | None = None,
+        raise_on_partial: bool = False,
     ) -> None:
-        """Resolve the binary and establish the invocation directory."""
+        """Resolve the binary and establish the invocation directory.
+
+        With ``raise_on_partial``, a write that lands in part (exit 4) raises
+        `PartialWriteError` carrying its typed answer and its JSON; without it, the default,
+        that answer is returned, as it always has been.
+        """
         self.binary = _resolve_binary(binary, environment)
+        self.raise_on_partial = raise_on_partial
         self.cwd = Path(cwd) if cwd is not None else None
         self.environment = dict(environment if environment is not None else os.environ)
         self.environment.pop("ONETASKGRAPH_SDK_BINARY", None)
@@ -124,19 +243,38 @@ class Client(GeneratedClient):
             except ValidationError:
                 pass
         if completed.returncode not in {0, 4}:
-            raise OnetaskgraphError(
+            document = _failure_document_of(completed.stdout)
+            error = (
+                VersionMovedError
+                if document is not None and document.failure.kind == "version-moved"
+                else OnetaskgraphError
+            )
+            raise error(
                 completed.stderr.strip(),
                 exit_code=completed.returncode,
-                failure=_failure_of(completed.stdout),
+                document=document,
+                answer=_json_of(completed.stdout),
             )
         try:
             # TypeAdapter validates `model`; its dynamic constructor cannot preserve T.
-            return cast(T, TypeAdapter(model).validate_json(completed.stdout))
+            result = cast(T, TypeAdapter(model).validate_json(completed.stdout))
         except ValidationError as error:
             raise OnetaskgraphError(
                 f"binary returned a response outside its emitted schema: {error}",
                 exit_code=completed.returncode,
             ) from error
+        if (
+            completed.returncode == 4
+            and self.raise_on_partial
+            and tuple(command) in PARTIAL_WRITE_COMMANDS
+        ):
+            raise PartialWriteError(
+                completed.stderr.strip() or "the write landed in part",
+                exit_code=completed.returncode,
+                result=result,
+                answer=_json_of(completed.stdout),
+            )
+        return result
 
     async def _invoke_process(
         self, arguments: list[str], stdin: str | None = None
@@ -166,13 +304,23 @@ class Client(GeneratedClient):
         )
 
 
-def _failure_of(stdout: str) -> Failure | None:
-    """The failure a refused command wrote, when it wrote a document its schema describes."""
+def _failure_document_of(stdout: str) -> FailureDocument | None:
+    """The failure document a refused command wrote, when its schema describes what it wrote."""
     from ._generated.failure_document import FailureDocument
 
     try:
-        return FailureDocument.model_validate_json(stdout).failure
+        return FailureDocument.model_validate_json(stdout)
     except ValidationError:
+        return None
+
+
+def _json_of(stdout: str) -> object:
+    """What a refused command wrote, as JSON, or ``None`` when it wrote no JSON."""
+    import json
+
+    try:
+        return json.loads(stdout)
+    except ValueError:
         return None
 
 

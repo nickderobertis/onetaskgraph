@@ -7,6 +7,7 @@ import type {
   CacheCleared,
   Classification,
   CommentList,
+  CommentsSince,
   CommentWritten,
   CopyReport,
   DeletedComment,
@@ -94,6 +95,9 @@ export type WriteOptions = {
 // task's ids and current values from the source's local cache instead of reading it. Not a
 // precondition — see `docs/plugin-protocol.md`.
 export type ExpectOptions = { expect?: string };
+// The version of the task a write is held to: at any other it is refused as `version-moved`,
+// writing nothing.
+export type HeldOptions = { ifVersion?: string };
 /** Status ownership on copy updates. Creates always carry the source status. */
 export const statusPolicies = ["source", "preserve-destination"] as const;
 export type StatusPolicy = (typeof statusPolicies)[number];
@@ -141,7 +145,8 @@ export type TaskCopyOptions = StatusCopyOptions &
   CopyOptions &
   CopyQueryOptions &
   CopyConditionOptions &
-  ExpectOptions & { create?: boolean; targetTask?: string };
+  ExpectOptions &
+  HeldOptions & { create?: boolean; targetTask?: string };
 // A comment's body, given as text the client writes to the binary's standard input or as a
 // file the binary reads byte for byte — never as a word of the command line.
 export type CommentBodyOptions = ({ body: string } | { bodyFile: string }) &
@@ -201,7 +206,8 @@ export type ProjectCreateOptions = CreateOptions & { status?: StatusCategory };
 // source that keeps one. A list given replaces that list, `[]` included — which is how a list is
 // cleared — and one left out is not named.
 export type TaskUpdateOptions = WriteOptions &
-  ExpectOptions & {
+  ExpectOptions &
+  HeldOptions & {
     title?: string;
     bodyFile?: string;
     status?: StatusCategory;
@@ -211,6 +217,8 @@ export type TaskUpdateOptions = WriteOptions &
     removeMetadata?: string[];
     delivers?: string[];
     dependsOn?: string[];
+    // The repository origins the task names, replacing its list; `[]` clears it.
+    repositories?: string[];
   };
 // A regenerate: the template to use in place of the recorded one, answers laid over the stored
 // base, `unset` names whose answer is dropped, and `dryRun` to write nothing.
@@ -284,6 +292,8 @@ export const commandResponseRoots: Readonly<Record<string, keyof typeof runtimeS
   "task comment list": "CommentList",
   "task comment edit": "CommentWritten",
   "task comment delete": "DeletedComment",
+  // Every comment made or edited since an instant, and the watermark to read from next.
+  "task comments": "CommentsSince",
   "task status set": "TaskStatusSet",
   // Every card of one source brought in line with its issue's closure, or none for a source
   // whose status is its closure.
@@ -556,6 +566,9 @@ export const taskUpdateOptionFlags: Readonly<Record<keyof TaskUpdateOptions, str
   reject: "--reject",
   sanitizeDryRun: "--sanitize-dry-run",
   expect: "--expect",
+  ifVersion: "--if-version",
+  // `[]` is sent as `--no-repositories`, which is how the list is cleared.
+  repositories: "--repository",
 };
 
 // A string option, refused unless it is one: anything else would reach the binary as its string
@@ -586,13 +599,14 @@ export function taskUpdateFlags(options: unknown): string[] {
     );
   }
   const args: string[] = [];
-  const scalars: readonly ("title" | "status" | "statusName" | "priority" | "expect")[] = [
-    "title",
-    "status",
-    "statusName",
-    "priority",
-    "expect",
-  ];
+  const scalars: readonly (
+    | "title"
+    | "status"
+    | "statusName"
+    | "priority"
+    | "expect"
+    | "ifVersion"
+  )[] = ["title", "status", "statusName", "priority", "expect", "ifVersion"];
   for (const name of scalars) {
     if (options[name] !== undefined) {
       args.push(taskUpdateOptionFlags[name], stringOption(method, name, options[name]));
@@ -621,6 +635,11 @@ export function taskUpdateFlags(options: unknown): string[] {
     const ids = stringList(method, name, options[name]);
     if (ids.length === 0) args.push(flag.replace("--", "--no-"));
     for (const id of ids) args.push(flag, id);
+  }
+  if (options.repositories !== undefined) {
+    const origins = stringList(method, "repositories", options.repositories);
+    if (origins.length === 0) args.push("--no-repositories");
+    for (const origin of origins) args.push("--repository", origin);
   }
   args.push(...writePolicyFlags(method, options));
   return args;
@@ -907,6 +926,50 @@ function pinFlags(method: string, pin: unknown): string[] {
   return ["--pin", stringOption(method, "pin", pin)];
 }
 
+// What `taskComments` narrows by: the narrowing `task list` takes.
+export type TaskCommentsOptions = {
+  // `<KEY>[/<SEGMENT>...]=<VALUE>`, as `taskList` takes it.
+  metadata?: string[];
+  statuses?: StatusCategory[];
+  // Qualified ids, each of the source listed.
+  items?: string[];
+};
+
+// Every option `TaskCommentsOptions` has, and the one flag each is sent as. Exported so
+// tests/client.test.ts can reconcile it against the flags `task comments --help` reports.
+export const taskCommentsOptionFlags: Readonly<Record<keyof TaskCommentsOptions, string>> = {
+  metadata: "--metadata",
+  statuses: "--status",
+  items: "--item",
+};
+
+// The flags `taskComments` sends, beside the source: `--since` and each narrowing.
+export function taskCommentsFlags(since: string, options: unknown): string[] {
+  const method = "taskComments";
+  if (!isPlainObject(options)) {
+    throw new TypeError(
+      `${method}: options is not an object; next: pass the narrowing as a plain object`,
+    );
+  }
+  // Its own members only, each one it carries: a misspelled narrowing would otherwise be
+  // dropped in silence and widen the listing past what the caller asked for.
+  const unknown = Object.keys(options).find((key) => !Object.hasOwn(taskCommentsOptionFlags, key));
+  if (unknown !== undefined) {
+    throw new TypeError(
+      `${method}: options has the member ${unknown}, which narrows nothing; next: name only ` +
+        Object.keys(taskCommentsOptionFlags).join(", "),
+    );
+  }
+  const args = ["--since", stringOption(method, "since", since)];
+  const names: readonly (keyof TaskCommentsOptions)[] = ["metadata", "statuses", "items"];
+  for (const name of names) {
+    for (const value of stringList(method, name, options[name])) {
+      args.push(taskCommentsOptionFlags[name], value);
+    }
+  }
+  return args;
+}
+
 // The flags `taskCopy` sends for `options`, beside the ids and `--to`: exported so the tests can
 // reconcile them against the binary's own `task copy --help`.
 export function taskCopyFlags(options: TaskCopyOptions): string[] {
@@ -942,6 +1005,9 @@ export function taskCopyFlags(options: TaskCopyOptions): string[] {
       ? []
       : ["--target-task", stringOption("taskCopy", "targetTask", options.targetTask)]),
     ...expectFlags("taskCopy", options),
+    ...(options.ifVersion === undefined
+      ? []
+      : ["--if-version", stringOption("taskCopy", "ifVersion", options.ifVersion)]),
   ];
 }
 
@@ -1189,6 +1255,15 @@ export class OnetaskgraphClient {
     args.push(...writePolicyFlags("taskCommentAdd", options));
     args.push(...expectFlags("taskCommentAdd", options));
     return this.run("task comment add", [id, ...args], input, options.sanitizeDryRun === true);
+  }
+  // Every comment `source`'s tasks hold that was made or edited at or after `since`, narrowed
+  // as `taskList` narrows, with the watermark the next read starts from.
+  taskComments(
+    source: string,
+    since: string,
+    options: TaskCommentsOptions = {},
+  ): Promise<CommentsSince> {
+    return this.run("task comments", [source, ...taskCommentsFlags(since, options)]);
   }
   taskCommentList(id: string, options: { pin?: string } = {}): Promise<CommentList> {
     return this.run("task comment list", [id, ...pinFlags("taskCommentList", options.pin)]);

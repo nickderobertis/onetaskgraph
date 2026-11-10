@@ -168,6 +168,35 @@ impl CommentOrigin {
     }
 }
 
+/// Who wrote a comment, as the source that holds it can tell: a person, a bot — an
+/// integration, an app, an automation acting on its own — or neither, when the source cannot
+/// say. Decided by the plugin, through
+/// [`TaskSource::comment_author_kind`](crate::TaskSource::comment_author_kind).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum AuthorKind {
+    /// A person.
+    Person,
+    /// A bot, an integration or an app.
+    Bot,
+    /// The source cannot say — no author at all, a deleted account.
+    Unknown,
+}
+
+impl AuthorKind {
+    /// The kind an author spelled `author` is by the convention every source shares unless it
+    /// knows better: a name ending `[bot]` — how GitHub spells an app, and how a comment copied
+    /// from one keeps it — is a bot, any other name a person, and no name unknown.
+    #[must_use]
+    pub fn of_name(author: Option<&str>) -> Self {
+        match author {
+            Some(name) if name.ends_with("[bot]") => Self::Bot,
+            Some(_) => Self::Person,
+            None => Self::Unknown,
+        }
+    }
+}
+
 impl Comment {
     /// This comment with a marker [`CommentOrigin::mark`] wrote taken out of its body and
     /// reported as its [`origin`](Self::origin); unchanged when it carries an origin already

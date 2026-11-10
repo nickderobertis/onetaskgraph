@@ -1,5 +1,10 @@
 //! A stateless onetaskgraph source over one GitHub Projects v2 board.
 //!
+//! **A write held to a version** (`--if-version`) is checked immediately before its first
+//! mutation and not as one step with it: GitHub takes no conditional write, so the engine reads
+//! the task through this source just before writing it, and a change landing between that read
+//! and the mutation — the time one request takes — is GitHub's residual race.
+//!
 //! **A board is a container of projects, not a project.** Its own `title`,
 //! `shortDescription` and `readme` are never read as an item's fields and are never
 //! written: nothing in this source can rename the board a user configured.
@@ -1120,10 +1125,11 @@ pub mod graphql {
     /// A macro for the reason [`board_issue!`] is one: a comment listed, a comment just added
     /// and a comment just edited are handed to one mapper, so they are selected by one
     /// spelling. `author` is `Actor`, which GitHub answers `null` for an account that no
-    /// longer exists, and `login` is the one member every kind of actor carries.
+    /// longer exists, and `login` is the one member every kind of actor carries; `__typename`
+    /// says whether it is a `Bot`, whose `login` GitHub's own pages spell with `[bot]` after it.
     macro_rules! issue_comment {
         () => {
-            "id author{login} createdAt updatedAt body url"
+            "id author{__typename login} createdAt updatedAt body url"
         };
     }
 
@@ -3825,6 +3831,11 @@ impl From<RepositoryTarget> for String {
     }
 }
 
+/// How long GitHub's issue search may go on missing a comment after it was made or edited,
+/// which a read of the comments made since an instant sets its watermark back by: four times the
+/// thirty seconds the credentialed lane has watched it lag.
+pub const COMMENT_SEARCH_LAG: std::time::Duration = std::time::Duration::from_secs(120);
+
 /// A source which reads GitHub afresh for every operation.
 pub struct GitHubProjectsSource {
     /// This source's configured name, used both to tell a far end naming this source
@@ -3896,6 +3907,9 @@ pub struct GitHubProjectsSource {
     /// [`GitHubProjectsSource::paced`] for why completion rather than release is what it is
     /// measured from.
     last_mutation: Mutex<Option<Duration>>,
+    /// The `Date` GitHub stated on the last answer this source read: its own time, which the
+    /// watermark of a comment read is set back from. See [`TaskSource::served_at`].
+    last_served: Mutex<Option<DateTime<Utc>>>,
     /// GitHub's secondary windows as this source has charged them; see the `pacing` module.
     windows: Mutex<pacing::Windows>,
     /// The tasks a project holds, as a copy's batched read of the project and every one of them
@@ -5190,6 +5204,7 @@ impl GitHubProjectsSource {
             commented: Mutex::new(Vec::new()),
             pacing: Pacing::resolve(config.pacing, name)?,
             last_mutation: Mutex::new(None),
+            last_served: Mutex::new(None),
             windows: Mutex::new(pacing::Windows::default()),
             task_children: Mutex::new(BTreeMap::new()),
             written: Mutex::new(BTreeMap::new()),
@@ -5647,6 +5662,10 @@ impl GitHubProjectsSource {
         };
         let mut data = answered.map_err(Attempt::Failed)?;
         if let Some(served) = served {
+            *self
+                .last_served
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(served);
             stamp_served(&mut data, &served.to_rfc3339());
         }
         Ok(data)
@@ -8653,6 +8672,7 @@ impl GitHubProjectsSource {
             || !update.metadata_set.is_empty()
             || !update.metadata_remove.is_empty()
             || update.delivers.is_some()
+            || update.repositories.is_some()
             || edges.is_some())
             && self.is_unread(id)
         {
@@ -8693,6 +8713,29 @@ impl GitHubProjectsSource {
         }
         if let Some(delivers) = &update.delivers {
             set_task_list(&mut slot, TaskRef::DELIVERS_KEY, delivers);
+        }
+        // The list a whole write records, by the same rule: none when it is exactly the issue's
+        // own repository, or empty with no issue repository to derive, and otherwise the list.
+        if let Some(repositories) = &update.repositories {
+            let derivable = item
+                .own_repository
+                .as_ref()
+                .map_or(repositories.is_empty(), |own| {
+                    repositories.as_slice() == std::slice::from_ref(own)
+                });
+            if derivable {
+                slot.remove(Repository::METADATA_KEY);
+            } else {
+                slot.insert(
+                    Repository::METADATA_KEY.to_owned(),
+                    Value::Array(
+                        repositories
+                            .iter()
+                            .map(|repository| Value::String(repository.as_str().to_owned()))
+                            .collect(),
+                    ),
+                );
+            }
         }
         if let Some((_, recorded)) = &edges {
             record_edges(&mut slot, recorded);
@@ -8826,6 +8869,9 @@ impl GitHubProjectsSource {
         item.slot = slot;
         if let Some(delivers) = &update.delivers {
             item.delivers.clone_from(delivers);
+        }
+        if let Some(repositories) = &update.repositories {
+            item.repositories.clone_from(repositories);
         }
         if let Some(moving) = status_move {
             item.closed = matches!(moving.target, StatusTarget::Terminal(_, _))
@@ -13402,6 +13448,20 @@ impl TaskSource for GitHubProjectsSource {
     fn kind(&self) -> &'static str {
         KIND
     }
+    /// GitHub's issue search, which narrows a read of the comments made since an instant, is
+    /// an index behind the writes it indexes — the credentialed lane has watched it miss a newly
+    /// commented issue for thirty seconds — so a watermark is set back by
+    /// [`COMMENT_SEARCH_LAG`], four times that.
+    fn comment_consistency_window(&self) -> std::time::Duration {
+        COMMENT_SEARCH_LAG
+    }
+    /// The `Date` of the last answer GitHub gave this source.
+    fn served_at(&self) -> Option<DateTime<Utc>> {
+        *self
+            .last_served
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
     fn attach_body_markup(&self, markup: onetaskgraph_plugin_api::SharedBodyMarkup) {
         let _ = self.body_markup.set(markup);
     }
@@ -15064,11 +15124,20 @@ type ProjectChildren = BTreeMap<NativeId, (NativeId, Vec<Resolved>)>;
 /// — GitHub sets every comment's author and times itself, so there is nowhere else to keep it —
 /// and is read back with the marker taken out and reported as its origin.
 fn comment_from(value: &Value) -> Result<Comment, SourceError> {
+    let actor = value.get("author").unwrap_or(&Value::Null);
+    // A bot's login is spelled as GitHub's own pages spell it, `<login>[bot]`, so a reader —
+    // and every copy of the comment — can tell it from a person's.
+    let bot = actor.get("__typename").and_then(Value::as_str) == Some("Bot");
     Ok(Comment {
         origin: None,
         id: NativeId(required_str(value, "id")?.to_owned()),
-        author: optional_str(value.get("author").unwrap_or(&Value::Null), "login")?
-            .map(str::to_owned),
+        author: optional_str(actor, "login")?.map(|login| {
+            if bot && !login.ends_with("[bot]") {
+                format!("{login}[bot]")
+            } else {
+                login.to_owned()
+            }
+        }),
         created_at: optional_time(value, "createdAt")?,
         updated_at: optional_time(value, "updatedAt")?,
         body: required_str(value, "body")?.to_owned(),

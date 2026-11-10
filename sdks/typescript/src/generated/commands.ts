@@ -18,6 +18,7 @@ export const binaryCommands = [
   "task comment list",
   "task comment edit",
   "task comment delete",
+  "task comments",
   "task status set",
   "task status reconcile",
   "task status complete",

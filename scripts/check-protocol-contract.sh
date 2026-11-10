@@ -302,6 +302,22 @@ NOT_METHODS = {
         "not carried: the paragraph after §4's method table says a source over this protocol "
         "ignores it, so the engine writes no anchor markup into its bodies"
     ),
+    "holds_versions": (
+        "not carried: the paragraph after §4's method table says a source over this protocol "
+        "answers false, so the engine reads a task before a write held to its version"
+    ),
+    "comment_author_kind": (
+        "not carried: the paragraph after §4's method table says a source over this protocol "
+        "is answered by the name convention the trait's default applies"
+    ),
+    "comment_consistency_window": (
+        "not carried: the paragraph after §4's method table says a source over this protocol "
+        "answers no window, as the trait's default does"
+    ),
+    "served_at": (
+        "not carried: the paragraph after §4's method table says a source over this protocol "
+        "states no time, so a watermark is set back from the engine's own clock"
+    ),
     "version_coverage": CACHE_ONLY_REASON,
     "project_version_coverage": CACHE_ONLY_REASON,
     "document_version_coverage": CACHE_ONLY_REASON,

@@ -119,6 +119,11 @@ pub struct TaskDetail {
     /// naming no configured source.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache: Option<CacheUse>,
+    /// The task's forward dependency edges, exactly as `task deps` answers them — present only
+    /// when the read asked for them (`task show --with-deps`), and absent for a task that was not
+    /// found, or whose edges could not be read, the failure then in the response's `errors`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depends_on: Option<Vec<super::QualifiedEdge>>,
 }
 
 /// One document as `document show` reports it: the response every show verb answers with,
@@ -211,6 +216,7 @@ impl Engine {
                         comments: None,
                         assets: None,
                         cache: None,
+                        depends_on: None,
                     })
                     .collect(),
             };
@@ -257,6 +263,7 @@ impl Engine {
                     comments: None,
                     assets: None,
                     cache: None,
+                    depends_on: None,
                 })
                 .collect();
         };
@@ -336,6 +343,7 @@ impl Engine {
                 comments,
                 assets,
                 cache: self.cache_use(id),
+                depends_on: None,
             });
         }
         details
@@ -390,6 +398,7 @@ impl Engine {
             comments: None,
             assets,
             cache: self.cache_use(id),
+            depends_on: None,
         })
     }
 
@@ -609,7 +618,7 @@ impl Engine {
     }
 
     /// The built source called `name`, when its tasks have comments.
-    fn commented(&self, name: &SourceName) -> Result<&ResolvedSource, EngineError> {
+    pub(crate) fn commented(&self, name: &SourceName) -> Result<&ResolvedSource, EngineError> {
         let name = self.known(name)?;
         match self.configured(&name) {
             Some(ConfiguredSource::Ready(source)) => {

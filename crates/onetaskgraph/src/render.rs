@@ -422,10 +422,41 @@ pub fn task_updated(updated: &TaskUpdated) -> String {
 
 /// What `task priority set` did: the task, and the priority its source now reads it as.
 pub fn priority_set(set: &TaskPrioritySet) -> String {
-    columns(&[
+    let mut rows = vec![
         vec!["id:".to_owned(), set.id.to_string()],
         vec!["priority:".to_owned(), wire(&set.priority)],
-    ])
+    ];
+    if let Some(guard) = &set.guard {
+        rows.push(vec!["outcome:".to_owned(), wire(&guard.outcome())]);
+    }
+    columns(&rows)
+}
+
+/// What `task comments --since` found: each comment, oldest first, under the task it is on,
+/// and the watermark to read from next.
+pub fn comments_since(listed: &onetaskgraph_core::CommentsSince) -> String {
+    let mut rendered = String::new();
+    for comment in &listed.comments {
+        rendered.push_str(&format!(
+            "{} {} — {} ({}) at {}\n{}\n\n",
+            comment.item,
+            comment.id,
+            comment.author.as_deref().unwrap_or("(no author)"),
+            wire(&comment.author_kind),
+            comment.version,
+            comment.body.trim_end()
+        ));
+    }
+    if listed.comments.is_empty() {
+        rendered.push_str("no comment was made or edited since then\n");
+    }
+    rendered.push_str(&format!(
+        "watermark: {}\n",
+        listed
+            .watermark
+            .to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)
+    ));
+    rendered
 }
 
 /// What `task content set` did: the task whose content was replaced.

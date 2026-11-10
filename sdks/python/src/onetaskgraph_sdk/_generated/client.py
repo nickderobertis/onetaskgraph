@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from .models import (
         CacheCleared,
         CommentList,
+        CommentsSince,
         CommentWritten,
         CopyReport,
         DeletedComment,
@@ -86,6 +87,7 @@ POSITIONALS: dict[tuple[str, ...], tuple[str, ...]] = {
     ("task", "comment", "delete"): ("id", "comment_id"),
     ("task", "comment", "edit"): ("id", "comment_id"),
     ("task", "comment", "list"): ("id",),
+    ("task", "comments"): ("source",),
     ("task", "content", "set"): ("id",),
     ("task", "copy"): ("ids",),
     ("task", "create"): ("source",),
@@ -778,6 +780,7 @@ class GeneratedClient:
         *,
         default_sources: list[str] | tuple[str, ...] | None = None,
         expect: VersionToken | None = None,
+        if_version: VersionToken | None = None,
         page_size: int | None = None,
         reject: list[str] | tuple[str, ...] | None = None,
         replace: list[str] | tuple[str, ...] | None = None,
@@ -795,6 +798,7 @@ class GeneratedClient:
         *,
         default_sources: list[str] | tuple[str, ...] | None = None,
         expect: VersionToken | None = None,
+        if_version: VersionToken | None = None,
         page_size: int | None = None,
         reject: list[str] | tuple[str, ...] | None = None,
         replace: list[str] | tuple[str, ...] | None = None,
@@ -812,6 +816,7 @@ class GeneratedClient:
         *,
         default_sources: list[str] | tuple[str, ...] | None = None,
         expect: VersionToken | None = None,
+        if_version: VersionToken | None = None,
         page_size: int | None = None,
         reject: list[str] | tuple[str, ...] | None = None,
         replace: list[str] | tuple[str, ...] | None = None,
@@ -828,6 +833,7 @@ class GeneratedClient:
         *,
         default_sources: list[str] | tuple[str, ...] | None = None,
         expect: VersionToken | None = None,
+        if_version: VersionToken | None = None,
         page_size: int | None = None,
         reject: list[str] | tuple[str, ...] | None = None,
         replace: list[str] | tuple[str, ...] | None = None,
@@ -844,6 +850,7 @@ class GeneratedClient:
             value=value,
             default_sources=default_sources,
             expect=expect,
+            if_version=if_version,
             page_size=page_size,
             reject=reject,
             replace=replace,
@@ -1796,6 +1803,7 @@ class GeneratedClient:
         *,
         default_sources: list[str] | tuple[str, ...] | None = None,
         expect: VersionToken | None = None,
+        if_version: VersionToken | None = None,
         page_size: int | None = None,
         reject: list[str] | tuple[str, ...] | None = None,
         replace: list[str] | tuple[str, ...] | None = None,
@@ -1813,6 +1821,7 @@ class GeneratedClient:
         *,
         default_sources: list[str] | tuple[str, ...] | None = None,
         expect: VersionToken | None = None,
+        if_version: VersionToken | None = None,
         page_size: int | None = None,
         reject: list[str] | tuple[str, ...] | None = None,
         replace: list[str] | tuple[str, ...] | None = None,
@@ -1830,6 +1839,7 @@ class GeneratedClient:
         *,
         default_sources: list[str] | tuple[str, ...] | None = None,
         expect: VersionToken | None = None,
+        if_version: VersionToken | None = None,
         page_size: int | None = None,
         reject: list[str] | tuple[str, ...] | None = None,
         replace: list[str] | tuple[str, ...] | None = None,
@@ -1846,6 +1856,7 @@ class GeneratedClient:
         *,
         default_sources: list[str] | tuple[str, ...] | None = None,
         expect: VersionToken | None = None,
+        if_version: VersionToken | None = None,
         page_size: int | None = None,
         reject: list[str] | tuple[str, ...] | None = None,
         replace: list[str] | tuple[str, ...] | None = None,
@@ -1862,6 +1873,7 @@ class GeneratedClient:
             value=value,
             default_sources=default_sources,
             expect=expect,
+            if_version=if_version,
             page_size=page_size,
             reject=reject,
             replace=replace,
@@ -2703,6 +2715,7 @@ class GeneratedClient:
         body_file: str | None = None,
         default_sources: list[str] | tuple[str, ...] | None = None,
         expect: VersionToken | None = None,
+        if_version: VersionToken | None = None,
         page_size: int | None = None,
         reject: list[str] | tuple[str, ...] | None = None,
         replace: list[str] | tuple[str, ...] | None = None,
@@ -2721,6 +2734,7 @@ class GeneratedClient:
         body_file: str | None = None,
         default_sources: list[str] | tuple[str, ...] | None = None,
         expect: VersionToken | None = None,
+        if_version: VersionToken | None = None,
         page_size: int | None = None,
         reject: list[str] | tuple[str, ...] | None = None,
         replace: list[str] | tuple[str, ...] | None = None,
@@ -2739,6 +2753,7 @@ class GeneratedClient:
         body_file: str | None = None,
         default_sources: list[str] | tuple[str, ...] | None = None,
         expect: VersionToken | None = None,
+        if_version: VersionToken | None = None,
         page_size: int | None = None,
         reject: list[str] | tuple[str, ...] | None = None,
         replace: list[str] | tuple[str, ...] | None = None,
@@ -2756,6 +2771,7 @@ class GeneratedClient:
         body_file: str | None = None,
         default_sources: list[str] | tuple[str, ...] | None = None,
         expect: VersionToken | None = None,
+        if_version: VersionToken | None = None,
         page_size: int | None = None,
         reject: list[str] | tuple[str, ...] | None = None,
         replace: list[str] | tuple[str, ...] | None = None,
@@ -2773,6 +2789,7 @@ class GeneratedClient:
             body_file=body_file,
             default_sources=default_sources,
             expect=expect,
+            if_version=if_version,
             page_size=page_size,
             reject=reject,
             replace=replace,
@@ -2864,6 +2881,7 @@ class GeneratedClient:
         body_file: str | None = None,
         default_sources: list[str] | tuple[str, ...] | None = None,
         expect: VersionToken | None = None,
+        if_version: VersionToken | None = None,
         page_size: int | None = None,
         reject: list[str] | tuple[str, ...] | None = None,
         replace: list[str] | tuple[str, ...] | None = None,
@@ -2882,6 +2900,7 @@ class GeneratedClient:
         body_file: str | None = None,
         default_sources: list[str] | tuple[str, ...] | None = None,
         expect: VersionToken | None = None,
+        if_version: VersionToken | None = None,
         page_size: int | None = None,
         reject: list[str] | tuple[str, ...] | None = None,
         replace: list[str] | tuple[str, ...] | None = None,
@@ -2900,6 +2919,7 @@ class GeneratedClient:
         body_file: str | None = None,
         default_sources: list[str] | tuple[str, ...] | None = None,
         expect: VersionToken | None = None,
+        if_version: VersionToken | None = None,
         page_size: int | None = None,
         reject: list[str] | tuple[str, ...] | None = None,
         replace: list[str] | tuple[str, ...] | None = None,
@@ -2917,6 +2937,7 @@ class GeneratedClient:
         body_file: str | None = None,
         default_sources: list[str] | tuple[str, ...] | None = None,
         expect: VersionToken | None = None,
+        if_version: VersionToken | None = None,
         page_size: int | None = None,
         reject: list[str] | tuple[str, ...] | None = None,
         replace: list[str] | tuple[str, ...] | None = None,
@@ -2934,6 +2955,7 @@ class GeneratedClient:
             body_file=body_file,
             default_sources=default_sources,
             expect=expect,
+            if_version=if_version,
             page_size=page_size,
             reject=reject,
             replace=replace,
@@ -3012,6 +3034,133 @@ class GeneratedClient:
         )
 
     @overload
+    async def task_comments(
+        self,
+        source: SourceName | str,
+        since: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        item: list[GlobalId | str] | tuple[GlobalId | str, ...] | None = None,
+        metadata: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        status: list[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ]
+        ]
+        | tuple[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ],
+            ...,
+        ]
+        | None = None,
+    ) -> CommentsSince: ...
+
+    @overload
+    async def task_comments(
+        self,
+        source: SourceName | str,
+        since: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        item: list[GlobalId | str] | tuple[GlobalId | str, ...] | None = None,
+        metadata: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+        status: list[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ]
+        ]
+        | tuple[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ],
+            ...,
+        ]
+        | None = None,
+    ) -> CommentsSince | SanitizeDryRun: ...
+
+    @overload
+    async def task_comments(
+        self,
+        source: SourceName | str,
+        since: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        item: list[GlobalId | str] | tuple[GlobalId | str, ...] | None = None,
+        metadata: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        status: list[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ]
+        ]
+        | tuple[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ],
+            ...,
+        ]
+        | None = None,
+    ) -> CommentsSince | SanitizeDryRun: ...
+
+    async def task_comments(
+        self,
+        source: SourceName | str,
+        since: str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        item: list[GlobalId | str] | tuple[GlobalId | str, ...] | None = None,
+        metadata: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        status: list[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ]
+        ]
+        | tuple[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ],
+            ...,
+        ]
+        | None = None,
+    ) -> CommentsSince | SanitizeDryRun:
+        """Run ``onetaskgraph task comments``."""
+        return await self._invoke(
+            ["task", "comments"],
+            _models.CommentsSince | _models.SanitizeDryRun,
+            source=source,
+            since=since,
+            default_sources=default_sources,
+            item=item,
+            metadata=_strings("task_comments", "metadata", metadata),
+            page_size=page_size,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
+            set=set,
+            status=status,
+        )
+
+    @overload
     async def task_content_set(
         self,
         id: GlobalId | str,
@@ -3019,6 +3168,7 @@ class GeneratedClient:
         *,
         default_sources: list[str] | tuple[str, ...] | None = None,
         expect: VersionToken | None = None,
+        if_version: VersionToken | None = None,
         page_size: int | None = None,
         reject: list[str] | tuple[str, ...] | None = None,
         replace: list[str] | tuple[str, ...] | None = None,
@@ -3035,6 +3185,7 @@ class GeneratedClient:
         *,
         default_sources: list[str] | tuple[str, ...] | None = None,
         expect: VersionToken | None = None,
+        if_version: VersionToken | None = None,
         page_size: int | None = None,
         reject: list[str] | tuple[str, ...] | None = None,
         replace: list[str] | tuple[str, ...] | None = None,
@@ -3051,6 +3202,7 @@ class GeneratedClient:
         *,
         default_sources: list[str] | tuple[str, ...] | None = None,
         expect: VersionToken | None = None,
+        if_version: VersionToken | None = None,
         page_size: int | None = None,
         reject: list[str] | tuple[str, ...] | None = None,
         replace: list[str] | tuple[str, ...] | None = None,
@@ -3066,6 +3218,7 @@ class GeneratedClient:
         *,
         default_sources: list[str] | tuple[str, ...] | None = None,
         expect: VersionToken | None = None,
+        if_version: VersionToken | None = None,
         page_size: int | None = None,
         reject: list[str] | tuple[str, ...] | None = None,
         replace: list[str] | tuple[str, ...] | None = None,
@@ -3081,6 +3234,7 @@ class GeneratedClient:
             file=file,
             default_sources=default_sources,
             expect=expect,
+            if_version=if_version,
             page_size=page_size,
             reject=reject,
             replace=replace,
@@ -3100,6 +3254,7 @@ class GeneratedClient:
         default_sources: list[str] | tuple[str, ...] | None = None,
         dry_run: bool | None = None,
         expect: VersionToken | None = None,
+        if_version: VersionToken | None = None,
         match_by: str | None = None,
         metadata: list[str] | tuple[str, ...] | None = None,
         no_link: bool | None = None,
@@ -3155,6 +3310,7 @@ class GeneratedClient:
         default_sources: list[str] | tuple[str, ...] | None = None,
         dry_run: bool | None = None,
         expect: VersionToken | None = None,
+        if_version: VersionToken | None = None,
         match_by: str | None = None,
         metadata: list[str] | tuple[str, ...] | None = None,
         no_link: bool | None = None,
@@ -3210,6 +3366,7 @@ class GeneratedClient:
         default_sources: list[str] | tuple[str, ...] | None = None,
         dry_run: bool | None = None,
         expect: VersionToken | None = None,
+        if_version: VersionToken | None = None,
         match_by: str | None = None,
         metadata: list[str] | tuple[str, ...] | None = None,
         no_link: bool | None = None,
@@ -3264,6 +3421,7 @@ class GeneratedClient:
         default_sources: list[str] | tuple[str, ...] | None = None,
         dry_run: bool | None = None,
         expect: VersionToken | None = None,
+        if_version: VersionToken | None = None,
         match_by: str | None = None,
         metadata: list[str] | tuple[str, ...] | None = None,
         no_link: bool | None = None,
@@ -3318,6 +3476,7 @@ class GeneratedClient:
             default_sources=default_sources,
             dry_run=dry_run,
             expect=expect,
+            if_version=if_version,
             match_by=match_by,
             metadata=_strings("task_copy", "metadata", metadata),
             no_link=no_link,
@@ -3610,6 +3769,7 @@ class GeneratedClient:
     async def task_list(
         self,
         *,
+        all: bool | None = None,
         allow_partial: bool | None = None,
         commented_since: str | None = None,
         default_sources: list[str] | tuple[str, ...] | None = None,
@@ -3652,6 +3812,7 @@ class GeneratedClient:
     async def task_list(
         self,
         *,
+        all: bool | None = None,
         allow_partial: bool | None = None,
         commented_since: str | None = None,
         default_sources: list[str] | tuple[str, ...] | None = None,
@@ -3694,6 +3855,7 @@ class GeneratedClient:
     async def task_list(
         self,
         *,
+        all: bool | None = None,
         allow_partial: bool | None = None,
         commented_since: str | None = None,
         default_sources: list[str] | tuple[str, ...] | None = None,
@@ -3735,6 +3897,7 @@ class GeneratedClient:
     async def task_list(
         self,
         *,
+        all: bool | None = None,
         allow_partial: bool | None = None,
         commented_since: str | None = None,
         default_sources: list[str] | tuple[str, ...] | None = None,
@@ -3776,6 +3939,7 @@ class GeneratedClient:
         return await self._invoke(
             ["task", "list"],
             _models.QueryResponseOfQualifiedTask | _models.SanitizeDryRun,
+            all=all,
             allow_partial=allow_partial,
             commented_since=commented_since,
             default_sources=default_sources,
@@ -3888,6 +4052,7 @@ class GeneratedClient:
         *,
         default_sources: list[str] | tuple[str, ...] | None = None,
         expect: VersionToken | None = None,
+        if_version: VersionToken | None = None,
         page_size: int | None = None,
         reject: list[str] | tuple[str, ...] | None = None,
         replace: list[str] | tuple[str, ...] | None = None,
@@ -3905,6 +4070,7 @@ class GeneratedClient:
         *,
         default_sources: list[str] | tuple[str, ...] | None = None,
         expect: VersionToken | None = None,
+        if_version: VersionToken | None = None,
         page_size: int | None = None,
         reject: list[str] | tuple[str, ...] | None = None,
         replace: list[str] | tuple[str, ...] | None = None,
@@ -3922,6 +4088,7 @@ class GeneratedClient:
         *,
         default_sources: list[str] | tuple[str, ...] | None = None,
         expect: VersionToken | None = None,
+        if_version: VersionToken | None = None,
         page_size: int | None = None,
         reject: list[str] | tuple[str, ...] | None = None,
         replace: list[str] | tuple[str, ...] | None = None,
@@ -3938,6 +4105,7 @@ class GeneratedClient:
         *,
         default_sources: list[str] | tuple[str, ...] | None = None,
         expect: VersionToken | None = None,
+        if_version: VersionToken | None = None,
         page_size: int | None = None,
         reject: list[str] | tuple[str, ...] | None = None,
         replace: list[str] | tuple[str, ...] | None = None,
@@ -3954,6 +4122,7 @@ class GeneratedClient:
             value=value,
             default_sources=default_sources,
             expect=expect,
+            if_version=if_version,
             page_size=page_size,
             reject=reject,
             replace=replace,
@@ -3970,12 +4139,16 @@ class GeneratedClient:
         *,
         default_sources: list[str] | tuple[str, ...] | None = None,
         expect: VersionToken | None = None,
+        if_version: VersionToken | None = None,
         page_size: int | None = None,
         reject: list[str] | tuple[str, ...] | None = None,
         replace: list[str] | tuple[str, ...] | None = None,
         sanitize_dry_run: Literal[False] | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
+        when_priority: list[Literal["none", "urgent", "high", "medium", "low"]]
+        | tuple[Literal["none", "urgent", "high", "medium", "low"], ...]
+        | None = None,
     ) -> TaskPrioritySet: ...
 
     @overload
@@ -3986,12 +4159,16 @@ class GeneratedClient:
         *,
         default_sources: list[str] | tuple[str, ...] | None = None,
         expect: VersionToken | None = None,
+        if_version: VersionToken | None = None,
         page_size: int | None = None,
         reject: list[str] | tuple[str, ...] | None = None,
         replace: list[str] | tuple[str, ...] | None = None,
         sanitize_dry_run: Literal[True],
         set: list[str] | tuple[str, ...] | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
+        when_priority: list[Literal["none", "urgent", "high", "medium", "low"]]
+        | tuple[Literal["none", "urgent", "high", "medium", "low"], ...]
+        | None = None,
     ) -> TaskPrioritySet | SanitizeDryRun: ...
 
     @overload
@@ -4002,12 +4179,16 @@ class GeneratedClient:
         *,
         default_sources: list[str] | tuple[str, ...] | None = None,
         expect: VersionToken | None = None,
+        if_version: VersionToken | None = None,
         page_size: int | None = None,
         reject: list[str] | tuple[str, ...] | None = None,
         replace: list[str] | tuple[str, ...] | None = None,
         sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
+        when_priority: list[Literal["none", "urgent", "high", "medium", "low"]]
+        | tuple[Literal["none", "urgent", "high", "medium", "low"], ...]
+        | None = None,
     ) -> TaskPrioritySet | SanitizeDryRun: ...
 
     async def task_priority_set(
@@ -4017,12 +4198,16 @@ class GeneratedClient:
         *,
         default_sources: list[str] | tuple[str, ...] | None = None,
         expect: VersionToken | None = None,
+        if_version: VersionToken | None = None,
         page_size: int | None = None,
         reject: list[str] | tuple[str, ...] | None = None,
         replace: list[str] | tuple[str, ...] | None = None,
         sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
+        when_priority: list[Literal["none", "urgent", "high", "medium", "low"]]
+        | tuple[Literal["none", "urgent", "high", "medium", "low"], ...]
+        | None = None,
     ) -> TaskPrioritySet | SanitizeDryRun:
         """Run ``onetaskgraph task priority set``."""
         return await self._invoke(
@@ -4032,12 +4217,14 @@ class GeneratedClient:
             priority=priority,
             default_sources=default_sources,
             expect=expect,
+            if_version=if_version,
             page_size=page_size,
             reject=reject,
             replace=replace,
             sanitize_dry_run=sanitize_dry_run,
             set=set,
             term_scope=_strings("task_priority_set", "term_scope", term_scope),
+            when_priority=when_priority,
         )
 
     @overload
@@ -4227,6 +4414,7 @@ class GeneratedClient:
         replace: list[str] | tuple[str, ...] | None = None,
         sanitize_dry_run: Literal[False] | None = None,
         set: list[str] | tuple[str, ...] | None = None,
+        with_deps: bool | None = None,
     ) -> TaskDetail: ...
 
     @overload
@@ -4244,6 +4432,7 @@ class GeneratedClient:
         replace: list[str] | tuple[str, ...] | None = None,
         sanitize_dry_run: Literal[True],
         set: list[str] | tuple[str, ...] | None = None,
+        with_deps: bool | None = None,
     ) -> TaskDetail | SanitizeDryRun: ...
 
     @overload
@@ -4261,6 +4450,7 @@ class GeneratedClient:
         replace: list[str] | tuple[str, ...] | None = None,
         sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
+        with_deps: bool | None = None,
     ) -> TaskDetail | SanitizeDryRun: ...
 
     async def task_show(
@@ -4277,6 +4467,7 @@ class GeneratedClient:
         replace: list[str] | tuple[str, ...] | None = None,
         sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
+        with_deps: bool | None = None,
     ) -> TaskDetail | SanitizeDryRun:
         """Run ``onetaskgraph task show``."""
         return await self._invoke(
@@ -4293,6 +4484,7 @@ class GeneratedClient:
             replace=replace,
             sanitize_dry_run=sanitize_dry_run,
             set=set,
+            with_deps=with_deps,
         )
 
     @overload
@@ -4527,6 +4719,7 @@ class GeneratedClient:
         *,
         default_sources: list[str] | tuple[str, ...] | None = None,
         expect: VersionToken | None = None,
+        if_version: VersionToken | None = None,
         page_size: int | None = None,
         reject: list[str] | tuple[str, ...] | None = None,
         replace: list[str] | tuple[str, ...] | None = None,
@@ -4543,6 +4736,7 @@ class GeneratedClient:
         *,
         default_sources: list[str] | tuple[str, ...] | None = None,
         expect: VersionToken | None = None,
+        if_version: VersionToken | None = None,
         page_size: int | None = None,
         reject: list[str] | tuple[str, ...] | None = None,
         replace: list[str] | tuple[str, ...] | None = None,
@@ -4559,6 +4753,7 @@ class GeneratedClient:
         *,
         default_sources: list[str] | tuple[str, ...] | None = None,
         expect: VersionToken | None = None,
+        if_version: VersionToken | None = None,
         page_size: int | None = None,
         reject: list[str] | tuple[str, ...] | None = None,
         replace: list[str] | tuple[str, ...] | None = None,
@@ -4574,6 +4769,7 @@ class GeneratedClient:
         *,
         default_sources: list[str] | tuple[str, ...] | None = None,
         expect: VersionToken | None = None,
+        if_version: VersionToken | None = None,
         page_size: int | None = None,
         reject: list[str] | tuple[str, ...] | None = None,
         replace: list[str] | tuple[str, ...] | None = None,
@@ -4589,6 +4785,7 @@ class GeneratedClient:
             category=category,
             default_sources=default_sources,
             expect=expect,
+            if_version=if_version,
             page_size=page_size,
             reject=reject,
             replace=replace,
@@ -4607,14 +4804,17 @@ class GeneratedClient:
         delivers: list[GlobalId | str] | tuple[GlobalId | str, ...] | None = None,
         depends_on: list[GlobalId | str] | tuple[GlobalId | str, ...] | None = None,
         expect: VersionToken | None = None,
+        if_version: VersionToken | None = None,
         metadata: list[str] | tuple[str, ...] | None = None,
         no_delivers: bool | None = None,
         no_depends_on: bool | None = None,
+        no_repositories: bool | None = None,
         page_size: int | None = None,
         priority: Literal["none", "urgent", "high", "medium", "low"] | None = None,
         reject: list[str] | tuple[str, ...] | None = None,
         remove_metadata: list[str] | tuple[str, ...] | None = None,
         replace: list[str] | tuple[str, ...] | None = None,
+        repository: list[str] | tuple[str, ...] | None = None,
         sanitize_dry_run: Literal[False] | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         status: Literal[
@@ -4636,14 +4836,17 @@ class GeneratedClient:
         delivers: list[GlobalId | str] | tuple[GlobalId | str, ...] | None = None,
         depends_on: list[GlobalId | str] | tuple[GlobalId | str, ...] | None = None,
         expect: VersionToken | None = None,
+        if_version: VersionToken | None = None,
         metadata: list[str] | tuple[str, ...] | None = None,
         no_delivers: bool | None = None,
         no_depends_on: bool | None = None,
+        no_repositories: bool | None = None,
         page_size: int | None = None,
         priority: Literal["none", "urgent", "high", "medium", "low"] | None = None,
         reject: list[str] | tuple[str, ...] | None = None,
         remove_metadata: list[str] | tuple[str, ...] | None = None,
         replace: list[str] | tuple[str, ...] | None = None,
+        repository: list[str] | tuple[str, ...] | None = None,
         sanitize_dry_run: Literal[True],
         set: list[str] | tuple[str, ...] | None = None,
         status: Literal[
@@ -4665,14 +4868,17 @@ class GeneratedClient:
         delivers: list[GlobalId | str] | tuple[GlobalId | str, ...] | None = None,
         depends_on: list[GlobalId | str] | tuple[GlobalId | str, ...] | None = None,
         expect: VersionToken | None = None,
+        if_version: VersionToken | None = None,
         metadata: list[str] | tuple[str, ...] | None = None,
         no_delivers: bool | None = None,
         no_depends_on: bool | None = None,
+        no_repositories: bool | None = None,
         page_size: int | None = None,
         priority: Literal["none", "urgent", "high", "medium", "low"] | None = None,
         reject: list[str] | tuple[str, ...] | None = None,
         remove_metadata: list[str] | tuple[str, ...] | None = None,
         replace: list[str] | tuple[str, ...] | None = None,
+        repository: list[str] | tuple[str, ...] | None = None,
         sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         status: Literal[
@@ -4693,14 +4899,17 @@ class GeneratedClient:
         delivers: list[GlobalId | str] | tuple[GlobalId | str, ...] | None = None,
         depends_on: list[GlobalId | str] | tuple[GlobalId | str, ...] | None = None,
         expect: VersionToken | None = None,
+        if_version: VersionToken | None = None,
         metadata: list[str] | tuple[str, ...] | None = None,
         no_delivers: bool | None = None,
         no_depends_on: bool | None = None,
+        no_repositories: bool | None = None,
         page_size: int | None = None,
         priority: Literal["none", "urgent", "high", "medium", "low"] | None = None,
         reject: list[str] | tuple[str, ...] | None = None,
         remove_metadata: list[str] | tuple[str, ...] | None = None,
         replace: list[str] | tuple[str, ...] | None = None,
+        repository: list[str] | tuple[str, ...] | None = None,
         sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         status: Literal[
@@ -4721,14 +4930,17 @@ class GeneratedClient:
             delivers=delivers,
             depends_on=depends_on,
             expect=expect,
+            if_version=if_version,
             metadata=_strings("task_update", "metadata", metadata),
             no_delivers=no_delivers,
             no_depends_on=no_depends_on,
+            no_repositories=no_repositories,
             page_size=page_size,
             priority=priority,
             reject=reject,
             remove_metadata=_strings("task_update", "remove_metadata", remove_metadata),
             replace=replace,
+            repository=_strings("task_update", "repository", repository),
             sanitize_dry_run=sanitize_dry_run,
             set=set,
             status=status,

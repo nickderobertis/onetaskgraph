@@ -1,5 +1,11 @@
 //! A read/write source over Linear's published GraphQL API.
 //!
+//! **A write held to a version** (`--if-version`) is checked immediately before its first
+//! mutation and not as one step with it: Linear takes no conditional write, so the engine reads
+//! the issue through this source just before writing it, and a change landing between that read
+//! and the mutation — the time one request takes — is Linear's residual race. The version is
+//! the `lin1` token its `updatedAt` and facets give.
+//!
 //! Linear `Issue` maps to [`Task`], `Project` to [`Project`], `Document` to [`Document`],
 //! `IssueLabel` and `ProjectLabel` to [`Label`], and an issue's `WorkflowState.name` and a
 //! project's `ProjectStatus.name` are preserved as the status's name while the source's
@@ -1609,6 +1615,10 @@ pub async fn status_names(
         .await
 }
 
+/// How long Linear's filtered reads may go on missing a comment after it was made or edited,
+/// which a read of the comments made since an instant sets its watermark back by.
+const COMMENT_FILTER_LAG: std::time::Duration = std::time::Duration::from_secs(60);
+
 struct LinearSource {
     clock: onetaskgraph_plugin_api::SharedClock,
     /// Built on the first request rather than with the source: building one loads the
@@ -2933,6 +2943,14 @@ impl LinearSource {
         if let Some(delivers) = &update.delivers {
             set_task_list(&mut slot, TaskRef::DELIVERS_KEY, delivers);
         }
+        // Recorded exactly as a whole write records it: none for an empty list.
+        if let Some(repositories) = &update.repositories {
+            if repositories.is_empty() {
+                slot.remove(Repository::METADATA_KEY);
+            } else {
+                slot.insert(Repository::METADATA_KEY.into(), json!(repositories));
+            }
+        }
         let mut relations = None;
         if let Some(wanted) = &update.depends_on {
             let current = self.forward_edges(&before.id).await?;
@@ -3508,6 +3526,24 @@ const DOCUMENT_ASSETS_UNCOVERED: &str =
 
 #[async_trait::async_trait]
 impl TaskSource for LinearSource {
+    /// Linear names no `user` for a comment an integration or a bot made, and names one for
+    /// every comment a person made: so a comment with an author is a person's, and one with
+    /// none a bot's.
+    fn comment_author_kind(
+        &self,
+        comment: &onetaskgraph_plugin_api::Comment,
+    ) -> onetaskgraph_plugin_api::AuthorKind {
+        if comment.author.is_some() {
+            onetaskgraph_plugin_api::AuthorKind::Person
+        } else {
+            onetaskgraph_plugin_api::AuthorKind::Bot
+        }
+    }
+    /// Linear's filtered reads lag its writes by seconds, so a read of the comments made since
+    /// an instant sets its watermark back by [`COMMENT_FILTER_LAG`].
+    fn comment_consistency_window(&self) -> std::time::Duration {
+        COMMENT_FILTER_LAG
+    }
     fn kind(&self) -> &'static str {
         KIND
     }
