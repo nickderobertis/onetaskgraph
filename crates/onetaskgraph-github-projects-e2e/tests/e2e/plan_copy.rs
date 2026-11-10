@@ -656,6 +656,42 @@ impl Plan {
         }
     }
 
+    /// One scenario as one command — `project copy --documents`, the plan's document carried in
+    /// the same copy as its project and tasks — with its report, standing for both reports, and
+    /// every request the board answered for it, timed as [`Self::copy_timed`] times a command.
+    pub fn copy_together_timed(&self) -> Scenario {
+        let before = self.board.calls().len();
+        let lease = self.clock.lease(self.client);
+        let simulated = self.clock.now();
+        let started = std::time::Instant::now();
+        let screened_before = self.boundary_calls().len();
+        let output = self.run(&[
+            "project",
+            "copy",
+            "notes:P",
+            "--documents",
+            "--to",
+            "board",
+            "--json",
+        ]);
+        let real = started.elapsed();
+        lease.wait_for_detach();
+        let phases = vec![(TOGETHER, self.clock.now() - simulated, real)];
+        drop(lease);
+        let report = success(&output);
+        Scenario {
+            project: report.clone(),
+            document: report,
+            calls: self.own_calls(before),
+            phases,
+            boundary: vec![Phase {
+                kind: TOGETHER,
+                screening: self.boundary_calls()[screened_before..].to_vec(),
+                calls: self.own_calls(before),
+            }],
+        }
+    }
+
     /// Every request the host answered this plan's commands from the `from`th it recorded on:
     /// another manager's sharing the host are not this plan's.
     fn own_calls(&self, from: usize) -> Vec<Call> {
@@ -674,6 +710,10 @@ impl Plan {
             .unwrap_or_default()
     }
 }
+
+/// What a scenario of the one command [`Plan::copy_together_timed`] runs is called, and what its
+/// recording names as the copy it measured.
+pub(super) const TOGETHER: &str = "project copy --documents";
 
 /// One command of a scenario: the boundary commands it ran and the requests the board answered.
 pub(super) struct Phase {
@@ -3207,4 +3247,116 @@ fn a_recopy_whose_aliased_update_fails_part_way_leaves_both_issues_as_they_were(
             "{what}: both issues are as they were before the copy"
         );
     }
+}
+
+/// The budgets [`record_together`] records, by scenario: the simulated seconds a person waits for
+/// the plan copied with its documents in one command.
+const TOGETHER_BUDGETS: [&str; 3] = [
+    "plan-copy-seconds-first",
+    "plan-copy-seconds-changed",
+    "plan-copy-seconds-unchanged",
+];
+
+/// Record each of the three scenarios of [`Plan::copy_together_timed`] as its seconds budget's
+/// telemetry, for `budget_runner::report_plan_copy`: the simulated seconds of the command, with
+/// the requests it sent by kind and by operation, the latency each kind is charged, and what it
+/// asked the boundary.
+fn record_together(scenarios: [&Scenario; 3]) {
+    let directory = super::budget_runner::directory();
+    std::fs::create_dir_all(&directory).unwrap();
+    for ((budget, name), scenario) in TOGETHER_BUDGETS.iter().zip(SCENARIOS).zip(scenarios) {
+        let cost = cost(scenario);
+        let mut by_kind: BTreeMap<String, (usize, u64)> = BTreeMap::new();
+        for call in &scenario.calls {
+            by_kind
+                .entry(format!("{:?}", call.kind))
+                .or_insert((0, call.kind.measured_millis()))
+                .0 += 1;
+        }
+        let kinds: serde_json::Map<String, Value> = by_kind
+            .into_iter()
+            .map(|(kind, (count, millis))| {
+                (
+                    kind,
+                    json!({"requests": count, "milliseconds each": millis}),
+                )
+            })
+            .collect();
+        let detail = json!({"requests by kind": kinds, "seconds": cost.seconds});
+        std::fs::write(
+            onetaskgraph_e2e_support::telemetry::file_in(&directory, budget),
+            serde_json::to_vec(&json!({"budget": budget, "value": cost.simulated,
+                "detail": detail.to_string(), "plan": WORKLOAD, "board": SMALL,
+                "scenario": name, "copy": TOGETHER}))
+            .unwrap(),
+        )
+        .unwrap();
+    }
+}
+
+#[test]
+fn a_plan_copied_with_its_documents_in_one_command_lands_whole_first_changed_and_unchanged() {
+    // The host's configuration: the plan drafted in a folder declared private, copied onto a
+    // public board with its cache on, every public write screened by the write policy.
+    let plan = Plan::host(SMALL, Vec::new(), true);
+    plan.place_as_measured();
+    let titles: Vec<String> = std::iter::once("Copy the plan in a fraction of the time".to_owned())
+        .chain((1..=TASKS).map(|n| format!("Step {n} of the plan")))
+        .chain(std::iter::once("Design of the plan copy".to_owned()))
+        .collect();
+    // One check of the whole plan, its document included, finished before its first write.
+    let screened = |what: &str, scenario: &Scenario| {
+        screened_once_before_writing(what, scenario, &[]);
+        let phase = &scenario.boundary[0];
+        if phase.calls.iter().any(|call| call.creating) {
+            let check = phase
+                .screening
+                .iter()
+                .find(|call| call.command == BoundaryCommand::Check)
+                .unwrap();
+            let carried = check.input["metadata"].as_array().unwrap();
+            for title in &titles {
+                assert!(
+                    carried.iter().any(|value| value == title.as_str()),
+                    "{what}'s one check carried {title:?}"
+                );
+            }
+        }
+    };
+
+    let first = plan.copy_together_timed();
+    never_walks("the first copy", &first.calls);
+    let items = first.project["items"].as_array().unwrap();
+    assert_eq!(
+        items.len(),
+        TASKS + 2,
+        "the project, its tasks and its document"
+    );
+    assert_eq!(
+        items.last().unwrap()["source"],
+        json!("notes:D"),
+        "the document lands after the tasks"
+    );
+    let at = counterparts(&first.project, &first.document);
+    holds_the_plan(&plan, &at, None);
+    screened("the first copy", &first);
+
+    let edited = format!(
+        "{}An edit made since the last copy.\n",
+        plan.generated.tasks[3]
+    );
+    plan.write_task(4, &edited, true);
+    let changed = plan.copy_together_timed();
+    never_walks("the re-copy after one task changed", &changed.calls);
+    assert_eq!(counterparts(&changed.project, &changed.document), at);
+    holds_the_plan(&plan, &at, Some((4, &edited)));
+    screened("the re-copy after one task changed", &changed);
+
+    let unchanged = plan.copy_together_timed();
+    never_walks("the unchanged re-copy", &unchanged.calls);
+    assert_eq!(counterparts(&unchanged.project, &unchanged.document), at);
+    holds_the_plan(&plan, &at, Some((4, &edited)));
+    screened("the unchanged re-copy", &unchanged);
+
+    record_together([&first, &changed, &unchanged]);
 }

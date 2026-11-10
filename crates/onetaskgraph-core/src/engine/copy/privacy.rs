@@ -65,6 +65,7 @@ impl Engine {
             self.rewrite_references(
                 std::slice::from_mut(item),
                 &running.resolvable,
+                running.carries_work,
                 &mut running.references,
                 running.private_locations.as_deref(),
             )

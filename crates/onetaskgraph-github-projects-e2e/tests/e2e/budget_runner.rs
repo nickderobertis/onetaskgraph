@@ -356,6 +356,15 @@ fn plan_copy_figure(budget: &str) -> Result<(f64, String), String> {
             plan_copy_scenario(budget)
         ));
     }
+    // The seconds of the plan copied with its documents in one command are their own budgets,
+    // beside the two commands the `github-plan-copy-*` budgets measure.
+    let together = budget.starts_with("plan-copy-seconds-");
+    if together && value["copy"].as_str() != Some(super::plan_copy::TOGETHER) {
+        return Err(format!(
+            "the recording is not of one `{}`",
+            super::plan_copy::TOGETHER
+        ));
+    }
     let figure = value["value"]
         .as_f64()
         .filter(|value| value.is_finite() && *value >= 0.0)
@@ -391,10 +400,14 @@ fn the_plan_copy_report_hands_over_the_recorded_figure_and_refuses_another_workl
         ("github-plan-copy-seconds-unchanged", "unchanged"),
         ("github-plan-copy-points-changed", "changed"),
         ("github-plan-copy-content-creations", "first"),
+        ("plan-copy-seconds-changed", "changed"),
     ] {
-        let valid = json!({"budget": budget, "value": 5.25, "detail": "recorded",
+        let mut valid = json!({"budget": budget, "value": 5.25, "detail": "recorded",
             "plan": super::plan_copy::WORKLOAD, "board": super::plan_copy::SMALL,
             "scenario": scenario});
+        if budget.starts_with("plan-copy-seconds-") {
+            valid["copy"] = json!(super::plan_copy::TOGETHER);
+        }
         let with = |field: &str, value: Value| {
             let mut changed = valid.clone();
             changed[field] = value;
@@ -419,6 +432,18 @@ fn the_plan_copy_report_hands_over_the_recorded_figure_and_refuses_another_workl
             (with("budget", json!("another-budget")), "different budget"),
             (with("value", json!(-1.0)), "missing nonnegative figure"),
             (with("detail", json!(null)), "missing detail"),
+            (
+                if budget.starts_with("plan-copy-seconds-") {
+                    with("copy", json!("project copy"))
+                } else {
+                    with("scenario", json!(other))
+                },
+                if budget.starts_with("plan-copy-seconds-") {
+                    "is not of one"
+                } else {
+                    "scenario"
+                },
+            ),
         ] {
             let (output, written) = run(budget, recorded);
             assert!(!output.status.success(), "{budget}: accepted {message}");

@@ -1619,6 +1619,10 @@ struct Running {
     /// destination's plugin answered — taken before the first write, so a body larger than its
     /// destination holds refuses the whole copy while nothing is written.
     sizes: HashMap<GlobalId, BodySize>,
+    /// Whether the copied set holds work — tasks or projects — beside any documents, as every
+    /// copy but a document copy's does: a document's reference to a member of the set that the
+    /// destination does not hold yet is then one this copy lands, and is finished once it has.
+    carries_work: bool,
 }
 
 /// The member project a routed write was filed under, and what finding it wrote.
@@ -2428,7 +2432,10 @@ impl Engine {
         request: &CopyRequest,
         journal: &mut Journal,
     ) -> Result<(CopyReport, Vec<Deliverer>), EngineError> {
-        let mut running = Running::default();
+        let mut running = Running {
+            carries_work: request.scope != CopyScope::Documents,
+            ..Running::default()
+        };
         // The whole copied set, established before anything is written. For a project
         // copy that means reading every named project's membership first: the set is the
         // whole request rather than one project of it.
@@ -4584,6 +4591,7 @@ impl Engine {
         &self,
         planned: &mut [Planned],
         copied: &[GlobalId],
+        carries_work: bool,
         counts: &mut Counted,
         private_locations: Option<&[String]>,
     ) -> Result<(), EngineError> {
@@ -4650,9 +4658,11 @@ impl Engine {
         }
         // The copied set names records by qualified id alone, and an id alone does not identify a
         // record: a document copy's set is its documents, never a task or project sharing an id.
-        let copies_work = planned
-            .iter()
-            .any(|item| item.item.level() != Level::Document);
+        // A project copy carrying its documents holds its work too, rewritten a body at a time.
+        let copies_work = carries_work
+            || planned
+                .iter()
+                .any(|item| item.item.level() != Level::Document);
         let none = Counterparts::default();
         let mut read_for_headings: BTreeSet<(SourceName, Level, NativeId)> = BTreeSet::new();
         for (item, referents) in planned.iter_mut().zip(named) {
@@ -5432,6 +5442,7 @@ impl Engine {
         self.rewrite_references(
             &mut planned,
             &running.resolvable,
+            running.carries_work,
             &mut running.references,
             None,
         )
