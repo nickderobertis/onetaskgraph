@@ -1515,6 +1515,29 @@ them do; this is the inventory of what is owed, not a status board.
      trashed under the next, one plan copied to two Linear destinations lands once in each, and
      a copy out of a folder declared private into a Linear source that is not sends no id derived
      from it and leaves nothing there naming it.
+152. A template's `object` or `list` variable declaring a `schema` holds its answer to it through
+     `template render` and the create and render verbs of a task, a project and a document: a
+     conforming answer renders, a violating one is refused exit `2` naming the variable and the
+     JSON pointer of the first violation, writing nothing — a refused render leaves the stored
+     content and answers as they were — and a template declaring none renders as before.
+153. An attestation recorded on a task, a project and a document — a folder of Markdown, a GitHub
+     board and a Linear workspace alike — checks `valid`; an edit of its body, title, a template
+     answer, a dependency edge, its repositories or a caller key not excluded voids it as
+     `content-moved`, an excluded key or a status change does not, another `--bar` answers
+     `bar-moved`, and a project copied with its documents lands copies holding the source's
+     records, each `valid`.
+154. A project template declaring `members` creates the project and every member task, each from
+     its own template — a loader document's included — with its answers stored, its provenance
+     recorded and its `depends_on` as `blocks` edges; a member its schema refuses refuses the
+     whole create naming it and writes nothing, `--dry-run` prints the plan and writes nothing,
+     and a template with no `members` creates the project alone, as before.
+155. A store configured as another orchestrator repository would configure it — three Linear team
+     sources, none a default and no routes, `drafts` and `authoring` folders, and its own
+     templates, personas and status vocabulary — runs a plan graph, attestations, a copy to one
+     named team and a schema'd template through the binary.
+156. One `design-approval` attestation on the board copy of a private, screened 10-item plan's
+     design document is one read and one screened write, recorded in simulated time as
+     `plan-approval-seconds`.
 
 ## The public boundary
 
