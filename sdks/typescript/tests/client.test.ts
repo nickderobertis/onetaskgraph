@@ -2590,6 +2590,15 @@ test("a held copy, a repositories update and a comments listing drive the real b
     await expect(stale).rejects.toMatchObject({ failure: { kind: "version-moved" } });
     expect((await client.taskShow(landed)).items[0]?.item.title).toBe("Moved by another writer");
 
+    // An update held to the task's version lands at it, and is refused at one it moved past.
+    const before = await versionOf("work:T-1");
+    await client.taskUpdate("work:T-1", { title: "Held", ifVersion: before });
+    expect((await client.taskShow("work:T-1")).items[0]?.item.title).toBe("Held");
+    const refused = client.taskUpdate("work:T-1", { title: "Stale", ifVersion: before });
+    await expect(refused).rejects.toBeInstanceOf(OnetaskgraphExecutionError);
+    await expect(refused).rejects.toMatchObject({ failure: { kind: "version-moved" } });
+    expect((await client.taskShow("work:T-1")).items[0]?.item.title).toBe("Held");
+
     // Every comment since an instant, who wrote it, and the watermark to read from next.
     await client.taskCommentAdd("work:T-1", {
       body: "A bot follows up.\n",
