@@ -65,10 +65,10 @@ esac
 case "$JOB" in
   lint)
     # Linux's distribution journey runs here, beside the lint phases, rather than in
-    # test-linux: with every crate's coverage selected, test-linux's four cores ran it for 34
-    # minutes and the job past its timeout (run 42882244796), while this job finished in 14 of
-    # its 30. It still runs in full, unconditionally, on Linux, and under the relative
-    # interpreter, which check-relative-interpreter.sh compares with the targeted pass.
+    # test-linux: when a change selects every crate's coverage, the journey's builds and that
+    # coverage share test-linux's cores and leave the job no room inside its timeout. It still
+    # runs in full, unconditionally, on Linux, and under the relative interpreter, which
+    # check-relative-interpreter.sh compares with the targeted pass.
     export ONETASKGRAPH_DISTRIBUTION_UNDER_RELATIVE_INTERPRETER=1
     phases="1 affected format-check,lint,typecheck -
 1 run sdk-python:generate-check -
