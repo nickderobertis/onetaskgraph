@@ -37,6 +37,9 @@ from onetaskgraph_sdk import (
     VersionMovedError,
 )
 
+# The hosted plugins' credentials, which no client here may inherit.
+CREDENTIALS = frozenset({"LINEAR_API_KEY", "GH_PROJECTS_TOKEN"})
+
 MAPPING = {
     "backlog": "backlog",
     "todo": "todo",
@@ -232,7 +235,14 @@ def test_a_partial_write_raises_its_whole_answer_only_for_a_client_that_asks(
     binary: Path, store: Path
 ) -> None:
     """Opted in, a write answering exit 4 raises `PartialWriteError` carrying every item."""
-    environment = {**os.environ, "HOME": str(store), "XDG_CONFIG_HOME": str(store)}
+    # No credential reaches this client: the credentialed CI lane holds `LINEAR_API_KEY` and
+    # `GH_PROJECTS_TOKEN`, and a hosted source handed one would answer the listing below
+    # rather than fail it.
+    environment = {
+        **{k: v for k, v in os.environ.items() if k not in CREDENTIALS},
+        "HOME": str(store),
+        "XDG_CONFIG_HOME": str(store),
+    }
     strict = Client(binary, cwd=store, environment=environment, raise_on_partial=True)
     with pytest.raises(PartialWriteError) as raised:
         run(strict.task_copy(["plan:a", "plan:c"], to="work"))
@@ -263,7 +273,7 @@ def test_a_partial_write_raises_its_whole_answer_only_for_a_client_that_asks(
             {
                 "sources": {
                     "plan": {"plugin": "local-md", "config": {"root": str(store / "plan")}},
-                    "broken": {"plugin": "linear", "config": {}},
+                    "broken": {"plugin": "github-projects", "config": {}},
                 }
             }
         ),
@@ -271,6 +281,7 @@ def test_a_partial_write_raises_its_whole_answer_only_for_a_client_that_asks(
     )
     partial = run(strict.task_list())
     assert {failure.source.root for failure in partial.errors} == {"broken"}
+    assert partial.errors[0].error.root.kind == "config"
 
 
 def test_every_command_is_classified_as_a_partial_write_or_not(
