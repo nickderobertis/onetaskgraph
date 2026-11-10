@@ -123,6 +123,15 @@ class BudgetSpent(BaseModel):
     ]
 
 
+class GlobalId(RootModel[str]):
+    root: Annotated[
+        str,
+        Field(
+            description="One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely."
+        ),
+    ]
+
+
 class LocatorKind(StrEnum):
     LocatorKindSource = "source"
     LocatorKindItem = "item"
@@ -188,6 +197,22 @@ class Spent(BaseModel):
             description="What those requests spent, one entry per budget and unit, ordered by budget name."
         ),
     ]
+
+
+class Oversized(BaseModel):
+    source: Annotated[GlobalId, Field(description="The qualified id the item was read from.")]
+    destination: Annotated[
+        SourceName,
+        Field(description="The configured source it would have been written to."),
+    ]
+    body_size: Annotated[
+        int,
+        Field(
+            description="The size of the body that write would store, as the destination's plugin counts it.",
+            ge=0,
+        ),
+    ]
+    limit: Annotated[int, Field(description="The most that destination holds in one body.", ge=0)]
 
 
 class Locator1(BaseModel):
@@ -291,4 +316,11 @@ class FailureDocument(BaseModel):
             description="`true` when the write was refused for something already on its item before it — a\nprivate repository among its `repositories`, or a term sanitising it could not fix —\nand absent otherwise."
         ),
     ] = False
+    oversize: Annotated[
+        list[Oversized],
+        Field(
+            description="Every item a copy refused as `oversize` — its source id, its destination, the size of\nthe body that write would store and the most that destination holds — and absent for\nevery other failure.",
+            validate_default=True,
+        ),
+    ] = []
     sanitization: Sanitization | None = None

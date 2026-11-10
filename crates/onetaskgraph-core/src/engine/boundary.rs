@@ -1303,6 +1303,44 @@ impl Exposure {
         self
     }
 
+    /// The multiset union of `self` and `other`: every value either holds, each as many times
+    /// as the one of the two holding it more often holds it, `self`'s order first.
+    ///
+    /// What a batch of writes is screened as: exactly the values each write's own screening
+    /// would hold and nothing else, so two writes carrying the same text send it once. A check
+    /// decides on whether a value is there, and a rewrite maps each value it changes, so neither
+    /// reads the same value twice differently.
+    pub(crate) fn union(mut self, other: Self) -> Self {
+        fn joined(held: &mut Vec<String>, more: Vec<String>) {
+            let mut counted: std::collections::HashMap<String, usize> =
+                std::collections::HashMap::new();
+            for value in held.iter() {
+                *counted.entry(value.clone()).or_default() += 1;
+            }
+            let mut seen: std::collections::HashMap<String, usize> =
+                std::collections::HashMap::new();
+            for value in more {
+                let times = seen.entry(value.clone()).or_default();
+                *times += 1;
+                if *times > counted.get(&value).copied().unwrap_or(0) {
+                    held.push(value);
+                }
+            }
+        }
+        joined(&mut self.text, other.text);
+        joined(&mut self.paths, other.paths);
+        joined(&mut self.metadata, other.metadata);
+        joined(&mut self.fixed.text, other.fixed.text);
+        joined(&mut self.fixed.paths, other.fixed.paths);
+        joined(&mut self.fixed.metadata, other.fixed.metadata);
+        for locator in other.locators {
+            if !self.locators.contains(&locator) {
+                self.locators.push(locator);
+            }
+        }
+        self
+    }
+
     /// Paths a write names that replacement never rewrites — an image asset's name.
     pub(crate) fn paths(mut self, paths: impl IntoIterator<Item = String>) -> Self {
         self.fixed.paths.extend(paths);
@@ -2233,8 +2271,9 @@ impl Engine {
 
     /// Put every write of `writes` — each its destination, how it names its item, and what it
     /// exposes — to the caller's policy before any of them is made: one sanitisation of all of
-    /// them together, every list concatenated element by element under the one scope they
-    /// share, answering what each value is written as. A union one earlier sanitisation of this
+    /// them together — a batch, each list the multiset union of theirs (see
+    /// [`Exposure::union`]) under the one scope they share — answering what each value is
+    /// written as. A copy of one item is a batch of one. A union one earlier sanitisation of this
     /// command passed whole is not sent again.
     ///
     /// Only a union the policy refuses is sent again write by write, so the refusal names the
@@ -2252,7 +2291,7 @@ impl Engine {
         }
         let mut union = Exposure::default();
         for (destination, item, exposure) in writes {
-            union = union.and(located(destination, item, exposure.clone()));
+            union = union.union(located(destination, item, exposure.clone()));
         }
         if let Some(rewrite) = self.boundary.passed(&union) {
             return Ok(rewrite);

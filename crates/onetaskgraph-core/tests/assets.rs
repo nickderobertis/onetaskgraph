@@ -187,7 +187,10 @@ async fn a_copy_that_cannot_finish_puts_back_the_assets_of_each_task_it_changed(
         SourceName::new("notes").expect("a name"),
         NativeId::from("launch"),
     );
-    let projects = CopyScope::Projects { tasks: true };
+    let projects = CopyScope::Projects {
+        tasks: true,
+        documents: false,
+    };
     let report = engine
         .copy(&copy_of(std::slice::from_ref(&project), projects.clone()))
         .await
@@ -472,7 +475,10 @@ async fn a_copy_of_a_record_that_dropped_its_assets_takes_them_away_and_an_undo_
     let first = create(&engine, "First", &[1; 32]).await;
     let second = create(&engine, "Second", &[2; 32]).await;
     let project: GlobalId = "notes:launch".parse().expect("an id");
-    let projects = CopyScope::Projects { tasks: true };
+    let projects = CopyScope::Projects {
+        tasks: true,
+        documents: false,
+    };
     let report = engine
         .copy(&copy_of(std::slice::from_ref(&project), projects.clone()))
         .await

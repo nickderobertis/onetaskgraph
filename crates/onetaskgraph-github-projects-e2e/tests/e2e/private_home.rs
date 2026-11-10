@@ -1271,7 +1271,10 @@ fn a_project_copy_visibility_rate_limit_holds_off_later_reads() {
     let request = onetaskgraph_core::CopyRequest {
         items: onetaskgraph_core::CopyItems::new(vec!["plan:home".parse().expect("an id")])
             .expect("one item"),
-        scope: onetaskgraph_core::CopyScope::Projects { tasks: true },
+        scope: onetaskgraph_core::CopyScope::Projects {
+            tasks: true,
+            documents: false,
+        },
         destination: onetaskgraph_plugin_api::SourceName::new("board").expect("a name"),
         target_task: None,
         match_by: None,

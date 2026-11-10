@@ -44,6 +44,7 @@ mod locate;
 mod member_copy;
 mod metadata_fields;
 mod narrow_write_cost;
+mod oversize;
 mod plan_copy;
 mod plan_locations;
 mod plan_pacing;

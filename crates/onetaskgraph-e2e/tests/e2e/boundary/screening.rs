@@ -417,7 +417,10 @@ fn plan_copy_request() -> onetaskgraph_core::CopyRequest {
     onetaskgraph_core::CopyRequest {
         items: onetaskgraph_core::CopyItems::new(vec!["draft:goal".parse().unwrap()])
             .expect("one item"),
-        scope: onetaskgraph_core::CopyScope::Projects { tasks: true },
+        scope: onetaskgraph_core::CopyScope::Projects {
+            tasks: true,
+            documents: false,
+        },
         destination: onetaskgraph_plugin_api::SourceName::new("site").unwrap(),
         target_task: None,
         match_by: None,
@@ -497,7 +500,10 @@ async fn copied_through(
     let request = onetaskgraph_core::CopyRequest {
         items: onetaskgraph_core::CopyItems::new(vec!["draft:goal".parse().unwrap()])
             .expect("one item"),
-        scope: onetaskgraph_core::CopyScope::Projects { tasks: true },
+        scope: onetaskgraph_core::CopyScope::Projects {
+            tasks: true,
+            documents: false,
+        },
         destination: onetaskgraph_plugin_api::SourceName::new("site").unwrap(),
         target_task: None,
         match_by: None,

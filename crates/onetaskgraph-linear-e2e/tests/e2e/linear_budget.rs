@@ -599,7 +599,10 @@ fn status_write_warm(total: usize) -> (usize, String) {
             engine
                 .copy(&CopyRequest {
                     items: CopyItems::new(vec![global("plan:kept")]).expect("one item"),
-                    scope: CopyScope::Projects { tasks: false },
+                    scope: CopyScope::Projects {
+                        tasks: false,
+                        documents: false,
+                    },
                     destination: SourceName::new(LINEAR).unwrap(),
                     target_task: None,
                     match_by: None,
@@ -1071,7 +1074,10 @@ fn task_and_project_reads_status_listings_and_copy_discovery_cost_no_more_than_o
             engine
                 .copy(&CopyRequest {
                     items: CopyItems::new(vec![global("plan:kept")]).expect("one item"),
-                    scope: CopyScope::Projects { tasks: false },
+                    scope: CopyScope::Projects {
+                        tasks: false,
+                        documents: false,
+                    },
                     destination: SourceName::new(LINEAR).unwrap(),
                     target_task: None,
                     match_by: None,

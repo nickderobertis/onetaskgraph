@@ -63,12 +63,12 @@ use query::{Slot, failed};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use onetaskgraph_plugin_api::{
-    AssetPayload, AssetUploads, AssetWrite, Capabilities, Classification, Comment, CommentCopy,
-    Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, Direction, Document, DocumentQuery,
-    ItemKind, ItemWrite, Location, MetadataKey, MetadataMatch, MetadataRecord, Metering, NativeId,
-    Page, PageRequest, Priority, Project, ProjectFilter, ProjectQuery, Repository, SourceError,
-    SourceName, Status, StatusCategory, Task, TaskDetailRead, TaskQuery, TaskRef, TextFields,
-    TextQuery, WriteTarget,
+    AssetPayload, AssetUploads, AssetWrite, BodySize, Capabilities, Classification, Comment,
+    CommentCopy, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind, Direction, Document,
+    DocumentQuery, ItemKind, ItemWrite, Location, MetadataKey, MetadataMatch, MetadataRecord,
+    Metering, NativeId, Page, PageRequest, Priority, Project, ProjectFilter, ProjectQuery,
+    Repository, SourceError, SourceName, Status, StatusCategory, Task, TaskDetailRead, TaskQuery,
+    TaskRef, TextFields, TextQuery, WriteTarget,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -333,6 +333,11 @@ pub enum CopyScope {
     Projects {
         /// Whether the tasks in each project are copied too.
         tasks: bool,
+        /// Whether the documents filed under each project are copied too — `project copy
+        /// --documents` — in the same copy: read, screened and sized with the project and its
+        /// tasks before anything is written, and landed after them, each filed under the
+        /// project's counterpart.
+        documents: bool,
     },
     /// The ids name projects, and of the tasks in them exactly these are copied.
     ///
@@ -621,6 +626,25 @@ pub struct CopyOutcome {
     /// What the copy could not do for its section links, and what finishing them cost.
     #[serde(flatten)]
     pub sections: SectionLinks,
+    /// The size of the body the destination would store for the item, in the unit its plugin
+    /// states its limit in — the metadata slot the destination keeps and every asset reference
+    /// rewritten to where it is served included. Present on a dry run's item whose destination
+    /// can say, and absent on every other outcome.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body_size: Option<u64>,
+}
+
+/// One item a copy would write whose body is larger than its destination holds.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct Oversized {
+    /// The qualified id the item was read from.
+    pub source: GlobalId,
+    /// The configured source it would have been written to.
+    pub destination: SourceName,
+    /// The size of the body that write would store, as the destination's plugin counts it.
+    pub body_size: u64,
+    /// The most that destination holds in one body.
+    pub limit: u64,
 }
 
 /// What a `--comments` copy did to one task's comments at the destination.
@@ -816,6 +840,13 @@ pub enum CopyAction {
         /// Why, as `status <category> is not one of <categories>`.
         reason: String,
     },
+    /// A dry run's item whose body — [`CopyOutcome::body_size`] — is larger than its
+    /// destination holds: the copy itself would refuse, as `oversize`, before writing anything.
+    /// The command exits `4`.
+    Oversize {
+        /// The most the destination holds in one body, as its plugin states it.
+        limit: u64,
+    },
 }
 
 impl CopyAction {
@@ -827,7 +858,7 @@ impl CopyAction {
             Self::Updated { destination, .. }
             | Self::Unchanged { destination, .. }
             | Self::Orphaned { destination } => Some(destination),
-            Self::Failed { .. } | Self::Skipped { .. } => None,
+            Self::Failed { .. } | Self::Skipped { .. } | Self::Oversize { .. } => None,
         }
     }
 
@@ -840,7 +871,8 @@ impl CopyAction {
             Self::Created { .. }
             | Self::Orphaned { .. }
             | Self::Failed { .. }
-            | Self::Skipped { .. } => None,
+            | Self::Skipped { .. }
+            | Self::Oversize { .. } => None,
         }
     }
 
@@ -852,7 +884,10 @@ impl CopyAction {
             Self::Created { link, .. }
             | Self::Updated { link, .. }
             | Self::Unchanged { link, .. } => *link,
-            Self::Orphaned { .. } | Self::Failed { .. } | Self::Skipped { .. } => None,
+            Self::Orphaned { .. }
+            | Self::Failed { .. }
+            | Self::Skipped { .. }
+            | Self::Oversize { .. } => None,
         }
     }
 
@@ -864,7 +899,10 @@ impl CopyAction {
             Self::Created { comments, .. }
             | Self::Updated { comments, .. }
             | Self::Unchanged { comments, .. } => comments.as_ref(),
-            Self::Orphaned { .. } | Self::Failed { .. } | Self::Skipped { .. } => None,
+            Self::Orphaned { .. }
+            | Self::Failed { .. }
+            | Self::Skipped { .. }
+            | Self::Oversize { .. } => None,
         }
     }
 
@@ -880,7 +918,10 @@ impl CopyAction {
     fn landed(&self) -> bool {
         !matches!(
             self,
-            Self::Orphaned { .. } | Self::Failed { .. } | Self::Skipped { .. }
+            Self::Orphaned { .. }
+                | Self::Failed { .. }
+                | Self::Skipped { .. }
+                | Self::Oversize { .. }
         )
     }
 
@@ -890,7 +931,10 @@ impl CopyAction {
             Self::Created { link, .. }
             | Self::Updated { link, .. }
             | Self::Unchanged { link, .. } => Some(link),
-            Self::Orphaned { .. } | Self::Failed { .. } | Self::Skipped { .. } => None,
+            Self::Orphaned { .. }
+            | Self::Failed { .. }
+            | Self::Skipped { .. }
+            | Self::Oversize { .. } => None,
         }
     }
 
@@ -1568,6 +1612,13 @@ struct Running {
     /// origin: its answer is that destination's to hold for this command, so the filing lookup
     /// confirms a link to that project by it rather than by a read of the project.
     asked_origins: Vec<(SourceName, GlobalId)>,
+    /// The documents a `project copy --documents` carries with each project, by the project's
+    /// qualified id, in the order its source lists them.
+    plan_documents: HashMap<GlobalId, Vec<GlobalId>>,
+    /// The size of the body each item this copy writes would store, by its source id, as its
+    /// destination's plugin answered — taken before the first write, so a body larger than its
+    /// destination holds refuses the whole copy while nothing is written.
+    sizes: HashMap<GlobalId, BodySize>,
 }
 
 /// The member project a routed write was filed under, and what finding it wrote.
@@ -2472,7 +2523,7 @@ impl Engine {
                     })
                     .collect()
             }
-            CopyScope::Projects { tasks } => {
+            CopyScope::Projects { tasks, documents } => {
                 let mut projects = Vec::new();
                 for id in request.items.as_slice() {
                     let members = if *tasks {
@@ -2480,6 +2531,19 @@ impl Engine {
                     } else {
                         Vec::new()
                     };
+                    if *documents {
+                        // A destination with no documents has nowhere to put the plan's, so it
+                        // is refused before anything of the plan is read.
+                        documentary(self.writable(&request.destination)?)?;
+                        let filed: Vec<GlobalId> = self
+                            .project_documents(id)
+                            .await?
+                            .into_iter()
+                            .map(|document| document.id)
+                            .collect();
+                        running.resolvable.extend(filed.iter().cloned());
+                        running.plan_documents.insert(id.clone(), filed);
+                    }
                     running.resolvable.push(id.clone());
                     running.resolvable.extend(members.iter().cloned());
                     projects.push((id.clone(), members));
@@ -2531,6 +2595,7 @@ impl Engine {
             .map(|entry| (entry.destination.to_string(), entry.level))
             .collect();
         let homes = std::mem::take(&mut running.homes);
+        let sizes = std::mem::take(&mut running.sizes);
         let recordings = self.recordings(&running);
         // The repair writes an item's content again, so what the destination stores after it is
         // read off its answer exactly as the first write's was.
@@ -2543,6 +2608,19 @@ impl Engine {
         // is undone with nothing recorded at its sources.
         self.finished_writes(request, journal).await?;
         let mut items = items;
+        // A dry run says, of every item it sized, how large a body it would write — and, of one
+        // larger than its destination holds, that the copy itself would refuse it.
+        if request.dry_run {
+            for outcome in &mut items {
+                let Some(size) = sizes.get(&outcome.source) else {
+                    continue;
+                };
+                outcome.body_size = Some(size.size);
+                if let (true, Some(limit)) = (size.exceeds(), size.limit) {
+                    outcome.action = CopyAction::Oversize { limit };
+                }
+            }
+        }
         if !request.dry_run {
             intent::stop_at("before-link");
         }
@@ -3381,10 +3459,16 @@ impl Engine {
                         Err(error) => return Err(error),
                     }
                 }
+                let mut document_reads = self
+                    .read_documents(request, id, &mut changed, running)
+                    .await?;
                 {
                     let mut ahead = vec![project];
                     ahead.append(&mut reads);
+                    let carried = document_reads.len();
+                    ahead.append(&mut document_reads);
                     self.read_ahead(request, &ahead, running).await;
+                    document_reads = ahead.split_off(ahead.len() - carried);
                     let mut ahead = ahead.into_iter();
                     project = ahead.next().expect("the project was read first");
                     reads = ahead.collect();
@@ -3466,7 +3550,11 @@ impl Engine {
                     }
                 }
                 let projecting = projecting.settled(&project);
-                plans.push((project, tasks, changed, projecting));
+                let mut documents = Vec::new();
+                for read in document_reads {
+                    documents.push(self.plan_read(request, read, running).await?);
+                }
+                plans.push((project, tasks, changed, projecting, documents));
             } else {
                 let project = self
                     .read_for_copy(request, Level::Project, id, running)
@@ -3486,10 +3574,16 @@ impl Engine {
                         Err(error) => return Err(error),
                     }
                 }
-                // The project and every task read before any is aimed, so the destination is
-                // read for all of their counterparts together.
+                let mut document_reads = self
+                    .read_documents(request, id, &mut changed, running)
+                    .await?;
+                // The project, every task and every document it carries read before any is
+                // aimed, so the destination is read for all of their counterparts together.
                 reads.insert(0, project);
+                let carried = document_reads.len();
+                reads.append(&mut document_reads);
                 self.read_ahead(request, &reads, running).await;
+                let document_reads = reads.split_off(reads.len() - carried);
                 let mut reads = reads.into_iter();
                 let project = reads.next().expect("the project was read first");
                 let mut project = self.plan_read(request, project, running).await?;
@@ -3516,16 +3610,23 @@ impl Engine {
                 } else {
                     projections::Projecting::default()
                 };
-                plans.push((project, tasks, changed, projecting));
+                let mut documents = Vec::new();
+                for read in document_reads {
+                    documents.push(self.plan_read(request, read, running).await?);
+                }
+                plans.push((project, tasks, changed, projecting, documents));
             }
         }
-        for (project, tasks, _, _) in &plans {
-            for item in std::iter::once(project).chain(tasks) {
+        for (project, tasks, _, _, documents) in &plans {
+            for item in std::iter::once(project).chain(tasks).chain(documents) {
                 unrecorded_far_end(item, unrecorded)?;
             }
         }
-        for (project, tasks, _, _) in &mut plans {
-            for item in std::iter::once(project).chain(tasks) {
+        for (project, tasks, _, _, documents) in &mut plans {
+            for item in std::iter::once(project)
+                .chain(tasks.iter_mut())
+                .chain(documents.iter_mut())
+            {
                 self.prepare_public_body(item, running).await?;
             }
         }
@@ -3535,7 +3636,9 @@ impl Engine {
             .preflight_copy(
                 plans
                     .iter()
-                    .flat_map(|(project, tasks, _, _)| std::iter::once(project).chain(tasks))
+                    .flat_map(|(project, tasks, _, _, documents)| {
+                        std::iter::once(project).chain(tasks).chain(documents)
+                    })
                     .filter(|item| !item.skipped)
                     .collect(),
                 running,
@@ -3543,15 +3646,26 @@ impl Engine {
             .await?;
         // Only what lands somewhere screened is written as the policy passed it: a destination
         // declared private takes the original, as it always did.
-        for (project, tasks, _, _) in &mut plans {
-            for item in std::iter::once(project).chain(tasks.iter_mut()) {
+        for (project, tasks, _, _, documents) in &mut plans {
+            for item in std::iter::once(project)
+                .chain(tasks.iter_mut())
+                .chain(documents.iter_mut())
+            {
                 if self.declared(&item.to) != crate::config::SourceVisibility::Private {
                     rewritten(item, &rewrite)?;
                 }
             }
         }
+        // Every item of every plan sized as the policy passed it, before anything is written.
+        let sized: Vec<&Planned> = plans
+            .iter()
+            .flat_map(|(project, tasks, _, _, documents)| {
+                std::iter::once(project).chain(tasks).chain(documents)
+            })
+            .collect();
+        self.size_bodies(request, &sized, running)?;
         // Every public view too, before anything of any plan is written.
-        for (_, _, _, projecting) in &mut plans {
+        for (_, _, _, projecting, _) in &mut plans {
             if projecting.lands() {
                 if projecting.could_address() && running.private_locations.is_none() {
                     running.private_locations = Some(self.private_locations().await?);
@@ -3564,13 +3678,13 @@ impl Engine {
             self.preflight_projections(projecting).await?;
         }
         running.preflighted = true;
-        for (project, tasks, _, _) in &plans {
-            for item in std::iter::once(project).chain(tasks) {
+        for (project, tasks, _, _, documents) in &plans {
+            for item in std::iter::once(project).chain(tasks).chain(documents) {
                 note_private(running, item);
             }
         }
         let mut outcomes = Vec::new();
-        for (project, tasks, changed, projecting) in plans {
+        for (project, tasks, changed, projecting, documents) in plans {
             let landed = self
                 .copy_project(request, project, tasks, &changed, running, journal)
                 .await?;
@@ -3578,11 +3692,50 @@ impl Engine {
                 self.land_projections(&projecting, &landed, journal).await?;
             }
             outcomes.extend(landed);
+            // The plan's documents last, each filed under the project's counterpart this copy
+            // has just landed and naming the records it has just written.
+            if !documents.is_empty() {
+                outcomes.extend(
+                    self.copy_items(request, documents, None, running, journal)
+                        .await?,
+                );
+            }
             // A task that would not hold still is reported where its project's tasks are,
             // having written nothing.
             outcomes.extend(changed);
         }
         Ok(outcomes)
+    }
+
+    /// Read each document a `project copy --documents` carries with `project`, as a document
+    /// copy reads it: one that changed while it was read is reported among `changed`, having
+    /// written nothing.
+    async fn read_documents(
+        &self,
+        request: &CopyRequest,
+        project: &GlobalId,
+        changed: &mut Vec<CopyOutcome>,
+        running: &mut Running,
+    ) -> Result<Vec<Read>, EngineError> {
+        let documents = running
+            .plan_documents
+            .get(project)
+            .cloned()
+            .unwrap_or_default();
+        let mut reads = Vec::with_capacity(documents.len());
+        for document in documents {
+            match self
+                .read_for_copy(request, Level::Document, &document, running)
+                .await
+            {
+                Ok(read) => reads.push(read),
+                Err(error @ EngineError::ChangedWhileCopied { .. }) => {
+                    changed.push(failed(document, &error));
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(reads)
     }
 
     /// Copy the members a members-only copy names into the projects the destination already
@@ -3945,7 +4098,7 @@ impl Engine {
         journal: &mut Journal,
     ) -> Result<Vec<CopyOutcome>, EngineError> {
         let (carries_tasks, walks_orphans) = match request.scope {
-            CopyScope::Projects { tasks } => (tasks, tasks),
+            CopyScope::Projects { tasks, .. } => (tasks, tasks),
             CopyScope::Members(_) | CopyScope::MembersOnly(_) => (true, false),
             CopyScope::Tasks | CopyScope::Documents => (false, false),
         };
@@ -5195,6 +5348,7 @@ impl Engine {
                     continue;
                 }
                 orphans.push(CopyOutcome {
+                    body_size: None,
                     sections: SectionLinks::default(),
                     status_condition: None,
                     priority_condition: None,
@@ -5440,6 +5594,9 @@ impl Engine {
                     rewritten(item, &rewrite)?;
                 }
             }
+            // As the policy passed it, and before anything — an intent at the source included
+            // — is written.
+            self.size_bodies(request, &planned.iter().collect::<Vec<_>>(), running)?;
         }
 
         // Every create this call makes is recorded as an intent on the item it copies before
@@ -6348,6 +6505,154 @@ impl Engine {
             .await?;
         }
         self.check_all(&checked).await
+    }
+
+    /// Size the body every item of `planned` would write — each as [`Engine::write`] composes it
+    /// for its destination, its copy's record and every asset reference included — before any
+    /// of it is written, and refuse the whole copy, writing nothing, when any is larger than its
+    /// destination holds: every one over its limit named, as [`EngineError::Oversize`].
+    ///
+    /// A dry run keeps each size for its report instead, and refuses nothing. An item skipped
+    /// writes nothing and is not sized; a destination whose plugin cannot say is not either.
+    fn size_bodies(
+        &self,
+        request: &CopyRequest,
+        planned: &[&Planned],
+        running: &mut Running,
+    ) -> Result<(), EngineError> {
+        let mut over = Vec::new();
+        for item in planned.iter().filter(|item| !item.skipped) {
+            let destination = self.writable(&item.to)?;
+            let Some(size) = self.composed_size(destination, item, !request.no_link, running)
+            else {
+                continue;
+            };
+            if let (true, Some(limit)) = (size.exceeds(), size.limit) {
+                over.push(Oversized {
+                    source: item.source.clone(),
+                    destination: item.to.clone(),
+                    body_size: size.size,
+                    limit,
+                });
+            }
+            running.sizes.insert(item.source.clone(), size);
+        }
+        if over.is_empty() || request.dry_run {
+            return Ok(());
+        }
+        Err(EngineError::Oversize { items: over })
+    }
+
+    /// The body one planned item's write would store at `destination`, as its plugin sizes it:
+    /// the item [`outgoing`] lands, stamped with the record a copy leaves on it, with the edges
+    /// and delivered tasks this copy can already name and the assets it carries.
+    fn composed_size(
+        &self,
+        destination: &ResolvedSource,
+        item: &Planned,
+        linking: bool,
+        running: &Running,
+    ) -> Option<BodySize> {
+        let held = item.held.as_ref();
+        let target = match &item.target {
+            Target::Update { id, .. } => Some(id.clone()),
+            Target::Create => None,
+        };
+        let edges = resolved(&self.shown_edges(
+            &item.to,
+            &item.source,
+            mapped_edges(
+                &item.edges,
+                &item.source.source,
+                &item.to,
+                &running.resolvable,
+                &running.counterparts,
+            ),
+            &running.private,
+        ));
+        let delivers = resolved_entries(&self.shown_delivers(
+            &item.to,
+            delivers_of(item, &item.to, &running.resolvable, &running.counterparts),
+            &running.private,
+        ));
+        let suggested = target
+            .clone()
+            .unwrap_or_else(|| created_id(&item.item, None));
+        let mut landing = as_written(
+            destination,
+            item,
+            outgoing(
+                item,
+                suggested,
+                None,
+                &recorded(item, held),
+                &delivers,
+                held,
+            ),
+        );
+        // A create carries the key of the intent the copy records before it, as
+        // [`Engine::intend`] decides one is recorded: its UUID, as long as every one.
+        if matches!(item.target, Target::Create)
+            && linking
+            && !item.withheld
+            && self.writable(&item.source.source).is_ok_and(|source| {
+                source.source().writes().is_supported()
+                    && (self.declared(&item.to) != crate::config::SourceVisibility::Private
+                        || self.declared(source.name()) == crate::config::SourceVisibility::Private)
+            })
+        {
+            metadata_of(&mut landing).insert(
+                MetadataKey::CREATE_KEY.to_owned(),
+                Value::String(uuid::Uuid::nil().hyphenated().to_string()),
+            );
+        }
+        if let Item::Task(task) = &mut landing
+            && self.declared(destination.name()) != crate::config::SourceVisibility::Private
+            && edges.len() == item.edges.len()
+        {
+            task.metadata
+                .insert(MetadataKey::EDGES_ON_RECORD_KEY.to_owned(), Value::from(1));
+        }
+        record_of(
+            item,
+            &landing,
+            &edges,
+            destination.name(),
+            held.and_then(|prior| prior.recorded.as_ref()),
+            None,
+        )
+        .stamp(metadata_of(&mut landing));
+        let carrying = !item.assets.is_empty() || held.is_some_and(|prior| prior.assets.is_some());
+        let assets = carrying.then(|| {
+            assets::write_of(
+                item.assets.clone(),
+                held.and_then(|prior| prior.recorded.clone()),
+            )
+        });
+        let source = destination.source();
+        match landing {
+            Item::Task(task) => source.task_body_size(
+                &ItemWrite {
+                    target,
+                    item: *task,
+                    depends_on: edges,
+                },
+                assets.as_ref(),
+            ),
+            Item::Project(project) => source.project_body_size(&ItemWrite {
+                target,
+                item: *project,
+                depends_on: edges,
+            }),
+            Item::Document(document) => source.document_body_size(
+                &ItemWrite {
+                    target,
+                    item: *document,
+                    depends_on: Vec::new(),
+                },
+                assets.as_ref(),
+            ),
+        }
     }
 
     /// Ask, once, which tracker each source declared private is that an edge of `planned`,
@@ -7714,6 +8019,7 @@ impl Engine {
             },
         };
         let outcome = |action: CopyAction| CopyOutcome {
+            body_size: None,
             sections: SectionLinks::default(),
             source: item.source.clone(),
             action,

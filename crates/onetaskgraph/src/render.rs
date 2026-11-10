@@ -653,6 +653,15 @@ pub fn copied(report: &CopyReport) -> String {
                 if let CopyAction::Skipped { reason } = &outcome.action {
                     row.push(reason.clone());
                 }
+                // Only a dry run sizes what it would write, so only its rows say how large.
+                if let Some(size) = outcome.body_size {
+                    row.push(match &outcome.action {
+                        CopyAction::Oversize { limit } => {
+                            format!("body: {size} characters, over the limit of {limit}")
+                        }
+                        _ => format!("body: {size} characters"),
+                    });
+                }
                 row
             })
             .collect::<Vec<_>>(),

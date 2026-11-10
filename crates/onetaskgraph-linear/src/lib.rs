@@ -3910,11 +3910,8 @@ impl TaskSource for LinearSource {
         write: &ItemWrite<Task>,
         assets: Option<&onetaskgraph_plugin_api::AssetWrite>,
     ) -> Option<onetaskgraph_plugin_api::BodySize> {
-        let (content, mut metadata) = served(
-            write.item.content.as_deref(),
-            &write.item.metadata,
-            assets,
-        );
+        let (content, mut metadata) =
+            served(write.item.content.as_deref(), &write.item.metadata, assets);
         set_task_list(&mut metadata, TaskRef::DELIVERS_KEY, &write.item.delivers);
         set_task_list(
             &mut metadata,
@@ -3948,11 +3945,8 @@ impl TaskSource for LinearSource {
         write: &ItemWrite<Document>,
         assets: Option<&onetaskgraph_plugin_api::AssetWrite>,
     ) -> Option<onetaskgraph_plugin_api::BodySize> {
-        let (content, metadata) = served(
-            write.item.content.as_deref(),
-            &write.item.metadata,
-            assets,
-        );
+        let (content, metadata) =
+            served(write.item.content.as_deref(), &write.item.metadata, assets);
         body_size(Self::long_form(
             content.as_deref(),
             &metadata,
