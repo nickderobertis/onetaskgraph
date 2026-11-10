@@ -1310,15 +1310,24 @@ impl Exposure {
     /// would hold and nothing else, so two writes carrying the same text send it once. A check
     /// decides on whether a value is there, and a rewrite maps each value it changes, so neither
     /// reads the same value twice differently.
-    pub(crate) fn union(mut self, other: Self) -> Self {
-        fn joined(held: &mut Vec<String>, more: Vec<String>) {
-            let mut counted: std::collections::HashMap<String, usize> =
-                std::collections::HashMap::new();
-            for value in held.iter() {
-                *counted.entry(value.clone()).or_default() += 1;
+    ///
+    /// `checked` is whether the policy only checks, rewriting nothing: then a value is counted
+    /// over each surface as the check reads it — rewritable and fixed together, as one list —
+    /// so the batch's check is handed exactly the union of what each write's own would be. A
+    /// policy that rewrites keeps the two apart, so a value one write may have rewritten never
+    /// stands in for the same value another write holds where nothing rewrites it.
+    pub(crate) fn union(mut self, other: Self, checked: bool) -> Self {
+        type Tally = std::collections::HashMap<String, usize>;
+        fn tally<'a>(lists: impl IntoIterator<Item = &'a [String]>) -> Tally {
+            let mut tally = Tally::new();
+            for value in lists.into_iter().flatten() {
+                *tally.entry(value.clone()).or_default() += 1;
             }
-            let mut seen: std::collections::HashMap<String, usize> =
-                std::collections::HashMap::new();
+            tally
+        }
+        // Each value of `more` is appended to `held` once `seen` counts it more often than
+        // `counted` does.
+        fn joined(held: &mut Vec<String>, more: Vec<String>, counted: &Tally, seen: &mut Tally) {
             for value in more {
                 let times = seen.entry(value.clone()).or_default();
                 *times += 1;
@@ -1327,12 +1336,38 @@ impl Exposure {
                 }
             }
         }
-        joined(&mut self.text, other.text);
-        joined(&mut self.paths, other.paths);
-        joined(&mut self.metadata, other.metadata);
-        joined(&mut self.fixed.text, other.fixed.text);
-        joined(&mut self.fixed.paths, other.fixed.paths);
-        joined(&mut self.fixed.metadata, other.fixed.metadata);
+        for (held, fixed, more, fixed_more) in [
+            (
+                &mut self.text,
+                &mut self.fixed.text,
+                other.text,
+                other.fixed.text,
+            ),
+            (
+                &mut self.paths,
+                &mut self.fixed.paths,
+                other.paths,
+                other.fixed.paths,
+            ),
+            (
+                &mut self.metadata,
+                &mut self.fixed.metadata,
+                other.metadata,
+                other.fixed.metadata,
+            ),
+        ] {
+            if checked {
+                let counted = tally([held.as_slice(), fixed.as_slice()]);
+                let mut seen = Tally::new();
+                joined(held, more, &counted, &mut seen);
+                joined(fixed, fixed_more, &counted, &mut seen);
+            } else {
+                let counted = tally([held.as_slice()]);
+                joined(held, more, &counted, &mut Tally::new());
+                let counted = tally([fixed.as_slice()]);
+                joined(fixed, fixed_more, &counted, &mut Tally::new());
+            }
+        }
         for locator in other.locators {
             if !self.locators.contains(&locator) {
                 self.locators.push(locator);
@@ -2290,8 +2325,9 @@ impl Engine {
             return self.check(destination, item, exposure).await;
         }
         let mut union = Exposure::default();
+        let checked = self.boundary.mode == PolicyMode::Checks;
         for (destination, item, exposure) in writes {
-            union = union.union(located(destination, item, exposure.clone()));
+            union = union.union(located(destination, item, exposure.clone()), checked);
         }
         if let Some(rewrite) = self.boundary.passed(&union) {
             return Ok(rewrite);

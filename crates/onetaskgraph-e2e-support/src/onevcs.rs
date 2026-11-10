@@ -330,8 +330,10 @@ sys.exit(ran.returncode)
 "#;
 
 /// The Python interpreter the recorder runs on, found on `PATH` — `python3` is what every
-/// guard of this workspace already runs on all three platforms.
-fn python() -> &'static Path {
+/// guard of this workspace already runs on all three platforms — and that a journey's own
+/// recording policy runs on too.
+#[must_use]
+pub fn python() -> &'static Path {
     static PYTHON: OnceLock<PathBuf> = OnceLock::new();
     PYTHON.get_or_init(|| {
         let names: &[&str] = if cfg!(windows) {

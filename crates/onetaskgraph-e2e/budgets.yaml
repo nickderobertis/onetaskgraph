@@ -1,0 +1,16 @@
+# The write-policy processes a public plan copy starts, counted by the journey
+# `boundary::batch::a_public_plan_copy_starts_one_check_and_one_inspect_per_repository_of_the_released_onevcs`
+# while this project's `test` target runs. The command is tests/e2e/budget_runner.rs, which reports
+# what that run recorded; it names the saved telemetry it reads as its last argument, a libtest
+# filter no test matches, so a job with no build reads the row as unavailable.
+schema_version: 1
+budgets:
+  - id: boundary-invocations-per-public-copy
+    description: >-
+      Write-policy processes (`visibility_command` and `check_command` runs, `onevcs boundary inspect` and `onevcs boundary check` on this host) one public plan copy with its documents starts on the copying host — a cost no other budget contains, since the `plan-copy-seconds-*` budgets measure only the destination's modelled request latency in simulated time; detail gives the visibility runs apart from the check runs, and the items the check screened. An inner measure: it counts the public-boundary screening processes one copy starts, an inner part of the copy a person waits on, because their number is what batching changes (48 per-item processes against 3) and is exact on any host, while the copy's whole duration is already held by the `plan-copy-seconds-*` budgets beside it. Workload: one public plan — one project, six tasks, one design document and two spike reports, naming two public repositories — copied with its documents onto a public board under the write policy.
+    labels: [boundary]
+    measure: reported
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_boundary", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-e2e"]
+    unit: processes
+    direction: max
+    threshold: 3
