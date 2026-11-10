@@ -215,13 +215,13 @@ fn a_plan_copies_into_a_named_linear_team_of_a_store_configured_by_configuration
         5,
         "the project, its three tasks and its document: {report}"
     );
+    let mut sized = std::collections::BTreeMap::new();
     for item in items {
         assert_eq!(item["action"], json!("created"), "{item}");
         let size = item["body_size"]
             .as_u64()
             .unwrap_or_else(|| panic!("a size: {item}"));
-        // Each composed body is the rendered content and the slot Linear keeps it in.
-        assert!(size > 40, "{item}");
+        sized.insert(item["source"].as_str().expect("a source").to_owned(), size);
     }
     for (team, workspace) in &store.teams {
         assert!(
@@ -272,6 +272,42 @@ fn a_plan_copies_into_a_named_linear_team_of_a_store_configured_by_configuration
             assert!(sent.is_empty(), "{team} was asked nothing: {sent:?}");
         }
     }
+    // Each item's dry-run size is the length of the long form the team then stores for it —
+    // its rendered content and the slot Linear keeps beside it — and an unchanged re-copy's dry
+    // run sizes each exactly so again.
+    let (_, workspace) = store
+        .teams
+        .iter()
+        .find(|(team, _)| *team == TEAM)
+        .expect("the team");
+    let again: Value = serde_json::from_str(&store.ok(&dry)).expect("a copy report");
+    for (index, item) in items.iter().enumerate() {
+        let source = item["source"].as_str().expect("a source");
+        let native = item["destination"]
+            .as_str()
+            .and_then(|landed| landed.strip_prefix(&format!("{TEAM}:")))
+            .expect("landed in the team");
+        let kind = match index {
+            0 => "projects",
+            4 => "documents",
+            _ => "tasks",
+        };
+        let stored = workspace
+            .long_form(kind, native)
+            .unwrap_or_else(|| panic!("{source} is held as one of the team's {kind}"))
+            .chars()
+            .count() as u64;
+        assert_eq!(sized[source], stored, "{source}: the first dry run's size");
+        let resized = &again["items"][index];
+        assert_eq!(resized["source"], json!(source));
+        assert_eq!(resized["action"], json!("unchanged"), "{resized}");
+        assert_eq!(
+            resized["body_size"],
+            json!(stored),
+            "{source}: a re-copy's size"
+        );
+    }
+
     // Read back through the binary: every task is there, under the team's own project.
     let listed: Value =
         serde_json::from_str(&store.ok(&["task", "list", "--source", TEAM, "--json"]))

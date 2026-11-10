@@ -1326,8 +1326,6 @@ impl Exposure {
             }
             tally
         }
-        // Each value of `more` is appended to `held` once `seen` counts it more often than
-        // `counted` does.
         fn joined(held: &mut Vec<String>, more: Vec<String>, counted: &Tally, seen: &mut Tally) {
             for value in more {
                 let times = seen.entry(value.clone()).or_default();

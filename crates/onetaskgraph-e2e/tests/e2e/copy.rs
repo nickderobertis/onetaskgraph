@@ -3561,6 +3561,62 @@ fn a_document_copy_into_a_source_that_has_none_is_refused_naming_it_and_its_plug
 }
 
 #[test]
+fn a_project_copy_carrying_its_documents_into_a_source_that_has_none_is_refused_before_any_read() {
+    for row in documentary_rows() {
+        let sandbox = Sandbox::new();
+        sandbox.project_document(&row.document_with_documentless(&sandbox, NOTES));
+        // A project that does not exist: refused for the destination's documents rather than
+        // as an id naming nothing, so the plan was never read.
+        let complaint = refused(
+            &sandbox,
+            &[
+                "project",
+                "copy",
+                &qualified(SOURCE, "NO-SUCH-PROJECT"),
+                "--documents",
+                "--to",
+                NOTES,
+            ],
+            1,
+        );
+        assert!(
+            complaint.contains(NOTES) && complaint.contains("has no documents"),
+            "{}: the refusal names the source and what is wrong with it:\n{complaint}",
+            row.name
+        );
+        assert!(
+            !complaint.contains("NO-SUCH-PROJECT"),
+            "{}: and nothing of the plan was read to find it missing:\n{complaint}",
+            row.name
+        );
+    }
+}
+
+#[test]
+fn a_project_copy_carrying_its_documents_and_naming_members_is_refused_as_an_invocation() {
+    let sandbox = Sandbox::new();
+    sandbox.project_document(&ROWS[0].document_with_documentless(&sandbox, NOTES));
+    let complaint = refused(
+        &sandbox,
+        &[
+            "project",
+            "copy",
+            &qualified(SOURCE, "P-1"),
+            "--documents",
+            "--member",
+            &qualified(SOURCE, "T-1"),
+            "--to",
+            NOTES,
+        ],
+        2,
+    );
+    assert!(
+        complaint.contains("--documents") && complaint.contains("--member"),
+        "the refusal names both flags:\n{complaint}"
+    );
+}
+
+#[test]
 fn a_document_copy_out_of_a_source_that_has_none_is_refused_naming_it_and_its_plugin() {
     for row in ROWS
         .iter()

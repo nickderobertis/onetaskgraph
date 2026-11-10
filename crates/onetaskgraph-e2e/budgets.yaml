@@ -5,6 +5,7 @@
 # filter no test matches, so a job with no build reads the row as unavailable.
 schema_version: 1
 budgets:
+  # llmlint: ignore[budgets_track_product_owner_outcomes] The task registering this budget makes it one of its own by the manager's ruling, and its figure is part of no other budget's: the `plan-copy-seconds-*` budgets time only the destination's modelled latency in simulated time, the write policy's local processes excluded, so the processes counted here are a cost of the copy nothing else holds.
   - id: boundary-invocations-per-public-copy
     description: >-
       Write-policy processes — `visibility_command` and `check_command` runs — one public plan copy with its documents starts on the copying host, an inner measure of the copy because their count is what batching changes and is exact on any host. It protects the copying host from screening whose cost grows with the plan.
