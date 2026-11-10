@@ -21,6 +21,7 @@ import type {
   Attested,
   AttestationCheck,
   ProjectAttestationCheck,
+  PlannedProject,
   NativeId,
   Priority,
   ProjectGraph,
@@ -207,7 +208,9 @@ export type DocumentCreateOptions = CreateOptions & AssetOptions & { id?: string
 // A project is filed under no project, so it names none; its `id` is required instead, and a
 // project the source holds under it is replaced — its status, labels, repositories and every
 // metadata key not named here kept.
-export type ProjectCreateOptions = CreateOptions & { status?: StatusCategory };
+// `dryRun` renders the project and every member its template declares, and answers the plan
+// rather than writing it.
+export type ProjectCreateOptions = CreateOptions & { status?: StatusCategory; dryRun?: boolean };
 // A targeted update: every field named is written, and nothing else. `bodyFile` is read by the
 // binary byte for byte and replaces the content; `statusName` is the status's own word, for a
 // source that keeps one. A list given replaces that list, `[]` included — which is how a list is
@@ -1920,31 +1923,39 @@ export class OnetaskgraphClient {
     ]);
   }
   // Create — or, with `id` naming one the source holds, replace — a project, its description
-  // rendered from a template or given as it is; it answers as `projectShow` does.
+  // rendered from a template or given as it is; it answers as `projectShow` does. A template
+  // declaring `members` creates every member task too; `dryRun` answers the plan instead.
   projectCreate(
     source: string,
     id: NativeId,
     title: string,
-    options?: ProjectCreateOptions & { sanitizeDryRun?: false },
+    options: ProjectCreateOptions & { dryRun: true; sanitizeDryRun?: false },
+  ): Promise<PlannedProject>;
+  projectCreate(
+    source: string,
+    id: NativeId,
+    title: string,
+    options?: ProjectCreateOptions & { dryRun?: false; sanitizeDryRun?: false },
   ): Promise<QueryResponseOfQualifiedProject>;
   projectCreate(
     source: string,
     id: NativeId,
     title: string,
     options?: ProjectCreateOptions,
-  ): Promise<QueryResponseOfQualifiedProject | SanitizeDryRun>;
+  ): Promise<QueryResponseOfQualifiedProject | PlannedProject | SanitizeDryRun>;
   async projectCreate(
     source: string,
     id: NativeId,
     title: string,
     options: ProjectCreateOptions = {},
-  ): Promise<QueryResponseOfQualifiedProject | SanitizeDryRun> {
+  ): Promise<QueryResponseOfQualifiedProject | PlannedProject | SanitizeDryRun> {
     const { args, input } = createArguments(
       "projectCreate",
       ["--id", id, "--title", title],
       options,
     );
     if (options.status !== undefined) args.push("--status", options.status);
+    if (options.dryRun === true) args.push("--dry-run");
     return this.run("project create", [source, ...args], input, options.sanitizeDryRun === true);
   }
   // Regenerate one project's description in place from its template, over its stored answers.
