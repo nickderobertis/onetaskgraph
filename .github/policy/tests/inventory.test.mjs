@@ -158,9 +158,11 @@ test("source edits select CD journeys and project definitions also select cache 
 
 // A release guard may skip Windows only where what it drives runs on Linux alone in production,
 // or skip off Linux where it checks something no platform changes; either way it must still
-// run in full, unconditionally, in test-linux. Derived from scripts:distribution-check and
-// scripts:distribution-test rather than listed, so a guard that starts skipping is held too.
+// run in full, unconditionally, in a Linux job: scripts:distribution-check in test-linux, and
+// scripts:distribution-test in lint, which has the room test-linux's coverage leaves it none of.
+// Derived from both targets rather than listed, so a guard that starts skipping is held too.
 const GUARD_TARGETS = ["distribution-check", "distribution-test"];
+const GUARD_JOBS = { "distribution-check": "test-linux", "distribution-test": "lint" };
 const WINDOWS = ["*Windows_NT*", "*msys*", "*cygwin*", "*win32*"];
 const OFF_LINUX = [...WINDOWS, "*darwin*"];
 const MOVED_OFF_WINDOWS = [
@@ -200,19 +202,27 @@ function skipProblems(sources) {
       if (!allowed.includes(pattern)) problems.push(`${guard} also skips ${pattern}`);
   }
   const ci = parse(sources[".github/workflows/ci.yml"]);
-  const job = ci.jobs["test-linux"];
-  if (job?.["runs-on"] !== "ubuntu-latest")
-    problems.push("test-linux does not run on ubuntu-latest");
-  if (!job?.steps?.some((step) => step.run === "just ci-test-linux"))
-    problems.push("test-linux does not run `just ci-test-linux`");
-  if (!/\nci-test-linux[^\n]*:\n[^\n]*scripts\/ci-job\.sh test-linux\b/.test(sources.justfile))
-    problems.push("`just ci-test-linux` does not run scripts/ci-job.sh test-linux");
-  const arm = sources["scripts/ci-job.sh"].match(
-    /\n {2}test-linux\)\n[\s\S]*?phases="([\s\S]*?)"\n/,
-  );
-  for (const target of GUARD_TARGETS)
+  for (const name of new Set(Object.values(GUARD_JOBS))) {
+    const job = ci.jobs[name];
+    if (job?.["runs-on"] !== "ubuntu-latest")
+      problems.push(`${name} does not run on ubuntu-latest`);
+    if (!job?.steps?.some((step) => step.run === `just ci-${name}`))
+      problems.push(`${name} does not run \`just ci-${name}\``);
+    if (
+      !new RegExp(`\\nci-${name}[^\\n]*:\\n[^\\n]*scripts\\/ci-job\\.sh ${name}\\b`).test(
+        sources.justfile,
+      )
+    )
+      problems.push(`\`just ci-${name}\` does not run scripts/ci-job.sh ${name}`);
+  }
+  for (const target of GUARD_TARGETS) {
+    const name = GUARD_JOBS[target];
+    const arm = sources["scripts/ci-job.sh"].match(
+      new RegExp(`\\n {2}${name}\\)\\n[\\s\\S]*?phases="([\\s\\S]*?)"\\n`),
+    );
     if (!arm?.[1].split("\n").includes(`1 run scripts:${target} -`))
-      problems.push(`test-linux's phases do not run scripts:${target} unconditionally`);
+      problems.push(`${name}'s phases do not run scripts:${target} unconditionally`);
+  }
   return problems;
 }
 
@@ -237,14 +247,14 @@ test("the policy journeys are keyed on exactly the distribution guards they read
   );
 });
 
-test("every release guard that skips Windows runs in full in test-linux", () => {
+test("every release guard that skips Windows runs in full in a Linux job", () => {
   const sources = guardSources();
   for (const guard of [...MOVED_OFF_WINDOWS, "scripts/check-fixture-discrimination.sh"])
     assert.ok(windowsSkips(sources).includes(guard), guard);
   assert.deepEqual(skipProblems(sources), []);
 });
 
-test("a skip widened past Windows, or test-linux leaving distribution-check, is refused", () => {
+test("a skip widened past Windows, or a guard target leaving its Linux job, is refused", () => {
   const original = guardSources();
   const refused = (edit, expected) => {
     const sources = structuredClone(original);
@@ -264,14 +274,14 @@ test("a skip widened past Windows, or test-linux leaving distribution-check, is 
   }, /check-fixture-discrimination\.sh also skips \*linux\*/);
   refused((sources) => {
     sources["scripts/ci-job.sh"] = sources["scripts/ci-job.sh"].replace(
-      /(\n {2}test-linux\)[\s\S]*?)1 run scripts:distribution-test -/,
+      /(\n {2}lint\)[\s\S]*?)\n1 run scripts:distribution-test -/,
       (_, before) => before,
     );
-  }, /do not run scripts:distribution-test unconditionally/);
+  }, /lint's phases do not run scripts:distribution-test unconditionally/);
   refused((sources) => {
     sources["scripts/ci-job.sh"] = sources["scripts/ci-job.sh"].replace(
-      /(\n {2}test-linux\)[\s\S]*?)1 run scripts:distribution-check -\n/,
-      (_, before) => before,
+      /(\n {2}test-linux\)[\s\S]*?)\n1 run scripts:distribution-check -"/,
+      (_, before) => `${before}"`,
     );
   }, /do not run scripts:distribution-check unconditionally/);
   refused((sources) => {
@@ -280,6 +290,12 @@ test("a skip widened past Windows, or test-linux leaving distribution-check, is 
       "$1windows-latest",
     );
   }, /test-linux does not run on ubuntu-latest/);
+  refused((sources) => {
+    sources[".github/workflows/ci.yml"] = sources[".github/workflows/ci.yml"].replace(
+      /(\n {2}lint:\n(?: {4}[^\n]*\n)*? {4}runs-on: )ubuntu-latest/,
+      "$1macos-latest",
+    );
+  }, /lint does not run on ubuntu-latest/);
 });
 
 // Which projects a job's phases run a target for, as Nx reads each phase's exclusions: a name,

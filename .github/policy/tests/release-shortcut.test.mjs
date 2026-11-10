@@ -248,7 +248,8 @@ test("the release coverage switch keeps functional and SDK tasks and omits only 
     "sdk-typescript:coverage",
     "github-workflow-policy:budgets",
     "onetaskgraph-github-projects:test",
-    "scripts:distribution-test",
+    // scripts:distribution-test is lint's, which the switch does not reach.
+    "scripts:distribution-check",
   ])
     assert.ok(release.includes(task), `${task}: still selected on release`);
   const omitted = normal.filter((task) => !release.includes(task));

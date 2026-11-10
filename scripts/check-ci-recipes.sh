@@ -315,7 +315,7 @@ for arguments in "onetaskgraph-linear" "onetaskgraph-linear live" \
     || fail "live-crate-test.sh ran '$arguments', which names no journey: exit $LIVE_STATUS, ran '$RECORDED'"
 done
 
-# Where test-linux runs the distribution journey under the relative interpreter, the real
+# Where lint runs the distribution journey under the relative interpreter, the real
 # check-relative-interpreter.sh runs the scripts it is given, or every one but that journey,
 # and clears the variable before any runs; and the journey hands itself to that check, which
 # follows it with the targeted pass. Elsewhere the targeted pass stands in for it. The
@@ -369,6 +369,7 @@ for target in format-check lint typecheck; do
 done
 expect "lint after a change to $CHANGED" ran "sdk-python:generate-check"
 expect "lint after a change to $CHANGED" ran "workspace:deny"
+expect "lint after a change to $CHANGED" ran "scripts:distribution-test"
 expect "lint after a change to $CHANGED" ran "$CHANGED:test" absent
 
 recipe ci-test-linux
@@ -395,7 +396,8 @@ expect "test-linux after a change to $CHANGED" ran "onetaskgraph-linear-e2e:budg
 expect "test-linux after a change to $CHANGED" ran "workspace:test"
 expect "test-linux after a change to $CHANGED" ran "workspace:coverage"
 expect "test-linux after a change to $CHANGED" ran "scripts:distribution-check"
-expect "test-linux after a change to $CHANGED" ran "scripts:distribution-test"
+# Linux's distribution journey is lint's, where test-linux's coverage leaves it room.
+expect "test-linux after a change to $CHANGED" ran "scripts:distribution-test" absent
 expect "test-linux after a change to $CHANGED" ran "$UNAFFECTED:test" absent
 expect "test-linux after a change to $CHANGED" ran "github-workflows:test" absent
 expect "test-linux after a change to $CHANGED" ran "$CHANGED:lint" absent
@@ -423,12 +425,13 @@ expect_status "lint after a change to $NOTHING_FILE" 0
 expect "lint after a change to $NOTHING_FILE" ran "$CHANGED:lint" absent
 expect "lint after a change to $NOTHING_FILE" ran "workspace:lint" absent
 expect "lint after a change to $NOTHING_FILE" ran "workspace:deny"
+expect "lint after a change to $NOTHING_FILE" ran "scripts:distribution-test"
 for job in test-linux; do
   recipe "ci-$job"
   expect_status "$job after a change to $NOTHING_FILE" 0
   expect "$job after a change to $NOTHING_FILE" ran "$CHANGED:coverage" absent
   expect "$job after a change to $NOTHING_FILE" ran "workspace:test" absent
-  expect "$job after a change to $NOTHING_FILE" ran "scripts:distribution-test"
+  expect "$job after a change to $NOTHING_FILE" ran "scripts:distribution-check"
 done
 for job in test-windows test-macos; do
   recipe "ci-$job" --select-only
@@ -457,17 +460,18 @@ for actions in true ""; do
   GITHUB_ACTIONS="$actions" recipe ci-lint
   expect_status "lint with $CHANGED:lint failing, $mode" 1
   expect "lint with $CHANGED:lint failing, $mode" ran "workspace:deny"
+  expect "lint with $CHANGED:lint failing, $mode" ran "scripts:distribution-test"
   grep -qF "ci-job: lint: nx affected -t format-check lint typecheck failed" <<<"$OUTPUT" \
     || fail "lint with $CHANGED:lint failing, $mode: the recipe did not name the phase that failed"
   fail_one "$CHANGED:coverage"
   GITHUB_ACTIONS="$actions" recipe ci-test-linux
   expect_status "test-linux with $CHANGED:coverage failing, $mode" 1
-  expect "test-linux with $CHANGED:coverage failing, $mode" ran "scripts:distribution-test"
+  expect "test-linux with $CHANGED:coverage failing, $mode" ran "scripts:distribution-check"
   grep -qE "^ci-job: test-linux: nx affected -t test-uncovered coverage( --exclude=[^ ]+)? failed" <<<"$OUTPUT" \
     || fail "test-linux with $CHANGED:coverage failing, $mode: the recipe did not name the phase that failed"
 done
 
-# 3a. test-linux runs the distribution journey under the relative interpreter, and test-macos
+# 3a. lint runs Linux's distribution journey under the relative interpreter, and test-macos
 #     plainly, so every pull request still runs it both ways.
 git -C "$REPO" checkout --quiet -- .
 git -C "$REPO" reset --quiet --hard "$BASE"
@@ -482,11 +486,11 @@ project["targets"]["distribution-test"]["options"] = {
 json.dump(project, open(path, "w", encoding="utf-8"), indent=2)
 PY2
 git -C "$REPO" commit --quiet --no-verify -am "test: record how the distribution journey runs"
-for job in test-linux test-macos; do
+for job in lint test-macos; do
   rm -f "$scratch/distribution-path"
   recipe "ci-$job"
   expect_status "$job recording how the distribution journey runs" 0
-  case "$job" in test-linux) expected=1 ;; *) expected=plain ;; esac
+  case "$job" in lint) expected=1 ;; *) expected=plain ;; esac
   [ "$(cat "$scratch/distribution-path" 2>/dev/null)" = "$expected" ] \
     || fail "$job ran the distribution journey as '$(cat "$scratch/distribution-path" 2>/dev/null)', not '$expected'"
 done

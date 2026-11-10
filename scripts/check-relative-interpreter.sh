@@ -10,11 +10,11 @@
 # for the host, which is the variable under test. Case 1 refuses to let the rest pass
 # vacuously, because a simulation that did not take would look exactly like a pass.
 #
-# The distribution journey is not re-run whole here. Where it runs plainly — test-macos,
-# test-windows and `just check` — this runs scripts/test-python-call-sites.sh in its place:
+# The distribution journey is not re-run whole here. Where it runs plainly or not at all —
+# test-macos, test-windows, test-linux and `just check` — this runs scripts/test-python-call-sites.sh in its place:
 # every call site that journey reaches which starts Python, through the real scripts, in
-# about a minute rather than its five. Where the journey runs under this check — test-linux,
-# or `check-relative-interpreter.sh scripts/test-distribution.sh` — that targeted pass runs
+# about a minute rather than its five. Where the journey runs under this check — lint, or
+# `check-relative-interpreter.sh scripts/test-distribution.sh` — that targeted pass runs
 # after it, and the two are compared: a script the journey started Python from through the
 # relative interpreter that the targeted pass did not fails this check, naming it.
 # scripts/check-python-call-sites-enforced.sh watches that comparison refuse a missed site.

@@ -64,9 +64,16 @@ esac
 # llmlint: ignore-block[work_goes_through_command_surface] Each phase is Nx's own invocation because this script reads its task graph to select, stream and summarise the phase, and runs phases side by side; the just recipes for these tasks are single `nx run` wrappers (generate-check adds only output buffering), and this script is itself the body of the ci-* recipes.
 case "$JOB" in
   lint)
+    # Linux's distribution journey runs here, beside the lint phases, rather than in
+    # test-linux: with every crate's coverage selected, test-linux's four cores ran it for 34
+    # minutes and the job past its timeout (run 42882244796), while this job finished in 14 of
+    # its 30. It still runs in full, unconditionally, on Linux, and under the relative
+    # interpreter, which check-relative-interpreter.sh compares with the targeted pass.
+    export ONETASKGRAPH_DISTRIBUTION_UNDER_RELATIVE_INTERPRETER=1
     phases="1 affected format-check,lint,typecheck -
 1 run sdk-python:generate-check -
-1 run workspace:deny -"
+1 run workspace:deny -
+1 run scripts:distribution-test -"
     ;;
   test-linux)
     # And the live e2e suites' `test` runs only their credentialed journeys, coverage running
@@ -76,9 +83,6 @@ case "$JOB" in
     export ONETASKGRAPH_TESTS_UNDER_COVERAGE=1
     # The release CD journeys name each recipe call's seconds, so a slow phase is visible here.
     export ONETASKGRAPH_CD_TIMINGS=1
-    # Exercise the relative interpreter without paying for a second distribution run.
-    # check-relative-interpreter.sh owns the call-site comparison.
-    export ONETASKGRAPH_DISTRIBUTION_UNDER_RELATIVE_INTERPRETER=1
     # Work that would queue behind a long phase gets one of its own: the two Linear crates,
     # whose credentialed journeys take one seat and so run one at a time, and the SDKs'
     # coverage, which would otherwise wait for every crate's.
@@ -95,8 +99,7 @@ case "$JOB" in
 1 affected test *,!github-workflows --parallel=4
 1 affected test *,!onetaskgraph-linear,!onetaskgraph-linear-e2e
 1 affected test-uncovered,coverage *,!tag:layer:sdk
-1 run scripts:distribution-check -
-1 run scripts:distribution-test -"
+1 run scripts:distribution-check -"
     if "$skip_rust_coverage"; then
       coverage_budget_exclusions="onetaskgraph-github-projects-e2e,onetaskgraph-linear-e2e,onetaskgraph-live-janitor"
     else
