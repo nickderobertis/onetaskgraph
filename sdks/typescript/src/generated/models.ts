@@ -1571,6 +1571,11 @@ action: "skipped"
 [k: string]: any
 } | {
 /**
+ * The size of the body the item would store, as the destination's plugin counts it —
+ * what [`CopyOutcome::body_size`] reports beside it.
+ */
+size: number
+/**
  * The most the destination holds in one body, as its plugin states it.
  */
 limit: number
@@ -1847,6 +1852,11 @@ reason: string
 action: "skipped"
 [k: string]: any
 } | {
+/**
+ * The size of the body the item would store, as the destination's plugin counts it —
+ * what [`CopyOutcome::body_size`] reports beside it.
+ */
+size: number
 /**
  * The most the destination holds in one body, as its plugin states it.
  */
@@ -2374,6 +2384,11 @@ reason: string
 action: "skipped"
 [k: string]: any
 } | {
+/**
+ * The size of the body the item would store, as the destination's plugin counts it —
+ * what [`CopyOutcome::body_size`] reports beside it.
+ */
+size: number
 /**
  * The most the destination holds in one body, as its plugin states it.
  */

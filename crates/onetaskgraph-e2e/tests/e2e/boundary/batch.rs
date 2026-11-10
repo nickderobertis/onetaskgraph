@@ -492,6 +492,58 @@ fn under_a_policy_that_rewrites_a_value_rewritable_in_one_write_and_fixed_in_ano
     );
 }
 
+#[test]
+fn a_dry_run_sizes_a_body_as_the_policy_rewrote_it() {
+    // The released `boundary sanitize` replaces a declared term with a shorter word: the dry run
+    // sizes the body as it would be written, replacement made, and the board stores exactly that.
+    let sandbox = Sandbox::new();
+    let mut home = OnevcsHome::new(&sandbox);
+    registered_with_plan(&mut home);
+    let record = home.recorded_sanitizing(
+        &sandbox,
+        json!([{"term": "quietharbor", "with": "harbor-x"}]),
+    );
+    let (config, board) = crate::fixtures::github_projects_with_items(&sandbox, Vec::new());
+    let extra = json!({
+        "draft": super::folder(&sandbox, "draft", "public"),
+        "board": {"plugin": "github-projects", "config": config, "visibility": "public"},
+    });
+    let policy = record.write_policy().clone();
+    let store = Store::configured(sandbox, Some(home), Some(policy), extra);
+    store.record(
+        "draft",
+        "tasks",
+        "solo",
+        &format!("title: A task of its own\nstatus: todo\nrepositories: [{OPEN}]"),
+        "Mirror the retry loop quietharbor uses, as quietharbor does.",
+    );
+    let copy = ["task", "copy", "draft:solo", "--to", "board", "--json"];
+    let mut dry = copy.to_vec();
+    dry.push("--dry-run");
+    let report: Value = serde_json::from_str(&store.ok(&dry)).expect("a report");
+    let sized = report["items"][0]["body_size"]
+        .as_u64()
+        .unwrap_or_else(|| panic!("a size: {report}"));
+    let landed: Value = serde_json::from_str(&store.ok(&copy)).expect("a report");
+    let id = landed["items"][0]["destination"]
+        .as_str()
+        .expect("a destination")
+        .strip_prefix("board:")
+        .expect("on the board")
+        .to_owned();
+    let body = board.body(&id);
+    let body = body.as_str().expect("a body");
+    assert!(
+        body.contains("harbor-x") && !body.contains("quietharbor"),
+        "{body}"
+    );
+    assert_eq!(
+        sized,
+        body.chars().count() as u64,
+        "the dry run sized the body as the policy rewrote it"
+    );
+}
+
 /// The budget the journey above records, and the workload it records it for.
 pub(crate) const BOUNDARY_BUDGET: &str = "boundary-invocations-per-public-copy";
 pub(crate) const BOUNDARY_WORKLOAD: &str = "public plan of a project, six tasks, a design document and two spike reports naming two \

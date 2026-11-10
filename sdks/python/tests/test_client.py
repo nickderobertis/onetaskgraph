@@ -751,6 +751,38 @@ def test_task_copy_create_drives_the_binary(binary: Path, tmp_path: Path) -> Non
         assert "--create cannot be given with" in str(refused.value)
 
 
+def test_project_copy_carries_its_documents_when_asked(binary: Path, tmp_path: Path) -> None:
+    """Copy a project with its task and its document in one command, and read the document back."""
+    root = folders(tmp_path)
+    (root / "from" / "projects").mkdir()
+    (root / "from" / "projects" / "P-1.md").write_text(
+        "---\ntitle: Engine\nstatus: todo\n---\nthe engine\n", encoding="utf-8"
+    )
+    (root / "from" / "tasks" / "T-1.md").write_text(
+        "---\ntitle: Alpha engine\nstatus: todo\nproject: P-1\n---\nthe core\n",
+        encoding="utf-8",
+    )
+    (root / "from" / "documents").mkdir()
+    (root / "from" / "documents" / "D-1.md").write_text(
+        "---\ntitle: Design of the engine\nproject: P-1\n---\nwhy the core\n", encoding="utf-8"
+    )
+    client = Client(binary, cwd=root)
+
+    # Without the flag a project copy reads and writes no document.
+    alone = run(client.project_copy(id="from:P-1", to="into", dry_run=True))
+    assert [item.root.source.root for item in alone.items] == ["from:P-1", "from:T-1"]
+    copied = run(client.project_copy(id="from:P-1", to="into", documents=True))
+    assert [(item.root.source.root, item.root.action) for item in copied.items] == [
+        ("from:P-1", "created"),
+        ("from:T-1", "created"),
+        ("from:D-1", "created"),
+    ]
+    landed = run(client.document_list(source=["into"]))
+    assert [document.item.title for document in landed.items] == ["Design of the engine"]
+    again = run(client.project_copy(id="from:P-1", to="into", documents=True))
+    assert [item.root.action for item in again.items] == ["unchanged"] * 3
+
+
 def test_project_copy_drives_the_binary(binary: Path, tmp_path: Path) -> None:
     """Copy a project and the tasks in it, then copy it again without duplicating them."""
     root = folders(tmp_path)

@@ -2335,9 +2335,15 @@ export const runtimeSchemas = {
         ]
       },
       {
-        "description": "A dry run's item whose body — [`CopyOutcome::body_size`] — is larger than its\ndestination holds: the copy itself would refuse, as `oversize`, before writing anything.\nThe command exits `4`.",
+        "description": "A dry run's item whose body is larger than its destination holds: the copy itself would\nrefuse, as `oversize`, before writing anything. The command exits `4`.",
         "type": "object",
         "properties": {
+          "size": {
+            "description": "The size of the body the item would store, as the destination's plugin counts it —\nwhat [`CopyOutcome::body_size`] reports beside it.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
           "limit": {
             "description": "The most the destination holds in one body, as its plugin states it.",
             "type": "integer",
@@ -2351,6 +2357,7 @@ export const runtimeSchemas = {
         },
         "required": [
           "action",
+          "size",
           "limit"
         ]
       }
@@ -2883,9 +2890,15 @@ export const runtimeSchemas = {
         ]
       },
       {
-        "description": "A dry run's item whose body — [`CopyOutcome::body_size`] — is larger than its\ndestination holds: the copy itself would refuse, as `oversize`, before writing anything.\nThe command exits `4`.",
+        "description": "A dry run's item whose body is larger than its destination holds: the copy itself would\nrefuse, as `oversize`, before writing anything. The command exits `4`.",
         "type": "object",
         "properties": {
+          "size": {
+            "description": "The size of the body the item would store, as the destination's plugin counts it —\nwhat [`CopyOutcome::body_size`] reports beside it.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
           "limit": {
             "description": "The most the destination holds in one body, as its plugin states it.",
             "type": "integer",
@@ -2899,6 +2912,7 @@ export const runtimeSchemas = {
         },
         "required": [
           "action",
+          "size",
           "limit"
         ]
       }
@@ -3821,9 +3835,15 @@ export const runtimeSchemas = {
             ]
           },
           {
-            "description": "A dry run's item whose body — [`CopyOutcome::body_size`] — is larger than its\ndestination holds: the copy itself would refuse, as `oversize`, before writing anything.\nThe command exits `4`.",
+            "description": "A dry run's item whose body is larger than its destination holds: the copy itself would\nrefuse, as `oversize`, before writing anything. The command exits `4`.",
             "type": "object",
             "properties": {
+              "size": {
+                "description": "The size of the body the item would store, as the destination's plugin counts it —\nwhat [`CopyOutcome::body_size`] reports beside it.",
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
               "limit": {
                 "description": "The most the destination holds in one body, as its plugin states it.",
                 "type": "integer",
@@ -3837,6 +3857,7 @@ export const runtimeSchemas = {
             },
             "required": [
               "action",
+              "size",
               "limit"
             ]
           }

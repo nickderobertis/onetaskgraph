@@ -37,7 +37,7 @@ fn writes(calls: &[Call]) -> Vec<&Call> {
 }
 
 /// Every file under `root`, with its bytes.
-fn tree(root: &Path) -> BTreeMap<String, Vec<u8>> {
+pub(super) fn tree(root: &Path) -> BTreeMap<String, Vec<u8>> {
     let mut held = BTreeMap::new();
     let mut pending = vec![root.to_path_buf()];
     while let Some(directory) = pending.pop() {
@@ -111,6 +111,11 @@ fn reported_oversize(report: &Value, source: &str) -> u64 {
     assert_eq!(item["action"], json!("oversize"), "{item}");
     assert_eq!(item["limit"], json!(LIMIT), "{item}");
     let size = item["body_size"].as_u64().unwrap();
+    assert_eq!(
+        item["size"],
+        json!(size),
+        "the action names the size it is over by: {item}"
+    );
     assert!(size > LIMIT, "{item}");
     size
 }
@@ -341,5 +346,55 @@ fn a_dry_run_sizes_a_task_as_the_board_then_stores_it() {
     assert_eq!(
         sized, stored,
         "the dry run sized the body the board then stored"
+    );
+}
+
+#[test]
+fn an_updates_dry_run_sizes_the_body_the_board_then_stores_its_recorded_image_reused() {
+    let plan = Plan::new(0, Vec::new());
+    let assets = plan.root.join("tasks/T-1.assets");
+    std::fs::create_dir_all(&assets).unwrap();
+    std::fs::write(assets.join("diagram.png"), &plan.generated.png).unwrap();
+    let content = format!(
+        "{}\n\n![Where the copy spends its time](./diagram.png)\n",
+        plan.generated.tasks[0]
+    );
+    plan.write_task(1, &content, false);
+    let first = success(&plan.run(&["task", "copy", "notes:T-1", "--to", "board", "--json"]));
+    let id = outcome(&first, "notes:T-1")["destination"]
+        .as_str()
+        .unwrap()
+        .strip_prefix("board:")
+        .unwrap()
+        .to_owned();
+    // Edited, so the next copy updates the issue, keeping what the board records of it — the
+    // image's uploaded URL among it, which the update reuses rather than uploading again.
+    plan.write_task(1, &format!("{content}One more line.\n"), false);
+    let dry = success(&plan.run(&[
+        "task",
+        "copy",
+        "notes:T-1",
+        "--to",
+        "board",
+        "--dry-run",
+        "--json",
+    ]));
+    let item = outcome(&dry, "notes:T-1");
+    assert_eq!(item["action"], json!("updated"), "{item}");
+    let sized = item["body_size"].as_u64().unwrap();
+    let mark = plan.board.calls_count();
+    success(&plan.run(&["task", "copy", "notes:T-1", "--to", "board", "--json"]));
+    assert!(
+        !plan
+            .board
+            .calls_since(mark)
+            .iter()
+            .any(|call| call.kind == Kind::Upload),
+        "the recorded image was reused, not uploaded again"
+    );
+    let stored = plan.github.body(&id).as_str().unwrap().chars().count() as u64;
+    assert_eq!(
+        sized, stored,
+        "the update's dry run sized what the board stores"
     );
 }

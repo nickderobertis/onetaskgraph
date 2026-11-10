@@ -3360,3 +3360,59 @@ fn a_plan_copied_with_its_documents_in_one_command_lands_whole_first_changed_and
 
     record_together([&first, &changed, &unchanged]);
 }
+
+#[test]
+fn a_plan_copy_whose_document_write_is_refused_after_its_tasks_landed_leaves_nothing_behind() {
+    let plan = Plan::new(0, Vec::new());
+    let issues = plan.github.issues();
+    let notes = super::oversize::tree(&plan.root);
+    // The project's issue is the first create sent on its own and the document's the second;
+    // the tasks between them are created together. Refusing the second fails the document's
+    // write once the project and every task have landed.
+    plan.github.refuse_after("createIssue(input:$input)", 1);
+    let output = plan.run(&[
+        "project",
+        "copy",
+        "notes:P",
+        "--documents",
+        "--to",
+        "board",
+        "--json",
+    ]);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "{}\n{}",
+        stdout(&output),
+        stderr(&output)
+    );
+    let created: Vec<String> = plan
+        .board
+        .calls()
+        .iter()
+        .filter(|call| call.creating)
+        .map(operation)
+        .collect();
+    assert!(
+        created
+            .iter()
+            .any(|sent| sent == "creating several issues together"),
+        "the tasks landed before the document's write: {created:?}"
+    );
+    let left: Vec<String> = plan
+        .github
+        .issues()
+        .into_iter()
+        .filter(|issue| !issues.contains(issue))
+        .map(|issue| issue["title"].to_string())
+        .collect();
+    assert!(
+        left.is_empty(),
+        "the whole copy was taken back, its project and tasks included: {left:?}"
+    );
+    assert_eq!(
+        super::oversize::tree(&plan.root),
+        notes,
+        "the plan's folder is as it was"
+    );
+}

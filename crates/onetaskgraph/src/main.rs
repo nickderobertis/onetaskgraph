@@ -1997,13 +1997,12 @@ fn failed_exit(report: &CopyReport) -> u8 {
                 error.message()
             );
         }
-        if let CopyAction::Oversize { limit } = &outcome.action {
+        if let CopyAction::Oversize { size, limit } = &outcome.action {
             failed = true;
             eprintln!(
-                "onetaskgraph: {} would not be copied: its body of {} characters is larger than \
-                 the {limit} its destination holds",
+                "onetaskgraph: {} would not be copied: its body of {size} characters is larger \
+                 than the {limit} its destination holds",
                 outcome.source,
-                outcome.body_size.unwrap_or_default(),
             );
         }
     }

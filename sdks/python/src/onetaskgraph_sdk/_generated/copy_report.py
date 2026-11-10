@@ -992,6 +992,13 @@ class CopyOutcomeOversize(BaseModel):
             ge=0,
         ),
     ] = None
+    size: Annotated[
+        int,
+        Field(
+            description="The size of the body the item would store, as the destination's plugin counts it —\nwhat [`CopyOutcome::body_size`] reports beside it.",
+            ge=0,
+        ),
+    ]
     limit: Annotated[
         int,
         Field(

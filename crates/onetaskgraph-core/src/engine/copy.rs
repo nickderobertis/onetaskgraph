@@ -840,10 +840,12 @@ pub enum CopyAction {
         /// Why, as `status <category> is not one of <categories>`.
         reason: String,
     },
-    /// A dry run's item whose body — [`CopyOutcome::body_size`] — is larger than its
-    /// destination holds: the copy itself would refuse, as `oversize`, before writing anything.
-    /// The command exits `4`.
+    /// A dry run's item whose body is larger than its destination holds: the copy itself would
+    /// refuse, as `oversize`, before writing anything. The command exits `4`.
     Oversize {
+        /// The size of the body the item would store, as the destination's plugin counts it —
+        /// what [`CopyOutcome::body_size`] reports beside it.
+        size: u64,
         /// The most the destination holds in one body, as its plugin states it.
         limit: u64,
     },
@@ -2531,6 +2533,11 @@ impl Engine {
                     .collect()
             }
             CopyScope::Projects { tasks, documents } => {
+                // A destination with no documents has nowhere to put the plan's, so it is
+                // refused before anything of the plan is read.
+                if *documents {
+                    documentary(self.writable(&request.destination)?)?;
+                }
                 let mut projects = Vec::new();
                 for id in request.items.as_slice() {
                     let members = if *tasks {
@@ -2539,9 +2546,6 @@ impl Engine {
                         Vec::new()
                     };
                     if *documents {
-                        // A destination with no documents has nowhere to put the plan's, so it
-                        // is refused before anything of the plan is read.
-                        documentary(self.writable(&request.destination)?)?;
                         let filed: Vec<GlobalId> = self
                             .project_documents(id)
                             .await?
@@ -2624,7 +2628,10 @@ impl Engine {
                 };
                 outcome.body_size = Some(size.size);
                 if let (true, Some(limit)) = (size.exceeds(), size.limit) {
-                    outcome.action = CopyAction::Oversize { limit };
+                    outcome.action = CopyAction::Oversize {
+                        size: size.size,
+                        limit,
+                    };
                 }
             }
         }
@@ -3466,9 +3473,7 @@ impl Engine {
                         Err(error) => return Err(error),
                     }
                 }
-                let mut document_reads = self
-                    .read_documents(request, id, &mut changed, running)
-                    .await?;
+                let mut document_reads = self.read_documents(request, id, running).await?;
                 {
                     let mut ahead = vec![project];
                     ahead.append(&mut reads);
@@ -3581,9 +3586,7 @@ impl Engine {
                         Err(error) => return Err(error),
                     }
                 }
-                let mut document_reads = self
-                    .read_documents(request, id, &mut changed, running)
-                    .await?;
+                let mut document_reads = self.read_documents(request, id, running).await?;
                 // The project, every task and every document it carries read before any is
                 // aimed, so the destination is read for all of their counterparts together.
                 reads.insert(0, project);
@@ -3715,13 +3718,11 @@ impl Engine {
     }
 
     /// Read each document a `project copy --documents` carries with `project`, as a document
-    /// copy reads it: one that changed while it was read is reported among `changed`, having
-    /// written nothing.
+    /// copy reads it: once, since a document holds no comments to read beside it.
     async fn read_documents(
         &self,
         request: &CopyRequest,
         project: &GlobalId,
-        changed: &mut Vec<CopyOutcome>,
         running: &mut Running,
     ) -> Result<Vec<Read>, EngineError> {
         let documents = running
@@ -3731,16 +3732,10 @@ impl Engine {
             .unwrap_or_default();
         let mut reads = Vec::with_capacity(documents.len());
         for document in documents {
-            match self
-                .read_for_copy(request, Level::Document, &document, running)
-                .await
-            {
-                Ok(read) => reads.push(read),
-                Err(error @ EngineError::ChangedWhileCopied { .. }) => {
-                    changed.push(failed(document, &error));
-                }
-                Err(error) => return Err(error),
-            }
+            reads.push(
+                self.read_for_copy(request, Level::Document, &document, running)
+                    .await?,
+            );
         }
         Ok(reads)
     }
