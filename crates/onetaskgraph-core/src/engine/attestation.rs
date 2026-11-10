@@ -164,7 +164,13 @@ impl Engine {
         let mut held = std::collections::BTreeMap::new();
         held.insert(MetadataKey::ATTESTATIONS_KEY.to_owned(), set.value);
         let record = record_of(&held, &request.kind)
-            .filter(|held| held.content_digest == attestation.content_digest)
+            // Screening may rewrite a label — who attested, the bar, the note — and nothing
+            // else: every other member must read back as it was written.
+            .filter(|held| {
+                held.content_digest == attestation.content_digest
+                    && held.at == attestation.at
+                    && held.excludes == attestation.excludes
+            })
             .ok_or_else(|| {
                 source_failed(
                     source,

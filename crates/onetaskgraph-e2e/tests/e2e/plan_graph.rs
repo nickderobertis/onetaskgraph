@@ -782,3 +782,60 @@ fn on_a_board_that_issues_its_own_ids_each_edge_names_the_id_the_board_gave() {
     expected.sort();
     assert_eq!(depended, expected, "the edges name what the board issued");
 }
+
+#[test]
+fn a_later_member_the_board_refuses_leaves_the_members_before_it_and_names_them() {
+    let fixture = Fixture::new();
+    let (board, _) = github_projects_with_board(&fixture.sandbox);
+    fixture.sandbox.project_document(&document(&json!({
+        "notes": {"plugin": "local-md", "config": {"root": fixture.notes}},
+        "board": {"plugin": "github-projects", "config": board},
+    })));
+    // The ship member names a repository of another owner than the board's project issue,
+    // which a board refuses only once the design and measure members have landed.
+    let template = fixture.template("plan.md");
+    let output = fixture.exits(
+        &[
+            "project",
+            "create",
+            "board",
+            "--id",
+            "plan-1",
+            "--title",
+            "On the board",
+            "--template",
+            &template,
+            "--var",
+            "slug=w",
+            "--var",
+            "goal=widgets",
+            "--no-interactive",
+        ],
+        1,
+    );
+    let message = stderr(&output);
+    assert!(
+        message.contains("member w-ship of the plan could not be created"),
+        "{message}"
+    );
+    let landed = message
+        .lines()
+        .find_map(|line| line.strip_prefix("already created: "))
+        .expect("what landed is named");
+    let landed: Vec<&str> = landed.split(", ").collect();
+    assert_eq!(
+        landed.len(),
+        3,
+        "the project and the two members before it: {landed:?}"
+    );
+    for (id, title) in landed[1..]
+        .iter()
+        .zip(["Design widgets", "Measure widgets"])
+    {
+        assert_eq!(
+            fixture.task(id)["title"],
+            title,
+            "{id} is left as it landed"
+        );
+    }
+}

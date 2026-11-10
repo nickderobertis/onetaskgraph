@@ -12,6 +12,7 @@ import asyncio
 import json
 from collections.abc import Coroutine
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 
@@ -32,7 +33,15 @@ def run[T](call: Coroutine[object, object, T]) -> T:
     return asyncio.run(call)
 
 
-def plan(binary: Path, tmp_path: Path) -> tuple[Client, str, str]:
+class Plan(NamedTuple):
+    """A client over a seeded folder, and the qualified ids of what it holds."""
+
+    client: Client
+    project: str
+    task: str
+
+
+def plan(binary: Path, tmp_path: Path) -> Plan:
     """A client over a folder of Markdown with one project and one task in it."""
     (tmp_path / "notes").mkdir()
     (tmp_path / "onetaskgraph.yaml").write_text(
@@ -44,14 +53,15 @@ def plan(binary: Path, tmp_path: Path) -> tuple[Client, str, str]:
     created = run(
         client.task_create("notes", "P-1", "Build", body="Build it.\n", metadata=["myapp.size=1"])
     )
-    return client, "notes:P-1", str(created.items[0].id.root)
+    return Plan(client, "notes:P-1", str(created.items[0].id.root))
 
 
 def test_a_record_reads_back_as_its_models_and_goes_void_when_content_moves(
     binary: Path, tmp_path: Path
 ) -> None:
     """A record, its checks and a project's per-task check validate as the emitted models."""
-    client, project, task = plan(binary, tmp_path)
+    seeded = plan(binary, tmp_path)
+    client, project, task = seeded.client, seeded.project, seeded.task
     absent = run(client.task_attestation_check(task, "plan-review"))
     assert isinstance(absent, AttestationCheck)
     assert (absent.state, absent.reason, absent.record) == (AttestationState("absent"), None, None)
@@ -104,7 +114,8 @@ def test_a_record_reads_back_as_its_models_and_goes_void_when_content_moves(
 
 def test_a_refused_attestation_raises_with_the_failure(binary: Path, tmp_path: Path) -> None:
     """A kind the binary refuses raises carrying the failure document's kind."""
-    client, _, task = plan(binary, tmp_path)
+    seeded = plan(binary, tmp_path)
+    client, task = seeded.client, seeded.task
     with pytest.raises(OnetaskgraphError) as refused:
         run(client.task_attest(task, "plan review", "ada", "bar-1"))
     assert refused.value.exit_code == 1

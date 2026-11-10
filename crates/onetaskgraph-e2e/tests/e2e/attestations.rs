@@ -1327,3 +1327,34 @@ fn a_write_answered_with_another_record_than_the_one_written_is_refused() {
         stderr(&refused)
     );
 }
+
+#[test]
+fn a_far_end_in_a_source_nothing_configures_is_named_by_its_id() {
+    let plan = Plan::new(false);
+    let seeded = plan.seed("notes");
+    let ship = seeded.measure.as_str();
+    // An edge to an item of a source this configuration does not name: no source can read it,
+    // so the digest names it by its id, and the record holds while that id does.
+    plan.hand_edit(
+        "tasks",
+        ship,
+        "status:",
+        "depends_on:\n- id: elsewhere:far-1\n  kind: blocks\n  item: task\nstatus:",
+    );
+    plan.attest("task", ship);
+    plan.holds(
+        "task",
+        ship,
+        "valid",
+        Value::Null,
+        "an unread far end, named by its id",
+    );
+    plan.hand_edit("tasks", ship, "elsewhere:far-1", "elsewhere:far-2");
+    plan.holds(
+        "task",
+        ship,
+        "void",
+        json!("content-moved"),
+        "the far end's id moved",
+    );
+}

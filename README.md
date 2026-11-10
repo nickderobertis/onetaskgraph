@@ -1392,6 +1392,11 @@ whole create, naming the member, and writes nothing. Otherwise it creates the pr
 each member under it, dependencies first, exactly as `task create` creates one — offered its
 `id`, its provenance recorded and its answers stored as that verb stores them — and prints the
 project's id and each member's, one per line (`--json`: the project as `project show` answers).
+A source that issues its own ids — a GitHub board, Linear — still issues them, and each edge names
+what it issued. On a public write a member's offered `id` is screened as a fixed entry, as an
+explicit project or document id is: a declared term in it is refused, never rewritten. A member
+whose write fails after the project and the members before it landed is reported naming it and
+every item already created (exit `1`); nothing that landed is taken back.
 `--dry-run` renders all of it and prints the plan instead — `--json`: `PlannedProject`, the
 project and each member with its content, answers and edges — writing nothing. A project
 template that declares no `members` creates exactly what it always did. `project render`
