@@ -528,3 +528,50 @@ fn a_default_its_schema_accepts_renders_when_no_answer_is_given() {
     let output = fixture.exits(&["template", "render", &file, "--no-interactive"], 0);
     assert_eq!(stdout(&output), "* Draft\n* Review\n");
 }
+
+#[test]
+fn a_boolean_schema_accepts_every_answer_or_refuses_every_one_writing_nothing() {
+    let fixture = Fixture::new();
+    let inputs = fixture.sandbox.subdirectory("inputs");
+    for (name, schema) in [("open.md", "true"), ("closed.md", "false")] {
+        std::fs::write(
+            inputs.join(name),
+            format!(
+                "---\nonetaskgraph_template: 1\nvariables:\n  plan:\n    description: p\n    type: object\n    schema: {schema}\n---\nGoal: {{{{ plan.goal }}}}\n"
+            ),
+        )
+        .expect("a template");
+    }
+    let open = fixture.input("open.md");
+    let closed = fixture.input("closed.md");
+    let output = fixture.exits(
+        &[
+            "template",
+            "render",
+            &open,
+            "--var",
+            "plan={goal: anything}",
+            "--no-interactive",
+        ],
+        0,
+    );
+    assert_eq!(stdout(&output), "Goal: anything\n");
+    fixture.refused(
+        &[
+            "task",
+            "create",
+            "notes",
+            "--project",
+            "P-1",
+            "--title",
+            "Closed",
+            "--template",
+            &closed,
+            "--var",
+            "plan={goal: anything}",
+            "--no-interactive",
+        ],
+        "plan",
+        "",
+    );
+}

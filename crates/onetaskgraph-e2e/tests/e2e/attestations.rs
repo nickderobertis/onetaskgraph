@@ -1453,3 +1453,35 @@ fn every_label_an_attestation_refuses_is_refused_by_its_flag_writing_nothing() {
     );
     assert!(stderr(&refused).contains("--bar"), "{}", stderr(&refused));
 }
+
+#[test]
+fn an_opaque_far_end_no_configured_tracker_is_is_named_by_its_id() {
+    let plan = Plan::new(false);
+    let seeded = plan.seed("notes");
+    let measure = seeded.measure.as_str();
+    // A far end named by a tracker's designator, as a copy between trackers records one, that
+    // no configured source is.
+    let far = format!("linear/{}", "ab".repeat(32));
+    plan.hand_edit(
+        "tasks",
+        measure,
+        "status:",
+        &format!("depends_on:\n  - {{designator: {far}, id: L-9, item: task}}\nstatus:"),
+    );
+    plan.attest("task", measure);
+    plan.holds(
+        "task",
+        measure,
+        "valid",
+        Value::Null,
+        "an opaque far end, named by its id",
+    );
+    plan.hand_edit("tasks", measure, "id: L-9", "id: L-10");
+    plan.holds(
+        "task",
+        measure,
+        "void",
+        json!("content-moved"),
+        "the opaque far end moved",
+    );
+}
