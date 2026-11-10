@@ -60,11 +60,12 @@ impl Stores {
         std::fs::create_dir_all(notes.join("tasks")).expect("the task folder");
         let folder = sandbox.subdirectory("folder");
         std::fs::create_dir_all(folder.join("tasks")).expect("the task folder");
+        let cache = sandbox.subdirectory("cache");
         sandbox.project_document(&document(&json!({
             "board": {"plugin": "github-projects", "config": board_config,
-                      "cache": {"enabled": cached}},
+                      "cache": {"enabled": cached, "dir": cache.join("board")}},
             "linear": {"plugin": "linear", "config": linear_config,
-                       "cache": {"enabled": cached}},
+                       "cache": {"enabled": cached, "dir": cache.join("linear")}},
             "notes": {"plugin": "local-md",
                       "config": {"root": notes, "status_mapping": folder_mapping()}},
             "folder": {"plugin": "local-md",
@@ -305,6 +306,23 @@ fn every_task_write_verb_held_to_a_version_lands_at_it_and_is_refused_once_it_mo
     for cached in [false, true] {
         for destination in DESTINATIONS {
             let stores = Stores::new(cached);
+            if destination != "folder" {
+                // The hosted source really keeps its cache when this run says it does: a read of
+                // one reports how it used it.
+                stores.note("Z", "Probe");
+                let copied =
+                    stores.exited(&owned(&["task", "copy", "notes:Z", "--to", destination]), 0);
+                let probe = copied["items"][0]["destination"]
+                    .as_str()
+                    .expect("an id")
+                    .to_owned();
+                let shown = stores.exited(&owned(&["task", "show", &probe]), 0);
+                assert_eq!(
+                    shown["cache"].is_object(),
+                    cached,
+                    "{destination}: {shown:#}"
+                );
+            }
             every_verb_is_held(
                 &stores,
                 destination,
@@ -1079,4 +1097,131 @@ fn a_write_held_across_the_stdio_plugin_protocol_lands_at_its_version_and_is_ref
     );
     assert_eq!(refused["failure"]["kind"], "version-moved", "{refused:#}");
     assert_eq!(refused["held"]["version"], moved, "{refused:#}");
+}
+
+#[test]
+fn a_write_expecting_a_version_and_held_to_it_takes_both_on_a_cached_board() {
+    let stores = Stores::new(true);
+    stores.note("A", "Task A");
+    let task = stores.exited(&owned(&["task", "copy", "notes:A", "--to", "board"]), 0)["items"][0]
+        ["destination"]
+        .as_str()
+        .expect("an id")
+        .to_owned();
+    let read = stores.version(&task);
+    let both = stores.exited(
+        &owned(&[
+            "task",
+            "priority",
+            "set",
+            &task,
+            "low",
+            "--expect",
+            &read,
+            "--if-version",
+            &read,
+        ]),
+        0,
+    );
+    assert_eq!(both["priority"], "low", "{both:#}");
+    assert!(
+        both["result"]["parts"].is_array(),
+        "an expected write still reports its parts: {both:#}"
+    );
+
+    // Moved by another writer: the held version refuses the write the expectation would make.
+    let written = stores.version(&task);
+    stores.exited(&owned(&["task", "update", &task, "--title", "Moved"]), 0);
+    let moved = stores.shown(&task);
+    let refused = stores.exited(
+        &owned(&[
+            "task",
+            "priority",
+            "set",
+            &task,
+            "urgent",
+            "--expect",
+            &written,
+            "--if-version",
+            &written,
+        ]),
+        1,
+    );
+    assert_eq!(refused["failure"]["kind"], "version-moved", "{refused:#}");
+    assert_eq!(refused["held"]["version"], moved["version"]);
+    assert_eq!(stores.shown(&task), moved, "nothing was written");
+}
+
+#[test]
+fn a_held_copy_carrying_comments_checks_its_first_write_and_lands_the_rest() {
+    for destination in DESTINATIONS {
+        let stores = Stores::new(false);
+        stores.note("A", "Task A");
+        let copy = |version: &str| {
+            owned(&[
+                "task",
+                "copy",
+                "notes:A",
+                "--to",
+                destination,
+                "--comments",
+                "--if-version",
+                version,
+            ])
+        };
+        let task =
+            stores.exited(&owned(&["task", "copy", "notes:A", "--to", destination]), 0)["items"][0]
+                ["destination"]
+                .as_str()
+                .expect("an id")
+                .to_owned();
+        let comments = |id: &str| stores.exited(&owned(&["task", "comment", "list", id]), 0);
+
+        // At the counterpart's version: the task and every comment after it land. A note is
+        // rewritten whole, so its comment is added after it.
+        stores.note("A", "Task A, revised");
+        let comment = stores.file("comment.md", "A comment the copy carries.\n");
+        stores.exited(
+            &owned(&["task", "comment", "add", "notes:A", "--body-file", &comment]),
+            0,
+        );
+        let read = stores.version(&task);
+        stores.exited(&copy(&read), 0);
+        let carried = comments(&task);
+        assert!(
+            carried["comments"]
+                .as_array()
+                .expect("a list")
+                .iter()
+                .any(|held| held["body"]
+                    .as_str()
+                    .is_some_and(|body| body.contains("A comment the copy carries."))),
+            "{destination}: {carried:#}"
+        );
+
+        // At a version another writer moved it past: nothing lands, comments included.
+        let written = stores.version(&task);
+        stores.exited(&owned(&["task", "update", &task, "--title", "Moved"]), 0);
+        stores.exited(
+            &owned(&["task", "update", "notes:A", "--title", "Task A, again"]),
+            0,
+        );
+        let second = stores.file("second.md", "A second comment.\n");
+        stores.exited(
+            &owned(&["task", "comment", "add", "notes:A", "--body-file", &second]),
+            0,
+        );
+        let before = comments(&task);
+        let refused = stores.exited(&copy(&written), 1);
+        assert_eq!(
+            refused["failure"]["kind"], "version-moved",
+            "{destination}: {refused:#}"
+        );
+        assert_eq!(stores.shown(&task)["title"], "Moved", "{destination}");
+        assert_eq!(
+            comments(&task)["comments"],
+            before["comments"],
+            "{destination}: no comment was carried"
+        );
+    }
 }

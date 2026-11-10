@@ -549,3 +549,78 @@ async fn a_held_write_of_a_task_its_backend_gives_no_version_is_refused_writing_
         .clone();
     assert_eq!(after, before, "nothing was written");
 }
+
+/// A public `site` task `T-1`, and a private `vault` recording `site:T-1` as depending on its
+/// `V-1` and `V-2` — a vault that cannot be listed.
+fn private_record() -> Engine {
+    let recorded = |id: &str| {
+        json!({"id": id, "title": id, "labels": [],
+               "status": {"category": "todo", "name": "todo"},
+               "metadata": {"onetaskgraph.depended_on_by": {
+                   "site:T-1": {"id": "site:T-1", "kind": "task"}}}})
+    };
+    let site = in_memory(
+        "site",
+        &json!({"tasks": [{"id": "T-1", "title": "T-1", "labels": [],
+                           "status": {"category": "todo", "name": "todo"},
+                           "metadata": {"onetaskgraph.copied_destination_version": "sha256:00"}}]}),
+    );
+    let vault = Scripted {
+        inner: in_memory(
+            "vault",
+            &json!({"tasks": [recorded("V-1"), recorded("V-2")]}),
+        ),
+        script: Script {
+            refuse_listing: true,
+            ..Script::default()
+        },
+    };
+    engine_of(vec![("site", site), ("vault", Box::new(vault))]).with_routes(
+        onetaskgraph_core::config::Routes::default().with_visibility(
+            std::collections::BTreeMap::from([
+                (
+                    name("site"),
+                    onetaskgraph_core::config::SourceVisibility::Public,
+                ),
+                (
+                    name("vault"),
+                    onetaskgraph_core::config::SourceVisibility::Private,
+                ),
+            ]),
+        ),
+    )
+}
+
+#[tokio::test]
+async fn a_private_source_that_could_not_be_asked_is_named_once_across_every_page_of_edges() {
+    let engine = private_record();
+    let walked = engine
+        .task_dependencies_all(&DependencyRequest {
+            id: id("site:T-1"),
+            direction: Direction::DependsOn,
+            completeness: onetaskgraph_core::Completeness::NamingUnasked,
+            paging: page(1),
+        })
+        .await
+        .expect("walked");
+    let unanswered: Vec<String> = walked
+        .unanswered
+        .iter()
+        .map(|unasked| format!("{unasked:?}"))
+        .collect();
+    assert_eq!(unanswered.len(), 1, "the vault named once: {unanswered:?}");
+    assert!(unanswered[0].contains("vault"), "{unanswered:?}");
+    assert!(walked.errors.is_empty(), "{:?}", walked.errors);
+
+    // Read beside the task, the vault is named once there too, and the task's own edges stand.
+    let detail = engine.task_detail(&id("site:T-1")).await.expect("read");
+    let detail = engine
+        .with_task_dependencies(&id("site:T-1"), detail)
+        .await
+        .expect("answered");
+    assert_eq!(detail.response.unanswered.len(), 1, "{:?}", detail.response);
+    assert!(
+        detail.depends_on.is_some(),
+        "the task's own source answered its edges"
+    );
+}
