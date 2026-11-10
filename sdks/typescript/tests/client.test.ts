@@ -2644,4 +2644,9 @@ test("taskComments sends exactly the flags the binary's task comments reports, n
     }).filter((argument) => argument.startsWith("--")),
   );
   expect([...sent].sort()).toEqual(own);
+  // A narrowing it does not carry, or options that are not an object, are refused rather than
+  // dropped — either would widen the listing past what the caller asked for.
+  expect(() => taskCommentsFlags("2026-01-01T00:00:00Z", { status: ["done"] })).toThrow("status");
+  expect(() => taskCommentsFlags("2026-01-01T00:00:00Z", "done")).toThrow("not an object");
+  expect(() => taskCommentsFlags("2026-01-01T00:00:00Z", ["done"])).toThrow("not an object");
 });

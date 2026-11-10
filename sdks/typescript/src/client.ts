@@ -944,8 +944,22 @@ export const taskCommentsOptionFlags: Readonly<Record<keyof TaskCommentsOptions,
 };
 
 // The flags `taskComments` sends, beside the source: `--since` and each narrowing.
-export function taskCommentsFlags(since: string, options: TaskCommentsOptions): string[] {
+export function taskCommentsFlags(since: string, options: unknown): string[] {
   const method = "taskComments";
+  if (!isPlainObject(options)) {
+    throw new TypeError(
+      `${method}: options is not an object; next: pass the narrowing as a plain object`,
+    );
+  }
+  // Its own members only, each one it carries: a misspelled narrowing would otherwise be
+  // dropped in silence and widen the listing past what the caller asked for.
+  const unknown = Object.keys(options).find((key) => !Object.hasOwn(taskCommentsOptionFlags, key));
+  if (unknown !== undefined) {
+    throw new TypeError(
+      `${method}: options has the member ${unknown}, which narrows nothing; next: name only ` +
+        Object.keys(taskCommentsOptionFlags).join(", "),
+    );
+  }
   const args = ["--since", stringOption(method, "since", since)];
   const names: readonly (keyof TaskCommentsOptions)[] = ["metadata", "statuses", "items"];
   for (const name of names) {
