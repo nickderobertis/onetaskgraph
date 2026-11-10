@@ -2674,9 +2674,9 @@ multiset union of what each write would have been screened as alone — a value 
 the write holding it most often holds it — under the one `scope` they share, and
 `visibility_command` runs once per distinct repository the copy names, its answer used for every
 item naming it. A copy of one item is a batch of one. A refusal refuses the whole copy before
-anything is written; the store then screens the copy's writes one at a time only to name the
-item the refusal is about, and still writes nothing. An unavailable check makes the copy
-unavailable. With a `sanitize_command`, which rewrites per item, the batch keeps each write's
+anything is written, on that one check: the policy is asked nothing more, and the refusal names
+the copy — `this copy's N writes` — never which item or what of it the check stopped at. An
+unavailable check makes the copy unavailable the same way. With a `sanitize_command`, which rewrites per item, the batch keeps each write's
 rewritable and fixed values apart, so a value fixed in one write is never screened only behind
 the same value another may rewrite.
 

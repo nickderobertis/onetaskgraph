@@ -53,8 +53,7 @@ everything = document.get("text", []) + document.get("paths", []) + document.get
 if mode == "unavailable":
     print(json.dumps({"verdict": "unavailable", "reason": "registry"}))
     sys.exit(2)
-if (mode == "refuse-first" and checks == 1) or (
-        mode == "planted" and any("quietharbor-ledger-7731" in value for value in everything)):
+if mode == "planted" and any("quietharbor-ledger-7731" in value for value in everything):
     print(json.dumps({"verdict": "refuse", "surface": "text"}))
     sys.exit(1)
 print(json.dumps({"verdict": "pass"}))
@@ -62,6 +61,7 @@ sys.exit(0)
 "#;
 
 /// One policy process the store started.
+#[derive(Clone)]
 struct Run {
     command: String,
     input: Value,
@@ -234,59 +234,48 @@ fn union(inputs: &[Value], list: &str) -> BTreeMap<String, usize> {
     union
 }
 
+/// Each item of the plan copied on its own, as a dry run: one command per item, each a batch of
+/// one, so each check its record holds is that item's own composition, screened alone.
+const ALONE: [&[&str]; ITEMS] = [
+    &["project", "copy", "draft:goal", "--no-tasks"],
+    &["task", "copy", "draft:t1"],
+    &["task", "copy", "draft:t2"],
+    &["task", "copy", "draft:t3"],
+    &["task", "copy", "draft:t4"],
+    &["task", "copy", "draft:t5"],
+    &["task", "copy", "draft:t6"],
+    &["document", "copy", "draft:design"],
+    &["document", "copy", "draft:spike-a"],
+    &["document", "copy", "draft:spike-b"],
+];
+
 #[test]
 fn a_public_plan_copy_is_screened_as_one_batch_holding_exactly_what_its_items_screen() {
-    // A check refusing its first input makes the store screen the same copy write by write, to
-    // name the write refused: the per-item inputs of its own composition, beside the batch.
-    let mut refused = None;
+    let mut recorded = None;
     let (store, board) = store(None, |sandbox| {
-        let (policy, configured) = Policy::new(sandbox, "refuse-first");
-        refused = Some(policy);
+        let (policy, configured) = Policy::new(sandbox, "pass");
+        recorded = Some(policy);
         configured
     });
-    let refused = refused.unwrap();
+    let policy = recorded.unwrap();
     plan(&store);
-    let (kind, said) = store.refused(&PLAN_COPY);
-    assert_eq!(kind, "boundary-refused", "{said}");
-    assert!(mutations(&board).is_empty(), "nothing was written");
-    let checks = refused.checks();
-    assert_eq!(checks.len(), 1 + ITEMS, "the batch, then each item alone");
-    let (batch, items) = checks.split_first().unwrap();
-    for list in ["text", "paths", "metadata"] {
-        assert_eq!(
-            counted(&batch[list]),
-            union(items, list),
-            "the batch's {list} is the union of its items'"
-        );
+    // The oracle: what the store composes for each item screened alone, each in a command of
+    // its own and none in the plan's copy.
+    let mut items = Vec::new();
+    for alone in ALONE {
+        let before = policy.checks().len();
+        let mut with = alone.to_vec();
+        with.extend(["--to", "board", "--dry-run"]);
+        store.ok(&with);
+        let checks = policy.checks();
+        assert_eq!(checks.len(), before + 1, "{alone:?} is a batch of one");
+        items.push(checks[before].clone());
     }
-    for item in items {
-        assert_eq!(item.get("scope"), batch.get("scope"), "one scope");
-    }
-    for title in [
-        "Faster retries",
-        "Retry step 1",
-        "Retry step 6",
-        "Spike: jitter",
-    ] {
-        assert!(
-            counted(&batch["metadata"]).contains_key(title),
-            "{title} is in the batch"
-        );
-    }
-    assert_eq!(
-        counted(&batch["text"])["Measure the retry loop again."],
-        1,
-        "two items saying the same thing put it in the batch once"
-    );
+    assert!(mutations(&board).is_empty(), "a dry run writes nothing");
 
-    // The same copy under a check that passes: one check, of exactly that batch, and one
-    // visibility run per repository the plan names — then everything lands.
-    let (passing, configured) = Policy::new(&store.sandbox, "pass");
-    let configuration = store.sandbox.project().join("onetaskgraph.yaml");
-    let mut document: Value =
-        serde_json::from_str(&std::fs::read_to_string(&configuration).unwrap()).unwrap();
-    document["write_policy"] = configured;
-    store.sandbox.project_document(&document.to_string());
+    // The plan's copy: one check, of exactly the union of those, and one visibility run per
+    // repository the plan names — then everything lands.
+    let runs_before = policy.runs().len();
     let output = store.ok(&{
         let mut with = PLAN_COPY.to_vec();
         with.push("--json");
@@ -294,7 +283,7 @@ fn a_public_plan_copy_is_screened_as_one_batch_holding_exactly_what_its_items_sc
     });
     let report: Value = serde_json::from_str(&output).unwrap();
     assert_eq!(report["items"].as_array().unwrap().len(), ITEMS, "{report}");
-    let runs = passing.runs();
+    let runs = policy.runs()[runs_before..].to_vec();
     let inspected: Vec<&Value> = runs
         .iter()
         .filter(|run| run.command == "inspect")
@@ -304,17 +293,40 @@ fn a_public_plan_copy_is_screened_as_one_batch_holding_exactly_what_its_items_sc
     for repository in [OPEN, SHOP] {
         assert!(inspected.contains(&&json!(repository)), "{repository}");
     }
-    let checks = passing.checks();
+    let checks: Vec<&Value> = runs
+        .iter()
+        .filter(|run| run.command == "check")
+        .map(|run| &run.input)
+        .collect();
     assert_eq!(checks.len(), 1, "one check for the whole copy");
+    let batch = checks[0];
     for list in ["text", "paths", "metadata"] {
-        assert_eq!(counted(&checks[0][list]), counted(&batch[list]), "{list}");
+        assert_eq!(
+            counted(&batch[list]),
+            union(&items, list),
+            "the batch's {list} is the union of its items'"
+        );
     }
+    for item in &items {
+        assert_eq!(item.get("scope"), batch.get("scope"), "one scope");
+    }
+    assert_eq!(
+        counted(&batch["text"])["Measure the retry loop again."],
+        1,
+        "two items saying the same thing put it in the batch once"
+    );
     assert!(!mutations(&board).is_empty(), "the copy landed");
 }
 
 #[test]
-fn a_planted_term_in_one_task_refuses_the_whole_copy_without_printing_it() {
-    let (store, board) = store(None, |sandbox| Policy::new(sandbox, "planted").1);
+fn a_planted_term_in_one_task_refuses_the_whole_copy_on_one_check_without_printing_it() {
+    let mut recorded = None;
+    let (store, board) = store(None, |sandbox| {
+        let (policy, configured) = Policy::new(sandbox, "planted");
+        recorded = Some(policy);
+        configured
+    });
+    let policy = recorded.unwrap();
     plan(&store);
     store.record(
         "draft",
@@ -331,13 +343,15 @@ fn a_planted_term_in_one_task_refuses_the_whole_copy_without_printing_it() {
     let failure: Value = serde_json::from_str(&stdout(&output)).unwrap();
     assert_eq!(failure["failure"]["kind"], json!("boundary-refused"));
     assert!(
-        stderr(&output).contains("draft:t3"),
-        "it names the item: {}",
+        stderr(&output).contains(&format!("this copy's {ITEMS} writes")),
+        "it refuses the copy whole: {}",
         stderr(&output)
     );
     for printed in [stdout(&output), stderr(&output)] {
         assert!(!printed.contains(PLANTED), "neutrally: {printed}");
+        assert!(!printed.contains("draft:t3"), "naming no item: {printed}");
     }
+    assert_eq!(policy.checks().len(), 1, "one check, and no other");
     assert!(
         mutations(&board).is_empty(),
         "nothing of the plan was written"
@@ -346,12 +360,19 @@ fn a_planted_term_in_one_task_refuses_the_whole_copy_without_printing_it() {
 }
 
 #[test]
-fn a_check_that_cannot_decide_leaves_the_board_without_a_write() {
-    let (store, board) = store(None, |sandbox| Policy::new(sandbox, "unavailable").1);
+fn a_check_that_cannot_decide_starts_one_check_and_leaves_the_board_without_a_write() {
+    let mut recorded = None;
+    let (store, board) = store(None, |sandbox| {
+        let (policy, configured) = Policy::new(sandbox, "unavailable");
+        recorded = Some(policy);
+        configured
+    });
+    let policy = recorded.unwrap();
     plan(&store);
     let held = board.issues();
     let (kind, said) = store.refused(&PLAN_COPY);
     assert_eq!(kind, "boundary-unavailable", "{said}");
+    assert_eq!(policy.checks().len(), 1, "one check, and no other");
     assert!(mutations(&board).is_empty(), "nothing was written");
     assert_eq!(board.issues(), held, "the board holds what it held");
 }

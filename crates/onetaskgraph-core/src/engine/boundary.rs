@@ -2310,14 +2310,15 @@ impl Engine {
     /// written as. A copy of one item is a batch of one. A union one earlier sanitisation of this
     /// command passed whole is not sent again.
     ///
-    /// Only a union the policy refuses is sent again write by write, so the refusal names the
-    /// write it is about — and those calls pass nothing, since a write passing alone says nothing
-    /// of the union; a union the policy cannot decide is the first write's own unavailability.
+    /// A batch the policy refuses, or cannot decide, refuses the whole copy on that one answer:
+    /// the policy is asked nothing more, so a copy starts one check however it ends, and the
+    /// refusal names the copy and its first destination as the policy screened them, never which
+    /// write or what of it the policy stopped at.
     pub(crate) async fn check_all(
         &self,
         writes: &[(&ResolvedSource, String, Exposure)],
     ) -> Result<Rewrite, EngineError> {
-        let Some((first, first_item, _)) = writes.first() else {
+        let Some((first, _, _)) = writes.first() else {
             return Ok(Rewrite::default());
         };
         if let [(destination, item, exposure)] = writes {
@@ -2334,41 +2335,17 @@ impl Engine {
             return Ok(rewrite);
         }
         let answer = self.screen(&union).await;
-        match &answer.verdict {
-            WriteVerdict::Pass => {
-                let rewrite = Rewrite::of(&union, &answer);
-                self.boundary.pass(&union, &rewrite);
-                Ok(rewrite)
-            }
-            WriteVerdict::Refuse { reason } => {
-                for (destination, item, exposure) in writes {
-                    let exposure = located(destination, item, exposure.clone());
-                    let alone = self.screen(&exposure).await;
-                    if alone.verdict != WriteVerdict::Pass {
-                        return Err(refusal(destination, item, &exposure, &alone));
-                    }
-                }
-                let exposure = located(first, first_item, Exposure::default());
-                Err(refusal(
-                    first,
-                    first_item,
-                    &exposure,
-                    &SanitizeVerdict {
-                        verdict: WriteVerdict::Refuse {
-                            reason: reason.clone(),
-                        },
-                        locators: Vec::new(),
-                        ..answer.clone()
-                    },
-                ))
-            }
-            WriteVerdict::Unavailable { .. } => Err(refusal(
-                first,
-                first_item,
-                &located(first, first_item, Exposure::default()),
-                &answer,
-            )),
+        if answer.verdict == WriteVerdict::Pass {
+            let rewrite = Rewrite::of(&union, &answer);
+            self.boundary.pass(&union, &rewrite);
+            return Ok(rewrite);
         }
+        Err(refusal(
+            first,
+            &format!("this copy's {} writes", writes.len()),
+            &union,
+            &answer,
+        ))
     }
 
     /// The check every write makes before its first mutation: a destination declared private
