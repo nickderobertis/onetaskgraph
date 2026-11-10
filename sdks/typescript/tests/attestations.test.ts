@@ -22,7 +22,12 @@ beforeAll(async () => {
     resolve(root, "onetaskgraph.yaml"),
     JSON.stringify({ sources: { notes: { plugin: "local-md", config: { root: "notes" } } } }),
   );
-  client = new OnetaskgraphClient({ binaryPath: binary, cwd: root });
+  // The store's home is the scratch tree, so a user configuration on the host adds no source.
+  client = new OnetaskgraphClient({
+    binaryPath: binary,
+    cwd: root,
+    env: { ...process.env, HOME: root, XDG_CONFIG_HOME: root },
+  });
   await client.projectCreate("notes", "P-1", "Plan", { body: "The plan.\n" });
   const created = await client.taskCreate("notes", "P-1", "Build", { body: "Build it.\n" });
   task = created.items[0]?.id ?? "";
