@@ -1560,6 +1560,96 @@ fn a_task_record_with_edges_survives_two_hops_of_copying() {
 }
 
 #[test]
+fn deleting_a_copy_between_a_far_end_and_its_root_leaves_the_record_valid() {
+    // notes → middle → last, three folders of Markdown. Ship depends on Build at every hop, and
+    // the record recorded in `notes` travels to `last` with the copies. The copy of Build in
+    // `middle` is then deleted, as a person deletes a file: the copy in `last` names Build's
+    // root itself, so the edge — and every record over it — reads as it did.
+    let plan = Plan::new(false);
+    let middle = plan.sandbox.subdirectory("middle");
+    let last = plan.sandbox.subdirectory("last");
+    plan.sandbox.project_document(&document(&json!({
+        "notes": {"plugin": "local-md", "config": {"root": plan.notes}},
+        "middle": {"plugin": "local-md", "config": {"root": middle}},
+        "last": {"plugin": "local-md", "config": {"root": last}},
+    })));
+    let seeded = plan.seed("notes");
+    let record = plan.attest("task", &seeded.ship);
+    let landed = |report: &Value, source: &str| -> String {
+        report["items"]
+            .as_array()
+            .expect("outcomes")
+            .iter()
+            .find(|outcome| outcome["source"] == source)
+            .and_then(|outcome| outcome["destination"].as_str())
+            .unwrap_or_else(|| panic!("{source} landed: {report}"))
+            .to_owned()
+    };
+    let first = plan.json(&["project", "copy", &seeded.project, "--to", "middle"]);
+    let second = plan.json(&[
+        "project",
+        "copy",
+        &landed(&first, &seeded.project),
+        "--to",
+        "last",
+    ]);
+    let build_in_middle = landed(&first, &seeded.build);
+    let build_in_last = landed(&second, &build_in_middle);
+    let ship_in_last = landed(&second, &landed(&first, &seeded.ship));
+    let metadata =
+        |id: &str| plan.json(&["task", "show", id])["items"][0]["item"]["metadata"].clone();
+    assert_eq!(
+        (
+            &metadata(&build_in_last)["onetaskgraph.origin"],
+            &metadata(&build_in_last)["onetaskgraph.lineage"],
+        ),
+        (&json!(build_in_middle), &json!(seeded.build)),
+        "the second hop records where it came from and the root that came from"
+    );
+    assert_eq!(
+        metadata(&build_in_middle).get("onetaskgraph.lineage"),
+        None,
+        "the first hop's origin is its root, so it records no lineage beside it"
+    );
+    plan.holds(
+        "task",
+        &ship_in_last,
+        "valid",
+        Value::Null,
+        "two hops from where it was recorded",
+    );
+    let copied_here = {
+        let checked = plan.check("task", &ship_in_last, Some(BAR));
+        assert_eq!(checked["record"], record, "the record the copies carried");
+        checked
+    };
+
+    let native = build_in_middle.split_once(':').expect("qualified").1;
+    let file = middle.join("tasks").join(format!("{native}.md"));
+    std::fs::remove_file(&file).unwrap_or_else(|error| panic!("{}: {error}", file.display()));
+    plan.exits(&["task", "show", &build_in_middle], 1);
+
+    let after = plan.check("task", &ship_in_last, Some(BAR));
+    assert_eq!(
+        after, copied_here,
+        "with the copy between it and its root deleted, the record reads exactly as it did"
+    );
+    plan.holds(
+        "task",
+        &seeded.ship,
+        "valid",
+        Value::Null,
+        "the record where it was recorded",
+    );
+    // And a record made where the chain is broken agrees with one made where it is whole.
+    let recorded_after = plan.attest("task", &ship_in_last);
+    assert_eq!(
+        recorded_after["content_digest"], record["content_digest"],
+        "the content Ship's copy holds names Build's root as Ship does in `notes`"
+    );
+}
+
+#[test]
 fn a_far_end_whose_lineage_cannot_be_named_refuses_the_attestation_writing_nothing() {
     let plan = Plan::new(false);
     plan.sandbox.project_document(&document(&json!({
@@ -1575,9 +1665,12 @@ fn a_far_end_whose_lineage_cannot_be_named_refuses_the_attestation_writing_nothi
         )
         .expect("a task file");
     };
-    // Two tasks recording each other as their origin: a lineage with no root.
-    write("loop-a", "metadata:\n  onetaskgraph.origin: notes:loop-b\n");
-    write("loop-b", "metadata:\n  onetaskgraph.origin: notes:loop-a\n");
+    // A task recording a lineage that is not a qualified id, beside an origin that is: the
+    // lineage is what names the root, so the origin does not stand in for it.
+    write(
+        "garbled-root",
+        "metadata:\n  onetaskgraph.lineage: not a qualified id\n  onetaskgraph.origin: notes:x\n",
+    );
     // A task recording an origin that is not a qualified id.
     write(
         "garbled",
@@ -1592,8 +1685,8 @@ fn a_far_end_whose_lineage_cannot_be_named_refuses_the_attestation_writing_nothi
     };
     for (near, says) in [
         (
-            near("on-loop", "loop-a"),
-            "never reach an item copied from nowhere",
+            near("on-garbled-root", "garbled-root"),
+            "records the onetaskgraph.lineage \"not a qualified id\"",
         ),
         (near("on-garbled", "garbled"), "which is not a qualified id"),
         (near("on-broken", "broken:x"), "broken"),
@@ -1621,61 +1714,6 @@ fn a_far_end_whose_lineage_cannot_be_named_refuses_the_attestation_writing_nothi
         let check = plan.exits(&["task", "attestation", "check", &near, "--kind", KIND], 1);
         assert!(stderr(&check).contains(says), "{near}: {}", stderr(&check));
     }
-}
-
-#[test]
-fn a_lineage_longer_than_the_limit_refuses_and_one_within_it_records() {
-    let plan = Plan::new(false);
-    let tasks = plan.notes.join("tasks");
-    std::fs::create_dir_all(&tasks).expect("the tasks folder");
-    // A chain of `length` tasks, each recording the next as its origin, the last none.
-    let chain = |prefix: &str, length: usize| {
-        for at in 0..length {
-            let front = if at + 1 < length {
-                format!(
-                    "metadata:\n  onetaskgraph.origin: notes:{prefix}-{}\n",
-                    at + 1
-                )
-            } else {
-                String::new()
-            };
-            std::fs::write(
-                tasks.join(format!("{prefix}-{at}.md")),
-                format!("---\ntitle: {prefix} {at}\nstatus: todo\n{front}---\nBody.\n"),
-            )
-            .expect("a task file");
-        }
-        let near = format!("on-{prefix}");
-        std::fs::write(
-            tasks.join(format!("{near}.md")),
-            format!(
-                "---\ntitle: Near\nstatus: todo\ndepends_on:\n- id: {prefix}-0\n  kind: blocks\n  item: task\n---\nBody.\n"
-            ),
-        )
-        .expect("a task file");
-        format!("notes:{near}")
-    };
-    let within = chain("short", 16);
-    plan.attest("task", &within);
-    plan.holds(
-        "task",
-        &within,
-        "valid",
-        Value::Null,
-        "a lineage of sixteen ids",
-    );
-    let beyond = chain("long", 17);
-    let refused = plan.exits(
-        &[
-            "task", "attest", &beyond, "--kind", KIND, "--by", "ada", "--bar", BAR,
-        ],
-        1,
-    );
-    assert!(
-        stderr(&refused).contains("never reach an item copied from nowhere"),
-        "{}",
-        stderr(&refused)
-    );
 }
 
 #[test]

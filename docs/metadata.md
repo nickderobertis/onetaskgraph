@@ -19,7 +19,7 @@ Keys are free-form, with two prefixes reserved:
      in `crates/onetaskgraph-e2e/tests/e2e/surface.rs` reads this bullet, and fails when the keys it
      lists or the count it states in words differ from the constants each key is spelled once
      as — `MetadataKey::COPIES_KEY` among them. -->
-- `onetaskgraph.` belongs to this product. It defines exactly eighteen keys, each spelled
+- `onetaskgraph.` belongs to this product. It defines exactly nineteen keys, each spelled
   once so no source can invent its own: `onetaskgraph.repositories`
   (`Repository::METADATA_KEY`), `onetaskgraph.depends_on`
   (`DependencyEdge::RECORDED_KEY`), `onetaskgraph.delivers` (`TaskRef::DELIVERS_KEY`),
@@ -39,8 +39,9 @@ Keys are free-form, with two prefixes reserved:
   (`MetadataKey::CREATE_KEY`), which an item a copy created keeps (README, "A create safe to
   retry") —
   in the contract crate, and
-  `onetaskgraph.origin` (`GlobalId::ORIGIN_KEY`) in the engine —
-  that last one carries a *qualified* id, whose contents no plugin ever constructs or
+  `onetaskgraph.origin` (`GlobalId::ORIGIN_KEY`) and `onetaskgraph.lineage`
+  (`GlobalId::LINEAGE_KEY`) in the engine —
+  those last two carry a *qualified* id, whose contents no plugin ever constructs or
   interprets, though `github-projects` routes the key itself into a text field of its own.
 <!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 - `onepipeline.` belongs to that consumer.
@@ -504,6 +505,7 @@ The reserved keys keep the owners they had:
 | Key | Owner on an update |
 | --- | --- |
 | `onetaskgraph.origin` | the copy, which records the id it copied from — or, on a copy back, keeps the destination's own (above) |
+| `onetaskgraph.lineage` | the copy, which records the root of the chain of copies its source is one of — the source's own lineage, else its origin — where that is not the origin it records, and keeps the destination's own wherever it keeps its origin; never an id whose provenance the write withholds |
 | `onetaskgraph.copies`, `onetaskgraph.members`, `onetaskgraph.member_of`, `onetaskgraph.assets`, `onetaskgraph.create_key` | the destination, which keeps what it holds whatever the source carries |
 | `onetaskgraph.creating` | neither: an intent to create is the copied item's own, so it is never carried to a counterpart |
 | `onetaskgraph.repositories`, `onetaskgraph.depends_on`, `onetaskgraph.delivers`, `onetaskgraph.delivered_by` | neither: the typed fields carry them, so they are dropped from both sides' metadata (above) |

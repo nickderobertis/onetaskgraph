@@ -33,9 +33,10 @@
 //! - `repositories`, sorted;
 //! - `depends_on`: the item's own forward dependency edges, each `[<edge kind>, <far end's
 //!   kind>, <far end>]` sorted, where the far end is named by its lineage root: the qualified
-//!   id its chain of recorded `onetaskgraph.origin`s leads back to through the configured
-//!   sources — its own, for an item copied from nowhere. A copy files the far end under another
-//!   id and records where it came from, so every copy of one far end reaches one root, while
+//!   id the far end records at `onetaskgraph.lineage`, else at `onetaskgraph.origin`, else its
+//!   own, for an item copied from nowhere. A copy files the far end under another id and
+//!   records where it came from and the root that came from, so every copy of one far end
+//!   names one root without any copy between them being read — or being there at all — while
 //!   two items sharing a title never do. A document has none;
 //! - `metadata`: every caller-owned metadata key and its value, but those the record
 //!   `excludes`.
@@ -387,8 +388,8 @@ pub struct Attested {
 /// One far end of an edge, as the digest names it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FarEnd {
-    /// By its lineage root: the qualified id its chain of recorded origins leads back to — its
-    /// own, for an item copied from nowhere — so it reads the same from every copy of it.
+    /// By its lineage root: the qualified id that roots its chain of copies, as it records it —
+    /// its own, for an item copied from nowhere — so it reads the same from every copy of it.
     Lineage(GlobalId),
     /// By its spelling, for an opaque far end no configured source can be asked about.
     Id(String),

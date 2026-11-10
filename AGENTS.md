@@ -1670,7 +1670,9 @@ document arriving by one route and naming records that arrived by the other. **A
 two or more hops does not, permanently**, because only one origin is ever recorded and
 every hop overwrites it. Chasing the chain further would need the intermediate stores
 configured and reachable, which would put a third party's availability inside a copy; a
-durable lineage id would identify only records written after it landed.
+durable lineage id would identify only records written after it landed. One now exists for
+attestations alone — `onetaskgraph.lineage` (`GlobalId::LINEAGE_KEY`), the chain's root, which
+names a dependency's far end in one read of it — and this resolution does not read it.
 
 **A recorded location answers before either key, and only beside its link.** A referent whose
 `onetaskgraph.copy_locations` entry names exactly the record its `onetaskgraph.copies` link names

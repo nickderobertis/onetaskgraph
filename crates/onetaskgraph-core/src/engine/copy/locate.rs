@@ -307,6 +307,8 @@ impl Engine {
                     assets: Vec::new(),
                     classification: landing,
                     withheld,
+                    // A lookup writes nothing, so it records no lineage.
+                    lineage: None,
                     carried: None,
                     comment_plan: None,
                     skipped: false,

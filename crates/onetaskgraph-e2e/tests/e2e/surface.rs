@@ -1015,6 +1015,7 @@ fn the_reserved_key_inventory_names_exactly_the_keys_the_code_spells() {
         MetadataKey::CREATING_KEY,
         MetadataKey::CREATE_KEY,
         onetaskgraph_core::GlobalId::ORIGIN_KEY,
+        onetaskgraph_core::GlobalId::LINEAGE_KEY,
     ]
     .into_iter()
     .collect();
@@ -1056,6 +1057,7 @@ fn the_reserved_key_inventory_names_exactly_the_keys_the_code_spells() {
         "sixteen",
         "seventeen",
         "eighteen",
+        "nineteen",
     ];
     assert!(
         bullet.contains(&format!("defines exactly {} keys", words[spelled.len()])),
