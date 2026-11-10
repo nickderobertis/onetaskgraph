@@ -1003,3 +1003,80 @@ fn a_member_loader_that_cannot_be_read_or_is_not_a_loader_document_is_refused_na
         assert_eq!(fixture.folder(), before, "{name}: nothing written");
     }
 }
+
+#[test]
+fn a_member_its_repositories_route_elsewhere_lands_there_with_its_edges() {
+    // The folder the plan is created in routes `github.com/acme/*` to another: the member
+    // naming that repository lands there, under the plan's member project, and its edges still
+    // name the members that stayed.
+    let fixture = Fixture::new();
+    let elsewhere = fixture.sandbox.subdirectory("elsewhere");
+    fixture.sandbox.project_document(&document(&json!({
+        "notes": {"plugin": "local-md", "config": {"root": fixture.notes},
+                  "routes": [{"repositories": ["github.com/acme/*"], "to": "elsewhere"}]},
+        "elsewhere": {"plugin": "local-md", "config": {"root": elsewhere}},
+    })));
+    let arguments = create_arguments(&fixture.template("plan.md"), &[]);
+    let created = stdout(&fixture.exits(&borrowed(&arguments), 0));
+    assert_eq!(
+        created.lines().collect::<Vec<_>>(),
+        [
+            "notes:plan-1",
+            "notes:w-design",
+            "notes:w-measure",
+            "elsewhere:w-ship"
+        ],
+        "the routed member is reported where it landed"
+    );
+
+    let ship = fixture.task("elsewhere:w-ship");
+    assert_eq!(ship["project"], "plan-1", "{ship}");
+    assert_eq!(
+        ship["content"],
+        "Design: shipping widgets\n- Build\n- Release\n"
+    );
+    let member = fixture.json(&["project", "show", "elsewhere:plan-1"])["items"][0]["item"].clone();
+    assert_eq!(
+        member["metadata"]["onetaskgraph.member_of"], "notes:plan-1",
+        "{member}"
+    );
+    let home = fixture.json(&["project", "show", "notes:plan-1"])["items"][0]["item"].clone();
+    assert_eq!(
+        home["metadata"]["onetaskgraph.members"],
+        json!(["elsewhere:plan-1"]),
+        "{home}"
+    );
+
+    let edges: Vec<(String, String)> = fixture.json(&["task", "deps", "elsewhere:w-ship"])["items"]
+        .as_array()
+        .expect("edges")
+        .iter()
+        .map(|edge| {
+            (
+                edge["from"]["id"].as_str().unwrap().to_owned(),
+                edge["to"]["id"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        edges,
+        [
+            ("elsewhere:w-ship".to_owned(), "notes:w-design".to_owned()),
+            ("elsewhere:w-ship".to_owned(), "notes:w-measure".to_owned()),
+        ]
+    );
+    let listed: Vec<String> =
+        fixture.json(&["task", "list", "--project", "notes:plan-1", "--members"])["items"]
+            .as_array()
+            .expect("tasks")
+            .iter()
+            .map(|task| task["id"].as_str().unwrap().to_owned())
+            .collect();
+    let mut listed = listed;
+    listed.sort();
+    assert_eq!(
+        listed,
+        ["elsewhere:w-ship", "notes:w-design", "notes:w-measure"],
+        "the plan reads whole across both sources"
+    );
+}
