@@ -4406,3 +4406,237 @@ fn an_incoming_replacement_that_writes_does_not_claim_to_be_a_dry_run() {
     assert_eq!(answer["sanitization"]["dry_run"], false, "{answer}");
     assert!(text_of(&store, "site").contains(&format!("New {WITH}")));
 }
+
+#[test]
+fn a_plan_member_title_is_rewritten_and_its_offered_id_is_a_fixed_entry() {
+    let (store, _) = sanitizing(replaced());
+    let templates = store.sandbox.config_home().join("plan-templates");
+    std::fs::create_dir_all(&templates).expect("a template directory");
+    std::fs::write(
+        templates.join("task.md"),
+        "---\nonetaskgraph_template: 1\nvariables:\n  topic: {description: t}\n---\nTopic: {{ topic }}\n",
+    )
+    .expect("a member template");
+    let plan = |name: &str, id: &str| {
+        let file = templates.join(name);
+        std::fs::write(
+            &file,
+            format!(
+                "---\nonetaskgraph_template: 1\nmembers:\n  - id: {id}\n    title: \"Visit {TERM}\"\n    template: {{file: task.md}}\n    answers: {{topic: plain}}\n---\nThe plan.\n"
+            ),
+        )
+        .expect("a project template");
+        file.display().to_string()
+    };
+
+    // The member's title carries the term and is written replaced; the id it was offered is
+    // the id it lands under.
+    let landed = store.ok(&[
+        "project",
+        "create",
+        "site",
+        "--id",
+        "trip",
+        "--title",
+        "Trip",
+        "--template",
+        &plan("rewritten.md", "visit"),
+        "--no-interactive",
+    ]);
+    assert_eq!(
+        landed.lines().collect::<Vec<_>>(),
+        ["site:trip", "site:visit"]
+    );
+    let file = std::fs::read_to_string(store.folder("site").join("tasks").join("visit.md"))
+        .expect("the member's file");
+    assert!(file.contains(&format!("title: Visit {WITH}")), "{file}");
+    assert!(!file.contains(TERM), "{file}");
+
+    // A term in the id a member is offered is never rewritten: it is refused.
+    let (failure, said) = store.refused(&[
+        "project",
+        "create",
+        "site",
+        "--id",
+        "again",
+        "--title",
+        "Again",
+        "--template",
+        &plan("fixed.md", TERM),
+        "--no-interactive",
+    ]);
+    assert_eq!(failure, "boundary-refused");
+    assert!(said.contains("member"), "{said}");
+    assert!(
+        !store
+            .folder("site")
+            .join("tasks")
+            .join(format!("{TERM}.md"))
+            .exists(),
+        "nothing is written under the term"
+    );
+}
+
+#[test]
+fn an_attestation_whose_write_rewrites_the_stored_item_holds_over_what_it_rewrote() {
+    // Opted in to sanitising what is stored, the attestation's own write rewrites the item's
+    // title, body, label and metadata first; the record is of the content that write left.
+    let (store, _) = guarded(replaced());
+    stage_older(&store);
+    let attest = |version: &str| -> Vec<String> {
+        [
+            "task",
+            "attest",
+            "site:older",
+            "--kind",
+            "plan-review",
+            "--by",
+            "ada",
+            "--bar",
+            "bar-1",
+            "--if-version",
+            version,
+            "--json",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect()
+    };
+    // Held to a version the task is not at, it is refused before anything is sanitised.
+    let before = tree(&store.folder("site"));
+    let stale = attest("not-the-version");
+    let output = store.run(&stale.iter().map(String::as_str).collect::<Vec<_>>());
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("not-the-version"),
+        "{}",
+        stderr(&output)
+    );
+    assert_eq!(
+        tree(&store.folder("site")),
+        before,
+        "a stale version writes nothing"
+    );
+    // Held to the version it is at, it sanitises the task and records the attestation.
+    let shown: Value =
+        serde_json::from_str(&store.ok(&["task", "show", "site:older", "--json"])).expect("JSON");
+    let version = shown["items"][0]["item"]["version"]
+        .as_str()
+        .expect("a folder's task reports a version")
+        .to_owned();
+    let held = attest(&version);
+    let answer: Value =
+        serde_json::from_str(&store.ok(&held.iter().map(String::as_str).collect::<Vec<_>>()))
+            .expect("JSON");
+    assert_eq!(answer["record"]["kind"], json!("plan-review"), "{answer}");
+    let file = std::fs::read_to_string(store.folder("site").join("tasks").join("older.md"))
+        .expect("the task file");
+    assert!(
+        !file.contains(TERM),
+        "the stored item was rewritten: {file}"
+    );
+    let check = [
+        "task",
+        "attestation",
+        "check",
+        "site:older",
+        "--kind",
+        "plan-review",
+        "--bar",
+        "bar-1",
+    ];
+    assert_eq!(store.ok(&check), "plan-review: valid\n");
+    store.ok(&["task", "update", "site:older", "--title", "Port the retry"]);
+    let moved = store.run(&check);
+    assert_eq!(moved.status.code(), Some(3), "{}", stdout(&moved));
+    assert!(
+        stdout(&moved).contains("content-moved"),
+        "{}",
+        stdout(&moved)
+    );
+}
+
+#[test]
+fn an_attestation_on_a_public_item_is_screened_rewritten_previewed_and_refused() {
+    let (store, _) = sanitizing(replaced());
+    store.record(
+        "site",
+        "tasks",
+        "clean",
+        "title: Clean\nstatus: todo\nproject: p",
+        PLAIN,
+    );
+    let attest = |by: &str, extra: &[&str]| {
+        let mut arguments = vec![
+            "task",
+            "attest",
+            "site:clean",
+            "--kind",
+            "plan-review",
+            "--by",
+            by,
+            "--bar",
+            "bar-1",
+        ];
+        arguments.extend_from_slice(extra);
+        arguments.into_iter().map(str::to_owned).collect::<Vec<_>>()
+    };
+
+    // Previewed over an item whose stored text carries the term, nothing is written — the
+    // attestation nor the item's own sanitisation.
+    stage_older(&store);
+    let before = tree(&store.folder("site"));
+    let answer: Value = serde_json::from_str(&store.ok(&[
+        "task",
+        "attest",
+        "site:older",
+        "--kind",
+        "plan-review",
+        "--by",
+        "ada",
+        "--bar",
+        "bar-1",
+        "--json",
+        "--sanitize-dry-run",
+    ]))
+    .expect("JSON");
+    assert_eq!(answer["sanitization"]["dry_run"], json!(true), "{answer}");
+    assert!(answer.get("record").is_none(), "{answer}");
+    assert_eq!(
+        tree(&store.folder("site")),
+        before,
+        "a dry run writes nothing"
+    );
+
+    // Written, the label carrying the term lands replaced, and the record still holds.
+    let written = attest(&format!("ada of {TERM}"), &["--json"]);
+    let answer: Value =
+        serde_json::from_str(&store.ok(&written.iter().map(String::as_str).collect::<Vec<_>>()))
+            .expect("JSON");
+    assert_eq!(
+        answer["record"]["by"],
+        json!(format!("ada of {WITH}")),
+        "{answer}"
+    );
+    let file = std::fs::read_to_string(store.folder("site").join("tasks").join("clean.md"))
+        .expect("the task file");
+    assert!(!file.contains(TERM), "{file}");
+    let checked = store.ok(&[
+        "task",
+        "attestation",
+        "check",
+        "site:clean",
+        "--kind",
+        "plan-review",
+        "--bar",
+        "bar-1",
+    ]);
+    assert_eq!(checked, "plan-review: valid\n");
+
+    // A term the caller refuses is refused, writing nothing.
+    let before = tree(&store.folder("site"));
+    let refused = attest("ada", &["--reject", "ada"]);
+    let (failure, _) = store.refused(&refused.iter().map(String::as_str).collect::<Vec<_>>());
+    assert_eq!(failure, "boundary-refused");
+    assert_eq!(tree(&store.folder("site")), before);
+}

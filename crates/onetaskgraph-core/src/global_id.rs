@@ -35,6 +35,19 @@ impl GlobalId {
     /// value as it stores any other caller-defined one.
     pub const ORIGIN_KEY: &'static str = "onetaskgraph.origin";
 
+    /// The reserved metadata key a copy records the first item of a chain of copies under —
+    /// the qualified id of the item copied from nowhere — when that is not already the
+    /// [`ORIGIN_KEY`](Self::ORIGIN_KEY) it records.
+    ///
+    /// [`ORIGIN_KEY`](Self::ORIGIN_KEY) names one hop and every hop overwrites it, so an item
+    /// two copies from where it was authored could only be led back there through the copy
+    /// between — and not at all once that copy was deleted. This key is carried from hop to
+    /// hop instead, so an item's root is one read of the item itself: the key, else its
+    /// origin, else its own id. A copy whose origin is withheld records none, and one naming
+    /// a private source is never recorded where a write is not declared private. Spelled
+    /// beside [`ORIGIN_KEY`](Self::ORIGIN_KEY), for its reason.
+    pub const LINEAGE_KEY: &'static str = "onetaskgraph.lineage";
+
     /// Qualify `native` as belonging to `source`.
     #[must_use]
     pub fn new(source: SourceName, native: NativeId) -> Self {

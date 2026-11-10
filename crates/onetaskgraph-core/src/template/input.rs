@@ -207,6 +207,12 @@ impl LoaderDocument {
         self
     }
 
+    /// The directories the entry's chain resolves over, in order.
+    #[must_use]
+    pub fn search_path(&self) -> &[PathBuf] {
+        &self.search_path
+    }
+
     /// What an item rendered from this document records as its provenance `template`.
     #[must_use]
     pub fn reference(&self) -> &str {

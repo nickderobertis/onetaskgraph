@@ -18,6 +18,9 @@ use onetaskgraph_plugin_api::{
 use schemars::{Schema, schema_for};
 use serde_json::{Value, json};
 
+use crate::attestation::{
+    Attestation, AttestationCheck, AttestationState, Attested, ProjectAttestationCheck, VoidReason,
+};
 use crate::boundary::{PublicWriteInput, RepositoryVisibility, WriteVerdict};
 use crate::cache::{CacheCleared, CacheUse, ExpectedWrite};
 use crate::config::{
@@ -27,8 +30,8 @@ use crate::config::{
 use crate::registry::registry;
 use crate::secrets::{CredentialLayer, ResolvedCredential, SecretsReport};
 use crate::template::{
-    ItemType, RenderedTemplate, TemplateProvenance, TemplateVariable, TemplateVariables,
-    VariableType,
+    ItemType, MemberDeclaration, RenderedTemplate, TemplateProvenance, TemplateVariable,
+    TemplateVariables, VariableType,
 };
 use crate::{
     CommentList, CommentWritten, CommentsSince, CompleteAction, CopyAction, CopyLink, CopyOutcome,
@@ -54,7 +57,7 @@ use crate::{
 /// that it moves whenever [`schema_bundle`] below emits a different document. The golden
 /// that holds it to that is `PUBLISHED_BUNDLES` in `tests/engine.rs`, which records every
 /// root's schema by digest from this version on.
-pub const SCHEMA_BUNDLE_VERSION: u32 = 58;
+pub const SCHEMA_BUNDLE_VERSION: u32 = 59;
 
 /// The same typed envelope the command line serializes, keeping the payload's root name.
 pub(crate) fn write_answer_schema<T: schemars::JsonSchema>() -> Schema {
@@ -258,6 +261,21 @@ pub fn schema_bundle() -> Value {
     // What `task`, `project` and `document metadata set` answer with.
     roots.insert("MetadataSet", write_answer_schema::<MetadataSet>());
 
+    // Content-keyed attestations: what `attest` answers with, what `attestation check`
+    // answers for one item and — under `project attestation check --tasks` — for every task of
+    // a project, the record an item holds, and the two vocabularies a caller branches on.
+    // llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] The shapes are declared once, in `crate::attestation`; what lives here is their registration as roots, which is what both SDK generators read and `SCHEMA_BUNDLE_VERSION` and its golden track.
+    roots.insert("Attested", write_answer_schema::<Attested>());
+    roots.insert("Attestation", schema_for!(Attestation));
+    roots.insert("AttestationCheck", schema_for!(AttestationCheck));
+    roots.insert(
+        "ProjectAttestationCheck",
+        schema_for!(ProjectAttestationCheck),
+    );
+    roots.insert("AttestationState", schema_for!(AttestationState));
+    roots.insert("VoidReason", schema_for!(VoidReason));
+    // llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
+
     roots.insert("CopyReport", write_answer_schema::<CopyReport>());
     // A root of its own, for the reason `StatusMapping` is one: every source's block takes the
     // two settings of a create safe to retry by name, whatever plugin it names.
@@ -285,6 +303,11 @@ pub fn schema_bundle() -> Value {
     roots.insert("VariableType", schema_for!(VariableType));
     roots.insert("ItemType", schema_for!(ItemType));
     roots.insert("RenderedTemplate", schema_for!(RenderedTemplate));
+    // One member of a project template's plan graph, as its front matter declares it, and
+    // what `project create --dry-run` answers with: the project and every member it would
+    // create.
+    roots.insert("MemberDeclaration", schema_for!(MemberDeclaration));
+    roots.insert("PlannedProject", schema_for!(crate::PlannedProject));
     // What `task render` and `document render` answer with, what `task answers` and
     // `document answers` answer with, and the `onetaskgraph.template` entry an item rendered
     // from a template records — named, because a caller checking a hand edit or a changed

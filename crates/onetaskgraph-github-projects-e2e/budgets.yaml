@@ -203,6 +203,17 @@ budgets:
     unit: writes
     direction: max
     threshold: 40
+  # llmlint: ignore[budgets_track_product_owner_outcomes] The task registering this budget requires it here by id, threshold and workload, carried over unchanged from the approved orchestrator budget by the manager's ruling that each budget moves with its behaviour. It bounds a person's wait for one design approval, which `github-approval-calls-points` — the token's GraphQL points for a whole approval flow — cannot show regressing.
+  - id: plan-approval-seconds
+    description: >-
+      Simulated seconds, each request held for its kind's measured latency, to record one design-approval attestation on the board copy of a private 10-item plan's design document copied screened onto a 2,000-item board. It protects the time a person waits to approve a plan's design.
+    labels: [github]
+    measure: reported
+    # llmlint: ignore[budget_commands_measure_directly] Every budget of this file selects a report-only entry in `budget_runner`, the harness-runner convention this crate's budgets landed with, and the task registering this one names that command. It reads only the telemetry `approval_seconds.rs` recorded during the crate's test run, refuses a recording of another workload, and hands the figure to onebudgetspec, which alone judges it.
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_plan_approval", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-github-projects-e2e"]
+    unit: seconds
+    direction: max
+    threshold: 7
   - id: github-approval-calls-points
     description: >-
       Modelled GitHub GraphQL points of one complete plan design approval, its review task's creation and resolution included, on a 2,000-item board, screened or not. It protects every manager's share of the board token.

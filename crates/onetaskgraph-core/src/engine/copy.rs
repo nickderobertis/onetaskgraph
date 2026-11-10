@@ -1804,6 +1804,12 @@ struct Planned {
     /// the origin naming its source, any link naming a private source — is left behind
     /// rather than written where it would name somewhere private.
     withheld: bool,
+    /// The root of the chain of copies it is one of, recorded where it lands at
+    /// [`GlobalId::LINEAGE_KEY`]: its source's own lineage, else the origin its source records,
+    /// as the source holds it — `None` when its source records neither or records its own id,
+    /// where the origin it lands with is the root, and when it names a source whose provenance
+    /// this write withholds.
+    lineage: Option<Value>,
     /// Its comments at the source, every page of one revision of them, exactly when the copy
     /// carries them — a task of a `--comments` copy — and `None` otherwise, a copy that read a
     /// task's comments only to confirm its comment activity included.
@@ -7015,6 +7021,18 @@ impl Engine {
             comments,
         } = read;
         let withheld = self.withholds_provenance(&id.source, &placement.destination);
+        let lineage = (!withheld)
+            .then(|| lineage_of(&item))
+            .flatten()
+            .filter(|root| {
+                root.as_str() != Some(id.to_string().as_str())
+                    && root
+                        .as_str()
+                        .and_then(|root| root.parse::<GlobalId>().ok())
+                        .is_none_or(|root| {
+                            !self.withholds_provenance(&root.source, &placement.destination)
+                        })
+            });
         let destination = self.writable(&placement.destination)?;
         if item.level() == Level::Document {
             documentary(destination)?;
@@ -7116,6 +7134,7 @@ impl Engine {
             assets,
             classification,
             withheld,
+            lineage,
             carried,
             comment_plan: None,
             skipped: false,
@@ -11183,21 +11202,47 @@ fn carried(
             carried.insert(kept.to_owned(), held.clone());
         }
     }
-    let held = match origin {
-        Origin::Records(id) => Some(Value::String(id.to_string())),
-        Origin::Keeps(held) => held.clone(),
+    // The source's lineage is settled with its origin: a copy carries the root the source
+    // leads back to, and a copy that keeps the destination's origin keeps its lineage too.
+    carried.remove(GlobalId::LINEAGE_KEY);
+    let (held, lineage) = match origin {
+        Origin::Records(id, lineage) => (Some(Value::String(id.to_string())), lineage.clone()),
+        Origin::Keeps(held) => (
+            held.clone(),
+            own.and_then(|own| own.get(GlobalId::LINEAGE_KEY)).cloned(),
+        ),
     };
     if let Some(held) = held {
         carried.insert(GlobalId::ORIGIN_KEY.to_owned(), held);
     }
+    if let Some(lineage) = lineage {
+        carried.insert(GlobalId::LINEAGE_KEY.to_owned(), lineage);
+    }
     carried
+}
+
+/// The root of the chain of copies `item` is one of, as `item` records it: its
+/// [`GlobalId::LINEAGE_KEY`], else its [`GlobalId::ORIGIN_KEY`] — `None` when it records
+/// neither, where `item` is its own root.
+///
+/// Taken as the item holds it, a value that is no qualified id included: a copy is not where
+/// provenance is judged, and carrying it unread keeps it exactly as refusable where it lands —
+/// by an attestation naming the item as a far end — as it is where it was recorded, rather than
+/// putting another root in its place.
+fn lineage_of(item: &Item) -> Option<Value> {
+    let metadata = described(item).1;
+    [GlobalId::LINEAGE_KEY, GlobalId::ORIGIN_KEY]
+        .into_iter()
+        .find_map(|key| metadata.get(key).cloned())
 }
 
 /// What one landed item records at [`GlobalId::ORIGIN_KEY`].
 enum Origin {
     /// The qualified id this item was copied from, as the id type rather than as its
-    /// spelling: the key holds a [`GlobalId`] and nothing else may be recorded there.
-    Records(GlobalId),
+    /// spelling: the key holds a [`GlobalId`] and nothing else may be recorded there — and
+    /// the root of its chain of copies, where that is not this id, as its source holds it
+    /// ([`Planned::lineage`](Planned)).
+    Records(GlobalId, Option<Value>),
     /// Whatever the destination already holds there — `None` when it holds nothing, which
     /// is written as the key being absent rather than as a null.
     ///
@@ -11238,7 +11283,7 @@ fn recorded(item: &Planned, held: Option<&Prior>) -> Origin {
     if item.withheld {
         return Origin::Keeps(None);
     }
-    Origin::Records(item.source.clone())
+    Origin::Records(item.source.clone(), item.lineage.clone())
 }
 
 /// Whether a copy reads each task's comments from its source: to carry them, or to confirm the

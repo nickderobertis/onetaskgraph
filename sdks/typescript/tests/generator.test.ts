@@ -410,11 +410,15 @@ test("every command's response root is the one the Python generator maps it to",
   // And the other shapes a command answers in, which each client accepts beside its root.
   const alternates = source.slice(source.indexOf("ALTERNATE_ROOTS"));
   const pythonAlternates = Object.fromEntries(
-    [...alternates.slice(0, alternates.indexOf("\n")).matchAll(/"(\w+)": \(([^)]*)\)/g)].map(
+    [...alternates.slice(0, alternates.indexOf("\n}\n")).matchAll(/"(\w+)": \(([^)]*)\)/g)].map(
       ([, verb, roots]) => [verb, [...(roots ?? "").matchAll(/"(\w+)"/g)].map(([, root]) => root)],
     ),
   );
-  expect(Object.keys(pythonAlternates)).toEqual(["sources_fields"]);
+  expect(Object.keys(pythonAlternates)).toEqual([
+    "sources_fields",
+    "project_attestation_check",
+    "project_create",
+  ]);
   expect(
     Object.fromEntries(
       Object.entries(commandAlternateRoots).map(([command, roots]) => [

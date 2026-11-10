@@ -200,6 +200,26 @@ impl Engine {
             }
             stored = Some((read.classification, read.repositories, read.project));
         }
+        self.write_read_document(source, id, key, value, stored)
+            .await
+    }
+
+    /// The write half of [`write_document_metadata`](Self::write_document_metadata): admitted
+    /// on `stored` — what a read just found of the document — when there is one, and the
+    /// source's write primed with that read so it does not read again.
+    async fn write_read_document(
+        &self,
+        source: &ResolvedSource,
+        id: &GlobalId,
+        key: &MetadataKey,
+        value: &Value,
+        stored: Option<(
+            onetaskgraph_plugin_api::Classification,
+            Vec<onetaskgraph_plugin_api::Repository>,
+            Option<onetaskgraph_plugin_api::NativeId>,
+        )>,
+    ) -> Result<MetadataSet, EngineError> {
+        let read = stored.is_some();
         let exposure = Exposure::of_entry(key.as_str(), value);
         let rewrite = match stored {
             Some(stored) => {
@@ -228,7 +248,7 @@ impl Engine {
         rewrite.value(&mut value);
         let value = &value;
         // The write takes what the read above left, rather than reading the document again.
-        let primed = version.is_some()
+        let primed = read
             && source
                 .source()
                 .write_context(&id.native)
@@ -246,8 +266,33 @@ impl Engine {
         answer(source, id, key, &document.metadata, document.location)
     }
 
+    /// Set one key of the document `read` is, as that read found it: who may read it is taken
+    /// from the read, and the source's write takes what the read left rather than reading
+    /// again — so the whole is that read and this write.
+    pub(super) async fn set_read_document_metadata(
+        &self,
+        source: &ResolvedSource,
+        id: &GlobalId,
+        key: &MetadataKey,
+        value: &Value,
+        read: &onetaskgraph_plugin_api::Document,
+    ) -> Result<MetadataSet, EngineError> {
+        self.write_read_document(
+            source,
+            id,
+            key,
+            value,
+            Some((
+                read.classification,
+                read.repositories.clone(),
+                read.project.clone(),
+            )),
+        )
+        .await
+    }
+
     /// The built source `id` names, when a metadata write of `record` may be sent to it.
-    fn metadata_writable(
+    pub(super) fn metadata_writable(
         &self,
         id: &GlobalId,
         record: MetadataRecord,

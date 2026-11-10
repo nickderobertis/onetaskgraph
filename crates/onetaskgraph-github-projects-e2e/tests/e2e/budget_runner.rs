@@ -1,5 +1,5 @@
 //! Reports ordinary-test telemetry, validating the workload before handing it to onebudgetspec.
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::path::PathBuf;
 
 pub(super) fn directory() -> PathBuf {
@@ -180,6 +180,19 @@ fn report_plan_copy() {
 // llmlint: ignore-end[budget_commands_measure_directly]
 // llmlint: ignore-end[tests_assert_real_behavior]
 
+// llmlint: ignore-block[tests_assert_real_behavior] A report-only command entry point budgets.yaml selects, which reports nothing without ONEBUDGETSPEC_BUDGET_ID; `the_plan_approval_report_hands_over_the_recorded_figure_and_refuses_another_workload` below asserts what it hands over and refuses.
+// llmlint: ignore-block[budget_commands_measure_directly] Every budget of this crate selects its own report-only entry here, the harness-runner convention it landed with (report_visibility_reads, report_metadata_fields), and the task registering this one names that pattern. It reads only the telemetry `approval_seconds.rs` recorded during the crate's ordinary test run, refuses a recording of another workload, and hands the figure to onebudgetspec, which alone judges it.
+#[test]
+fn report_plan_approval() {
+    let Some(budget) = selected() else {
+        return;
+    };
+    let (value, detail) = plan_approval_figure(&budget).unwrap_or_else(|error| refuse(&error));
+    hand_over(value, &detail);
+}
+// llmlint: ignore-end[budget_commands_measure_directly]
+// llmlint: ignore-end[tests_assert_real_behavior]
+
 // llmlint: ignore-block[tests_assert_real_behavior] As the block of `report_*` entries above: each is a report-only command entry point budgets.yaml selects, which reports nothing without ONEBUDGETSPEC_BUDGET_ID; `a_store_cost_report_hands_over_the_larger_scale_and_refuses_another_workload` below asserts what they hand over and refuse.
 // llmlint: ignore-block[budget_commands_measure_directly] Every budget of this crate selects its own report-only entry here, the harness-runner convention it landed with (report_visibility_reads, report_metadata_fields), and the task registering these three names each entry. Each reads only the telemetry `store_cost.rs` recorded during the crate's ordinary test run, refuses a recording of another workload, scale or figure, and hands the figure to onebudgetspec, which alone judges it.
 #[test]
@@ -338,6 +351,115 @@ fn plan_copy_scenario(budget: &str) -> &'static str {
         .find(|scenario| budget.ends_with(&format!("-{scenario}")))
         .copied()
         .unwrap_or(super::plan_copy::SCENARIOS[0])
+}
+
+/// What `approval_seconds` recorded for `budget`, refused unless it is that journey's recording
+/// of one design approval on the board copy of the generated plan, drafted private and copied
+/// screened onto a board of 2,000 items.
+fn plan_approval_figure(budget: &str) -> Result<(f64, String), String> {
+    let value = recorded(budget)?;
+    let expected = [
+        ("plan", json!(super::plan_copy::WORKLOAD)),
+        ("board", json!(super::plan_copy::SMALL)),
+        ("private", json!(true)),
+        ("screened", json!(true)),
+        ("items", json!(10)),
+        ("images", json!(1)),
+        ("kind", json!(super::approval_seconds::KIND)),
+    ];
+    if let Some((field, _)) = expected
+        .iter()
+        .find(|(field, expected)| value[*field] != *expected)
+    {
+        return Err(format!(
+            "the recording's {field} is not the workload's: one design approval on a private \
+             10-item plan with one image copied screened onto a board of 2000 items"
+        ));
+    }
+    if !value["requests"].is_object() {
+        return Err("missing the request kinds".into());
+    }
+    let figure = value["value"]
+        .as_f64()
+        .filter(|value| value.is_finite() && *value >= 0.0)
+        .ok_or("missing nonnegative figure")?;
+    let detail = value["detail"].as_str().ok_or("missing detail")?.to_owned();
+    Ok((figure, detail))
+}
+
+#[test]
+fn the_plan_approval_report_hands_over_the_recorded_figure_and_refuses_another_workload() {
+    use onetaskgraph_e2e_support::common::Sandbox;
+    let sandbox = Sandbox::new();
+    let directory = sandbox.subdirectory("plan-approval");
+    let budget = super::approval_seconds::BUDGET;
+    let run = |recorded: Option<Value>| {
+        let path = onetaskgraph_e2e_support::telemetry::file_in(&directory, budget);
+        let _ = std::fs::remove_file(&path);
+        if let Some(recorded) = recorded {
+            std::fs::write(&path, recorded.to_string()).unwrap();
+        }
+        let result = directory.join("result.json");
+        let _ = std::fs::remove_file(&result);
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "budget_runner::report_plan_approval",
+                "--exact",
+                "--nocapture",
+            ])
+            .env("GITHUB_ASSET_TELEMETRY_DIR", &directory)
+            .env("ONEBUDGETSPEC_BUDGET_ID", budget)
+            .env("ONEBUDGETSPEC_RESULT", &result)
+            .output()
+            .unwrap();
+        (output, std::fs::read_to_string(&result).ok())
+    };
+    let mut kinds = std::collections::BTreeMap::new();
+    kinds.insert(
+        "ItemRead".to_owned(),
+        json!({"count": 1, "modelled_millis": 554, "total_millis": 554}),
+    );
+    let valid = super::approval_seconds::recording(1.636, &kinds);
+    let with = |field: &str, value: Value| {
+        let mut changed = valid.clone();
+        changed[field] = value;
+        Some(changed)
+    };
+    for (recorded, message) in [
+        (None, "no telemetry"),
+        (
+            with("plan", json!("a 24-image bundle")),
+            "plan is not the workload's",
+        ),
+        (
+            with("private", json!(false)),
+            "private is not the workload's",
+        ),
+        (
+            with("kind", json!("plan-review")),
+            "kind is not the workload's",
+        ),
+        (with("requests", Value::Null), "missing the request kinds"),
+        (with("budget", json!("another-budget")), "different budget"),
+        (with("value", json!(-1.0)), "missing nonnegative figure"),
+    ] {
+        let (output, written) = run(recorded);
+        assert!(!output.status.success(), "accepted {message}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(message),
+            "{message}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(written, None, "reported a figure over {message}");
+    }
+    let (output, written) = run(Some(valid));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let written: Value = serde_json::from_str(&written.expect("a result")).unwrap();
+    assert_eq!(written["value"], 1.636, "{written}");
 }
 
 /// What `plan_copy.rs` recorded for `budget`, refused unless the recording states the plan, the

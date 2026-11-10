@@ -32,6 +32,12 @@ use onetaskgraph_e2e_support::{common, fixtures, linear_vocabulary, onevcs};
 mod adoption;
 mod assets;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No credential and no network:
+// every journey drives the binary against a folder of Markdown, the loopback board and the
+// loopback Linear workspace in seconds. Recording and checking an attestation, and its digest,
+// are the engine's, and the copy they survive crosses plugins, so no one plugin crate's edge is
+// narrower.
+mod attestations;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No credential and no network:
 // every journey drives the binary against folders of Markdown and the released onevcs
 // boundary commands over an onevcs home this run owns, holding synthetic identities, in a few
 // seconds. Classification, routing by it and the write gate are the engine's and the
@@ -66,6 +72,12 @@ mod comments;
 // board and the loopback Linear workspace, in seconds. The listing and its watermark are the
 // engine's, composed over every plugin's own reads, so no one plugin crate's edge is narrower.
 mod comments_since;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No credential and no network: the
+// journey drives the binary against two folders of Markdown and three loopback Linear stand-ins
+// in seconds. It proves the store adopted by configuration alone — a plan graph, attestations,
+// a copy and a template schema together — which is the engine's and crosses plugins, so no one
+// plugin crate's edge is narrower.
+mod configured_lifecycle;
 mod copy;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No credential and no network: the
 // journeys drive the binary between loopback boards, a loopback Linear workspace and folders of
@@ -167,6 +179,10 @@ mod no_persistence;
 // Python stdio peer — with no credential and no network, in a few seconds. What it proves is
 // the engine's own refusal and the contract every plugin shares, so it cannot sit behind one
 // plugin crate's edge, which AGENTS.md forbids depending on the engine at any depth.
+// No credential and no network: each journey drives the binary against one folder of Markdown
+// in about a second. A plan graph is the template engine's and the engine's create, which every
+// source shares, so no plugin crate's edge is narrower.
+mod plan_graph;
 mod priority;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
 // narrower edge for it: every journey here drives the binary against folders of Markdown, an
@@ -219,6 +235,10 @@ mod surface;
 // library half is proven in `onetaskgraph-core`'s own `tests/templates.rs`, behind that crate's
 // edge.
 mod templates;
+// No credential and no network: each journey drives the binary against one folder of Markdown
+// in well under a second. A variable's schema is the template engine's, which every rendering
+// verb shares, so no plugin crate's edge is narrower.
+mod template_schemas;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
 // narrower edge for it: every journey here drives the binary against the shared rows — folders
 // of Markdown, in-memory sources, the loopback Linear workspace and GitHub board, and the stdio
