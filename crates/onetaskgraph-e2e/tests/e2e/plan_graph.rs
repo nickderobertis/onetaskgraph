@@ -595,3 +595,135 @@ fn a_member_that_cannot_be_written_names_itself_and_what_already_landed() {
     let project = fixture.json(&["project", "show", "notes:plan-1"])["items"][0]["item"].clone();
     assert_eq!(project["title"], "The widgets plan");
 }
+
+#[test]
+fn a_member_with_a_reserved_metadata_key_or_a_malformed_repository_is_refused_naming_it() {
+    let fixture = Fixture::new();
+    let before = fixture.folder();
+    for (name, extra, says) in [
+        (
+            "reserved.md",
+            "    metadata: {onetaskgraph.origin: x}\n",
+            "invalid-metadata-key",
+        ),
+        (
+            "repository.md",
+            "    repositories: [not a repository]\n",
+            "repository not a repository",
+        ),
+    ] {
+        let file = fixture.templates.join(name);
+        std::fs::write(
+            &file,
+            format!(
+                "---\nonetaskgraph_template: 1\nmembers:\n  - id: a\n    title: A\n    template: {{file: design-task.md}}\n    answers: {{topic: t}}\n{extra}---\nPlan\n"
+            ),
+        )
+        .expect("a template");
+        let output = fixture.exits(
+            &[
+                "project",
+                "create",
+                "notes",
+                "--id",
+                "plan-1",
+                "--title",
+                "P",
+                "--template",
+                &path(&file),
+                "--no-interactive",
+                "--json",
+            ],
+            1,
+        );
+        let failure: Value = serde_json::from_str(&stdout(&output)).expect("a failure document");
+        let message = failure["failure"]["message"].as_str().unwrap_or_default();
+        assert!(
+            message.contains("member \"a\" of the project template"),
+            "{name}: {message}"
+        );
+        assert!(
+            message.contains(says) || failure["failure"]["kind"] == says,
+            "{name}: {failure}"
+        );
+        assert_eq!(fixture.folder(), before, "{name}: nothing written");
+    }
+}
+
+#[test]
+fn a_project_template_from_a_loader_finds_its_members_beside_the_loader() {
+    let fixture = Fixture::new();
+    // The loader document sits in a directory of its own, beside the member templates; the
+    // project template it states is registered inline.
+    let crew = fixture.sandbox.subdirectory("crew");
+    std::fs::write(crew.join("design-task.md"), DESIGN_TASK).expect("a member template");
+    std::fs::write(crew.join("measure-task.md"), MEASURE_TASK).expect("a member template");
+    std::fs::write(
+        crew.join("measure.loader.json"),
+        json!({"reference": "crew/measure", "entry": "measure-task.md", "search_path": [crew]})
+            .to_string(),
+    )
+    .expect("a loader document");
+    let loader = crew.join("plan.loader.json");
+    std::fs::write(
+        &loader,
+        json!({"reference": "crew/plan", "entry": "plan.md", "templates": [{"name": "plan.md", "source": PLAN}]})
+            .to_string(),
+    )
+    .expect("a loader document");
+    let output = fixture.exits(
+        &[
+            "project",
+            "create",
+            "notes",
+            "--id",
+            "plan-1",
+            "--title",
+            "Loaded",
+            "--template-loader",
+            &path(&loader),
+            "--var",
+            "slug=w",
+            "--var",
+            "goal=widgets",
+            "--no-interactive",
+        ],
+        0,
+    );
+    assert_eq!(stdout(&output).lines().count(), 4, "{}", stdout(&output));
+    assert_eq!(
+        fixture.task("notes:w-measure")["metadata"]["onetaskgraph.template"]["template"],
+        "crew/measure"
+    );
+
+    // Read from standard input, a loader has no directory of its own: its search path is where
+    // members are found.
+    let piped = json!({"reference": "crew/plan", "entry": "plan.md", "search_path": [crew],
+        "templates": [{"name": "plan.md", "source": PLAN}]})
+    .to_string();
+    let output = fixture
+        .sandbox
+        .command()
+        .args([
+            "project",
+            "create",
+            "notes",
+            "--id",
+            "plan-2",
+            "--title",
+            "Piped",
+            "--template-loader",
+            "-",
+            "--var",
+            "slug=p",
+            "--var",
+            "goal=gadgets",
+            "--no-interactive",
+        ])
+        .write_stdin(piped)
+        .assert()
+        .get_output()
+        .clone();
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(fixture.task("notes:p-ship")["title"], "Ship gadgets");
+}

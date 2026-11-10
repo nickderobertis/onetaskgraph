@@ -433,6 +433,11 @@ fn a_schema_that_does_not_compile_or_types_a_scalar_is_refused_naming_its_key() 
             "variables.plan.schema",
         ),
         (
+            "remote.md",
+            "  plan:\n    description: p\n    type: object\n    schema: {$ref: \"https://example.com/plan.schema.json\"}\n",
+            "variables.plan.schema",
+        ),
+        (
             "default.md",
             "  steps:\n    description: s\n    type: list\n    default: [lower]\n    schema: {items: {pattern: \"^[A-Z]\"}}\n",
             "variables.steps.default",
@@ -508,4 +513,18 @@ fn a_nearer_declaration_gives_its_own_schema_or_none() {
         stderr(&short)
     );
     assert_eq!(stdout(&render("short.md", "steps=[lower]")), "* lower\n");
+}
+
+#[test]
+fn a_default_its_schema_accepts_renders_when_no_answer_is_given() {
+    let fixture = Fixture::new();
+    let file = fixture.sandbox.subdirectory("inputs").join("defaulted.md");
+    std::fs::write(
+        &file,
+        "---\nonetaskgraph_template: 1\nvariables:\n  steps:\n    description: s\n    type: list\n    default: [Draft, Review]\n    schema: {type: array, items: {type: string, pattern: \"^[A-Z]\"}}\n---\n{% for step in steps %}* {{ step }}\n{% endfor %}",
+    )
+    .expect("a template");
+    let file = file.to_str().expect("a UTF-8 path").to_owned();
+    let output = fixture.exits(&["template", "render", &file, "--no-interactive"], 0);
+    assert_eq!(stdout(&output), "* Draft\n* Review\n");
 }

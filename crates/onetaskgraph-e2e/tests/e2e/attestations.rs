@@ -1139,3 +1139,130 @@ fn an_edge_names_its_far_end_wherever_it_is_and_goes_void_when_it_moves() {
         "the project it depends on renamed",
     );
 }
+
+#[test]
+fn a_person_reads_each_answer_in_text_and_excludes_are_recorded_once_each_in_order() {
+    let plan = Plan::new(false);
+    let seeded = plan.seed("notes");
+    let ship = seeded.ship.as_str();
+    let said = stdout(&plan.exits(
+        &[
+            "task",
+            "attest",
+            ship,
+            "--kind",
+            KIND,
+            "--by",
+            "ada",
+            "--bar",
+            BAR,
+            "--exclude",
+            "myapp.zeta",
+            "--exclude",
+            "myapp.alpha",
+            "--exclude",
+            "myapp.zeta",
+        ],
+        0,
+    ));
+    assert!(
+        said.starts_with(&format!("{ship}: {KIND} recorded by ada at "))
+            && said.contains(&format!("against bar {BAR} (content sha256:")),
+        "{said}"
+    );
+    let held = plan.check("task", ship, None);
+    assert_eq!(
+        held["record"]["excludes"],
+        json!(["myapp.alpha", "myapp.zeta"])
+    );
+
+    let valid = plan.exits(&["task", "attestation", "check", ship, "--kind", KIND], 0);
+    assert_eq!(stdout(&valid), format!("{KIND}: valid\n"));
+    let moved = plan.exits(
+        &[
+            "task",
+            "attestation",
+            "check",
+            ship,
+            "--kind",
+            KIND,
+            "--bar",
+            "bar-2",
+        ],
+        3,
+    );
+    assert_eq!(stdout(&moved), format!("{KIND}: void (bar-moved)\n"));
+    let absent = plan.exits(
+        &[
+            "task",
+            "attestation",
+            "check",
+            ship,
+            "--kind",
+            "never-recorded",
+        ],
+        3,
+    );
+    assert_eq!(stdout(&absent), "never-recorded: absent\n");
+    let tasks = plan.exits(
+        &[
+            "project",
+            "attestation",
+            "check",
+            &seeded.project,
+            "--kind",
+            KIND,
+            "--tasks",
+        ],
+        3,
+    );
+    let lines: Vec<String> = stdout(&tasks).lines().map(str::to_owned).collect();
+    assert!(
+        lines.contains(&format!("{ship}\t{KIND}: valid"))
+            && lines.contains(&format!("{}\t{KIND}: absent", seeded.measure)),
+        "{lines:?}"
+    );
+
+    // A project with no task checks nothing, and that is no failure.
+    let template = plan.template("plan.md");
+    plan.exits(
+        &[
+            "project",
+            "create",
+            "notes",
+            "--id",
+            "empty",
+            "--title",
+            "Empty",
+            "--template",
+            &template,
+            "--var",
+            "goal=g",
+            "--no-interactive",
+        ],
+        0,
+    );
+    let empty = plan.exits(
+        &[
+            "project",
+            "attestation",
+            "check",
+            "notes:empty",
+            "--kind",
+            KIND,
+            "--tasks",
+        ],
+        0,
+    );
+    assert_eq!(stdout(&empty), "notes:empty: no task to check\n");
+    let json = plan.json(&[
+        "project",
+        "attestation",
+        "check",
+        "notes:empty",
+        "--kind",
+        KIND,
+        "--tasks",
+    ]);
+    assert_eq!(json["tasks"], json!([]));
+}

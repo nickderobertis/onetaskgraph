@@ -79,6 +79,9 @@ test("a document's record and a planned project validate as their roots", async 
   expect(listed.items.map((project) => project.id)).toEqual(["notes:P-1"]);
 });
 
+// Each call below hands the client a value its types forbid, as a JavaScript caller can; the
+// casts are deliberate, so the test reaches the runtime check those types would otherwise stop
+// at compile time.
 test("an option of the wrong type is refused before the binary is started", async () => {
   expect(() =>
     client.projectAttestationCheck("notes:P-1", "plan-review", {

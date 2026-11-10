@@ -4406,3 +4406,73 @@ fn an_incoming_replacement_that_writes_does_not_claim_to_be_a_dry_run() {
     assert_eq!(answer["sanitization"]["dry_run"], false, "{answer}");
     assert!(text_of(&store, "site").contains(&format!("New {WITH}")));
 }
+
+#[test]
+fn a_plan_member_title_is_rewritten_and_its_offered_id_is_a_fixed_entry() {
+    let (store, _) = sanitizing(replaced());
+    let templates = store.sandbox.config_home().join("plan-templates");
+    std::fs::create_dir_all(&templates).expect("a template directory");
+    std::fs::write(
+        templates.join("task.md"),
+        "---\nonetaskgraph_template: 1\nvariables:\n  topic: {description: t}\n---\nTopic: {{ topic }}\n",
+    )
+    .expect("a member template");
+    let plan = |name: &str, id: &str| {
+        let file = templates.join(name);
+        std::fs::write(
+            &file,
+            format!(
+                "---\nonetaskgraph_template: 1\nmembers:\n  - id: {id}\n    title: \"Visit {TERM}\"\n    template: {{file: task.md}}\n    answers: {{topic: plain}}\n---\nThe plan.\n"
+            ),
+        )
+        .expect("a project template");
+        file.display().to_string()
+    };
+
+    // The member's title carries the term and is written replaced; the id it was offered is
+    // the id it lands under.
+    let landed = store.ok(&[
+        "project",
+        "create",
+        "site",
+        "--id",
+        "trip",
+        "--title",
+        "Trip",
+        "--template",
+        &plan("rewritten.md", "visit"),
+        "--no-interactive",
+    ]);
+    assert_eq!(
+        landed.lines().collect::<Vec<_>>(),
+        ["site:trip", "site:visit"]
+    );
+    let file = std::fs::read_to_string(store.folder("site").join("tasks").join("visit.md"))
+        .expect("the member's file");
+    assert!(file.contains(&format!("title: Visit {WITH}")), "{file}");
+    assert!(!file.contains(TERM), "{file}");
+
+    // A term in the id a member is offered is never rewritten: it is refused.
+    let (failure, said) = store.refused(&[
+        "project",
+        "create",
+        "site",
+        "--id",
+        "again",
+        "--title",
+        "Again",
+        "--template",
+        &plan("fixed.md", TERM),
+        "--no-interactive",
+    ]);
+    assert_eq!(failure, "boundary-refused");
+    assert!(said.contains("member"), "{said}");
+    assert!(
+        !store
+            .folder("site")
+            .join("tasks")
+            .join(format!("{TERM}.md"))
+            .exists(),
+        "nothing is written under the term"
+    );
+}

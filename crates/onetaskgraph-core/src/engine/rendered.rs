@@ -721,11 +721,17 @@ impl Engine {
                         repositories: &request.repositories,
                         project: (near == &request.source).then_some(&request.project),
                     },
+                    // An id offered by the caller — a plan member's — is a fixed entry, as an
+                    // explicit project or document id is: replacement never rewrites it.
                     exposure: &Exposure::of_task(&write.item)
                         .assets(&carried)
                         .answers(answers)
                         .and(Exposure::metadata(
-                            write.depends_on.iter().map(|edge| edge.to.id().to_owned()),
+                            write
+                                .depends_on
+                                .iter()
+                                .map(|edge| edge.to.id().to_owned())
+                                .chain(offered.map(|id| id.0.clone())),
                         )),
                 },
             )
