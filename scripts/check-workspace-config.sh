@@ -144,6 +144,7 @@ SPAWNERS = {
     "sdks/typescript/tests/rendered.test.ts": SDK_TYPESCRIPT_TESTS,
     "sdks/typescript/tests/boundary.test.ts": SDK_TYPESCRIPT_TESTS,
     "sdks/typescript/tests/sweep.test.ts": SDK_TYPESCRIPT_TESTS,
+    "sdks/typescript/tests/attestations.test.ts": SDK_TYPESCRIPT_TESTS,
     "sdks/typescript/scripts/test-packed.sh": [("sdk-typescript", "pack")],
     # Two targets, because scripts:test drives this journey as well: through
     # check-relative-interpreter.sh's targeted pass, which runs it `--interpreter-only`.
