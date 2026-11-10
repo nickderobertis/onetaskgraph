@@ -121,12 +121,7 @@ impl Engine {
     ) -> Result<Attested, EngineError> {
         let id = &request.id;
         let source = self.metadata_writable(id, record)?;
-        if record == MetadataRecord::Task {
-            // A write that sanitises the task as stored would otherwise replace the very text
-            // the digest is taken over, leaving the record void the moment it lands.
-            self.sanitise_stored_task(source, id).await?;
-        }
-        let read = self.read_authored(source, record, id).await?;
+        let mut read = self.read_authored(source, record, id).await?;
         if let Some(expected) = &request.if_version {
             let at = read.version().unwrap_or_default().to_owned();
             if source.source().order_versions(&at, expected) != Some(std::cmp::Ordering::Equal) {
@@ -142,6 +137,13 @@ impl Engine {
                     found: at,
                 });
             }
+        }
+        // Held to its version first, so a stale one is refused before anything is written. A
+        // write that sanitises the task as stored would otherwise replace the very text the
+        // digest is taken over, leaving the record void the moment it lands: that is done
+        // first, and the task read again as it then stands.
+        if record == MetadataRecord::Task && self.sanitise_stored_task(source, id).await? {
+            read = self.read_authored(source, record, id).await?;
         }
         let mut excludes = request.excludes.clone();
         excludes.sort();

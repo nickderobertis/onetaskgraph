@@ -3119,19 +3119,20 @@ impl Engine {
     /// replaces. Only where that write would sanitise the stored task (`sanitize_stored_on_write`,
     /// a policy that can rewrite, an active boundary and a destination not declared private);
     /// anywhere else, and in a `--sanitize-dry-run` — which the write itself answers — it reads
-    /// and writes nothing. The write then finds the task clean and sanitises nothing more.
+    /// and writes nothing, and answers `false`. The write then finds the task clean and
+    /// sanitises nothing more; `true` says the task was screened, and may since have changed.
     pub(crate) async fn sanitise_stored_task(
         &self,
         destination: &ResolvedSource,
         id: &crate::GlobalId,
-    ) -> Result<(), EngineError> {
+    ) -> Result<bool, EngineError> {
         if !self.boundary.active
             || !self.boundary.sanitize_stored_on_write
             || self.boundary.sanitize_dry_run
             || !self.can_rewrite()
             || self.declared(destination.name()) == SourceVisibility::Private
         {
-            return Ok(());
+            return Ok(false);
         }
         self.admit_existing(
             destination,
@@ -3141,7 +3142,7 @@ impl Engine {
             &Exposure::default(),
         )
         .await
-        .map(|_| ())
+        .map(|_| true)
     }
 
     /// Refuse a narrow write to a task already private by its own record, naming `repositories`

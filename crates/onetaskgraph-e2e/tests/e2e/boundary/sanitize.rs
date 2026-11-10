@@ -4483,19 +4483,51 @@ fn an_attestation_whose_write_rewrites_the_stored_item_holds_over_what_it_rewrot
     // title, body, label and metadata first; the record is of the content that write left.
     let (store, _) = guarded(replaced());
     stage_older(&store);
-    let answer: Value = serde_json::from_str(&store.ok(&[
-        "task",
-        "attest",
-        "site:older",
-        "--kind",
-        "plan-review",
-        "--by",
-        "ada",
-        "--bar",
-        "bar-1",
-        "--json",
-    ]))
-    .expect("JSON");
+    let attest = |version: &str| -> Vec<String> {
+        [
+            "task",
+            "attest",
+            "site:older",
+            "--kind",
+            "plan-review",
+            "--by",
+            "ada",
+            "--bar",
+            "bar-1",
+            "--if-version",
+            version,
+            "--json",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect()
+    };
+    // Held to a version the task is not at, it is refused before anything is sanitised.
+    let before = tree(&store.folder("site"));
+    let stale = attest("not-the-version");
+    let output = store.run(&stale.iter().map(String::as_str).collect::<Vec<_>>());
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("not-the-version"),
+        "{}",
+        stderr(&output)
+    );
+    assert_eq!(
+        tree(&store.folder("site")),
+        before,
+        "a stale version writes nothing"
+    );
+    // Held to the version it is at, it sanitises the task and records the attestation.
+    let shown: Value =
+        serde_json::from_str(&store.ok(&["task", "show", "site:older", "--json"])).expect("JSON");
+    let version = shown["items"][0]["item"]["version"]
+        .as_str()
+        .expect("a folder's task reports a version")
+        .to_owned();
+    let held = attest(&version);
+    let answer: Value =
+        serde_json::from_str(&store.ok(&held.iter().map(String::as_str).collect::<Vec<_>>()))
+            .expect("JSON");
     assert_eq!(answer["record"]["kind"], json!("plan-review"), "{answer}");
     let file = std::fs::read_to_string(store.folder("site").join("tasks").join("older.md"))
         .expect("the task file");
