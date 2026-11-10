@@ -3,7 +3,6 @@
 //! with its assets, checked under the lock it holds rather than waiting on itself.
 
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use onetaskgraph_plugin_api::{
     AssetWrite, HeldVersion, NativeId, Priority, SecretResolver, SourceError, SourceName,
@@ -49,8 +48,10 @@ async fn version(source: &dyn TaskSource) -> String {
 
 #[tokio::test]
 async fn a_held_rendering_with_its_assets_is_checked_once_under_the_lock_it_holds() {
-    let (_root, source) = folder();
+    let (root, source) = folder();
     assert!(source.holds_versions());
+    // The lock beside the task's file, which a held write holds and lets go of.
+    let lock = root.path().join("tasks").join("T.md.lock");
     let id = NativeId::from("T");
     let provenance = json!({"template": "t", "body_digest": "d"});
     let answers = std::collections::BTreeMap::new();
@@ -67,16 +68,12 @@ async fn a_held_rendering_with_its_assets_is_checked_once_under_the_lock_it_hold
         (Arc::clone(&held), HeldVersion::scope(held, call))
     };
 
-    // At its version: it lands at once, rather than waiting out the lock it already holds.
+    // At its version: it lands — a rendering write waiting on the lock its own held write holds
+    // would end refused as held by another — and the lock is let go of.
     let read = version(source.as_ref()).await;
-    let started = Instant::now();
     let (held, call) = render(&read);
     let written = call.await.expect("rendered").expect("the task is there");
-    assert!(
-        started.elapsed() < Duration::from_secs(5),
-        "{:?}",
-        started.elapsed()
-    );
+    assert!(!lock.exists(), "the lock is released");
     assert_eq!(written.content.as_deref(), Some("Rendered.\n"));
     assert_eq!(held.found(), None);
     let task = source.get_task(&id).await.expect("read").expect("held");
@@ -93,17 +90,15 @@ async fn a_held_rendering_with_its_assets_is_checked_once_under_the_lock_it_hold
     );
     assert_eq!(held.found().as_deref(), Some(at.as_str()));
     assert_eq!(version(source.as_ref()).await, at, "nothing was written");
+    assert!(!lock.exists(), "a refusal lets go of the lock too");
 
-    // The lock was let go: the next held write takes it at once and lands.
+    // The next held write takes the lock again and lands.
     let next = Arc::new(HeldVersion::new(id.clone(), at));
-    let started = Instant::now();
     HeldVersion::scope(next, source.set_task_priority(&id, Priority::Low))
         .await
         .expect("written")
         .expect("the task is there");
-    assert!(
-        started.elapsed() < Duration::from_secs(5),
-        "{:?}",
-        started.elapsed()
-    );
+    assert!(!lock.exists());
+    let task = source.get_task(&id).await.expect("read").expect("held");
+    assert_eq!(task.priority, Priority::Low);
 }
