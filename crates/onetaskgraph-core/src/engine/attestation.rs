@@ -204,7 +204,7 @@ impl Engine {
         record: MetadataRecord,
         id: &GlobalId,
         kind: &AttestationKind,
-        bar: Option<&str>,
+        bar: Option<&AttestationLabel>,
     ) -> Result<AttestationCheck, EngineError> {
         let source = self.built(&id.source)?;
         if record == MetadataRecord::Document
@@ -235,7 +235,7 @@ impl Engine {
         &self,
         project: &GlobalId,
         kind: &AttestationKind,
-        bar: Option<&str>,
+        bar: Option<&AttestationLabel>,
     ) -> Result<ProjectAttestationCheck, EngineError> {
         let source = self.built(&project.source)?;
         source

@@ -1404,3 +1404,52 @@ fn a_stored_record_this_product_cannot_read_is_absent_and_another_kind_still_che
         "a readable kind beside them",
     );
 }
+
+#[test]
+fn every_label_an_attestation_refuses_is_refused_by_its_flag_writing_nothing() {
+    let plan = Plan::new(false);
+    let seeded = plan.seed("notes");
+    let ship = seeded.ship.as_str();
+    let long = "x".repeat(201);
+    for (flag, value) in [
+        ("--kind", long.as_str()),
+        ("--by", "two\nlines"),
+        ("--by", long.as_str()),
+        ("--bar", long.as_str()),
+        ("--bar", "two\nlines"),
+        ("--note", "   "),
+    ] {
+        let mut arguments = vec![ship, "--kind", KIND, "--by", "ada", "--bar", BAR];
+        match arguments.iter().position(|argument| *argument == flag) {
+            Some(at) => arguments[at + 1] = value,
+            None => arguments.extend([flag, value]),
+        }
+        let mut full = vec!["task", "attest"];
+        full.extend(arguments);
+        let refused = plan.exits(&full, 1);
+        assert!(
+            stderr(&refused).contains(flag),
+            "{flag}: {}",
+            stderr(&refused)
+        );
+        assert_eq!(
+            plan.check("task", ship, None)["state"],
+            "absent",
+            "{flag}: nothing written"
+        );
+    }
+    let refused = plan.exits(
+        &[
+            "task",
+            "attestation",
+            "check",
+            ship,
+            "--kind",
+            KIND,
+            "--bar",
+            " ",
+        ],
+        1,
+    );
+    assert!(stderr(&refused).contains("--bar"), "{}", stderr(&refused));
+}

@@ -1098,6 +1098,9 @@ pub struct AttestationCheckArgs {
 
     /// The fingerprint of the bar as it is now: a record cleared against another answers
     /// `void` with `bar-moved`. Left out, the bar is not checked.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — as `AttestArgs::bar`: converted through
+    /// `AttestationLabel::new`, naming the flag, before anything is read.
     #[arg(long, value_name = "FINGERPRINT")]
     pub bar: Option<String>,
 }

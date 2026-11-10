@@ -353,8 +353,6 @@ fn plan_copy_scenario(budget: &str) -> &'static str {
         .unwrap_or(super::plan_copy::SCENARIOS[0])
 }
 
-/// What `plan_copy.rs` recorded for `budget`, refused unless the recording states the plan, the
-/// board size and the scenario the budget's workload names: its figure, and its detail.
 /// What `approval_seconds` recorded for `budget`, refused unless it is that journey's recording
 /// of one design approval on the board copy of the generated plan, drafted private and copied
 /// screened onto a board of 2,000 items.
@@ -464,6 +462,8 @@ fn the_plan_approval_report_hands_over_the_recorded_figure_and_refuses_another_w
     assert_eq!(written["value"], 1.636, "{written}");
 }
 
+/// What `plan_copy.rs` recorded for `budget`, refused unless the recording states the plan, the
+/// board size and the scenario the budget's workload names: its figure, and its detail.
 fn plan_copy_figure(budget: &str) -> Result<(f64, String), String> {
     let value = recorded(budget)?;
     if value["plan"].as_str() != Some(super::plan_copy::WORKLOAD) {

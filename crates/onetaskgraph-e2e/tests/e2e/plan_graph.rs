@@ -480,6 +480,22 @@ fn a_member_graph_that_does_not_hold_together_is_refused_before_anything_is_writ
             "which no member is",
         ),
         (
+            "twice.md",
+            "  - {id: a, title: A, template: {file: design-task.md}, answers: {topic: t}}\n  \
+               - {id: a, title: B, template: {file: design-task.md}, answers: {topic: t}}\n",
+            "name the member \"a\" twice",
+        ),
+        (
+            "itself.md",
+            "  - {id: a, title: A, template: {file: design-task.md}, answers: {topic: t}, depends_on: [a]}\n",
+            "depend on itself",
+        ),
+        (
+            "empty.md",
+            "  - {id: \"{{ '' }}\", title: A, template: {file: design-task.md}, answers: {topic: t}}\n",
+            "renders an empty `id`",
+        ),
+        (
             "missing.md",
             "  - {id: a, title: A, template: {file: no-such.md}, answers: {topic: t}}\n",
             "no-such.md",

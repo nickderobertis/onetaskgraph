@@ -71,8 +71,9 @@ pub(crate) async fn check(
 ) -> Result<u8, Failure> {
     let id = qualified(&args.id)?;
     let kind = kind(&args.kind)?;
+    let bar = bar(args.bar.as_deref())?;
     let checked = engine(loaded)
-        .check_attestation(record, &id, &kind, args.bar.as_deref())
+        .check_attestation(record, &id, &kind, bar.as_ref())
         .await
         .map_err(|error| Failure::from(&error))?;
     let rendered = rendering(loaded, &checked, checked_text, "the attestation check")?;
@@ -91,8 +92,9 @@ pub(crate) async fn check_project(
     }
     let id = qualified(&args.check.id)?;
     let kind = kind(&args.check.kind)?;
+    let bar = bar(args.check.bar.as_deref())?;
     let checked = engine(loaded)
-        .check_project_attestations(&id, &kind, args.check.bar.as_deref())
+        .check_project_attestations(&id, &kind, bar.as_ref())
         .await
         .map_err(|error| Failure::from(&error))?;
     let rendered = rendering(loaded, &checked, tasks_text, "the attestation check")?;
@@ -102,6 +104,12 @@ pub(crate) async fn check_project(
 
 fn exit(valid: bool) -> u8 {
     if valid { EXIT_OK } else { EXIT_NOT_VALID }
+}
+
+fn bar(bar: Option<&str>) -> Result<Option<AttestationLabel>, Failure> {
+    bar.map(|bar| AttestationLabel::new("--bar", bar))
+        .transpose()
+        .map_err(refused)
 }
 
 fn kind(kind: &str) -> Result<AttestationKind, Failure> {

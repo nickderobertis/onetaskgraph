@@ -532,7 +532,7 @@ pub fn check(
     kind: &AttestationKind,
     record: Option<Attestation>,
     digest: impl FnOnce(&[MetadataKey]) -> Sha256Digest,
-    bar: Option<&str>,
+    bar: Option<&AttestationLabel>,
 ) -> AttestationCheck {
     let Some(record) = record else {
         return AttestationCheck {
@@ -544,7 +544,7 @@ pub fn check(
     };
     let reason = if digest(&record.excludes) != record.content_digest {
         Some(VoidReason::ContentMoved)
-    } else if bar.is_some_and(|bar| bar != record.bar.as_str()) {
+    } else if bar.is_some_and(|bar| *bar != record.bar) {
         Some(VoidReason::BarMoved)
     } else {
         None
@@ -652,7 +652,8 @@ mod tests {
     fn a_check_says_content_before_bar() {
         let kind = AttestationKind::new("design-approval").expect("a kind");
         let held = || Sha256Digest::of(b"x");
-        let valid = check(&kind, Some(record(&kind)), |_| held(), Some("bar-1"));
+        let bar = |text: &str| AttestationLabel::new("--bar", text).expect("a bar");
+        let valid = check(&kind, Some(record(&kind)), |_| held(), Some(&bar("bar-1")));
         assert_eq!((valid.state, valid.reason), (AttestationState::Valid, None));
         let bar = check(&kind, Some(record(&kind)), |_| held(), Some("bar-2"));
         assert_eq!(bar.reason, Some(VoidReason::BarMoved));
