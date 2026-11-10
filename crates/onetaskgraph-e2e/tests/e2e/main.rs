@@ -61,6 +61,12 @@ mod change_tokens;
 // — is the engine's reading of its own protocol, so no one plugin crate's edge is narrower.
 mod closure_answers;
 mod comments;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No credential and no network: the
+// journey drives the binary against two folders of Markdown and three loopback Linear stand-ins
+// in seconds. It proves the store adopted by configuration alone — a plan graph, attestations,
+// a copy and a template schema together — which is the engine's and crosses plugins, so no one
+// plugin crate's edge is narrower.
+mod configured_lifecycle;
 mod copy;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No credential and no network: the
 // journeys drive the binary between loopback boards, a loopback Linear workspace and folders of
