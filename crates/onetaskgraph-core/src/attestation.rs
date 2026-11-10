@@ -500,9 +500,9 @@ fn canonical(value: &Value) -> String {
     }
 }
 
-/// The records `metadata` holds, by kind: none when it holds no attestations entry, and only
-/// the entries that read as records — one this product did not write is passed over rather
-/// than refused, so a hand-edited entry cannot stop a check of another kind.
+/// Every entry of the attestations `metadata` holds, by kind, as it is held — readable or not,
+/// so a write replacing one kind keeps every other exactly as it was — and none when it holds no
+/// attestations entry. [`record_of`] is what reads one as a record.
 #[must_use]
 pub fn records(metadata: &BTreeMap<String, Value>) -> BTreeMap<String, Value> {
     match metadata.get(MetadataKey::ATTESTATIONS_KEY) {

@@ -97,6 +97,20 @@ test("an option of the wrong type is refused before the binary is started", asyn
   ).toThrow(TypeError);
 });
 
+test("an attestation held to a version records at it and is refused at another", async () => {
+  const created = await client.taskCreate("notes", "P-1", "Versioned", { body: "V.\n" });
+  const id = created.items[0]?.id ?? "";
+  const version = created.items[0]?.item.version ?? "";
+  expect(version).not.toBe("");
+  const attested = await client.taskAttest(id, "plan-review", "ada", "bar-1", {
+    ifVersion: version,
+  });
+  expect("record" in attested && attested.record.kind).toBe("plan-review");
+  await expect(
+    client.taskAttest(id, "plan-review", "ada", "bar-1", { ifVersion: version }),
+  ).rejects.toBeInstanceOf(OnetaskgraphExecutionError);
+});
+
 test("a kind the binary refuses rejects with its failure", async () => {
   const refused = client.taskAttest(task, "two words", "ada", "bar-1");
   await expect(refused).rejects.toBeInstanceOf(OnetaskgraphExecutionError);

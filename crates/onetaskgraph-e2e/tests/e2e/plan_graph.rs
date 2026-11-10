@@ -855,3 +855,44 @@ fn a_later_member_the_board_refuses_leaves_the_members_before_it_and_names_them(
         );
     }
 }
+
+#[test]
+fn a_structured_member_answer_is_rendered_at_every_depth_and_stored_as_its_value() {
+    let fixture = Fixture::new();
+    std::fs::write(
+        fixture.templates.join("brief.md"),
+        "---\nonetaskgraph_template: 1\nvariables:\n  budget:\n    description: b\n    type: object\n    schema: {type: object, required: [id, steps]}\n---\n{{ budget.id }}: {{ budget.steps | join(', ') }}\n",
+    )
+    .expect("a member template");
+    let plan = fixture.templates.join("structured.md");
+    std::fs::write(
+        &plan,
+        "---\nonetaskgraph_template: 1\nvariables:\n  goal: {description: g}\nmembers:\n  - id: brief\n    title: Brief\n    template: {file: brief.md}\n    answers:\n      budget: {id: \"{{ goal }}-seconds\", steps: [\"measure {{ goal }}\", fixed], limit: 7}\n---\nPlan\n",
+    )
+    .expect("a project template");
+    fixture.exits(
+        &[
+            "project",
+            "create",
+            "notes",
+            "--id",
+            "plan-1",
+            "--title",
+            "P",
+            "--template",
+            &path(&plan),
+            "--var",
+            "goal=approval",
+            "--no-interactive",
+        ],
+        0,
+    );
+    assert_eq!(
+        fixture.task("notes:brief")["content"],
+        "approval-seconds: measure approval, fixed\n"
+    );
+    assert_eq!(
+        fixture.json(&["task", "answers", "notes:brief"]),
+        json!({"budget": {"id": "approval-seconds", "steps": ["measure approval", "fixed"], "limit": 7}})
+    );
+}
