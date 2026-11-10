@@ -376,6 +376,7 @@ async fn the_watermark_is_the_sources_own_time_set_back_and_an_undated_comment_i
             Some("2026-09-01T00:00:00Z"),
             Some("2026-09-02T00:00:00Z")
         ),
+        comment("updated-only", None, Some("2026-10-04T00:00:00Z")),
     ]);
     let engine = engine_of(vec![(
         "work",
@@ -399,12 +400,16 @@ async fn the_watermark_is_the_sources_own_time_set_back_and_an_undated_comment_i
         .collect();
     assert_eq!(
         ids,
-        ["created", "edited"],
+        ["created", "edited", "updated-only"],
         "the undated and the older left out"
     );
     assert_eq!(
         listed.comments[0].updated_at, listed.comments[0].created_at,
         "a comment never edited last changed when it was made"
+    );
+    assert_eq!(
+        listed.comments[2].created_at, listed.comments[2].updated_at,
+        "a comment whose source gave only when it last changed is dated by that"
     );
     assert_eq!(
         listed.watermark,

@@ -216,6 +216,14 @@ impl Holds {
         Ok(())
     }
 
+    /// Whether this source holds the lock for `record` now.
+    pub(crate) fn holding(&self, record: &HeldRecord) -> bool {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains_key(record)
+    }
+
     /// Release the lock this source holds for `record`, wherever its file now is.
     pub(crate) fn release(&self, record: &HeldRecord) {
         let held = self

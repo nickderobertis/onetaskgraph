@@ -1229,7 +1229,12 @@ impl LocalMdSource {
             return write.await;
         };
         let record = held_as(onetaskgraph_plugin_api::MetadataRecord::Task, id);
-        self.holds.take(&record, &file)?;
+        // A write this source makes inside one it already holds the lock for — a rendering with
+        // its assets, made by the rendering write — is still checked, under the lock it holds.
+        let taken = !self.holds.holding(&record);
+        if taken {
+            self.holds.take(&record, &file)?;
+        }
         let checked = match std::fs::read(&file) {
             Ok(bytes) => {
                 let found = change_token::spell(&bytes);
@@ -1247,7 +1252,9 @@ impl LocalMdSource {
             Ok(()) => write.await,
             Err(refused) => Err(refused),
         };
-        self.holds.release(&record);
+        if taken {
+            self.holds.release(&record);
+        }
         written
     }
 }
