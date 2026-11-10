@@ -1330,8 +1330,6 @@ fn a_copy_that_settles_short_is_deleted_and_the_template_copied_once_more() {
             .filter(|(_, document, _)| document.contains(name))
             .count()
     };
-    // Two copies, the short one deleted before the second was made, and the session's own
-    // cleanup deleting the second: the account holds the template alone.
     assert_eq!(sent("LiveCopyBoard("), 2);
     let short_deleted = account
         .seen
@@ -1360,7 +1358,6 @@ fn a_second_copy_that_settles_short_too_is_refused_naming_both() {
         said.contains("deleted and the template copied again"),
         "{said}"
     );
-    // Both refusals are named, the second copy's after the first's.
     assert_eq!(said.matches("did not settle").count(), 2, "{said}");
     let account = account.lock().unwrap();
     assert_eq!(
