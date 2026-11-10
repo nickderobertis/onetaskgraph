@@ -25925,26 +25925,12 @@ export const runtimeSchemas = {
         ]
       },
       "outcome": {
-        "description": "Whether a write guarded by `--when-priority` was `written` or `held` — absent for a\nwrite made without the guard.",
-        "anyOf": [
-          {
-            "$ref": "#/$defs/GuardOutcome"
-          },
-          {
-            "type": "null"
-          }
-        ]
+        "description": "`written` when the task held a priority the guard names, and `held` when it did not.",
+        "$ref": "#/$defs/GuardOutcome"
       },
       "priority_condition": {
-        "description": "What the guard found the task's priority at before the write, and whether that is one it\nnames — the shape `task copy --when-destination-priority` reports — absent for a write\nmade without the guard.",
-        "anyOf": [
-          {
-            "$ref": "#/$defs/PriorityCondition"
-          },
-          {
-            "type": "null"
-          }
-        ]
+        "description": "What the guard found the task's priority at before the write, and whether that is one it\nnames — the shape `task copy --when-destination-priority` reports.",
+        "$ref": "#/$defs/PriorityCondition"
       },
       "sanitization": {
         "anyOf": [

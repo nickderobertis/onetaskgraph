@@ -70,12 +70,12 @@ pub use engine::{
     GuardOutcome, HeldAsset, IssueCompleted, IssuesCompleted, LabelRequest, LeftBehind,
     LocateLookup, LocateReport, LocateRequest, Located, LocatedCounterpart, MatchBy, MetadataSet,
     MirrorTarget, NoCounterpart, NotATask, Otherwise, PROJECT_GRAPH_SCHEMA_VERSION, Paging,
-    PriorityCondition, ProjectGraph, ProjectGraphRequest, ProjectRequest, ProjectSelector,
-    ProjectStatusSet, PublicProjection, PublicProjections, Qualified, QualifiedEdge,
-    QualifiedEndpoint, ReconcileOutcome, SearchHit, SearchKind, SearchRequest, SourceListing,
-    SourceState, Spent, StatusCondition, StatusPolicy, StatusReconciled, StatusesReconciled,
-    TaskAssetNames, TaskAssetsError, TaskContentSet, TaskDetail, TaskDetails, TaskPrioritySet,
-    TaskRequest, TaskStatusSet, TaskUpdated, graph_label, settled,
+    PriorityCondition, PriorityGuard, ProjectGraph, ProjectGraphRequest, ProjectRequest,
+    ProjectSelector, ProjectStatusSet, PublicProjection, PublicProjections, Qualified,
+    QualifiedEdge, QualifiedEndpoint, ReconcileOutcome, SearchHit, SearchKind, SearchRequest,
+    SourceListing, SourceState, Spent, StatusCondition, StatusPolicy, StatusReconciled,
+    StatusesReconciled, TaskAssetNames, TaskAssetsError, TaskContentSet, TaskDetail, TaskDetails,
+    TaskPrioritySet, TaskRequest, TaskStatusSet, TaskUpdated, graph_label, settled,
 };
 pub use engine::{
     DocumentCreate, ProjectCreate, Regenerated, Regeneration, RenderRequest, RenderTemplate,

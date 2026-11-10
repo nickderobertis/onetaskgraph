@@ -426,8 +426,8 @@ pub fn priority_set(set: &TaskPrioritySet) -> String {
         vec!["id:".to_owned(), set.id.to_string()],
         vec!["priority:".to_owned(), wire(&set.priority)],
     ];
-    if let Some(outcome) = &set.outcome {
-        rows.push(vec!["outcome:".to_owned(), wire(outcome)]);
+    if let Some(guard) = &set.guard {
+        rows.push(vec!["outcome:".to_owned(), wire(&guard.outcome())]);
     }
     columns(&rows)
 }

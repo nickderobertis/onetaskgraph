@@ -349,13 +349,19 @@ async fn the_guard_the_repositories_the_comments_every_page_and_the_edges() {
         .set_task_priority_when(&a, Priority::Low, &[Priority::None])
         .await
         .expect("answered");
-    assert_eq!(held.outcome, Some(GuardOutcome::Held));
+    assert_eq!(
+        held.guard.map(|guard| guard.outcome()),
+        Some(GuardOutcome::Held)
+    );
     assert_eq!(held.priority, Priority::High);
     let written = engine
         .set_task_priority_when(&a, Priority::Low, &[Priority::High])
         .await
         .expect("written");
-    assert_eq!(written.outcome, Some(GuardOutcome::Written));
+    assert_eq!(
+        written.guard.map(|guard| guard.outcome()),
+        Some(GuardOutcome::Written)
+    );
     assert_eq!(written.priority, Priority::Low);
 
     let widgets = Repository::try_from("github.com/acme/widgets".to_owned()).expect("an origin");
@@ -586,4 +592,72 @@ async fn every_page_of_a_listing_refuses_a_page_token_it_has_already_followed() 
         onetaskgraph_core::Failure::from(&refused).kind(),
         "repeated-page"
     );
+}
+
+/// A linking caller's policy for which `github.com/acme/secret` is private and every other
+/// repository public, and every public write's text passes.
+struct SecretRepository;
+
+#[async_trait::async_trait]
+impl onetaskgraph_core::boundary::WritePolicy for SecretRepository {
+    async fn repository_visibility(
+        &self,
+        repository: &Repository,
+    ) -> Result<
+        onetaskgraph_core::boundary::RepositoryVisibility,
+        onetaskgraph_core::boundary::PolicyError,
+    > {
+        Ok(if repository.as_str() == "github.com/acme/secret" {
+            onetaskgraph_core::boundary::RepositoryVisibility::Private
+        } else {
+            onetaskgraph_core::boundary::RepositoryVisibility::Public
+        })
+    }
+    async fn check_public_write(
+        &self,
+        _: &onetaskgraph_core::boundary::PublicWriteInput,
+    ) -> Result<onetaskgraph_core::boundary::WriteVerdict, onetaskgraph_core::boundary::PolicyError>
+    {
+        Ok(onetaskgraph_core::boundary::WriteVerdict::Pass)
+    }
+}
+
+#[tokio::test]
+async fn a_repositories_update_naming_a_private_repository_is_refused_onto_a_public_source() {
+    let root = tempfile::tempdir().expect("a folder");
+    let engine = folders(root.path()).with_write_policy(Arc::new(SecretRepository));
+    let a = id("plan:a");
+    let file = root.path().join("plan").join("tasks").join("a.md");
+    let before = std::fs::read(&file).expect("the task file");
+    let secret = Repository::try_from("github.com/acme/secret".to_owned()).expect("an origin");
+    let refused = engine
+        .update_task(
+            &a,
+            &TaskUpdate {
+                repositories: Some(vec![secret]),
+                ..TaskUpdate::default()
+            },
+        )
+        .await
+        .expect_err("a private repository is refused onto a source not declared private");
+    assert!(refused.to_string().contains("private"), "{refused}");
+    assert_eq!(
+        std::fs::read(&file).expect("the task file"),
+        before,
+        "nothing was written"
+    );
+
+    // A public one is written as any update is.
+    let public = Repository::try_from("github.com/acme/widgets".to_owned()).expect("an origin");
+    let updated = engine
+        .update_task(
+            &a,
+            &TaskUpdate {
+                repositories: Some(vec![public.clone()]),
+                ..TaskUpdate::default()
+            },
+        )
+        .await
+        .expect("a public repository lands");
+    assert_eq!(updated.task.repositories, vec![public]);
 }

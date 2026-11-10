@@ -103,7 +103,7 @@ pub use graph::{
 };
 pub use local::ProjectSelector;
 pub use metadata::MetadataSet;
-pub use narrow::{GuardOutcome, TaskContentSet, TaskPrioritySet};
+pub use narrow::{GuardOutcome, PriorityGuard, TaskContentSet, TaskPrioritySet};
 pub use rendered::{
     Body, DocumentCreate, ProjectCreate, Regenerated, Regeneration, RenderRequest, RenderTemplate,
     RenderedRecord, TaskCreate, TaskCreated, TemplateAnswers, UnusedAnswers,

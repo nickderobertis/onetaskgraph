@@ -260,13 +260,13 @@ class TaskPrioritySet(BaseModel):
     outcome: Annotated[
         GuardOutcome | None,
         Field(
-            description="Whether a write guarded by `--when-priority` was `written` or `held` — absent for a\nwrite made without the guard."
+            description="`written` when the task held a priority the guard names, and `held` when it did not."
         ),
     ] = None
     priority_condition: Annotated[
         PriorityCondition | None,
         Field(
-            description="What the guard found the task's priority at before the write, and whether that is one it\nnames — the shape `task copy --when-destination-priority` reports — absent for a write\nmade without the guard."
+            description="What the guard found the task's priority at before the write, and whether that is one it\nnames — the shape `task copy --when-destination-priority` reports."
         ),
     ] = None
     sanitization: Sanitization | None = None

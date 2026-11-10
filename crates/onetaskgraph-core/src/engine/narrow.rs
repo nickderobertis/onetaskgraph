@@ -39,15 +39,77 @@ pub struct TaskPrioritySet {
     /// fallback read included — absent for a write made without `--expect`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spent: Option<Spent>,
-    /// Whether a write guarded by `--when-priority` was `written` or `held` — absent for a
-    /// write made without the guard.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub outcome: Option<GuardOutcome>,
+    /// What a guard by `--when-priority` came to — its `outcome` and its `priority_condition`
+    /// beside the other members — absent for a write made without the guard.
+    #[serde(flatten, default, skip_serializing_if = "Option::is_none")]
+    pub guard: Option<PriorityGuard>,
+}
+
+/// What a write guarded by the priority its task holds came to: whether it was `written` or
+/// `held`, and the condition that decided it. Made only from the condition, so the outcome is
+/// always the one its `met` says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(try_from = "PriorityGuardWire")]
+pub struct PriorityGuard {
+    /// `written` when the task held a priority the guard names, and `held` when it did not.
+    outcome: GuardOutcome,
     /// What the guard found the task's priority at before the write, and whether that is one it
-    /// names — the shape `task copy --when-destination-priority` reports — absent for a write
-    /// made without the guard.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub priority_condition: Option<PriorityCondition>,
+    /// names — the shape `task copy --when-destination-priority` reports.
+    priority_condition: PriorityCondition,
+}
+
+impl PriorityGuard {
+    /// The guard `condition` came to.
+    #[must_use]
+    pub const fn of(condition: PriorityCondition) -> Self {
+        Self {
+            outcome: if condition.met {
+                GuardOutcome::Written
+            } else {
+                GuardOutcome::Held
+            },
+            priority_condition: condition,
+        }
+    }
+
+    /// Whether the write was made.
+    #[must_use]
+    pub const fn outcome(&self) -> GuardOutcome {
+        self.outcome
+    }
+
+    /// The condition that decided it.
+    #[must_use]
+    pub const fn condition(&self) -> PriorityCondition {
+        self.priority_condition
+    }
+}
+
+/// [`PriorityGuard`] as it reads off the wire, before its outcome is held to its condition.
+#[derive(Deserialize, JsonSchema)]
+#[schemars(rename = "PriorityGuard")]
+struct PriorityGuardWire {
+    /// `written` when the task held a priority the guard names, and `held` when it did not.
+    outcome: GuardOutcome,
+    /// What the guard found the task's priority at before the write, and whether that is one it
+    /// names — the shape `task copy --when-destination-priority` reports.
+    priority_condition: PriorityCondition,
+}
+
+impl TryFrom<PriorityGuardWire> for PriorityGuard {
+    type Error = String;
+
+    fn try_from(wire: PriorityGuardWire) -> Result<Self, Self::Error> {
+        let guard = Self::of(wire.priority_condition);
+        if guard.outcome == wire.outcome {
+            Ok(guard)
+        } else {
+            Err(format!(
+                "a guard's outcome {:?} contradicts its condition, met = {}",
+                wire.outcome, wire.priority_condition.met
+            ))
+        }
+    }
 }
 
 /// What a write guarded by a condition on the item's own value came to.
@@ -139,8 +201,7 @@ impl Engine {
             result,
             fallback,
             spent,
-            outcome: None,
-            priority_condition: None,
+            guard: None,
         })
     }
 
@@ -192,13 +253,11 @@ impl Engine {
                 result: Some(WriteResult::of_task(&task, task.version.clone())),
                 fallback: None,
                 spent: None,
-                outcome: Some(GuardOutcome::Held),
-                priority_condition: Some(condition),
+                guard: Some(PriorityGuard::of(condition)),
             });
         }
         let mut set = self.set_task_priority(id, priority).await?;
-        set.outcome = Some(GuardOutcome::Written);
-        set.priority_condition = Some(condition);
+        set.guard = Some(PriorityGuard::of(condition));
         Ok(set)
     }
 

@@ -2538,3 +2538,64 @@ test("taskCopy guards its writes, reports what each held and left, and retries a
     rmSync(store, { recursive: true, force: true });
   }
 });
+
+test("a held copy, a repositories update and a comments listing drive the real binary", async () => {
+  const root = metadataFolder();
+  try {
+    mkdirSync(resolve(root, "into", "tasks"), { recursive: true });
+    writeFileSync(
+      resolve(root, "onetaskgraph.yaml"),
+      JSON.stringify({
+        sources: {
+          work: { plugin: "local-md", config: { root: resolve(root, "work") } },
+          into: { plugin: "local-md", config: { root: resolve(root, "into") } },
+        },
+      }),
+    );
+    const client = new OnetaskgraphClient({ binaryPath: binary, cwd: root });
+
+    // The repositories list alone, replaced and then cleared.
+    const updated = await client.taskUpdate("work:T-1", {
+      repositories: ["github.com/acme/widgets"],
+    });
+    expect(updated.task.repositories).toEqual(["github.com/acme/widgets"]);
+    expect(updated.written).toEqual(["repositories"]);
+    expect(updated.task.title).toBe("One");
+    const cleared = await client.taskUpdate("work:T-1", { repositories: [] });
+    expect(cleared.task.repositories).toEqual([]);
+
+    // A copy held to its destination task's version lands at it, and is refused at one another
+    // writer moved the task past.
+    const created = await client.taskCopy(["work:T-1"], "into");
+    const landed = (created.items[0] as { destination: string }).destination;
+    const read = (await client.taskShow(landed)).items[0]?.item.version;
+    expect(typeof read).toBe("string");
+    await client.taskUpdate("work:T-1", { title: "One, revised" });
+    await client.taskCopy(["work:T-1"], "into", { ifVersion: read as string });
+    const written = (await client.taskShow(landed)).items[0]?.item;
+    expect(written?.title).toBe("One, revised");
+    await client.taskUpdate(landed, { title: "Moved by another writer" });
+    await client.taskUpdate("work:T-1", { title: "One, again" });
+    const stale = client.taskCopy(["work:T-1"], "into", { ifVersion: written?.version as string });
+    await expect(stale).rejects.toBeInstanceOf(OnetaskgraphExecutionError);
+    await expect(stale).rejects.toMatchObject({ failure: { kind: "version-moved" } });
+    expect((await client.taskShow(landed)).items[0]?.item.title).toBe("Moved by another writer");
+
+    // Every comment since an instant, who wrote it, and the watermark to read from next.
+    await client.taskCommentAdd("work:T-1", {
+      body: "A bot follows up.\n",
+      author: "ci-helper[bot]",
+    });
+    const listed = await client.taskComments("work", "2020-01-01T00:00:00Z", {
+      items: ["work:T-1"],
+    });
+    expect(listed.schema_version).toBe(1);
+    expect(listed.comments.map((comment) => comment.author_kind)).toEqual(["bot"]);
+    expect(listed.comments[0]?.item).toBe("work:T-1");
+    expect(typeof listed.watermark).toBe("string");
+    const none = await client.taskComments("work", "2020-01-01T00:00:00Z", { statuses: ["done"] });
+    expect(none.comments).toEqual([]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

@@ -3119,3 +3119,41 @@ async fn the_engine_asks_every_source_past_a_failure_and_names_the_first_that_fa
         "the source after the failure was still asked"
     );
 }
+
+#[tokio::test]
+async fn a_repositories_update_reaches_a_host_by_rewriting_the_task_and_moves_nothing_else() {
+    use onetaskgraph_plugin_api::{Repository, UpdatedField};
+
+    // A peer that declares targeted updates predates `repositories`, and one that did not know
+    // the member would drop it: the host rewrites the task whole instead, so the list lands.
+    let there = a_process_away(hosted_settings()).expect("the handshake succeeds");
+    let id = NativeId::from("T-1");
+    let before = there.get_task(&id).await.expect("a read").expect("held");
+    let widgets = Repository::try_from("github.com/acme/widgets".to_owned()).expect("an origin");
+    let outcome = there
+        .update_task(
+            &id,
+            &onetaskgraph_plugin_api::TaskUpdate {
+                repositories: Some(vec![widgets.clone()]),
+                ..onetaskgraph_plugin_api::TaskUpdate::default()
+            },
+        )
+        .await
+        .expect("the update lands")
+        .expect("the task is there");
+    assert_eq!(
+        outcome.written,
+        std::collections::BTreeSet::from([UpdatedField::Repositories])
+    );
+    let read = there.get_task(&id).await.expect("a read").expect("held");
+    assert_eq!(read.repositories, vec![widgets]);
+    assert_eq!(
+        Task {
+            repositories: before.repositories.clone(),
+            version: before.version.clone(),
+            ..read
+        },
+        before,
+        "nothing but the repositories moved"
+    );
+}

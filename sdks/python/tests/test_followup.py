@@ -15,7 +15,6 @@ import json
 import os
 from collections.abc import Callable, Coroutine
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -89,7 +88,7 @@ def client(binary: Path, store: Path) -> Client:
     return Client(binary, cwd=store, environment=environment)
 
 
-def run[T](call: Coroutine[Any, Any, T]) -> T:
+def run[T](call: Coroutine[object, object, T]) -> T:
     """Drive one client call to its answer."""
     return asyncio.run(call)
 
@@ -147,7 +146,7 @@ def test_every_held_write_lands_at_the_version_and_is_refused_typed_at_a_stale_o
     [landed] = run(client.task_list(source=["work"], all=True)).items
     counterpart = landed.id.root
 
-    writes: list[tuple[str, Callable[[str, int], Coroutine[Any, Any, object]]]] = [
+    writes: list[tuple[str, Callable[[str, int], Coroutine[object, object, object]]]] = [
         (
             "plan:a",
             lambda version, n: client.task_update("plan:a", title=f"Round {n}", if_version=version),

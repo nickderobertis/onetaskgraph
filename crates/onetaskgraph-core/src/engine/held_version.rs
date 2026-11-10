@@ -43,10 +43,21 @@ struct Hold {
 struct HoldState {
     /// The task held — named up front by a write, and by the copy once it reads its target.
     target: Option<(SourceName, NativeId)>,
-    /// `true` once the first write of the task reached its source and the hold was checked.
-    checked: bool,
-    /// The version the check found instead, when it refused the write.
-    moved: Option<String>,
+    /// What checking the hold came to.
+    check: Check,
+}
+
+/// What checking a hold came to: not yet made, made and passed, or made and refused at the
+/// version the task was found at.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+enum Check {
+    /// No write of the task has reached its source yet.
+    #[default]
+    Unchecked,
+    /// The first write of the task reached its source, at the version held.
+    Passed,
+    /// The first write of the task found it at this version instead, and wrote nothing.
+    Refused(String),
 }
 
 impl Hold {
@@ -74,10 +85,10 @@ impl Hold {
             .target
             .as_ref()
             .is_some_and(|(name, native)| name == source && native == id);
-        if !held || state.checked {
+        if !held || state.check != Check::Unchecked {
             return None;
         }
-        state.checked = true;
+        state.check = Check::Passed;
         Some(self.version.clone())
     }
 }
@@ -101,14 +112,14 @@ pub(crate) async fn held<T>(
         let held = Arc::new(HeldVersion::new(id.clone(), version));
         let answered = HeldVersion::scope(Arc::clone(&held), write).await;
         if let Some(found) = held.found() {
-            hold.state().moved = Some(found);
+            hold.state().check = Check::Refused(found);
         }
         return answered;
     }
     let found = inner.get_task(id).await?.and_then(|task| task.version);
     if !at(inner, found.as_deref(), &version) {
         let found = found.unwrap_or_default();
-        hold.state().moved = Some(found.clone());
+        hold.state().check = Check::Refused(found.clone());
         return Err(SourceError::Refused {
             message: format!(
                 "task {id} is at version {found:?}, not the version the write is held to, so \
@@ -204,7 +215,7 @@ impl Engine {
     pub(crate) fn hold_refused(&self, destination: &SourceName, id: &NativeId) -> bool {
         HOLD.try_with(|hold| {
             let state = hold.state();
-            state.moved.is_some()
+            matches!(state.check, Check::Refused(_))
                 && state
                     .target
                     .as_ref()
@@ -220,19 +231,19 @@ impl Engine {
         hold: &Hold,
         written: Result<T, EngineError>,
     ) -> Result<T, EngineError> {
-        let (target, checked, moved) = {
+        let (target, check) = {
             let state = hold.state();
-            (state.target.clone(), state.checked, state.moved.clone())
+            (state.target.clone(), state.check.clone())
         };
         let Some((source, native)) = target else {
             return written;
         };
         let id = GlobalId { source, native };
-        if let Some(found) = moved {
-            return Err(moved_error(&id, &hold.version, found));
-        }
-        if checked || written.is_err() {
-            return written;
+        match check {
+            Check::Refused(found) => return Err(moved_error(&id, &hold.version, found)),
+            Check::Passed => return written,
+            Check::Unchecked if written.is_err() => return written,
+            Check::Unchecked => {}
         }
         // Nothing reached the source: the version is still the caller's to be told about.
         let source = self.built(&id.source)?;
