@@ -1414,6 +1414,126 @@ fn a_stored_record_this_product_cannot_read_is_absent_and_another_kind_still_che
         Value::Null,
         "a readable kind beside them",
     );
+
+    // Recording a kind — replacing one held and adding another — writes that kind alone: the
+    // entries this product cannot read stay in the file exactly as the person left them.
+    let unreadable = |text: &str| -> (Value, Value) {
+        let start = text
+            .find("\"onetaskgraph.attestations\": ")
+            .expect("the entry")
+            + "\"onetaskgraph.attestations\": ".len();
+        let line_end = start + text[start..].find('\n').expect("one line");
+        let entry: Value = serde_json::from_str(&text[start..line_end]).expect("JSON");
+        (entry["broken"].clone(), entry["misfiled"].clone())
+    };
+    let before = unreadable(&std::fs::read_to_string(&file).expect("the task file"));
+    plan.attest("task", measure);
+    plan.json(&[
+        "task",
+        "attest",
+        measure,
+        "--kind",
+        "design-approval",
+        "--by",
+        "ada",
+        "--bar",
+        BAR,
+    ]);
+    let after = std::fs::read_to_string(&file).expect("the task file");
+    assert_eq!(
+        unreadable(&after),
+        before,
+        "the unreadable entries are kept as stored"
+    );
+    for kind in ["broken", "misfiled"] {
+        plan.exits(
+            &["task", "attestation", "check", measure, "--kind", kind],
+            3,
+        );
+    }
+    for kind in [KIND, "design-approval"] {
+        let checked = plan.json(&[
+            "task",
+            "attestation",
+            "check",
+            measure,
+            "--kind",
+            kind,
+            "--bar",
+            BAR,
+        ]);
+        assert_eq!(checked["state"], "valid", "{kind}: {checked}");
+    }
+}
+
+#[test]
+fn a_project_attestation_held_to_a_version_lands_at_it_and_is_refused_at_another() {
+    // A folder of Markdown gives a project no version; a board and Linear each give one.
+    let plan = Plan::new(true);
+    let seeded = plan.seed("notes");
+    for destination in ["board", "linear"] {
+        let copied = plan.json(&["project", "copy", &seeded.project, "--to", destination]);
+        let project = copied["items"]
+            .as_array()
+            .expect("outcomes")
+            .iter()
+            .find(|outcome| outcome["source"] == seeded.project.as_str())
+            .and_then(|outcome| outcome["destination"].as_str())
+            .unwrap_or_else(|| panic!("the project landed in {destination}: {copied}"))
+            .to_owned();
+        let version = plan.json(&["project", "show", &project])["items"][0]["item"]["version"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{destination}: project {project} reports a version"))
+            .to_owned();
+        let attest = |at: &str| {
+            vec![
+                "project".to_owned(),
+                "attest".to_owned(),
+                project.clone(),
+                "--kind".to_owned(),
+                KIND.to_owned(),
+                "--by".to_owned(),
+                "ada".to_owned(),
+                "--bar".to_owned(),
+                BAR.to_owned(),
+                "--if-version".to_owned(),
+                at.to_owned(),
+            ]
+        };
+        let stale = attest("not-the-version");
+        let stale: Vec<&str> = stale.iter().map(String::as_str).collect();
+        let refused = plan.exits(&stale, 1);
+        assert!(
+            stderr(&refused).contains("not-the-version"),
+            "{destination}: {}",
+            stderr(&refused)
+        );
+        assert_eq!(
+            plan.json(&["project", "show", &project])["items"][0]["item"]["version"],
+            json!(version),
+            "{destination}: the refusal wrote nothing"
+        );
+        assert_eq!(
+            plan.check("project", &project, None)["state"],
+            "absent",
+            "{destination}: the refusal recorded nothing"
+        );
+        let held = attest(&version);
+        let held: Vec<&str> = held.iter().map(String::as_str).collect();
+        let mut held = held;
+        held.push("--json");
+        let attested: Value =
+            serde_json::from_str(&stdout(&plan.exits(&held, 0))).expect("the answer is JSON");
+        assert_eq!(
+            attested["record"]["kind"], KIND,
+            "{destination}: {attested}"
+        );
+        assert_eq!(
+            plan.check("project", &project, Some(BAR))["state"],
+            "valid",
+            "{destination}"
+        );
+    }
 }
 
 #[test]
