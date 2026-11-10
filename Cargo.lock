@@ -1299,7 +1299,7 @@ dependencies = [
 
 [[package]]
 name = "onetaskgraph"
-version = "0.14.10"
+version = "0.14.11"
 dependencies = [
  "chrono",
  "clap",
@@ -1316,7 +1316,7 @@ dependencies = [
 
 [[package]]
 name = "onetaskgraph-core"
-version = "0.14.10"
+version = "0.14.11"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1345,7 +1345,7 @@ dependencies = [
 
 [[package]]
 name = "onetaskgraph-e2e"
-version = "0.14.10"
+version = "0.14.11"
 dependencies = [
  "assert_cmd",
  "async-trait",
@@ -1367,7 +1367,7 @@ dependencies = [
 
 [[package]]
 name = "onetaskgraph-e2e-support"
-version = "0.14.10"
+version = "0.14.11"
 dependencies = [
  "assert_cmd",
  "base64",
@@ -1385,7 +1385,7 @@ dependencies = [
 
 [[package]]
 name = "onetaskgraph-github-live"
-version = "0.14.10"
+version = "0.14.11"
 dependencies = [
  "onetaskgraph-live",
  "serde",
@@ -1396,7 +1396,7 @@ dependencies = [
 
 [[package]]
 name = "onetaskgraph-github-projects"
-version = "0.14.10"
+version = "0.14.11"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1416,7 +1416,7 @@ dependencies = [
 
 [[package]]
 name = "onetaskgraph-github-projects-e2e"
-version = "0.14.10"
+version = "0.14.11"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1439,7 +1439,7 @@ dependencies = [
 
 [[package]]
 name = "onetaskgraph-in-memory"
-version = "0.14.10"
+version = "0.14.11"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1453,7 +1453,7 @@ dependencies = [
 
 [[package]]
 name = "onetaskgraph-linear"
-version = "0.14.10"
+version = "0.14.11"
 dependencies = [
  "async-trait",
  "base64",
@@ -1473,7 +1473,7 @@ dependencies = [
 
 [[package]]
 name = "onetaskgraph-linear-e2e"
-version = "0.14.10"
+version = "0.14.11"
 dependencies = [
  "graphql-parser",
  "onebudgetspec-core",
@@ -1493,11 +1493,11 @@ dependencies = [
 
 [[package]]
 name = "onetaskgraph-live"
-version = "0.14.10"
+version = "0.14.11"
 
 [[package]]
 name = "onetaskgraph-live-janitor"
-version = "0.14.10"
+version = "0.14.11"
 dependencies = [
  "graphql-parser",
  "onebudgetspec-core",
@@ -1515,7 +1515,7 @@ dependencies = [
 
 [[package]]
 name = "onetaskgraph-local-md"
-version = "0.14.10"
+version = "0.14.11"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1534,7 +1534,7 @@ dependencies = [
 
 [[package]]
 name = "onetaskgraph-plugin-api"
-version = "0.14.10"
+version = "0.14.11"
 dependencies = [
  "async-trait",
  "base64",
@@ -1551,7 +1551,7 @@ dependencies = [
 
 [[package]]
 name = "onetaskgraph-status-options"
-version = "0.14.10"
+version = "0.14.11"
 dependencies = [
  "onetaskgraph-github-projects",
  "onetaskgraph-plugin-api",
@@ -1562,7 +1562,7 @@ dependencies = [
 
 [[package]]
 name = "onetaskgraph-status-options-e2e"
-version = "0.14.10"
+version = "0.14.11"
 dependencies = [
  "onetaskgraph-e2e-support",
  "serde_json",
