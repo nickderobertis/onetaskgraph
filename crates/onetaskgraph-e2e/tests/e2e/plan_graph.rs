@@ -953,3 +953,53 @@ fn a_malformed_member_declaration_or_one_that_does_not_render_is_refused_naming_
         assert_eq!(fixture.folder(), before, "{name}: nothing written");
     }
 }
+
+#[test]
+fn a_member_loader_that_cannot_be_read_or_is_not_a_loader_document_is_refused_naming_it() {
+    let fixture = Fixture::new();
+    std::fs::create_dir_all(fixture.templates.join("folder.loader.json"))
+        .expect("a directory where a loader document is named");
+    std::fs::write(fixture.templates.join("garbled.loader.json"), "{not json")
+        .expect("a loader document");
+    let before = fixture.folder();
+    // Named absolutely, the directory is read where it stands rather than searched for.
+    let folder = path(&fixture.templates.join("folder.loader.json"));
+    for (name, loader, says) in [
+        ("unreadable.md", folder.as_str(), "could not be read"),
+        (
+            "garbled.md",
+            "garbled.loader.json",
+            "the template loader document is refused",
+        ),
+    ] {
+        let file = fixture.templates.join(name);
+        std::fs::write(
+            &file,
+            format!(
+                "---\nonetaskgraph_template: 1\nmembers:\n  - {{id: a, title: A, template: {{loader: {loader}}}}}\n---\nPlan\n"
+            ),
+        )
+        .expect("a template");
+        let output = fixture.exits(
+            &[
+                "project",
+                "create",
+                "notes",
+                "--id",
+                "plan-1",
+                "--title",
+                "P",
+                "--template",
+                &path(&file),
+                "--no-interactive",
+            ],
+            1,
+        );
+        let message = stderr(&output);
+        assert!(
+            message.contains("member \"a\" of the project template") && message.contains(says),
+            "{name}: {message}"
+        );
+        assert_eq!(fixture.folder(), before, "{name}: nothing written");
+    }
+}

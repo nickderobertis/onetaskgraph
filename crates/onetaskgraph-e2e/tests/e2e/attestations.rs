@@ -1677,3 +1677,33 @@ fn a_lineage_longer_than_the_limit_refuses_and_one_within_it_records() {
         stderr(&refused)
     );
 }
+
+#[test]
+fn a_document_check_on_a_source_with_no_documents_is_refused_naming_it() {
+    let plan = Plan::new(false);
+    plan.sandbox.project_document(&document(&json!({
+        "notes": {"plugin": "local-md", "config": {"root": plan.notes}},
+        "memo": {"plugin": "in-memory", "config": {"capabilities": {"documents": "unsupported"}}},
+    })));
+    for arguments in [
+        vec![
+            "document",
+            "attestation",
+            "check",
+            "memo:D-1",
+            "--kind",
+            KIND,
+        ],
+        vec![
+            "document", "attest", "memo:D-1", "--kind", KIND, "--by", "ada", "--bar", BAR,
+        ],
+    ] {
+        let refused = plan.exits(&arguments, 1);
+        assert!(stderr(&refused).contains("memo"), "{}", stderr(&refused));
+        assert!(
+            stderr(&refused).contains("document"),
+            "{}",
+            stderr(&refused)
+        );
+    }
+}
