@@ -94,7 +94,7 @@ pub fn answer_a_stateless_session_call(
     const EXECUTED: &str = "rateLimit{cost nodeCount limit remaining} ";
     if query.contains(EXECUTED) {
         let document = query.replace(EXECUTED, "");
-        let mut answer = probe_answer(&document, pricing);
+        let mut answer = probe_answer(&document, variables, pricing);
         answer.as_object_mut().unwrap().remove("actualCost");
         return Some(answer);
     }
@@ -116,7 +116,7 @@ fn stateless_session_call(query: &str, variables: &Value, pricing: Pricing) -> O
             unbound.first().map_or("", |(name, _)| name.as_str()),
             unbound.first().map_or("", |(_, ty)| ty.as_str()),
         );
-        return Some(probe_answer(&production, pricing));
+        return Some(probe_answer(&production, variables, pricing));
     }
     if query.contains("__type(name:") {
         return Some(introspected(query));
@@ -159,17 +159,29 @@ pub fn unbound_required_variables(document: &str, variables: &Value) -> Vec<(Str
         .collect()
 }
 
-/// What a board answers a `rateLimit(dryRun: true)` probe about `production` with.
+/// What a board answers a `rateLimit(dryRun: true)` probe about `production` with, under the
+/// page sizes `variables` binds — as GitHub prices a document, at the page each connection is
+/// asked for; a page-size variable left unbound is priced at its largest.
 ///
 /// The node count is this workspace's own and so, under [`Pricing::AsComputed`], is the
 /// price: GitHub is the authority on both, and the credentialed lane is where they are
 /// really reconciled. What a board reporting something else does to a run is
 /// `tests/reconciliation_gate.rs`.
-pub fn probe_answer(production: &str, pricing: Pricing) -> Value {
-    let computed = onetaskgraph_github_projects::worst_case_point_cost(production)
+pub fn probe_answer(production: &str, variables: &Value, pricing: Pricing) -> Value {
+    let mut sizes = onetaskgraph_github_projects::largest_page_sizes();
+    for (name, size) in &mut sizes {
+        if let Some(bound) = variables
+            .get(name.as_str())
+            .and_then(Value::as_u64)
+            .and_then(|bound| u32::try_from(bound).ok())
+        {
+            *size = bound;
+        }
+    }
+    let computed = onetaskgraph_github_projects::point_cost(production, &sizes)
         .expect("a priceable production document");
     json!({"rateLimit":{"cost":pricing.charged(computed),
-        "nodeCount":onetaskgraph_github_projects::worst_case_node_count(production)
+        "nodeCount":onetaskgraph_github_projects::node_count(production, &sizes)
             .expect("a countable production document"),
         "limit":FIXTURE_BUDGET_LIMIT,"remaining":FIXTURE_BUDGET_LIMIT},
         "actualCost":{"cost":1}})

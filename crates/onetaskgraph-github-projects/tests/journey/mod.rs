@@ -31,7 +31,7 @@ use onetaskgraph_github_projects::accounting::{
     Accounting, Endpoint, Method, Mode, Outcome, RateLimit, Request, ResponseOutcome,
 };
 use onetaskgraph_github_projects::{
-    graphql, largest_page_sizes, worst_case_node_count, worst_case_point_cost,
+    Variables, graphql, node_count, point_cost, search_batch_largest_round, worst_case_point_cost,
 };
 use onetaskgraph_plugin_api::{
     Capabilities, CommentBody, DependencyEdge, DependencyEndpoint, DependencyKind,
@@ -687,9 +687,10 @@ async fn reconciliation_response(
 /// disagrees with this workspace's, when the answer carries neither, or when the document
 /// cannot be counted or priced at all.
 fn reconciled(doing: &str, document: &str, answer: &Value) -> Result<(), String> {
-    let ours_nodes = worst_case_node_count(document)
+    let sizes = reconciliation_page_sizes();
+    let ours_nodes = node_count(document, &sizes)
         .map_err(|error| format!("the document for {doing} could not be counted: {error}"))?;
-    let ours_points = worst_case_point_cost(document)
+    let ours_points = point_cost(document, &sizes)
         .map_err(|error| format!("the document for {doing} could not be priced: {error}"))?;
     let github = |field: &str| {
         answer
@@ -759,10 +760,23 @@ fn with_rate_limit_probe(document: &str) -> Result<String, String> {
     ))
 }
 
+/// The page sizes the reconciliation binds every document's page-size variables to, and prices
+/// this workspace's own figures under: the largest request this source sends of each document.
+///
+/// That is every page at its largest, which is what the offline bound is computed under, but
+/// for the batched search: one round of it never asks every slot for a whole page, so its
+/// largest request is [`search_batch_largest_round`], which production's own rounds are held to
+/// by `search_batch_resumed_page` and `tests/point_cost.rs`. The offline worst case of every
+/// document stays [`onetaskgraph_github_projects::largest_page_sizes`], held by
+/// `tests/node_count.rs` and `tests/point_cost.rs`.
+#[must_use]
+pub fn reconciliation_page_sizes() -> Variables {
+    search_batch_largest_round()
+}
+
 /// A value for every variable a document declares, for a run GitHub will not execute.
 ///
-/// The page sizes are [`largest_page_sizes`] — the reconciliation is about the worst case
-/// this source can drive a document to, which is what the offline bound is computed under.
+/// The page sizes are [`reconciliation_page_sizes`].
 /// Every other variable takes a value of the right type and no meaning at all, because
 /// `dryRun: true` computes the count without resolving one of them.
 pub fn dry_run_variables(document: &str) -> Value {
@@ -772,7 +786,7 @@ pub fn dry_run_variables(document: &str) -> Value {
             variables.insert(name.to_owned(), value);
         }
     };
-    for (name, size) in largest_page_sizes() {
+    for (name, size) in reconciliation_page_sizes() {
         bind(&name, json!(size));
     }
     bind("after", Value::Null);
@@ -802,7 +816,7 @@ pub fn dry_run_variables(document: &str) -> Value {
         bind(&format!("read{slot}"), json!(true));
     }
     // A batched search asks every one of its search slots and its origin slots, each at the
-    // largest page it is ever sent, as the offline bound prices it.
+    // page its largest round asks (`reconciliation_page_sizes`).
     for slot in 0..onetaskgraph_github_projects::SEARCH_BATCH {
         bind(&format!("search{slot}"), json!("repo:github/docs is:issue"));
         bind(&format!("ask{slot}"), json!(true));

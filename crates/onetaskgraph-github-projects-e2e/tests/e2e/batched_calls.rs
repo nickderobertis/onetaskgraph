@@ -307,6 +307,28 @@ fn a_find_answers_each_query_under_its_key_across_pages_in_one_request_a_round()
         second["origin0"], true,
         "the origin's board half goes on: {second:#}"
     );
+    // Every page of that round resumes, and together they ask one page of rows rather than a
+    // page each: a round of twenty resumed searches would otherwise cost 22 points.
+    let rows = |slots: usize, asked: &str, first: &str| -> u64 {
+        (0..slots)
+            .filter(|slot| second[format!("{asked}{slot}")] == true)
+            .map(|slot| {
+                second[format!("{first}{slot}")]
+                    .as_u64()
+                    .expect("a page size")
+            })
+            .sum()
+    };
+    let shared = rows(onetaskgraph_github_projects::SEARCH_BATCH, "ask", "first")
+        + rows(
+            onetaskgraph_github_projects::SEARCH_BATCH_ORIGINS,
+            "origin",
+            "itemsFirst",
+        );
+    assert!(
+        shared <= u64::from(onetaskgraph_github_projects::SEARCH_PAGE_SIZE),
+        "the resumed pages of one round share one page of rows, and asked {shared}: {second:#}"
+    );
 }
 
 #[test]

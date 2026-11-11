@@ -22,8 +22,9 @@
 //! `rateLimit(dryRun: true)` probe `tests/journey/mod.rs` already sends per read document.
 
 use onetaskgraph_github_projects::{
-    COPY_DETAIL_BATCH, DETAIL_BATCH, MEMBER_PAGE_SIZE, Variables, graphql, largest_page_sizes,
-    worst_case_point_cost,
+    COPY_DETAIL_BATCH, DETAIL_BATCH, MEMBER_PAGE_SIZE, SEARCH_BATCH, SEARCH_BATCH_FIRST_PAGE,
+    SEARCH_BATCH_ORIGINS, Variables, graphql, largest_page_sizes, point_cost,
+    search_batch_largest_round, search_batch_resumed_page, worst_case_point_cost,
 };
 
 /// What each document this source sends costs, in points, under the largest page sizes it
@@ -321,3 +322,55 @@ fn largest_at_one_point(document: &str, batch: usize, name: &str) {
     );
 }
 // llmlint: ignore-end[tests_hold_no_nonfunctional_thresholds]
+
+/// No round of the batched search costs more than [`search_batch_largest_round`], which is what
+/// the credentialed lane reconciles GitHub's price of it at: every way a round can split its
+/// search slots and origin item listings between first pages, resumed pages and slots it does
+/// not ask is priced at the pages `search_round` binds — a first page at
+/// [`SEARCH_BATCH_FIRST_PAGE`] rows, every resumed page at [`search_batch_resumed_page`]'s share
+/// of the round, and a slot not asked at one — and none costs more. The worst case every slot
+/// at a whole page would cost is still pinned above, and is more than any round sends.
+#[test]
+fn no_round_of_the_batched_search_costs_more_than_its_largest_round() {
+    let largest = point_cost(graphql::SEARCH_BATCH, &search_batch_largest_round()).unwrap();
+    assert_eq!(largest, 4, "the batched search's largest round");
+    assert!(largest < worst_case_point_cost(graphql::SEARCH_BATCH).unwrap());
+    for searches_first in 0..=SEARCH_BATCH {
+        for searches_resumed in 0..=SEARCH_BATCH - searches_first {
+            for origins_first in 0..=SEARCH_BATCH_ORIGINS {
+                for origins_resumed in 0..=SEARCH_BATCH_ORIGINS - origins_first {
+                    let shared = search_batch_resumed_page(searches_resumed + origins_resumed);
+                    let pages = |first: usize, resumed: usize, slot: usize| {
+                        if slot < first {
+                            SEARCH_BATCH_FIRST_PAGE
+                        } else if slot < first + resumed {
+                            shared
+                        } else {
+                            1
+                        }
+                    };
+                    let mut sizes = largest_page_sizes();
+                    for slot in 0..SEARCH_BATCH {
+                        sizes.insert(
+                            format!("first{slot}"),
+                            pages(searches_first, searches_resumed, slot),
+                        );
+                    }
+                    for slot in 0..SEARCH_BATCH_ORIGINS {
+                        sizes.insert(
+                            format!("itemsFirst{slot}"),
+                            pages(origins_first, origins_resumed, slot),
+                        );
+                    }
+                    let cost = point_cost(graphql::SEARCH_BATCH, &sizes).unwrap();
+                    assert!(
+                        cost <= largest,
+                        "a round of {searches_first} first and {searches_resumed} resumed \
+                         searches and {origins_first} first and {origins_resumed} resumed origin \
+                         listings costs {cost} points, more than the largest round's {largest}"
+                    );
+                }
+            }
+        }
+    }
+}

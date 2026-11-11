@@ -740,6 +740,42 @@ pub const SEARCH_BATCH_ORIGINS: usize = 5;
 /// [`SEARCH_BATCH`] searches at three points, where a page of [`SEARCH_PAGE_SIZE`] each would
 /// cost twenty. A search with more to answer is walked on at [`SEARCH_PAGE_SIZE`] rows a page.
 pub const SEARCH_BATCH_FIRST_PAGE: u32 = 3;
+
+/// The rows each resumed page of one [`graphql::SEARCH_BATCH`] round asks for, when `resumed`
+/// of its slots — searches and origin item listings alike — resume from a cursor.
+///
+/// Every resumed page of a round shares one [`SEARCH_PAGE_SIZE`] of rows, rather than each
+/// asking that many: a round in which all twenty searches walked on at twenty rows a slot cost
+/// 22 points in one request, while sharing holds every round to what its first pages cost and
+/// one page more. A search with more to answer is walked on over more rounds, each page still
+/// read, so what a walk answers is unchanged; a round of one resumed search asks the page a
+/// search alone asks.
+#[must_use]
+pub fn search_batch_resumed_page(resumed: usize) -> u32 {
+    let resumed = u32::try_from(resumed.max(1)).unwrap_or(u32::MAX);
+    (SEARCH_PAGE_SIZE / resumed).max(1)
+}
+
+/// The page sizes of the most expensive [`graphql::SEARCH_BATCH`] round this source sends:
+/// every slot on its first page, at [`SEARCH_BATCH_FIRST_PAGE`] rows, but one resumed slot
+/// asking all of [`search_batch_resumed_page`]'s shared rows.
+///
+/// `tests/point_cost.rs` holds every round shape [`search_batch_resumed_page`] allows to cost
+/// no more than this, and the credentialed lane reconciles GitHub's own price of the document
+/// under it. [`largest_page_sizes`] still binds every slot at [`SEARCH_PAGE_SIZE`], an upper
+/// bound on this, so the offline worst case covers more than any round sends.
+#[must_use]
+pub fn search_batch_largest_round() -> Variables {
+    let mut sizes = largest_page_sizes();
+    for slot in 0..SEARCH_BATCH {
+        sizes.insert(format!("first{slot}"), SEARCH_BATCH_FIRST_PAGE);
+    }
+    for slot in 0..SEARCH_BATCH_ORIGINS {
+        sizes.insert(format!("itemsFirst{slot}"), SEARCH_BATCH_FIRST_PAGE);
+    }
+    sizes.insert("first0".to_owned(), search_batch_resumed_page(1));
+    sizes
+}
 /// How many comments one [`graphql::ADD_COMMENTS`] request adds, and how many issue updates one
 /// [`graphql::WRITE_TASKS`] request carries: [`MUTATION_BATCH`], the most aliased mutations
 /// GitHub was seen to accept in one request.

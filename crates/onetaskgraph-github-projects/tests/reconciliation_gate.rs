@@ -219,8 +219,13 @@ fn panicked_with(payload: &Box<dyn std::any::Any + Send>) -> String {
 fn the_same_board_answers_that_document_as_this_workspace_prices_it() {
     let (document, _) = first_document_asked_about();
     let ours = worst_case_point_cost(document).expect("a priceable document");
-    let truthful = board::probe_answer(document, Pricing::AsComputed);
-    let overstated = board::probe_answer(document, Pricing::Overstating { by: OVERSTATED_BY });
+    let variables = journey::dry_run_variables(document);
+    let truthful = board::probe_answer(document, &variables, Pricing::AsComputed);
+    let overstated = board::probe_answer(
+        document,
+        &variables,
+        Pricing::Overstating { by: OVERSTATED_BY },
+    );
     assert_eq!(truthful.pointer("/rateLimit/cost"), Some(&json!(ours)));
     assert_eq!(
         overstated.pointer("/rateLimit/cost"),

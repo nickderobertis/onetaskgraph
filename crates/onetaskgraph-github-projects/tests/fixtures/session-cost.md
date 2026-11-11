@@ -308,3 +308,20 @@ records 239 requests / 300,990 nodes and 224 attributed GraphQL points. Only dra
 items travel with a board copy; issues and pull requests stay on the template.
 The copy waits for that draft count on two consecutive reads within the same bound.
 No budget ceiling changes.
+
+## The batched search's rounds share one page of resumed rows
+
+`graphql::SEARCH_BATCH` — the twenty search slots and five origin slots `task find` sends in one
+request — asked every resumed slot for a whole page of `SEARCH_PAGE_SIZE` rows, so a round in
+which all of them walked on cost 22 points, and the reconciliation, which prices each document
+at the largest request this source sends, spent those 22 on one request: a measured session went
+from 292 points to 315 against the 299 `github-live-session-points` holds it to (Reconciliation
+40 → 62). Every resumed page of one round now shares one `SEARCH_PAGE_SIZE` of rows
+(`search_batch_resumed_page`); a query with more to answer is walked on over more rounds, every
+page still read. The largest round this source sends is then every slot on its first page of
+`SEARCH_BATCH_FIRST_PAGE` rows and one resumed slot asking all the shared rows
+(`search_batch_largest_round`), 4 points: `tests/point_cost.rs` holds every round shape to it,
+and the reconciliation prices the document under it. The worst case of every slot at a whole
+page is still pinned at 22 by the same file and held under the node limit by
+`tests/node_count.rs`. The offline record moves from 399,965 worst-case nodes to 325,488 at the
+same 239 requests. No budget ceiling changes.

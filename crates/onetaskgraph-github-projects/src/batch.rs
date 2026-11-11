@@ -412,6 +412,27 @@ impl GitHubProjectsSource {
             variables.insert(format!("itemsFirst{slot}"), json!(1));
             variables.insert(format!("origin{slot}"), json!(false));
         }
+        // Every resumed page of the round shares one page of rows: see
+        // `search_batch_resumed_page`.
+        let resumed = placed
+            .iter()
+            .map(|ask| match &ask.slots {
+                Slots::Search(slotted, _) => usize::from(slotted.after.is_some()),
+                Slots::Origin { items, search, .. } => [items, search]
+                    .into_iter()
+                    .flatten()
+                    .filter(|(slotted, _)| slotted.after.is_some())
+                    .count(),
+            })
+            .sum::<usize>();
+        let shared = super::search_batch_resumed_page(resumed);
+        let first = |slotted: &Slotted| {
+            if slotted.after.is_some() {
+                slotted.first.min(shared)
+            } else {
+                slotted.first
+            }
+        };
         for ask in &placed {
             let (search, origin) = match &ask.slots {
                 Slots::Search(slotted, slot) => (Some((slotted, *slot)), None),
@@ -428,13 +449,13 @@ impl GitHubProjectsSource {
             if let Some((search, slot)) = search {
                 variables.insert(format!("search{slot}"), json!(search.search));
                 variables.insert(format!("after{slot}"), json!(search.after));
-                variables.insert(format!("first{slot}"), json!(search.first));
+                variables.insert(format!("first{slot}"), json!(first(search)));
                 variables.insert(format!("ask{slot}"), json!(true));
             }
             if let Some((items, slot, filter)) = origin {
                 variables.insert(format!("filter{slot}"), json!(filter));
                 variables.insert(format!("itemsAfter{slot}"), json!(items.after));
-                variables.insert(format!("itemsFirst{slot}"), json!(items.first));
+                variables.insert(format!("itemsFirst{slot}"), json!(first(items)));
                 variables.insert(format!("origin{slot}"), json!(true));
             }
         }

@@ -273,20 +273,26 @@ fn smallest_page_size() -> u64 {
 }
 
 /// The smallest page size the document the record's row `name` names binds, read off the
-/// variables its own `first:` arguments name — the bound the module documentation derives is
+/// variables its own `first:` arguments name — under the reconciliation's own bindings for a
+/// reconciliation row — the bound the module documentation derives is
 /// per call, so the call's own connections are what it divides by — or [`smallest_page_size`]
 /// for a row naming no document this source declares, or one naming no page-size variable.
 pub fn smallest_page_size_named(name: &str) -> u64 {
-    let described = name
-        .strip_prefix("node-count and point-cost reconciliation while ")
-        .unwrap_or(name);
+    let reconciling = name.strip_prefix("node-count and point-cost reconciliation while ");
+    let described = reconciling.unwrap_or(name);
     let Some((document, _)) = onetaskgraph_github_projects::graphql::DOCUMENTS
         .iter()
         .find(|(_, description)| *description == described)
     else {
         return smallest_page_size();
     };
-    let sizes = largest_page_sizes();
+    // A reconciliation binds the page sizes it prices the document under, which are not every
+    // page at its largest for the batched search.
+    let sizes = if reconciling.is_some() {
+        super::reconciliation_page_sizes()
+    } else {
+        largest_page_sizes()
+    };
     document
         .match_indices("first:$")
         .filter_map(|(at, pattern)| {
