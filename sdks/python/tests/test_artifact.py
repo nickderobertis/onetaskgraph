@@ -293,7 +293,18 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     # read from the raw document and the roots from the validated one.
     bundle = generate.validate_schema_bundle(emitted_bundle)
 
-    assert emitted_bundle["version"] == 61
+    assert emitted_bundle["version"] == 62
+    # Version 62: the documents the relation calls read and answer.
+    assert {
+        "ParentBatch",
+        "ParentsSet",
+        "LinkBatch",
+        "LinksWritten",
+        "TaskRelations",
+    } <= set(bundle["roots"])
+    assert {"task parent set-many", "task link add-many", "task relations"} <= set(
+        emitted_bundle["commands"]
+    )
     # Version 61: the batch documents `task find`, `task update-many` and `task comment
     # add-many` read and answer, and the priority guard `task update` reports.
     assert {

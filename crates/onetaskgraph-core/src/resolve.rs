@@ -164,6 +164,73 @@ pub fn validate_sources(config: &Config) -> Result<(), ConfigError> {
     for (name, source) in config.sources() {
         checked_plugin(name, source)?;
     }
+    one_meaning_per_board(config)
+}
+
+/// Refuse two `github-projects` sources naming one board with different `sub_issues`.
+///
+/// The two meanings answer differently for the same issues — one reads an issue with sub-issues
+/// as a project, the other as a task with children — and an edge written through either rewrites
+/// what the other reads, so a `parent` source needs a board of its own.
+// llmlint: ignore[code_lands_in_the_domain_that_owns_it] The refusal is about two configured sources at once, and a plugin is built from its own `config` block alone, so no GitHub Projects code can see the other source; moving it behind a plugin hook would change the `SourcePlugin` contract every plugin implements (AGENTS.md: keep the api crate still) to answer what one comparison of two blocks the engine already holds answers here, read through the plugin's own `remote_identity`.
+#[cfg(feature = "github-projects")]
+fn one_meaning_per_board(config: &Config) -> Result<(), ConfigError> {
+    use onetaskgraph_github_projects::SubIssues;
+    let mut boards: std::collections::BTreeMap<String, (SourceName, SubIssues)> =
+        std::collections::BTreeMap::new();
+    for (name, source) in config.sources() {
+        if source.plugin().as_str() != "github-projects" {
+            continue;
+        }
+        let Some(board) = source.plugin().plugin().remote_identity(source.config()) else {
+            continue;
+        };
+        // The plugin's own setting, read as the plugin reads it — its default where unset — so
+        // no second spelling of its meanings lives here. A spelling it refuses was refused
+        // when the source was checked, before this.
+        let meaning: SubIssues = source
+            .config()
+            .get("sub_issues")
+            .map_or_else(
+                || Ok(SubIssues::default()),
+                |set| serde_json::from_value(set.clone()),
+            )
+            .unwrap_or_default();
+        match boards.get(&board) {
+            Some((other, held)) if *held != meaning => {
+                let spelled = |meaning: SubIssues| {
+                    serde_json::to_value(meaning)
+                        .ok()
+                        .and_then(|value| value.as_str().map(str::to_owned))
+                        .unwrap_or_default()
+                };
+                let (held, meaning) = (spelled(*held), spelled(meaning));
+                return Err(ConfigError::setting(
+                    format!("sources.{name}.config.sub_issues"),
+                    format!(
+                        "sources {other} and {name} name one GitHub board, {other} with \
+                         `sub_issues: {held}` and {name} with `sub_issues: {meaning}`; the two \
+                         meanings read the same issues differently, and an edge written through \
+                         either rewrites what the other reads"
+                    ),
+                    format!(
+                        "give the `sub_issues: parent` source a board of its own, or give {other} \
+                         and {name} one `sub_issues`"
+                    ),
+                ));
+            }
+            Some(_) => {}
+            None => {
+                boards.insert(board, (name.clone(), meaning));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Without the GitHub Projects plugin no source can name a board, so there is nothing to refuse.
+#[cfg(not(feature = "github-projects"))]
+fn one_meaning_per_board(_config: &Config) -> Result<(), ConfigError> {
     Ok(())
 }
 

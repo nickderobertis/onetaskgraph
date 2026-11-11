@@ -466,6 +466,32 @@ pub enum TaskCommand {
     /// no item's failure writes or refuses another. Exits 4 when any is `version-moved` or
     /// `error`.
     UpdateMany(TaskBatchArgs),
+    /// Set or remove the parent of many tasks in one call, each answered on its own.
+    ///
+    /// A parent is a task of its child's own source: a GitHub sub-issue under a source's
+    /// `sub_issues: parent`, a Linear issue's parent, or a stored field of a folder of Markdown
+    /// or an in-memory source.
+    Parent {
+        #[command(subcommand)]
+        command: ParentCommand,
+    },
+    /// Add or remove many typed links between tasks in one call, each answered on its own.
+    ///
+    /// A link is a type name over a directed pair of tasks of any configured sources, held in
+    /// the store's metadata on both ends and listed in each one's `## Links` section; a type a
+    /// source's `link_types` mirrors natively is also written as that tracker's own relation.
+    Link {
+        #[command(subcommand)]
+        command: LinkCommand,
+    },
+    /// Read the parent, children and links of each task named, in one call.
+    ///
+    /// Answers `{"schema_version": 1, "items": [{"item", "parent", "children",
+    /// "children_complete", "links": [{"type", "direction", "other", "other_end"}],
+    /// "links_complete"}]}`, `onetaskgraph schema`'s `TaskRelations`. A link's `other_end` is
+    /// `present` or `missing` when its other item is among the ids named, and `unread`
+    /// otherwise, so the comparison costs no request.
+    Relations(TaskRelationsArgs),
     /// Set one task's status, and nothing else about it.
     ///
     /// Every task it delivers is kept in step with it afterwards, and each is reported.
@@ -607,6 +633,60 @@ pub struct TaskBatchArgs {
 
     #[command(flatten)]
     pub term_scope: TermScopeArgs,
+}
+
+/// What `onetaskgraph task parent` can do.
+#[derive(Debug, Subcommand)]
+pub enum ParentCommand {
+    /// Set or remove many tasks' parents, each answered on its own.
+    ///
+    /// Reads `{"schema_version": 1, "edges": [{"child", "parent", "if_version"}]}` — `parent`
+    /// a qualified id of the child's own source, or `null` to remove the child's parent — and
+    /// answers `{"schema_version": 1, "results": [{"child", "parent", "outcome", "version",
+    /// "reason"}]}`, `onetaskgraph schema`'s `ParentBatch` and `ParentsSet`: `written`,
+    /// `unchanged`, `version-moved`, `refused` (a cycle, a parent in another source, or a
+    /// limit of the destination, named) or `error`. No edge's answer writes or refuses
+    /// another. Exits 4 when any is not `written` or `unchanged`.
+    SetMany(RelationBatchArgs),
+}
+
+/// What `onetaskgraph task link` can do.
+#[derive(Debug, Subcommand)]
+pub enum LinkCommand {
+    /// Add many typed links, each answered on its own.
+    ///
+    /// Reads `{"schema_version": 1, "links": [{"from", "to", "type"}]}` and answers
+    /// `{"schema_version": 1, "results": [{"from", "to", "type", "outcome", "from_version",
+    /// "to_version", "reason"}]}`, `onetaskgraph schema`'s `LinkBatch` and `LinksWritten`:
+    /// `written`, `exists` when both ends already hold it, `partial` naming the one end that
+    /// landed, or `error`. Repeating an add restores an end that lost the link. Exits 4 when
+    /// any is `partial` or `error`.
+    AddMany(RelationBatchArgs),
+    /// Remove many typed links, each answered on its own: `written`, `absent` when neither end
+    /// holds it, `partial` or `error`. A native relation is removed only with the last
+    /// mirrored link between its two tasks. Exits 4 when any is `partial` or `error`.
+    RemoveMany(RelationBatchArgs),
+}
+
+/// `onetaskgraph task parent set-many`, `task link add-many` and `task link remove-many`.
+#[derive(Debug, Args)]
+pub struct RelationBatchArgs {
+    /// The file holding the batch, or `-` for standard input.
+    #[arg(long, value_name = "FILE")]
+    pub input: std::path::PathBuf,
+}
+
+/// `onetaskgraph task relations`.
+#[derive(Debug, Args)]
+pub struct TaskRelationsArgs {
+    /// The tasks' qualified ids, `<source>:<native-id>`.
+    // llmlint: ignore[invalid_states_unrepresentable] As `ShowArgs::id`: `qualified` in `main` converts each through `GlobalId::from_str` before anything is read, with the next action a user typing an unqualified id needs.
+    #[arg(value_name = "ID", required = true)]
+    pub ids: Vec<String>,
+
+    /// Refuse the answer when any item's children were not read whole.
+    #[arg(long)]
+    pub complete: bool,
 }
 
 /// `onetaskgraph task project-human`.

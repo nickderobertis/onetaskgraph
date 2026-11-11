@@ -16,12 +16,8 @@
     {
       "fixture": "fixtures/issue-authored.json",
       "write": "first",
-      "sent": [
-        "<summary>Probe A02: Entities &amp; &lt;tag&gt; in a summary</summary>"
-      ],
-      "stored": [
-        "<summary>Probe A02: Entities & <tag> in a summary</summary>"
-      ]
+      "sent": ["<summary>Probe A02: Entities &amp; &lt;tag&gt; in a summary</summary>"],
+      "stored": ["<summary>Probe A02: Entities & <tag> in a summary</summary>"]
     },
     {
       "fixture": "fixtures/issue-authored.json",
@@ -86,31 +82,19 @@
     {
       "fixture": "fixtures/issue-authored.json",
       "write": "first",
-      "sent": [
-        "- First bullet",
-        "- Second bullet"
-      ],
-      "stored": [
-        "* First bullet",
-        "* Second bullet"
-      ]
+      "sent": ["- First bullet", "- Second bullet"],
+      "stored": ["* First bullet", "* Second bullet"]
     },
     {
       "fixture": "fixtures/issue-authored.json",
       "write": "first",
-      "sent": [
-        "| --- | --- |"
-      ],
-      "stored": [
-        "| -- | -- |"
-      ]
+      "sent": ["| --- | --- |"],
+      "stored": ["| -- | -- |"]
     },
     {
       "fixture": "fixtures/issue-authored.json",
       "write": "first",
-      "sent": [
-        ""
-      ],
+      "sent": [""],
       "stored": []
     },
     {
@@ -188,64 +172,43 @@
     {
       "fixture": "fixtures/issue-no-blank-after-summary.json",
       "write": "first",
-      "sent": [
-        "- First bullet",
-        "- Second bullet"
-      ],
-      "stored": [
-        "",
-        "* First bullet",
-        "* Second bullet"
-      ]
+      "sent": ["- First bullet", "- Second bullet"],
+      "stored": ["", "* First bullet", "* Second bullet"]
     },
     {
       "fixture": "fixtures/issue-no-blank-after-summary.json",
       "write": "first",
       "sent": [],
-      "stored": [
-        ""
-      ]
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-no-blank-after-summary.json",
       "write": "first",
       "sent": [],
-      "stored": [
-        ""
-      ]
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-no-blank-after-summary.json",
       "write": "first",
       "sent": [],
-      "stored": [
-        ""
-      ]
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-no-blank-after-summary.json",
       "write": "first",
       "sent": [],
-      "stored": [
-        ""
-      ]
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-no-blank-after-summary.json",
       "write": "first",
-      "sent": [
-        "| --- | --- |"
-      ],
-      "stored": [
-        "| -- | -- |"
-      ]
+      "sent": ["| --- | --- |"],
+      "stored": ["| -- | -- |"]
     },
     {
       "fixture": "fixtures/issue-no-blank-after-summary.json",
       "write": "first",
-      "sent": [
-        ""
-      ],
+      "sent": [""],
       "stored": []
     },
     {
@@ -261,12 +224,8 @@
     {
       "fixture": "fixtures/issue-linear-plus.json",
       "write": "first",
-      "sent": [
-        "+++ Probe P02: Entities &amp; &lt;tag&gt; in a summary"
-      ],
-      "stored": [
-        "+++ Probe P02: Entities & <tag> in a summary"
-      ]
+      "sent": ["+++ Probe P02: Entities &amp; &lt;tag&gt; in a summary"],
+      "stored": ["+++ Probe P02: Entities & <tag> in a summary"]
     },
     {
       "fixture": "fixtures/issue-linear-plus.json",
@@ -331,42 +290,26 @@
     {
       "fixture": "fixtures/issue-linear-plus.json",
       "write": "first",
-      "sent": [
-        "- First bullet",
-        "- Second bullet"
-      ],
-      "stored": [
-        "* First bullet",
-        "* Second bullet"
-      ]
+      "sent": ["- First bullet", "- Second bullet"],
+      "stored": ["* First bullet", "* Second bullet"]
     },
     {
       "fixture": "fixtures/issue-linear-plus.json",
       "write": "first",
-      "sent": [
-        "| --- | --- |"
-      ],
-      "stored": [
-        "| -- | -- |"
-      ]
+      "sent": ["| --- | --- |"],
+      "stored": ["| -- | -- |"]
     },
     {
       "fixture": "fixtures/issue-linear-plus.json",
       "write": "first",
-      "sent": [
-        ""
-      ],
+      "sent": [""],
       "stored": []
     },
     {
       "fixture": "fixtures/issue-linear-arrow.json",
       "write": "first",
-      "sent": [
-        ">>> Probe R01: Plain summary text"
-      ],
-      "stored": [
-        "+++ Probe R01: Plain summary text"
-      ]
+      "sent": [">>> Probe R01: Plain summary text"],
+      "stored": ["+++ Probe R01: Plain summary text"]
     },
     {
       "fixture": "fixtures/issue-linear-arrow.json",
@@ -381,22 +324,14 @@
     {
       "fixture": "fixtures/issue-linear-arrow.json",
       "write": "first",
-      "sent": [
-        ">>>"
-      ],
-      "stored": [
-        "+++"
-      ]
+      "sent": [">>>"],
+      "stored": ["+++"]
     },
     {
       "fixture": "fixtures/issue-linear-arrow.json",
       "write": "first",
-      "sent": [
-        ">>> Probe R02: Entities &amp; &lt;tag&gt; in a summary"
-      ],
-      "stored": [
-        "+++ Probe R02: Entities & <tag> in a summary"
-      ]
+      "sent": [">>> Probe R02: Entities &amp; &lt;tag&gt; in a summary"],
+      "stored": ["+++ Probe R02: Entities & <tag> in a summary"]
     },
     {
       "fixture": "fixtures/issue-linear-arrow.json",
@@ -411,22 +346,14 @@
     {
       "fixture": "fixtures/issue-linear-arrow.json",
       "write": "first",
-      "sent": [
-        ">>>"
-      ],
-      "stored": [
-        "+++"
-      ]
+      "sent": [">>>"],
+      "stored": ["+++"]
     },
     {
       "fixture": "fixtures/issue-linear-arrow.json",
       "write": "first",
-      "sent": [
-        ">>> Probe R03: Inline code `copy --dry-run` in backticks"
-      ],
-      "stored": [
-        "+++ Probe R03: Inline code `copy --dry-run` in backticks"
-      ]
+      "sent": [">>> Probe R03: Inline code `copy --dry-run` in backticks"],
+      "stored": ["+++ Probe R03: Inline code `copy --dry-run` in backticks"]
     },
     {
       "fixture": "fixtures/issue-linear-arrow.json",
@@ -441,22 +368,14 @@
     {
       "fixture": "fixtures/issue-linear-arrow.json",
       "write": "first",
-      "sent": [
-        ">>>"
-      ],
-      "stored": [
-        "+++"
-      ]
+      "sent": [">>>"],
+      "stored": ["+++"]
     },
     {
       "fixture": "fixtures/issue-linear-arrow.json",
       "write": "first",
-      "sent": [
-        ">>> Probe R04: Inline code <code>copy --dry-run</code> as HTML"
-      ],
-      "stored": [
-        "+++ Probe R04: Inline code <code>copy --dry-run</code> as HTML"
-      ]
+      "sent": [">>> Probe R04: Inline code <code>copy --dry-run</code> as HTML"],
+      "stored": ["+++ Probe R04: Inline code <code>copy --dry-run</code> as HTML"]
     },
     {
       "fixture": "fixtures/issue-linear-arrow.json",
@@ -471,22 +390,14 @@
     {
       "fixture": "fixtures/issue-linear-arrow.json",
       "write": "first",
-      "sent": [
-        ">>>"
-      ],
-      "stored": [
-        "+++"
-      ]
+      "sent": [">>>"],
+      "stored": ["+++"]
     },
     {
       "fixture": "fixtures/issue-linear-arrow.json",
       "write": "first",
-      "sent": [
-        ">>> Probe R05: **Bold** text in a summary"
-      ],
-      "stored": [
-        "+++ Probe R05: **Bold** text in a summary"
-      ]
+      "sent": [">>> Probe R05: **Bold** text in a summary"],
+      "stored": ["+++ Probe R05: **Bold** text in a summary"]
     },
     {
       "fixture": "fixtures/issue-linear-arrow.json",
@@ -501,22 +412,14 @@
     {
       "fixture": "fixtures/issue-linear-arrow.json",
       "write": "first",
-      "sent": [
-        ">>>"
-      ],
-      "stored": [
-        "+++"
-      ]
+      "sent": [">>>"],
+      "stored": ["+++"]
     },
     {
       "fixture": "fixtures/issue-linear-arrow.json",
       "write": "first",
-      "sent": [
-        ">>> Probe R06: <strong>Bold</strong> as HTML"
-      ],
-      "stored": [
-        "+++ Probe R06: <strong>Bold</strong> as HTML"
-      ]
+      "sent": [">>> Probe R06: <strong>Bold</strong> as HTML"],
+      "stored": ["+++ Probe R06: <strong>Bold</strong> as HTML"]
     },
     {
       "fixture": "fixtures/issue-linear-arrow.json",
@@ -531,22 +434,14 @@
     {
       "fixture": "fixtures/issue-linear-arrow.json",
       "write": "first",
-      "sent": [
-        ">>>"
-      ],
-      "stored": [
-        "+++"
-      ]
+      "sent": [">>>"],
+      "stored": ["+++"]
     },
     {
       "fixture": "fixtures/issue-linear-arrow.json",
       "write": "first",
-      "sent": [
-        ">>> Probe R07: Body — paragraph"
-      ],
-      "stored": [
-        "+++ Probe R07: Body — paragraph"
-      ]
+      "sent": [">>> Probe R07: Body — paragraph"],
+      "stored": ["+++ Probe R07: Body — paragraph"]
     },
     {
       "fixture": "fixtures/issue-linear-arrow.json",
@@ -561,184 +456,110 @@
     {
       "fixture": "fixtures/issue-linear-arrow.json",
       "write": "first",
-      "sent": [
-        ">>>"
-      ],
-      "stored": [
-        "+++"
-      ]
+      "sent": [">>>"],
+      "stored": ["+++"]
     },
     {
       "fixture": "fixtures/issue-linear-arrow.json",
       "write": "first",
-      "sent": [
-        ">>> Probe R08: Body — lists"
-      ],
-      "stored": [
-        "+++ Probe R08: Body — lists"
-      ]
+      "sent": [">>> Probe R08: Body — lists"],
+      "stored": ["+++ Probe R08: Body — lists"]
     },
     {
       "fixture": "fixtures/issue-linear-arrow.json",
       "write": "first",
-      "sent": [
-        "- First bullet",
-        "- Second bullet"
-      ],
-      "stored": [
-        "* First bullet",
-        "* Second bullet"
-      ]
+      "sent": ["- First bullet", "- Second bullet"],
+      "stored": ["* First bullet", "* Second bullet"]
     },
     {
       "fixture": "fixtures/issue-linear-arrow.json",
       "write": "first",
-      "sent": [
-        ">>>"
-      ],
-      "stored": [
-        "+++"
-      ]
+      "sent": [">>>"],
+      "stored": ["+++"]
     },
     {
       "fixture": "fixtures/issue-linear-arrow.json",
       "write": "first",
-      "sent": [
-        ">>> Probe R09: Body — headings"
-      ],
-      "stored": [
-        "+++ Probe R09: Body — headings"
-      ]
+      "sent": [">>> Probe R09: Body — headings"],
+      "stored": ["+++ Probe R09: Body — headings"]
     },
     {
       "fixture": "fixtures/issue-linear-arrow.json",
       "write": "first",
-      "sent": [
-        ">>>"
-      ],
-      "stored": [
-        "+++"
-      ]
+      "sent": [">>>"],
+      "stored": ["+++"]
     },
     {
       "fixture": "fixtures/issue-linear-arrow.json",
       "write": "first",
-      "sent": [
-        ">>> Probe R10: Body — fenced code"
-      ],
-      "stored": [
-        "+++ Probe R10: Body — fenced code"
-      ]
+      "sent": [">>> Probe R10: Body — fenced code"],
+      "stored": ["+++ Probe R10: Body — fenced code"]
     },
     {
       "fixture": "fixtures/issue-linear-arrow.json",
       "write": "first",
-      "sent": [
-        ">>>"
-      ],
-      "stored": [
-        "+++"
-      ]
+      "sent": [">>>"],
+      "stored": ["+++"]
     },
     {
       "fixture": "fixtures/issue-linear-arrow.json",
       "write": "first",
-      "sent": [
-        ">>> Probe R11: Body — image"
-      ],
-      "stored": [
-        "+++ Probe R11: Body — image"
-      ]
+      "sent": [">>> Probe R11: Body — image"],
+      "stored": ["+++ Probe R11: Body — image"]
     },
     {
       "fixture": "fixtures/issue-linear-arrow.json",
       "write": "first",
-      "sent": [
-        ">>>"
-      ],
-      "stored": [
-        "+++"
-      ]
+      "sent": [">>>"],
+      "stored": ["+++"]
     },
     {
       "fixture": "fixtures/issue-linear-arrow.json",
       "write": "first",
-      "sent": [
-        ">>> Probe R12: Body — table"
-      ],
-      "stored": [
-        "+++ Probe R12: Body — table"
-      ]
+      "sent": [">>> Probe R12: Body — table"],
+      "stored": ["+++ Probe R12: Body — table"]
     },
     {
       "fixture": "fixtures/issue-linear-arrow.json",
       "write": "first",
-      "sent": [
-        "| --- | --- |"
-      ],
-      "stored": [
-        "| -- | -- |"
-      ]
+      "sent": ["| --- | --- |"],
+      "stored": ["| -- | -- |"]
     },
     {
       "fixture": "fixtures/issue-linear-arrow.json",
       "write": "first",
-      "sent": [
-        ">>>"
-      ],
-      "stored": [
-        "+++"
-      ]
+      "sent": [">>>"],
+      "stored": ["+++"]
     },
     {
       "fixture": "fixtures/issue-linear-arrow.json",
       "write": "first",
-      "sent": [
-        ">>> Probe R13: Body — nested"
-      ],
-      "stored": [
-        "+++ Probe R13: Body — nested"
-      ]
+      "sent": [">>> Probe R13: Body — nested"],
+      "stored": ["+++ Probe R13: Body — nested"]
     },
     {
       "fixture": "fixtures/issue-linear-arrow.json",
       "write": "first",
-      "sent": [
-        ">>> Probe R13i: nested inner summary"
-      ],
-      "stored": [
-        "+++ Probe R13i: nested inner summary"
-      ]
+      "sent": [">>> Probe R13i: nested inner summary"],
+      "stored": ["+++ Probe R13i: nested inner summary"]
     },
     {
       "fixture": "fixtures/issue-linear-arrow.json",
       "write": "first",
-      "sent": [
-        ">>>"
-      ],
-      "stored": [
-        "+++",
-        "",
-        "+++"
-      ]
+      "sent": [">>>"],
+      "stored": ["+++", "", "+++"]
     },
     {
       "fixture": "fixtures/issue-linear-arrow.json",
       "write": "first",
-      "sent": [
-        ">>>"
-      ],
-      "stored": [
-        "+++ "
-      ]
+      "sent": [">>>"],
+      "stored": ["+++ "]
     },
     {
       "fixture": "fixtures/issue-linear-arrow.json",
       "write": "first",
       "sent": [],
-      "stored": [
-        "+++"
-      ]
+      "stored": ["+++"]
     },
     {
       "fixture": "fixtures/issue-details-open.json",
@@ -753,12 +574,8 @@
     {
       "fixture": "fixtures/issue-details-open.json",
       "write": "first",
-      "sent": [
-        "<summary>Probe O02: Entities &amp; &lt;tag&gt; in a summary</summary>"
-      ],
-      "stored": [
-        "<summary>Probe O02: Entities & <tag> in a summary</summary>"
-      ]
+      "sent": ["<summary>Probe O02: Entities &amp; &lt;tag&gt; in a summary</summary>"],
+      "stored": ["<summary>Probe O02: Entities & <tag> in a summary</summary>"]
     },
     {
       "fixture": "fixtures/issue-details-open.json",
@@ -823,42 +640,26 @@
     {
       "fixture": "fixtures/issue-details-open.json",
       "write": "first",
-      "sent": [
-        "- First bullet",
-        "- Second bullet"
-      ],
-      "stored": [
-        "* First bullet",
-        "* Second bullet"
-      ]
+      "sent": ["- First bullet", "- Second bullet"],
+      "stored": ["* First bullet", "* Second bullet"]
     },
     {
       "fixture": "fixtures/issue-details-open.json",
       "write": "first",
-      "sent": [
-        "| --- | --- |"
-      ],
-      "stored": [
-        "| -- | -- |"
-      ]
+      "sent": ["| --- | --- |"],
+      "stored": ["| -- | -- |"]
     },
     {
       "fixture": "fixtures/issue-details-open.json",
       "write": "first",
-      "sent": [
-        ""
-      ],
+      "sent": [""],
       "stored": []
     },
     {
       "fixture": "fixtures/issue-in-list-item.json",
       "write": "first",
-      "sent": [
-        "- A list item holding the block that follows"
-      ],
-      "stored": [
-        "* A list item holding the block that follows"
-      ]
+      "sent": ["- A list item holding the block that follows"],
+      "stored": ["* A list item holding the block that follows"]
     },
     {
       "fixture": "fixtures/issue-in-list-item.json",
@@ -877,23 +678,14 @@
     {
       "fixture": "fixtures/issue-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-in-list-item.json",
       "write": "first",
-      "sent": [
-        "",
-        "- A list item holding the block that follows"
-      ],
-      "stored": [
-        "* A list item holding the block that follows"
-      ]
+      "sent": ["", "- A list item holding the block that follows"],
+      "stored": ["* A list item holding the block that follows"]
     },
     {
       "fixture": "fixtures/issue-in-list-item.json",
@@ -914,23 +706,14 @@
     {
       "fixture": "fixtures/issue-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-in-list-item.json",
       "write": "first",
-      "sent": [
-        "",
-        "- A list item holding the block that follows"
-      ],
-      "stored": [
-        "* A list item holding the block that follows"
-      ]
+      "sent": ["", "- A list item holding the block that follows"],
+      "stored": ["* A list item holding the block that follows"]
     },
     {
       "fixture": "fixtures/issue-in-list-item.json",
@@ -949,23 +732,14 @@
     {
       "fixture": "fixtures/issue-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-in-list-item.json",
       "write": "first",
-      "sent": [
-        "",
-        "- A list item holding the block that follows"
-      ],
-      "stored": [
-        "* A list item holding the block that follows"
-      ]
+      "sent": ["", "- A list item holding the block that follows"],
+      "stored": ["* A list item holding the block that follows"]
     },
     {
       "fixture": "fixtures/issue-in-list-item.json",
@@ -984,23 +758,14 @@
     {
       "fixture": "fixtures/issue-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-in-list-item.json",
       "write": "first",
-      "sent": [
-        "",
-        "- A list item holding the block that follows"
-      ],
-      "stored": [
-        "* A list item holding the block that follows"
-      ]
+      "sent": ["", "- A list item holding the block that follows"],
+      "stored": ["* A list item holding the block that follows"]
     },
     {
       "fixture": "fixtures/issue-in-list-item.json",
@@ -1019,23 +784,14 @@
     {
       "fixture": "fixtures/issue-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-in-list-item.json",
       "write": "first",
-      "sent": [
-        "",
-        "- A list item holding the block that follows"
-      ],
-      "stored": [
-        "* A list item holding the block that follows"
-      ]
+      "sent": ["", "- A list item holding the block that follows"],
+      "stored": ["* A list item holding the block that follows"]
     },
     {
       "fixture": "fixtures/issue-in-list-item.json",
@@ -1054,23 +810,14 @@
     {
       "fixture": "fixtures/issue-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-in-list-item.json",
       "write": "first",
-      "sent": [
-        "",
-        "- A list item holding the block that follows"
-      ],
-      "stored": [
-        "* A list item holding the block that follows"
-      ]
+      "sent": ["", "- A list item holding the block that follows"],
+      "stored": ["* A list item holding the block that follows"]
     },
     {
       "fixture": "fixtures/issue-in-list-item.json",
@@ -1089,340 +836,199 @@
     {
       "fixture": "fixtures/issue-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-in-list-item.json",
       "write": "first",
-      "sent": [
-        "",
-        "- A list item holding the block that follows"
-      ],
-      "stored": [
-        "* A list item holding the block that follows"
-      ]
+      "sent": ["", "- A list item holding the block that follows"],
+      "stored": ["* A list item holding the block that follows"]
     },
     {
       "fixture": "fixtures/issue-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  ",
-        "  - First bullet",
-        "  - Second bullet",
-        "  "
-      ],
-      "stored": [
-        "  * First bullet",
-        "  * Second bullet"
-      ]
+      "sent": ["  ", "  - First bullet", "  - Second bullet", "  "],
+      "stored": ["  * First bullet", "  * Second bullet"]
     },
     {
       "fixture": "fixtures/issue-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-in-list-item.json",
       "write": "first",
-      "sent": [
-        "",
-        "- A list item holding the block that follows"
-      ],
-      "stored": [
-        "* A list item holding the block that follows"
-      ]
+      "sent": ["", "- A list item holding the block that follows"],
+      "stored": ["* A list item holding the block that follows"]
     },
     {
       "fixture": "fixtures/issue-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-in-list-item.json",
       "write": "first",
-      "sent": [
-        "",
-        "- A list item holding the block that follows"
-      ],
-      "stored": [
-        "* A list item holding the block that follows"
-      ]
+      "sent": ["", "- A list item holding the block that follows"],
+      "stored": ["* A list item holding the block that follows"]
     },
     {
       "fixture": "fixtures/issue-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-in-list-item.json",
       "write": "first",
-      "sent": [
-        "",
-        "- A list item holding the block that follows"
-      ],
-      "stored": [
-        "* A list item holding the block that follows"
-      ]
+      "sent": ["", "- A list item holding the block that follows"],
+      "stored": ["* A list item holding the block that follows"]
     },
     {
       "fixture": "fixtures/issue-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-in-list-item.json",
       "write": "first",
-      "sent": [
-        "",
-        "- A list item holding the block that follows"
-      ],
-      "stored": [
-        "* A list item holding the block that follows"
-      ]
+      "sent": ["", "- A list item holding the block that follows"],
+      "stored": ["* A list item holding the block that follows"]
     },
     {
       "fixture": "fixtures/issue-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  | --- | --- |"
-      ],
-      "stored": [
-        "  | -- | -- |"
-      ]
+      "sent": ["  | --- | --- |"],
+      "stored": ["  | -- | -- |"]
     },
     {
       "fixture": "fixtures/issue-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-in-list-item.json",
       "write": "first",
-      "sent": [
-        "",
-        "- A list item holding the block that follows"
-      ],
-      "stored": [
-        "* A list item holding the block that follows"
-      ]
+      "sent": ["", "- A list item holding the block that follows"],
+      "stored": ["* A list item holding the block that follows"]
     },
     {
       "fixture": "fixtures/issue-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  ",
-        "  - A list item holding the block that follows",
-        "  "
-      ],
-      "stored": [
-        "  * A list item holding the block that follows",
-        ""
-      ]
+      "sent": ["  ", "  - A list item holding the block that follows", "  "],
+      "stored": ["  * A list item holding the block that follows", ""]
     },
     {
       "fixture": "fixtures/issue-in-list-item.json",
       "write": "first",
-      "sent": [
-        "    "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["    "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-in-list-item.json",
       "write": "first",
-      "sent": [
-        "    "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["    "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-in-list-item.json",
       "write": "first",
-      "sent": [
-        ""
-      ],
+      "sent": [""],
       "stored": []
     },
     {
       "fixture": "fixtures/issue-in-fenced-code.json",
       "write": "first",
-      "sent": [
-        ""
-      ],
+      "sent": [""],
       "stored": []
     },
     {
@@ -1438,12 +1044,8 @@
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        "<summary>Probe A02: Entities &amp; &lt;tag&gt; in a summary</summary>"
-      ],
-      "stored": [
-        "<summary>Probe A02: Entities & <tag> in a summary</summary>"
-      ]
+      "sent": ["<summary>Probe A02: Entities &amp; &lt;tag&gt; in a summary</summary>"],
+      "stored": ["<summary>Probe A02: Entities & <tag> in a summary</summary>"]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
@@ -1508,24 +1110,14 @@
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        "- First bullet",
-        "- Second bullet"
-      ],
-      "stored": [
-        "* First bullet",
-        "* Second bullet"
-      ]
+      "sent": ["- First bullet", "- Second bullet"],
+      "stored": ["* First bullet", "* Second bullet"]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        "| --- | --- |"
-      ],
-      "stored": [
-        "| -- | -- |"
-      ]
+      "sent": ["| --- | --- |"],
+      "stored": ["| -- | -- |"]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
@@ -1602,57 +1194,38 @@
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        "- First bullet",
-        "- Second bullet"
-      ],
-      "stored": [
-        "",
-        "* First bullet",
-        "* Second bullet"
-      ]
+      "sent": ["- First bullet", "- Second bullet"],
+      "stored": ["", "* First bullet", "* Second bullet"]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
       "sent": [],
-      "stored": [
-        ""
-      ]
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
       "sent": [],
-      "stored": [
-        ""
-      ]
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
       "sent": [],
-      "stored": [
-        ""
-      ]
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
       "sent": [],
-      "stored": [
-        ""
-      ]
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        "| --- | --- |"
-      ],
-      "stored": [
-        "| -- | -- |"
-      ]
+      "sent": ["| --- | --- |"],
+      "stored": ["| -- | -- |"]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
@@ -1667,12 +1240,8 @@
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        "+++ Probe P02: Entities &amp; &lt;tag&gt; in a summary"
-      ],
-      "stored": [
-        "+++ Probe P02: Entities & <tag> in a summary"
-      ]
+      "sent": ["+++ Probe P02: Entities &amp; &lt;tag&gt; in a summary"],
+      "stored": ["+++ Probe P02: Entities & <tag> in a summary"]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
@@ -1737,34 +1306,20 @@
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        "- First bullet",
-        "- Second bullet"
-      ],
-      "stored": [
-        "* First bullet",
-        "* Second bullet"
-      ]
+      "sent": ["- First bullet", "- Second bullet"],
+      "stored": ["* First bullet", "* Second bullet"]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        "| --- | --- |"
-      ],
-      "stored": [
-        "| -- | -- |"
-      ]
+      "sent": ["| --- | --- |"],
+      "stored": ["| -- | -- |"]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        ">>> Probe R01: Plain summary text"
-      ],
-      "stored": [
-        "+++ Probe R01: Plain summary text"
-      ]
+      "sent": [">>> Probe R01: Plain summary text"],
+      "stored": ["+++ Probe R01: Plain summary text"]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
@@ -1779,22 +1334,14 @@
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        ">>>"
-      ],
-      "stored": [
-        "+++"
-      ]
+      "sent": [">>>"],
+      "stored": ["+++"]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        ">>> Probe R02: Entities &amp; &lt;tag&gt; in a summary"
-      ],
-      "stored": [
-        "+++ Probe R02: Entities & <tag> in a summary"
-      ]
+      "sent": [">>> Probe R02: Entities &amp; &lt;tag&gt; in a summary"],
+      "stored": ["+++ Probe R02: Entities & <tag> in a summary"]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
@@ -1809,22 +1356,14 @@
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        ">>>"
-      ],
-      "stored": [
-        "+++"
-      ]
+      "sent": [">>>"],
+      "stored": ["+++"]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        ">>> Probe R03: Inline code `copy --dry-run` in backticks"
-      ],
-      "stored": [
-        "+++ Probe R03: Inline code `copy --dry-run` in backticks"
-      ]
+      "sent": [">>> Probe R03: Inline code `copy --dry-run` in backticks"],
+      "stored": ["+++ Probe R03: Inline code `copy --dry-run` in backticks"]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
@@ -1839,22 +1378,14 @@
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        ">>>"
-      ],
-      "stored": [
-        "+++"
-      ]
+      "sent": [">>>"],
+      "stored": ["+++"]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        ">>> Probe R04: Inline code <code>copy --dry-run</code> as HTML"
-      ],
-      "stored": [
-        "+++ Probe R04: Inline code <code>copy --dry-run</code> as HTML"
-      ]
+      "sent": [">>> Probe R04: Inline code <code>copy --dry-run</code> as HTML"],
+      "stored": ["+++ Probe R04: Inline code <code>copy --dry-run</code> as HTML"]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
@@ -1869,22 +1400,14 @@
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        ">>>"
-      ],
-      "stored": [
-        "+++"
-      ]
+      "sent": [">>>"],
+      "stored": ["+++"]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        ">>> Probe R05: **Bold** text in a summary"
-      ],
-      "stored": [
-        "+++ Probe R05: **Bold** text in a summary"
-      ]
+      "sent": [">>> Probe R05: **Bold** text in a summary"],
+      "stored": ["+++ Probe R05: **Bold** text in a summary"]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
@@ -1899,22 +1422,14 @@
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        ">>>"
-      ],
-      "stored": [
-        "+++"
-      ]
+      "sent": [">>>"],
+      "stored": ["+++"]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        ">>> Probe R06: <strong>Bold</strong> as HTML"
-      ],
-      "stored": [
-        "+++ Probe R06: <strong>Bold</strong> as HTML"
-      ]
+      "sent": [">>> Probe R06: <strong>Bold</strong> as HTML"],
+      "stored": ["+++ Probe R06: <strong>Bold</strong> as HTML"]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
@@ -1929,22 +1444,14 @@
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        ">>>"
-      ],
-      "stored": [
-        "+++"
-      ]
+      "sent": [">>>"],
+      "stored": ["+++"]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        ">>> Probe R07: Body — paragraph"
-      ],
-      "stored": [
-        "+++ Probe R07: Body — paragraph"
-      ]
+      "sent": [">>> Probe R07: Body — paragraph"],
+      "stored": ["+++ Probe R07: Body — paragraph"]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
@@ -1959,176 +1466,104 @@
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        ">>>"
-      ],
-      "stored": [
-        "+++"
-      ]
+      "sent": [">>>"],
+      "stored": ["+++"]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        ">>> Probe R08: Body — lists"
-      ],
-      "stored": [
-        "+++ Probe R08: Body — lists"
-      ]
+      "sent": [">>> Probe R08: Body — lists"],
+      "stored": ["+++ Probe R08: Body — lists"]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        "- First bullet",
-        "- Second bullet"
-      ],
-      "stored": [
-        "* First bullet",
-        "* Second bullet"
-      ]
+      "sent": ["- First bullet", "- Second bullet"],
+      "stored": ["* First bullet", "* Second bullet"]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        ">>>"
-      ],
-      "stored": [
-        "+++"
-      ]
+      "sent": [">>>"],
+      "stored": ["+++"]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        ">>> Probe R09: Body — headings"
-      ],
-      "stored": [
-        "+++ Probe R09: Body — headings"
-      ]
+      "sent": [">>> Probe R09: Body — headings"],
+      "stored": ["+++ Probe R09: Body — headings"]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        ">>>"
-      ],
-      "stored": [
-        "+++"
-      ]
+      "sent": [">>>"],
+      "stored": ["+++"]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        ">>> Probe R10: Body — fenced code"
-      ],
-      "stored": [
-        "+++ Probe R10: Body — fenced code"
-      ]
+      "sent": [">>> Probe R10: Body — fenced code"],
+      "stored": ["+++ Probe R10: Body — fenced code"]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        ">>>"
-      ],
-      "stored": [
-        "+++"
-      ]
+      "sent": [">>>"],
+      "stored": ["+++"]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        ">>> Probe R11: Body — image"
-      ],
-      "stored": [
-        "+++ Probe R11: Body — image"
-      ]
+      "sent": [">>> Probe R11: Body — image"],
+      "stored": ["+++ Probe R11: Body — image"]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        ">>>"
-      ],
-      "stored": [
-        "+++"
-      ]
+      "sent": [">>>"],
+      "stored": ["+++"]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        ">>> Probe R12: Body — table"
-      ],
-      "stored": [
-        "+++ Probe R12: Body — table"
-      ]
+      "sent": [">>> Probe R12: Body — table"],
+      "stored": ["+++ Probe R12: Body — table"]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        "| --- | --- |"
-      ],
-      "stored": [
-        "| -- | -- |"
-      ]
+      "sent": ["| --- | --- |"],
+      "stored": ["| -- | -- |"]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        ">>>"
-      ],
-      "stored": [
-        "+++"
-      ]
+      "sent": [">>>"],
+      "stored": ["+++"]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        ">>> Probe R13: Body — nested"
-      ],
-      "stored": [
-        "+++ Probe R13: Body — nested"
-      ]
+      "sent": [">>> Probe R13: Body — nested"],
+      "stored": ["+++ Probe R13: Body — nested"]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        ">>> Probe R13i: nested inner summary"
-      ],
-      "stored": [
-        "+++ Probe R13i: nested inner summary"
-      ]
+      "sent": [">>> Probe R13i: nested inner summary"],
+      "stored": ["+++ Probe R13i: nested inner summary"]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        ">>>"
-      ],
-      "stored": [
-        "+++",
-        "",
-        "+++"
-      ]
+      "sent": [">>>"],
+      "stored": ["+++", "", "+++"]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        ">>>"
-      ],
-      "stored": [
-        "+++ "
-      ]
+      "sent": [">>>"],
+      "stored": ["+++ "]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
@@ -2143,12 +1578,8 @@
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        "<summary>Probe O02: Entities &amp; &lt;tag&gt; in a summary</summary>"
-      ],
-      "stored": [
-        "<summary>Probe O02: Entities & <tag> in a summary</summary>"
-      ]
+      "sent": ["<summary>Probe O02: Entities &amp; &lt;tag&gt; in a summary</summary>"],
+      "stored": ["<summary>Probe O02: Entities & <tag> in a summary</summary>"]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
@@ -2213,34 +1644,20 @@
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        "- First bullet",
-        "- Second bullet"
-      ],
-      "stored": [
-        "* First bullet",
-        "* Second bullet"
-      ]
+      "sent": ["- First bullet", "- Second bullet"],
+      "stored": ["* First bullet", "* Second bullet"]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        "| --- | --- |"
-      ],
-      "stored": [
-        "| -- | -- |"
-      ]
+      "sent": ["| --- | --- |"],
+      "stored": ["| -- | -- |"]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        "- A list item holding the block that follows"
-      ],
-      "stored": [
-        "* A list item holding the block that follows"
-      ]
+      "sent": ["- A list item holding the block that follows"],
+      "stored": ["* A list item holding the block that follows"]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
@@ -2259,23 +1676,14 @@
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        "",
-        "- A list item holding the block that follows"
-      ],
-      "stored": [
-        "* A list item holding the block that follows"
-      ]
+      "sent": ["", "- A list item holding the block that follows"],
+      "stored": ["* A list item holding the block that follows"]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
@@ -2296,23 +1704,14 @@
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        "",
-        "- A list item holding the block that follows"
-      ],
-      "stored": [
-        "* A list item holding the block that follows"
-      ]
+      "sent": ["", "- A list item holding the block that follows"],
+      "stored": ["* A list item holding the block that follows"]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
@@ -2331,23 +1730,14 @@
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        "",
-        "- A list item holding the block that follows"
-      ],
-      "stored": [
-        "* A list item holding the block that follows"
-      ]
+      "sent": ["", "- A list item holding the block that follows"],
+      "stored": ["* A list item holding the block that follows"]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
@@ -2366,23 +1756,14 @@
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        "",
-        "- A list item holding the block that follows"
-      ],
-      "stored": [
-        "* A list item holding the block that follows"
-      ]
+      "sent": ["", "- A list item holding the block that follows"],
+      "stored": ["* A list item holding the block that follows"]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
@@ -2401,23 +1782,14 @@
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        "",
-        "- A list item holding the block that follows"
-      ],
-      "stored": [
-        "* A list item holding the block that follows"
-      ]
+      "sent": ["", "- A list item holding the block that follows"],
+      "stored": ["* A list item holding the block that follows"]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
@@ -2436,23 +1808,14 @@
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        "",
-        "- A list item holding the block that follows"
-      ],
-      "stored": [
-        "* A list item holding the block that follows"
-      ]
+      "sent": ["", "- A list item holding the block that follows"],
+      "stored": ["* A list item holding the block that follows"]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
@@ -2471,333 +1834,194 @@
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        "",
-        "- A list item holding the block that follows"
-      ],
-      "stored": [
-        "* A list item holding the block that follows"
-      ]
+      "sent": ["", "- A list item holding the block that follows"],
+      "stored": ["* A list item holding the block that follows"]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        "  ",
-        "  - First bullet",
-        "  - Second bullet",
-        "  "
-      ],
-      "stored": [
-        "  * First bullet",
-        "  * Second bullet"
-      ]
+      "sent": ["  ", "  - First bullet", "  - Second bullet", "  "],
+      "stored": ["  * First bullet", "  * Second bullet"]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        "",
-        "- A list item holding the block that follows"
-      ],
-      "stored": [
-        "* A list item holding the block that follows"
-      ]
+      "sent": ["", "- A list item holding the block that follows"],
+      "stored": ["* A list item holding the block that follows"]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        "",
-        "- A list item holding the block that follows"
-      ],
-      "stored": [
-        "* A list item holding the block that follows"
-      ]
+      "sent": ["", "- A list item holding the block that follows"],
+      "stored": ["* A list item holding the block that follows"]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        "",
-        "- A list item holding the block that follows"
-      ],
-      "stored": [
-        "* A list item holding the block that follows"
-      ]
+      "sent": ["", "- A list item holding the block that follows"],
+      "stored": ["* A list item holding the block that follows"]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        "",
-        "- A list item holding the block that follows"
-      ],
-      "stored": [
-        "* A list item holding the block that follows"
-      ]
+      "sent": ["", "- A list item holding the block that follows"],
+      "stored": ["* A list item holding the block that follows"]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        "  | --- | --- |"
-      ],
-      "stored": [
-        "  | -- | -- |"
-      ]
+      "sent": ["  | --- | --- |"],
+      "stored": ["  | -- | -- |"]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        "",
-        "- A list item holding the block that follows"
-      ],
-      "stored": [
-        "* A list item holding the block that follows"
-      ]
+      "sent": ["", "- A list item holding the block that follows"],
+      "stored": ["* A list item holding the block that follows"]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        "  ",
-        "  - A list item holding the block that follows",
-        "  "
-      ],
-      "stored": [
-        "  * A list item holding the block that follows",
-        ""
-      ]
+      "sent": ["  ", "  - A list item holding the block that follows", "  "],
+      "stored": ["  * A list item holding the block that follows", ""]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        "    "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["    "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        "    "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["    "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/issue-all-forms.json",
       "write": "first",
       "sent": [],
-      "stored": [
-        "+++"
-      ]
+      "stored": ["+++"]
     },
     {
       "fixture": "fixtures/document-authored.json",
@@ -2812,12 +2036,8 @@
     {
       "fixture": "fixtures/document-authored.json",
       "write": "first",
-      "sent": [
-        "<summary>Probe A02: Entities &amp; &lt;tag&gt; in a summary</summary>"
-      ],
-      "stored": [
-        "<summary>Probe A02: Entities & <tag> in a summary</summary>"
-      ]
+      "sent": ["<summary>Probe A02: Entities &amp; &lt;tag&gt; in a summary</summary>"],
+      "stored": ["<summary>Probe A02: Entities & <tag> in a summary</summary>"]
     },
     {
       "fixture": "fixtures/document-authored.json",
@@ -2882,31 +2102,19 @@
     {
       "fixture": "fixtures/document-authored.json",
       "write": "first",
-      "sent": [
-        "- First bullet",
-        "- Second bullet"
-      ],
-      "stored": [
-        "* First bullet",
-        "* Second bullet"
-      ]
+      "sent": ["- First bullet", "- Second bullet"],
+      "stored": ["* First bullet", "* Second bullet"]
     },
     {
       "fixture": "fixtures/document-authored.json",
       "write": "first",
-      "sent": [
-        "| --- | --- |"
-      ],
-      "stored": [
-        "| -- | -- |"
-      ]
+      "sent": ["| --- | --- |"],
+      "stored": ["| -- | -- |"]
     },
     {
       "fixture": "fixtures/document-authored.json",
       "write": "first",
-      "sent": [
-        ""
-      ],
+      "sent": [""],
       "stored": []
     },
     {
@@ -2984,64 +2192,43 @@
     {
       "fixture": "fixtures/document-no-blank-after-summary.json",
       "write": "first",
-      "sent": [
-        "- First bullet",
-        "- Second bullet"
-      ],
-      "stored": [
-        "",
-        "* First bullet",
-        "* Second bullet"
-      ]
+      "sent": ["- First bullet", "- Second bullet"],
+      "stored": ["", "* First bullet", "* Second bullet"]
     },
     {
       "fixture": "fixtures/document-no-blank-after-summary.json",
       "write": "first",
       "sent": [],
-      "stored": [
-        ""
-      ]
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-no-blank-after-summary.json",
       "write": "first",
       "sent": [],
-      "stored": [
-        ""
-      ]
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-no-blank-after-summary.json",
       "write": "first",
       "sent": [],
-      "stored": [
-        ""
-      ]
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-no-blank-after-summary.json",
       "write": "first",
       "sent": [],
-      "stored": [
-        ""
-      ]
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-no-blank-after-summary.json",
       "write": "first",
-      "sent": [
-        "| --- | --- |"
-      ],
-      "stored": [
-        "| -- | -- |"
-      ]
+      "sent": ["| --- | --- |"],
+      "stored": ["| -- | -- |"]
     },
     {
       "fixture": "fixtures/document-no-blank-after-summary.json",
       "write": "first",
-      "sent": [
-        ""
-      ],
+      "sent": [""],
       "stored": []
     },
     {
@@ -3057,12 +2244,8 @@
     {
       "fixture": "fixtures/document-linear-plus.json",
       "write": "first",
-      "sent": [
-        "+++ Probe P02: Entities &amp; &lt;tag&gt; in a summary"
-      ],
-      "stored": [
-        "+++ Probe P02: Entities & <tag> in a summary"
-      ]
+      "sent": ["+++ Probe P02: Entities &amp; &lt;tag&gt; in a summary"],
+      "stored": ["+++ Probe P02: Entities & <tag> in a summary"]
     },
     {
       "fixture": "fixtures/document-linear-plus.json",
@@ -3127,42 +2310,26 @@
     {
       "fixture": "fixtures/document-linear-plus.json",
       "write": "first",
-      "sent": [
-        "- First bullet",
-        "- Second bullet"
-      ],
-      "stored": [
-        "* First bullet",
-        "* Second bullet"
-      ]
+      "sent": ["- First bullet", "- Second bullet"],
+      "stored": ["* First bullet", "* Second bullet"]
     },
     {
       "fixture": "fixtures/document-linear-plus.json",
       "write": "first",
-      "sent": [
-        "| --- | --- |"
-      ],
-      "stored": [
-        "| -- | -- |"
-      ]
+      "sent": ["| --- | --- |"],
+      "stored": ["| -- | -- |"]
     },
     {
       "fixture": "fixtures/document-linear-plus.json",
       "write": "first",
-      "sent": [
-        ""
-      ],
+      "sent": [""],
       "stored": []
     },
     {
       "fixture": "fixtures/document-linear-arrow.json",
       "write": "first",
-      "sent": [
-        ">>> Probe R01: Plain summary text"
-      ],
-      "stored": [
-        "+++ Probe R01: Plain summary text"
-      ]
+      "sent": [">>> Probe R01: Plain summary text"],
+      "stored": ["+++ Probe R01: Plain summary text"]
     },
     {
       "fixture": "fixtures/document-linear-arrow.json",
@@ -3177,22 +2344,14 @@
     {
       "fixture": "fixtures/document-linear-arrow.json",
       "write": "first",
-      "sent": [
-        ">>>"
-      ],
-      "stored": [
-        "+++"
-      ]
+      "sent": [">>>"],
+      "stored": ["+++"]
     },
     {
       "fixture": "fixtures/document-linear-arrow.json",
       "write": "first",
-      "sent": [
-        ">>> Probe R02: Entities &amp; &lt;tag&gt; in a summary"
-      ],
-      "stored": [
-        "+++ Probe R02: Entities & <tag> in a summary"
-      ]
+      "sent": [">>> Probe R02: Entities &amp; &lt;tag&gt; in a summary"],
+      "stored": ["+++ Probe R02: Entities & <tag> in a summary"]
     },
     {
       "fixture": "fixtures/document-linear-arrow.json",
@@ -3207,22 +2366,14 @@
     {
       "fixture": "fixtures/document-linear-arrow.json",
       "write": "first",
-      "sent": [
-        ">>>"
-      ],
-      "stored": [
-        "+++"
-      ]
+      "sent": [">>>"],
+      "stored": ["+++"]
     },
     {
       "fixture": "fixtures/document-linear-arrow.json",
       "write": "first",
-      "sent": [
-        ">>> Probe R03: Inline code `copy --dry-run` in backticks"
-      ],
-      "stored": [
-        "+++ Probe R03: Inline code `copy --dry-run` in backticks"
-      ]
+      "sent": [">>> Probe R03: Inline code `copy --dry-run` in backticks"],
+      "stored": ["+++ Probe R03: Inline code `copy --dry-run` in backticks"]
     },
     {
       "fixture": "fixtures/document-linear-arrow.json",
@@ -3237,22 +2388,14 @@
     {
       "fixture": "fixtures/document-linear-arrow.json",
       "write": "first",
-      "sent": [
-        ">>>"
-      ],
-      "stored": [
-        "+++"
-      ]
+      "sent": [">>>"],
+      "stored": ["+++"]
     },
     {
       "fixture": "fixtures/document-linear-arrow.json",
       "write": "first",
-      "sent": [
-        ">>> Probe R04: Inline code <code>copy --dry-run</code> as HTML"
-      ],
-      "stored": [
-        "+++ Probe R04: Inline code <code>copy --dry-run</code> as HTML"
-      ]
+      "sent": [">>> Probe R04: Inline code <code>copy --dry-run</code> as HTML"],
+      "stored": ["+++ Probe R04: Inline code <code>copy --dry-run</code> as HTML"]
     },
     {
       "fixture": "fixtures/document-linear-arrow.json",
@@ -3267,22 +2410,14 @@
     {
       "fixture": "fixtures/document-linear-arrow.json",
       "write": "first",
-      "sent": [
-        ">>>"
-      ],
-      "stored": [
-        "+++"
-      ]
+      "sent": [">>>"],
+      "stored": ["+++"]
     },
     {
       "fixture": "fixtures/document-linear-arrow.json",
       "write": "first",
-      "sent": [
-        ">>> Probe R05: **Bold** text in a summary"
-      ],
-      "stored": [
-        "+++ Probe R05: **Bold** text in a summary"
-      ]
+      "sent": [">>> Probe R05: **Bold** text in a summary"],
+      "stored": ["+++ Probe R05: **Bold** text in a summary"]
     },
     {
       "fixture": "fixtures/document-linear-arrow.json",
@@ -3297,22 +2432,14 @@
     {
       "fixture": "fixtures/document-linear-arrow.json",
       "write": "first",
-      "sent": [
-        ">>>"
-      ],
-      "stored": [
-        "+++"
-      ]
+      "sent": [">>>"],
+      "stored": ["+++"]
     },
     {
       "fixture": "fixtures/document-linear-arrow.json",
       "write": "first",
-      "sent": [
-        ">>> Probe R06: <strong>Bold</strong> as HTML"
-      ],
-      "stored": [
-        "+++ Probe R06: <strong>Bold</strong> as HTML"
-      ]
+      "sent": [">>> Probe R06: <strong>Bold</strong> as HTML"],
+      "stored": ["+++ Probe R06: <strong>Bold</strong> as HTML"]
     },
     {
       "fixture": "fixtures/document-linear-arrow.json",
@@ -3327,22 +2454,14 @@
     {
       "fixture": "fixtures/document-linear-arrow.json",
       "write": "first",
-      "sent": [
-        ">>>"
-      ],
-      "stored": [
-        "+++"
-      ]
+      "sent": [">>>"],
+      "stored": ["+++"]
     },
     {
       "fixture": "fixtures/document-linear-arrow.json",
       "write": "first",
-      "sent": [
-        ">>> Probe R07: Body — paragraph"
-      ],
-      "stored": [
-        "+++ Probe R07: Body — paragraph"
-      ]
+      "sent": [">>> Probe R07: Body — paragraph"],
+      "stored": ["+++ Probe R07: Body — paragraph"]
     },
     {
       "fixture": "fixtures/document-linear-arrow.json",
@@ -3357,184 +2476,110 @@
     {
       "fixture": "fixtures/document-linear-arrow.json",
       "write": "first",
-      "sent": [
-        ">>>"
-      ],
-      "stored": [
-        "+++"
-      ]
+      "sent": [">>>"],
+      "stored": ["+++"]
     },
     {
       "fixture": "fixtures/document-linear-arrow.json",
       "write": "first",
-      "sent": [
-        ">>> Probe R08: Body — lists"
-      ],
-      "stored": [
-        "+++ Probe R08: Body — lists"
-      ]
+      "sent": [">>> Probe R08: Body — lists"],
+      "stored": ["+++ Probe R08: Body — lists"]
     },
     {
       "fixture": "fixtures/document-linear-arrow.json",
       "write": "first",
-      "sent": [
-        "- First bullet",
-        "- Second bullet"
-      ],
-      "stored": [
-        "* First bullet",
-        "* Second bullet"
-      ]
+      "sent": ["- First bullet", "- Second bullet"],
+      "stored": ["* First bullet", "* Second bullet"]
     },
     {
       "fixture": "fixtures/document-linear-arrow.json",
       "write": "first",
-      "sent": [
-        ">>>"
-      ],
-      "stored": [
-        "+++"
-      ]
+      "sent": [">>>"],
+      "stored": ["+++"]
     },
     {
       "fixture": "fixtures/document-linear-arrow.json",
       "write": "first",
-      "sent": [
-        ">>> Probe R09: Body — headings"
-      ],
-      "stored": [
-        "+++ Probe R09: Body — headings"
-      ]
+      "sent": [">>> Probe R09: Body — headings"],
+      "stored": ["+++ Probe R09: Body — headings"]
     },
     {
       "fixture": "fixtures/document-linear-arrow.json",
       "write": "first",
-      "sent": [
-        ">>>"
-      ],
-      "stored": [
-        "+++"
-      ]
+      "sent": [">>>"],
+      "stored": ["+++"]
     },
     {
       "fixture": "fixtures/document-linear-arrow.json",
       "write": "first",
-      "sent": [
-        ">>> Probe R10: Body — fenced code"
-      ],
-      "stored": [
-        "+++ Probe R10: Body — fenced code"
-      ]
+      "sent": [">>> Probe R10: Body — fenced code"],
+      "stored": ["+++ Probe R10: Body — fenced code"]
     },
     {
       "fixture": "fixtures/document-linear-arrow.json",
       "write": "first",
-      "sent": [
-        ">>>"
-      ],
-      "stored": [
-        "+++"
-      ]
+      "sent": [">>>"],
+      "stored": ["+++"]
     },
     {
       "fixture": "fixtures/document-linear-arrow.json",
       "write": "first",
-      "sent": [
-        ">>> Probe R11: Body — image"
-      ],
-      "stored": [
-        "+++ Probe R11: Body — image"
-      ]
+      "sent": [">>> Probe R11: Body — image"],
+      "stored": ["+++ Probe R11: Body — image"]
     },
     {
       "fixture": "fixtures/document-linear-arrow.json",
       "write": "first",
-      "sent": [
-        ">>>"
-      ],
-      "stored": [
-        "+++"
-      ]
+      "sent": [">>>"],
+      "stored": ["+++"]
     },
     {
       "fixture": "fixtures/document-linear-arrow.json",
       "write": "first",
-      "sent": [
-        ">>> Probe R12: Body — table"
-      ],
-      "stored": [
-        "+++ Probe R12: Body — table"
-      ]
+      "sent": [">>> Probe R12: Body — table"],
+      "stored": ["+++ Probe R12: Body — table"]
     },
     {
       "fixture": "fixtures/document-linear-arrow.json",
       "write": "first",
-      "sent": [
-        "| --- | --- |"
-      ],
-      "stored": [
-        "| -- | -- |"
-      ]
+      "sent": ["| --- | --- |"],
+      "stored": ["| -- | -- |"]
     },
     {
       "fixture": "fixtures/document-linear-arrow.json",
       "write": "first",
-      "sent": [
-        ">>>"
-      ],
-      "stored": [
-        "+++"
-      ]
+      "sent": [">>>"],
+      "stored": ["+++"]
     },
     {
       "fixture": "fixtures/document-linear-arrow.json",
       "write": "first",
-      "sent": [
-        ">>> Probe R13: Body — nested"
-      ],
-      "stored": [
-        "+++ Probe R13: Body — nested"
-      ]
+      "sent": [">>> Probe R13: Body — nested"],
+      "stored": ["+++ Probe R13: Body — nested"]
     },
     {
       "fixture": "fixtures/document-linear-arrow.json",
       "write": "first",
-      "sent": [
-        ">>> Probe R13i: nested inner summary"
-      ],
-      "stored": [
-        "+++ Probe R13i: nested inner summary"
-      ]
+      "sent": [">>> Probe R13i: nested inner summary"],
+      "stored": ["+++ Probe R13i: nested inner summary"]
     },
     {
       "fixture": "fixtures/document-linear-arrow.json",
       "write": "first",
-      "sent": [
-        ">>>"
-      ],
-      "stored": [
-        "+++",
-        "",
-        "+++"
-      ]
+      "sent": [">>>"],
+      "stored": ["+++", "", "+++"]
     },
     {
       "fixture": "fixtures/document-linear-arrow.json",
       "write": "first",
-      "sent": [
-        ">>>"
-      ],
-      "stored": [
-        "+++ "
-      ]
+      "sent": [">>>"],
+      "stored": ["+++ "]
     },
     {
       "fixture": "fixtures/document-linear-arrow.json",
       "write": "first",
       "sent": [],
-      "stored": [
-        "+++"
-      ]
+      "stored": ["+++"]
     },
     {
       "fixture": "fixtures/document-details-open.json",
@@ -3549,12 +2594,8 @@
     {
       "fixture": "fixtures/document-details-open.json",
       "write": "first",
-      "sent": [
-        "<summary>Probe O02: Entities &amp; &lt;tag&gt; in a summary</summary>"
-      ],
-      "stored": [
-        "<summary>Probe O02: Entities & <tag> in a summary</summary>"
-      ]
+      "sent": ["<summary>Probe O02: Entities &amp; &lt;tag&gt; in a summary</summary>"],
+      "stored": ["<summary>Probe O02: Entities & <tag> in a summary</summary>"]
     },
     {
       "fixture": "fixtures/document-details-open.json",
@@ -3619,42 +2660,26 @@
     {
       "fixture": "fixtures/document-details-open.json",
       "write": "first",
-      "sent": [
-        "- First bullet",
-        "- Second bullet"
-      ],
-      "stored": [
-        "* First bullet",
-        "* Second bullet"
-      ]
+      "sent": ["- First bullet", "- Second bullet"],
+      "stored": ["* First bullet", "* Second bullet"]
     },
     {
       "fixture": "fixtures/document-details-open.json",
       "write": "first",
-      "sent": [
-        "| --- | --- |"
-      ],
-      "stored": [
-        "| -- | -- |"
-      ]
+      "sent": ["| --- | --- |"],
+      "stored": ["| -- | -- |"]
     },
     {
       "fixture": "fixtures/document-details-open.json",
       "write": "first",
-      "sent": [
-        ""
-      ],
+      "sent": [""],
       "stored": []
     },
     {
       "fixture": "fixtures/document-in-list-item.json",
       "write": "first",
-      "sent": [
-        "- A list item holding the block that follows"
-      ],
-      "stored": [
-        "* A list item holding the block that follows"
-      ]
+      "sent": ["- A list item holding the block that follows"],
+      "stored": ["* A list item holding the block that follows"]
     },
     {
       "fixture": "fixtures/document-in-list-item.json",
@@ -3673,23 +2698,14 @@
     {
       "fixture": "fixtures/document-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-in-list-item.json",
       "write": "first",
-      "sent": [
-        "",
-        "- A list item holding the block that follows"
-      ],
-      "stored": [
-        "* A list item holding the block that follows"
-      ]
+      "sent": ["", "- A list item holding the block that follows"],
+      "stored": ["* A list item holding the block that follows"]
     },
     {
       "fixture": "fixtures/document-in-list-item.json",
@@ -3710,23 +2726,14 @@
     {
       "fixture": "fixtures/document-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-in-list-item.json",
       "write": "first",
-      "sent": [
-        "",
-        "- A list item holding the block that follows"
-      ],
-      "stored": [
-        "* A list item holding the block that follows"
-      ]
+      "sent": ["", "- A list item holding the block that follows"],
+      "stored": ["* A list item holding the block that follows"]
     },
     {
       "fixture": "fixtures/document-in-list-item.json",
@@ -3745,23 +2752,14 @@
     {
       "fixture": "fixtures/document-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-in-list-item.json",
       "write": "first",
-      "sent": [
-        "",
-        "- A list item holding the block that follows"
-      ],
-      "stored": [
-        "* A list item holding the block that follows"
-      ]
+      "sent": ["", "- A list item holding the block that follows"],
+      "stored": ["* A list item holding the block that follows"]
     },
     {
       "fixture": "fixtures/document-in-list-item.json",
@@ -3780,23 +2778,14 @@
     {
       "fixture": "fixtures/document-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-in-list-item.json",
       "write": "first",
-      "sent": [
-        "",
-        "- A list item holding the block that follows"
-      ],
-      "stored": [
-        "* A list item holding the block that follows"
-      ]
+      "sent": ["", "- A list item holding the block that follows"],
+      "stored": ["* A list item holding the block that follows"]
     },
     {
       "fixture": "fixtures/document-in-list-item.json",
@@ -3815,23 +2804,14 @@
     {
       "fixture": "fixtures/document-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-in-list-item.json",
       "write": "first",
-      "sent": [
-        "",
-        "- A list item holding the block that follows"
-      ],
-      "stored": [
-        "* A list item holding the block that follows"
-      ]
+      "sent": ["", "- A list item holding the block that follows"],
+      "stored": ["* A list item holding the block that follows"]
     },
     {
       "fixture": "fixtures/document-in-list-item.json",
@@ -3850,23 +2830,14 @@
     {
       "fixture": "fixtures/document-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-in-list-item.json",
       "write": "first",
-      "sent": [
-        "",
-        "- A list item holding the block that follows"
-      ],
-      "stored": [
-        "* A list item holding the block that follows"
-      ]
+      "sent": ["", "- A list item holding the block that follows"],
+      "stored": ["* A list item holding the block that follows"]
     },
     {
       "fixture": "fixtures/document-in-list-item.json",
@@ -3885,340 +2856,199 @@
     {
       "fixture": "fixtures/document-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-in-list-item.json",
       "write": "first",
-      "sent": [
-        "",
-        "- A list item holding the block that follows"
-      ],
-      "stored": [
-        "* A list item holding the block that follows"
-      ]
+      "sent": ["", "- A list item holding the block that follows"],
+      "stored": ["* A list item holding the block that follows"]
     },
     {
       "fixture": "fixtures/document-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  ",
-        "  - First bullet",
-        "  - Second bullet",
-        "  "
-      ],
-      "stored": [
-        "  * First bullet",
-        "  * Second bullet"
-      ]
+      "sent": ["  ", "  - First bullet", "  - Second bullet", "  "],
+      "stored": ["  * First bullet", "  * Second bullet"]
     },
     {
       "fixture": "fixtures/document-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-in-list-item.json",
       "write": "first",
-      "sent": [
-        "",
-        "- A list item holding the block that follows"
-      ],
-      "stored": [
-        "* A list item holding the block that follows"
-      ]
+      "sent": ["", "- A list item holding the block that follows"],
+      "stored": ["* A list item holding the block that follows"]
     },
     {
       "fixture": "fixtures/document-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-in-list-item.json",
       "write": "first",
-      "sent": [
-        "",
-        "- A list item holding the block that follows"
-      ],
-      "stored": [
-        "* A list item holding the block that follows"
-      ]
+      "sent": ["", "- A list item holding the block that follows"],
+      "stored": ["* A list item holding the block that follows"]
     },
     {
       "fixture": "fixtures/document-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-in-list-item.json",
       "write": "first",
-      "sent": [
-        "",
-        "- A list item holding the block that follows"
-      ],
-      "stored": [
-        "* A list item holding the block that follows"
-      ]
+      "sent": ["", "- A list item holding the block that follows"],
+      "stored": ["* A list item holding the block that follows"]
     },
     {
       "fixture": "fixtures/document-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-in-list-item.json",
       "write": "first",
-      "sent": [
-        "",
-        "- A list item holding the block that follows"
-      ],
-      "stored": [
-        "* A list item holding the block that follows"
-      ]
+      "sent": ["", "- A list item holding the block that follows"],
+      "stored": ["* A list item holding the block that follows"]
     },
     {
       "fixture": "fixtures/document-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  | --- | --- |"
-      ],
-      "stored": [
-        "  | -- | -- |"
-      ]
+      "sent": ["  | --- | --- |"],
+      "stored": ["  | -- | -- |"]
     },
     {
       "fixture": "fixtures/document-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-in-list-item.json",
       "write": "first",
-      "sent": [
-        "",
-        "- A list item holding the block that follows"
-      ],
-      "stored": [
-        "* A list item holding the block that follows"
-      ]
+      "sent": ["", "- A list item holding the block that follows"],
+      "stored": ["* A list item holding the block that follows"]
     },
     {
       "fixture": "fixtures/document-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  ",
-        "  - A list item holding the block that follows",
-        "  "
-      ],
-      "stored": [
-        "  * A list item holding the block that follows",
-        ""
-      ]
+      "sent": ["  ", "  - A list item holding the block that follows", "  "],
+      "stored": ["  * A list item holding the block that follows", ""]
     },
     {
       "fixture": "fixtures/document-in-list-item.json",
       "write": "first",
-      "sent": [
-        "    "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["    "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-in-list-item.json",
       "write": "first",
-      "sent": [
-        "    "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["    "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-in-list-item.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-in-list-item.json",
       "write": "first",
-      "sent": [
-        ""
-      ],
+      "sent": [""],
       "stored": []
     },
     {
       "fixture": "fixtures/document-in-fenced-code.json",
       "write": "first",
-      "sent": [
-        ""
-      ],
+      "sent": [""],
       "stored": []
     },
     {
@@ -4234,12 +3064,8 @@
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        "<summary>Probe A02: Entities &amp; &lt;tag&gt; in a summary</summary>"
-      ],
-      "stored": [
-        "<summary>Probe A02: Entities & <tag> in a summary</summary>"
-      ]
+      "sent": ["<summary>Probe A02: Entities &amp; &lt;tag&gt; in a summary</summary>"],
+      "stored": ["<summary>Probe A02: Entities & <tag> in a summary</summary>"]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
@@ -4304,24 +3130,14 @@
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        "- First bullet",
-        "- Second bullet"
-      ],
-      "stored": [
-        "* First bullet",
-        "* Second bullet"
-      ]
+      "sent": ["- First bullet", "- Second bullet"],
+      "stored": ["* First bullet", "* Second bullet"]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        "| --- | --- |"
-      ],
-      "stored": [
-        "| -- | -- |"
-      ]
+      "sent": ["| --- | --- |"],
+      "stored": ["| -- | -- |"]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
@@ -4398,57 +3214,38 @@
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        "- First bullet",
-        "- Second bullet"
-      ],
-      "stored": [
-        "",
-        "* First bullet",
-        "* Second bullet"
-      ]
+      "sent": ["- First bullet", "- Second bullet"],
+      "stored": ["", "* First bullet", "* Second bullet"]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
       "sent": [],
-      "stored": [
-        ""
-      ]
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
       "sent": [],
-      "stored": [
-        ""
-      ]
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
       "sent": [],
-      "stored": [
-        ""
-      ]
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
       "sent": [],
-      "stored": [
-        ""
-      ]
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        "| --- | --- |"
-      ],
-      "stored": [
-        "| -- | -- |"
-      ]
+      "sent": ["| --- | --- |"],
+      "stored": ["| -- | -- |"]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
@@ -4463,12 +3260,8 @@
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        "+++ Probe P02: Entities &amp; &lt;tag&gt; in a summary"
-      ],
-      "stored": [
-        "+++ Probe P02: Entities & <tag> in a summary"
-      ]
+      "sent": ["+++ Probe P02: Entities &amp; &lt;tag&gt; in a summary"],
+      "stored": ["+++ Probe P02: Entities & <tag> in a summary"]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
@@ -4533,34 +3326,20 @@
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        "- First bullet",
-        "- Second bullet"
-      ],
-      "stored": [
-        "* First bullet",
-        "* Second bullet"
-      ]
+      "sent": ["- First bullet", "- Second bullet"],
+      "stored": ["* First bullet", "* Second bullet"]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        "| --- | --- |"
-      ],
-      "stored": [
-        "| -- | -- |"
-      ]
+      "sent": ["| --- | --- |"],
+      "stored": ["| -- | -- |"]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        ">>> Probe R01: Plain summary text"
-      ],
-      "stored": [
-        "+++ Probe R01: Plain summary text"
-      ]
+      "sent": [">>> Probe R01: Plain summary text"],
+      "stored": ["+++ Probe R01: Plain summary text"]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
@@ -4575,22 +3354,14 @@
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        ">>>"
-      ],
-      "stored": [
-        "+++"
-      ]
+      "sent": [">>>"],
+      "stored": ["+++"]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        ">>> Probe R02: Entities &amp; &lt;tag&gt; in a summary"
-      ],
-      "stored": [
-        "+++ Probe R02: Entities & <tag> in a summary"
-      ]
+      "sent": [">>> Probe R02: Entities &amp; &lt;tag&gt; in a summary"],
+      "stored": ["+++ Probe R02: Entities & <tag> in a summary"]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
@@ -4605,22 +3376,14 @@
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        ">>>"
-      ],
-      "stored": [
-        "+++"
-      ]
+      "sent": [">>>"],
+      "stored": ["+++"]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        ">>> Probe R03: Inline code `copy --dry-run` in backticks"
-      ],
-      "stored": [
-        "+++ Probe R03: Inline code `copy --dry-run` in backticks"
-      ]
+      "sent": [">>> Probe R03: Inline code `copy --dry-run` in backticks"],
+      "stored": ["+++ Probe R03: Inline code `copy --dry-run` in backticks"]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
@@ -4635,22 +3398,14 @@
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        ">>>"
-      ],
-      "stored": [
-        "+++"
-      ]
+      "sent": [">>>"],
+      "stored": ["+++"]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        ">>> Probe R04: Inline code <code>copy --dry-run</code> as HTML"
-      ],
-      "stored": [
-        "+++ Probe R04: Inline code <code>copy --dry-run</code> as HTML"
-      ]
+      "sent": [">>> Probe R04: Inline code <code>copy --dry-run</code> as HTML"],
+      "stored": ["+++ Probe R04: Inline code <code>copy --dry-run</code> as HTML"]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
@@ -4665,22 +3420,14 @@
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        ">>>"
-      ],
-      "stored": [
-        "+++"
-      ]
+      "sent": [">>>"],
+      "stored": ["+++"]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        ">>> Probe R05: **Bold** text in a summary"
-      ],
-      "stored": [
-        "+++ Probe R05: **Bold** text in a summary"
-      ]
+      "sent": [">>> Probe R05: **Bold** text in a summary"],
+      "stored": ["+++ Probe R05: **Bold** text in a summary"]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
@@ -4695,22 +3442,14 @@
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        ">>>"
-      ],
-      "stored": [
-        "+++"
-      ]
+      "sent": [">>>"],
+      "stored": ["+++"]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        ">>> Probe R06: <strong>Bold</strong> as HTML"
-      ],
-      "stored": [
-        "+++ Probe R06: <strong>Bold</strong> as HTML"
-      ]
+      "sent": [">>> Probe R06: <strong>Bold</strong> as HTML"],
+      "stored": ["+++ Probe R06: <strong>Bold</strong> as HTML"]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
@@ -4725,22 +3464,14 @@
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        ">>>"
-      ],
-      "stored": [
-        "+++"
-      ]
+      "sent": [">>>"],
+      "stored": ["+++"]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        ">>> Probe R07: Body — paragraph"
-      ],
-      "stored": [
-        "+++ Probe R07: Body — paragraph"
-      ]
+      "sent": [">>> Probe R07: Body — paragraph"],
+      "stored": ["+++ Probe R07: Body — paragraph"]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
@@ -4755,176 +3486,104 @@
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        ">>>"
-      ],
-      "stored": [
-        "+++"
-      ]
+      "sent": [">>>"],
+      "stored": ["+++"]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        ">>> Probe R08: Body — lists"
-      ],
-      "stored": [
-        "+++ Probe R08: Body — lists"
-      ]
+      "sent": [">>> Probe R08: Body — lists"],
+      "stored": ["+++ Probe R08: Body — lists"]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        "- First bullet",
-        "- Second bullet"
-      ],
-      "stored": [
-        "* First bullet",
-        "* Second bullet"
-      ]
+      "sent": ["- First bullet", "- Second bullet"],
+      "stored": ["* First bullet", "* Second bullet"]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        ">>>"
-      ],
-      "stored": [
-        "+++"
-      ]
+      "sent": [">>>"],
+      "stored": ["+++"]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        ">>> Probe R09: Body — headings"
-      ],
-      "stored": [
-        "+++ Probe R09: Body — headings"
-      ]
+      "sent": [">>> Probe R09: Body — headings"],
+      "stored": ["+++ Probe R09: Body — headings"]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        ">>>"
-      ],
-      "stored": [
-        "+++"
-      ]
+      "sent": [">>>"],
+      "stored": ["+++"]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        ">>> Probe R10: Body — fenced code"
-      ],
-      "stored": [
-        "+++ Probe R10: Body — fenced code"
-      ]
+      "sent": [">>> Probe R10: Body — fenced code"],
+      "stored": ["+++ Probe R10: Body — fenced code"]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        ">>>"
-      ],
-      "stored": [
-        "+++"
-      ]
+      "sent": [">>>"],
+      "stored": ["+++"]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        ">>> Probe R11: Body — image"
-      ],
-      "stored": [
-        "+++ Probe R11: Body — image"
-      ]
+      "sent": [">>> Probe R11: Body — image"],
+      "stored": ["+++ Probe R11: Body — image"]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        ">>>"
-      ],
-      "stored": [
-        "+++"
-      ]
+      "sent": [">>>"],
+      "stored": ["+++"]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        ">>> Probe R12: Body — table"
-      ],
-      "stored": [
-        "+++ Probe R12: Body — table"
-      ]
+      "sent": [">>> Probe R12: Body — table"],
+      "stored": ["+++ Probe R12: Body — table"]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        "| --- | --- |"
-      ],
-      "stored": [
-        "| -- | -- |"
-      ]
+      "sent": ["| --- | --- |"],
+      "stored": ["| -- | -- |"]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        ">>>"
-      ],
-      "stored": [
-        "+++"
-      ]
+      "sent": [">>>"],
+      "stored": ["+++"]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        ">>> Probe R13: Body — nested"
-      ],
-      "stored": [
-        "+++ Probe R13: Body — nested"
-      ]
+      "sent": [">>> Probe R13: Body — nested"],
+      "stored": ["+++ Probe R13: Body — nested"]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        ">>> Probe R13i: nested inner summary"
-      ],
-      "stored": [
-        "+++ Probe R13i: nested inner summary"
-      ]
+      "sent": [">>> Probe R13i: nested inner summary"],
+      "stored": ["+++ Probe R13i: nested inner summary"]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        ">>>"
-      ],
-      "stored": [
-        "+++",
-        "",
-        "+++"
-      ]
+      "sent": [">>>"],
+      "stored": ["+++", "", "+++"]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        ">>>"
-      ],
-      "stored": [
-        "+++ "
-      ]
+      "sent": [">>>"],
+      "stored": ["+++ "]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
@@ -4939,12 +3598,8 @@
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        "<summary>Probe O02: Entities &amp; &lt;tag&gt; in a summary</summary>"
-      ],
-      "stored": [
-        "<summary>Probe O02: Entities & <tag> in a summary</summary>"
-      ]
+      "sent": ["<summary>Probe O02: Entities &amp; &lt;tag&gt; in a summary</summary>"],
+      "stored": ["<summary>Probe O02: Entities & <tag> in a summary</summary>"]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
@@ -5009,34 +3664,20 @@
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        "- First bullet",
-        "- Second bullet"
-      ],
-      "stored": [
-        "* First bullet",
-        "* Second bullet"
-      ]
+      "sent": ["- First bullet", "- Second bullet"],
+      "stored": ["* First bullet", "* Second bullet"]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        "| --- | --- |"
-      ],
-      "stored": [
-        "| -- | -- |"
-      ]
+      "sent": ["| --- | --- |"],
+      "stored": ["| -- | -- |"]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        "- A list item holding the block that follows"
-      ],
-      "stored": [
-        "* A list item holding the block that follows"
-      ]
+      "sent": ["- A list item holding the block that follows"],
+      "stored": ["* A list item holding the block that follows"]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
@@ -5055,23 +3696,14 @@
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        "",
-        "- A list item holding the block that follows"
-      ],
-      "stored": [
-        "* A list item holding the block that follows"
-      ]
+      "sent": ["", "- A list item holding the block that follows"],
+      "stored": ["* A list item holding the block that follows"]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
@@ -5092,23 +3724,14 @@
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        "",
-        "- A list item holding the block that follows"
-      ],
-      "stored": [
-        "* A list item holding the block that follows"
-      ]
+      "sent": ["", "- A list item holding the block that follows"],
+      "stored": ["* A list item holding the block that follows"]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
@@ -5127,23 +3750,14 @@
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        "",
-        "- A list item holding the block that follows"
-      ],
-      "stored": [
-        "* A list item holding the block that follows"
-      ]
+      "sent": ["", "- A list item holding the block that follows"],
+      "stored": ["* A list item holding the block that follows"]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
@@ -5162,23 +3776,14 @@
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        "",
-        "- A list item holding the block that follows"
-      ],
-      "stored": [
-        "* A list item holding the block that follows"
-      ]
+      "sent": ["", "- A list item holding the block that follows"],
+      "stored": ["* A list item holding the block that follows"]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
@@ -5197,23 +3802,14 @@
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        "",
-        "- A list item holding the block that follows"
-      ],
-      "stored": [
-        "* A list item holding the block that follows"
-      ]
+      "sent": ["", "- A list item holding the block that follows"],
+      "stored": ["* A list item holding the block that follows"]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
@@ -5232,23 +3828,14 @@
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        "",
-        "- A list item holding the block that follows"
-      ],
-      "stored": [
-        "* A list item holding the block that follows"
-      ]
+      "sent": ["", "- A list item holding the block that follows"],
+      "stored": ["* A list item holding the block that follows"]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
@@ -5267,350 +3854,205 @@
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        "",
-        "- A list item holding the block that follows"
-      ],
-      "stored": [
-        "* A list item holding the block that follows"
-      ]
+      "sent": ["", "- A list item holding the block that follows"],
+      "stored": ["* A list item holding the block that follows"]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        "  ",
-        "  - First bullet",
-        "  - Second bullet",
-        "  "
-      ],
-      "stored": [
-        "  * First bullet",
-        "  * Second bullet"
-      ]
+      "sent": ["  ", "  - First bullet", "  - Second bullet", "  "],
+      "stored": ["  * First bullet", "  * Second bullet"]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        "",
-        "- A list item holding the block that follows"
-      ],
-      "stored": [
-        "* A list item holding the block that follows"
-      ]
+      "sent": ["", "- A list item holding the block that follows"],
+      "stored": ["* A list item holding the block that follows"]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        "",
-        "- A list item holding the block that follows"
-      ],
-      "stored": [
-        "* A list item holding the block that follows"
-      ]
+      "sent": ["", "- A list item holding the block that follows"],
+      "stored": ["* A list item holding the block that follows"]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        "",
-        "- A list item holding the block that follows"
-      ],
-      "stored": [
-        "* A list item holding the block that follows"
-      ]
+      "sent": ["", "- A list item holding the block that follows"],
+      "stored": ["* A list item holding the block that follows"]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        "",
-        "- A list item holding the block that follows"
-      ],
-      "stored": [
-        "* A list item holding the block that follows"
-      ]
+      "sent": ["", "- A list item holding the block that follows"],
+      "stored": ["* A list item holding the block that follows"]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        "  | --- | --- |"
-      ],
-      "stored": [
-        "  | -- | -- |"
-      ]
+      "sent": ["  | --- | --- |"],
+      "stored": ["  | -- | -- |"]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        "",
-        "- A list item holding the block that follows"
-      ],
-      "stored": [
-        "* A list item holding the block that follows"
-      ]
+      "sent": ["", "- A list item holding the block that follows"],
+      "stored": ["* A list item holding the block that follows"]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        "  ",
-        "  - A list item holding the block that follows",
-        "  "
-      ],
-      "stored": [
-        "  * A list item holding the block that follows",
-        ""
-      ]
+      "sent": ["  ", "  - A list item holding the block that follows", "  "],
+      "stored": ["  * A list item holding the block that follows", ""]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        "    "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["    "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        "    "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["    "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
-      "sent": [
-        "  "
-      ],
-      "stored": [
-        ""
-      ]
+      "sent": ["  "],
+      "stored": [""]
     },
     {
       "fixture": "fixtures/document-all-forms.json",
       "write": "first",
       "sent": [],
-      "stored": [
-        "+++"
-      ]
+      "stored": ["+++"]
     },
     {
       "fixture": "fixtures/document-sample-after.json",
       "write": "first",
-      "sent": [
-        "| --- | --- | --- | --- | --- |"
-      ],
-      "stored": [
-        "| -- | -- | -- | -- | -- |"
-      ]
+      "sent": ["| --- | --- | --- | --- | --- |"],
+      "stored": ["| -- | -- | -- | -- | -- |"]
     },
     {
       "fixture": "fixtures/document-sample-after.json",
       "write": "first",
-      "sent": [
-        ""
-      ],
+      "sent": [""],
       "stored": []
     }
   ]

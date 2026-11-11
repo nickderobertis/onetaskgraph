@@ -11581,7 +11581,8 @@ fn created_id(item: &Item, filed: Option<&NativeId>) -> NativeId {
 /// copied carries an origin of its own and [`Origin::Keeps`] must not let it through. Its
 /// link is removed for the same reason: it names where *that* item was copied to, and on
 /// the destination it would name the destination item's own counterpart as itself. Its
-/// member keys name projects tied to *it*, which say nothing about the destination's.
+/// member keys name projects tied to *it*, which say nothing about the destination's, and its
+/// `onetaskgraph.links` name links whose endpoint is *it*.
 fn carried(
     metadata: &BTreeMap<String, Value>,
     origin: &Origin,
@@ -11608,6 +11609,9 @@ fn carried(
         MetadataKey::EDGES_ON_RECORD_KEY,
         dependents::DEPENDED_ON_BY_KEY,
         PublicProjections::KEY,
+        // A link names its endpoints; the copy is neither, so it never carries the source's
+        // and keeps whatever links the destination item holds of its own.
+        onetaskgraph_plugin_api::TaskLink::METADATA_KEY,
     ]
     .into_iter()
     .chain(record::KEYS)

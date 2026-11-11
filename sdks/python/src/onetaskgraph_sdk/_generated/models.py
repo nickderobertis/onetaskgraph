@@ -44,13 +44,20 @@ if TYPE_CHECKING:
     from .issues_completed import IssuesCompleted as IssuesCompleted
     from .item_type import ItemType as ItemType
     from .linear_config import LinearConfig as LinearConfig
+    from .link_batch import LinkBatch as LinkBatch
+    from .link_outcome import LinkOutcome as LinkOutcome
+    from .links_written import LinksWritten as LinksWritten
     from .locate_report import LocateReport as LocateReport
     from .located import Located as Located
     from .location import Location as Location
     from .member_declaration import MemberDeclaration as MemberDeclaration
     from .metadata_set import MetadataSet as MetadataSet
     from .native_id import NativeId as NativeId
+    from .other_end import OtherEnd as OtherEnd
     from .page_of_document import Page as PageOfDocument
+    from .parent_batch import ParentBatch as ParentBatch
+    from .parent_outcome import ParentOutcome as ParentOutcome
+    from .parents_set import ParentsSet as ParentsSet
     from .planned_project import PlannedProject as PlannedProject
     from .priority import Priority as Priority
     from .project_attestation_check import ProjectAttestationCheck as ProjectAttestationCheck
@@ -93,6 +100,7 @@ if TYPE_CHECKING:
     from .task_details import TaskDetails as TaskDetails
     from .task_priority_set import TaskPrioritySet as TaskPrioritySet
     from .task_ref import TaskRef as TaskRef
+    from .task_relations import TaskRelations as TaskRelations
     from .task_status_set import TaskStatusSet as TaskStatusSet
     from .task_updated import TaskUpdated as TaskUpdated
     from .tasks_updated import TasksUpdated as TasksUpdated
@@ -152,13 +160,20 @@ __all__ = [
     "IssuesCompleted",
     "ItemType",
     "LinearConfig",
+    "LinkBatch",
+    "LinkOutcome",
+    "LinksWritten",
     "LocateReport",
     "Located",
     "Location",
     "MemberDeclaration",
     "MetadataSet",
     "NativeId",
+    "OtherEnd",
     "PageOfDocument",
+    "ParentBatch",
+    "ParentOutcome",
+    "ParentsSet",
     "PlannedProject",
     "Priority",
     "ProjectAttestationCheck",
@@ -197,6 +212,7 @@ __all__ = [
     "TaskDetails",
     "TaskPrioritySet",
     "TaskRef",
+    "TaskRelations",
     "TaskStatusSet",
     "TaskUpdated",
     "TasksUpdated",
@@ -252,13 +268,20 @@ _MODULES: dict[str, tuple[str, str]] = {
     "IssuesCompleted": ("issues_completed", "IssuesCompleted"),
     "ItemType": ("item_type", "ItemType"),
     "LinearConfig": ("linear_config", "LinearConfig"),
+    "LinkBatch": ("link_batch", "LinkBatch"),
+    "LinkOutcome": ("link_outcome", "LinkOutcome"),
+    "LinksWritten": ("links_written", "LinksWritten"),
     "LocateReport": ("locate_report", "LocateReport"),
     "Located": ("located", "Located"),
     "Location": ("location", "Location"),
     "MemberDeclaration": ("member_declaration", "MemberDeclaration"),
     "MetadataSet": ("metadata_set", "MetadataSet"),
     "NativeId": ("native_id", "NativeId"),
+    "OtherEnd": ("other_end", "OtherEnd"),
     "PageOfDocument": ("page_of_document", "Page"),
+    "ParentBatch": ("parent_batch", "ParentBatch"),
+    "ParentOutcome": ("parent_outcome", "ParentOutcome"),
+    "ParentsSet": ("parents_set", "ParentsSet"),
     "PlannedProject": ("planned_project", "PlannedProject"),
     "Priority": ("priority", "Priority"),
     "ProjectAttestationCheck": ("project_attestation_check", "ProjectAttestationCheck"),
@@ -297,6 +320,7 @@ _MODULES: dict[str, tuple[str, str]] = {
     "TaskDetails": ("task_details", "TaskDetails"),
     "TaskPrioritySet": ("task_priority_set", "TaskPrioritySet"),
     "TaskRef": ("task_ref", "TaskRef"),
+    "TaskRelations": ("task_relations", "TaskRelations"),
     "TaskStatusSet": ("task_status_set", "TaskStatusSet"),
     "TaskUpdated": ("task_updated", "TaskUpdated"),
     "TasksUpdated": ("tasks_updated", "TasksUpdated"),

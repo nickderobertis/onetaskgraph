@@ -302,7 +302,17 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
     let bundle: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("schema output is valid JSON");
 
-    assert_eq!(bundle["version"], 61);
+    assert_eq!(bundle["version"], 62);
+    // Version 62: the relation calls' documents and outcomes.
+    for root in [
+        "ParentBatch",
+        "ParentsSet",
+        "LinkBatch",
+        "LinksWritten",
+        "TaskRelations",
+    ] {
+        assert!(bundle["roots"][root].is_object(), "{root} is a root");
+    }
     assert!(bundle["roots"]["HumanTaskProjection"].is_object());
     assert!(bundle["roots"]["HumanTaskProjected"].is_object());
     assert!(bundle["roots"]["LocateReport"].is_object());
@@ -428,6 +438,10 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
             "task comments",
             "task find",
             "task update-many",
+            "task parent set-many",
+            "task link add-many",
+            "task link remove-many",
+            "task relations",
             "task status set",
             "task status reconcile",
             "task status complete",
@@ -578,6 +592,186 @@ fn help_documents_the_exit_codes_a_caller_scripts_against() {
         .stdout(contains("Exit codes: `0` on success"))
         .stdout(contains("`2` when the invocation itself was wrong"))
         .stdout(contains("`4` when a query succeeded for some sources"));
+}
+
+/// The emitted schema of one root, from a bundle `onetaskgraph schema` printed.
+fn root_of<'a>(bundle: &'a serde_json::Value, root: &str) -> &'a serde_json::Value {
+    let schema = &bundle["roots"][root];
+    assert!(schema.is_object(), "the bundle has no root {root}");
+    schema
+}
+
+/// `schema` with a `$ref` into its root's own `$defs` followed, once.
+fn resolved<'a>(
+    root: &'a serde_json::Value,
+    schema: &'a serde_json::Value,
+) -> &'a serde_json::Value {
+    schema["$ref"]
+        .as_str()
+        .and_then(|reference| reference.strip_prefix("#/$defs/"))
+        .map_or(schema, |name| &root["$defs"][name])
+}
+
+/// The property names of an object schema.
+fn keys(schema: &serde_json::Value) -> Vec<String> {
+    schema["properties"]
+        .as_object()
+        .map(|properties| properties.keys().cloned().collect())
+        .unwrap_or_default()
+}
+
+/// Every member a root's document carries: its own properties, those of the objects each array
+/// property lists, and theirs in turn (`TaskRelations` lists an item's links inside each item)
+/// — the shape a relation verb's help spells out.
+fn members(root: &serde_json::Value) -> std::collections::BTreeSet<String> {
+    fn walk(
+        root: &serde_json::Value,
+        schema: &serde_json::Value,
+        names: &mut std::collections::BTreeSet<String>,
+    ) {
+        for name in keys(schema) {
+            let listed = resolved(root, &schema["properties"][&name]["items"]);
+            names.insert(name);
+            walk(root, listed, names);
+        }
+    }
+    let mut names = std::collections::BTreeSet::new();
+    walk(root, root, &mut names);
+    names
+}
+
+/// Every `const` a named `$defs` vocabulary of `root` admits.
+fn vocabulary(root: &serde_json::Value, def: &str) -> std::collections::BTreeSet<String> {
+    let schema = &root["$defs"][def];
+    assert!(schema.is_object(), "no {def} in {root}");
+    schema["oneOf"]
+        .as_array()
+        .or_else(|| schema["enum"].as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|variant| variant["const"].as_str().or_else(|| variant.as_str()))
+        .map(str::to_owned)
+        .collect()
+}
+
+/// The words a help text sets in a given pair of delimiters, one token each.
+fn delimited(help: &str, open: char, close: char) -> std::collections::BTreeSet<String> {
+    let mut words = std::collections::BTreeSet::new();
+    let mut rest = help;
+    while let Some(start) = rest.find(open) {
+        let after = &rest[start + open.len_utf8()..];
+        let Some(end) = after.find(close) else {
+            break;
+        };
+        words.insert(after[..end].to_owned());
+        rest = &after[end + close.len_utf8()..];
+    }
+    words
+}
+
+/// One relation verb, as its help is held to the schema.
+struct RelationVerb {
+    /// The verb's path under `onetaskgraph help`.
+    path: &'static [&'static str],
+    /// The roots its help names as the documents it reads and answers; empty for a verb whose
+    /// help names its documents by another verb's.
+    roots: &'static [&'static str],
+    /// The root and `$defs` name of the words its answers use.
+    vocabulary: (&'static str, &'static str),
+    /// Words of that vocabulary the verb never answers.
+    never: &'static [&'static str],
+}
+
+#[test]
+fn each_relation_verb_s_help_names_exactly_the_members_and_outcomes_its_schema_roots_carry() {
+    // Each relation verb's help spells out the documents it reads and answers, and the words
+    // its answers use. This holds that prose to the roots `onetaskgraph schema` emits, both
+    // ways: a member or a vocabulary word the help names that the schema does not carry fails,
+    // and so does one the schema gains that the help does not name — unless the verb is stated
+    // here never to answer it.
+    let output = onetaskgraph().arg("schema").output().expect("schema runs");
+    assert!(output.status.success());
+    let bundle: serde_json::Value = serde_json::from_slice(&output.stdout).expect("JSON");
+    let verbs = [
+        RelationVerb {
+            path: &["task", "parent", "set-many"],
+            roots: &["ParentBatch", "ParentsSet"],
+            vocabulary: ("ParentsSet", "ParentOutcome"),
+            never: &[],
+        },
+        RelationVerb {
+            path: &["task", "link", "add-many"],
+            roots: &["LinkBatch", "LinksWritten"],
+            vocabulary: ("LinksWritten", "LinkOutcome"),
+            never: &["absent"],
+        },
+        RelationVerb {
+            path: &["task", "link", "remove-many"],
+            roots: &[],
+            vocabulary: ("LinksWritten", "LinkOutcome"),
+            never: &["exists"],
+        },
+        RelationVerb {
+            path: &["task", "relations"],
+            roots: &["TaskRelations"],
+            vocabulary: ("TaskRelations", "OtherEnd"),
+            never: &[],
+        },
+    ];
+    // A write's screening report is stated under its own root, `Sanitization`, wherever a write
+    // carries one, rather than in each verb's help.
+    let stated_elsewhere = ["sanitization"];
+    for RelationVerb {
+        path,
+        roots,
+        vocabulary: (vocabulary_root, vocabulary_def),
+        never,
+    } in verbs
+    {
+        let mut args = vec!["help"];
+        args.extend(path);
+        let output = onetaskgraph().args(&args).output().expect("help runs");
+        assert!(output.status.success(), "{path:?}");
+        let help = String::from_utf8(output.stdout).expect("UTF-8");
+        let named = |schema_root: &str| help.contains(&format!("`{schema_root}`"));
+
+        if !roots.is_empty() {
+            let mut carried = std::collections::BTreeSet::new();
+            for schema_root in roots {
+                assert!(named(schema_root), "{path:?} names {schema_root}: {help}");
+                carried.extend(members(root_of(&bundle, schema_root)));
+            }
+            for elsewhere in stated_elsewhere {
+                carried.remove(elsewhere);
+            }
+            let spelled = delimited(&help, '"', '"');
+            assert_eq!(
+                spelled, carried,
+                "{path:?}: the members its help spells out"
+            );
+        }
+
+        let words = vocabulary(root_of(&bundle, vocabulary_root), vocabulary_def);
+        // The verb's own description, which is what names its answers; its arguments' text
+        // follows `Usage:`.
+        let description = help.split("Usage:").next().unwrap_or_default();
+        let backticked: std::collections::BTreeSet<String> = delimited(description, '`', '`')
+            .into_iter()
+            .filter(|word| {
+                !word.is_empty() && word.chars().all(|c| c.is_ascii_lowercase() || c == '-')
+            })
+            .filter(|word| !["null", "parent", "sub_issues"].contains(&word.as_str()))
+            .collect();
+        let expected: std::collections::BTreeSet<String> = words
+            .iter()
+            .filter(|word| !never.contains(&word.as_str()))
+            .cloned()
+            .collect();
+        assert_eq!(
+            backticked, expected,
+            "{path:?}: the {vocabulary_def} words its help names"
+        );
+    }
 }
 
 /// `/dev/full` accepts a write and then fails it with ENOSPC, which is the one portable
@@ -1019,6 +1213,7 @@ fn the_reserved_key_inventory_names_exactly_the_keys_the_code_spells() {
         MetadataKey::CREATE_KEY,
         onetaskgraph_core::GlobalId::ORIGIN_KEY,
         onetaskgraph_core::GlobalId::LINEAGE_KEY,
+        onetaskgraph_plugin_api::TaskLink::METADATA_KEY,
     ]
     .into_iter()
     .collect();
@@ -1061,6 +1256,7 @@ fn the_reserved_key_inventory_names_exactly_the_keys_the_code_spells() {
         "seventeen",
         "eighteen",
         "nineteen",
+        "twenty",
     ];
     assert!(
         bullet.contains(&format!("defines exactly {} keys", words[spelled.len()])),

@@ -126,6 +126,13 @@ const PRICES: &[(&str, u64)] = &[
     // llmlint: ignore-end[tests_hold_no_nonfunctional_thresholds]
     (graphql::STATUS_OPTIONS_SNAPSHOT, 1),
     (graphql::STATUS_OPTIONS_UPDATE, 1),
+    // llmlint: ignore-block[tests_hold_no_nonfunctional_thresholds] As at `SUB_ISSUES` above: the price is the instrument, not a threshold. These five are the relation documents, and the sweep below refuses any document in `graphql::DOCUMENTS` without a recorded price; what a relation batch spends is the `github-points-per-relation-batch` budget's, judged by onebudgetspec.
+    (graphql::ISSUE_RELATIONS, 1),
+    (graphql::SET_PARENTS, 1),
+    (graphql::ADD_RELATES_TO, 1),
+    (graphql::REMOVE_RELATES_TO, 1),
+    (graphql::RELATES_TO_READS, 1),
+    // llmlint: ignore-end[tests_hold_no_nonfunctional_thresholds]
 ];
 
 /// What this source's own text says `document` costs against what [`PRICES`] records, or

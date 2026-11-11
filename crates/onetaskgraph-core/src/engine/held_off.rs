@@ -666,6 +666,66 @@ impl TaskSource for HeldOff {
             .collect()
     }
 
+    async fn read_relations(
+        &self,
+        ids: &[NativeId],
+    ) -> Vec<Result<Option<onetaskgraph_plugin_api::Relations>, SourceError>> {
+        if let Err(refused) = self.refused() {
+            return ids.iter().map(|_| Err(refused.clone())).collect();
+        }
+        let answers = self.inner.read_relations(ids).await;
+        answers
+            .into_iter()
+            .map(|answer| self.noted(answer))
+            .collect()
+    }
+
+    async fn set_parents(
+        &self,
+        writes: &[onetaskgraph_plugin_api::ParentWrite],
+    ) -> Vec<Result<onetaskgraph_plugin_api::ParentAnswer, SourceError>> {
+        if let Err(refused) = self.refused() {
+            return writes.iter().map(|_| Err(refused.clone())).collect();
+        }
+        let answers = self.inner.set_parents(writes).await;
+        answers
+            .into_iter()
+            .map(|answer| self.noted(answer))
+            .collect()
+    }
+
+    fn link_types(&self) -> onetaskgraph_plugin_api::LinkTypes {
+        self.inner.link_types()
+    }
+
+    async fn add_native_links(
+        &self,
+        links: &[onetaskgraph_plugin_api::NativeLink],
+    ) -> Vec<Result<(), SourceError>> {
+        if let Err(refused) = self.refused() {
+            return links.iter().map(|_| Err(refused.clone())).collect();
+        }
+        let answers = self.inner.add_native_links(links).await;
+        answers
+            .into_iter()
+            .map(|answer| self.noted(answer))
+            .collect()
+    }
+
+    async fn remove_native_links(
+        &self,
+        links: &[onetaskgraph_plugin_api::NativeLink],
+    ) -> Vec<Result<(), SourceError>> {
+        if let Err(refused) = self.refused() {
+            return links.iter().map(|_| Err(refused.clone())).collect();
+        }
+        let answers = self.inner.remove_native_links(links).await;
+        answers
+            .into_iter()
+            .map(|answer| self.noted(answer))
+            .collect()
+    }
+
     async fn set_project_status(
         &self,
         id: &NativeId,
@@ -1182,6 +1242,38 @@ mod tests {
         async fn get_project(&self, _id: &NativeId) -> Result<Option<Project>, SourceError> {
             self.next().map(|()| None)
         }
+        async fn read_relations(
+            &self,
+            ids: &[NativeId],
+        ) -> Vec<Result<Option<onetaskgraph_plugin_api::Relations>, SourceError>> {
+            ids.iter().map(|_| self.next().map(|()| None)).collect()
+        }
+        async fn set_parents(
+            &self,
+            writes: &[onetaskgraph_plugin_api::ParentWrite],
+        ) -> Vec<Result<onetaskgraph_plugin_api::ParentAnswer, SourceError>> {
+            writes
+                .iter()
+                .map(|write| {
+                    self.next()
+                        .map(|()| onetaskgraph_plugin_api::ParentAnswer::Missing {
+                            what: write.child.clone(),
+                        })
+                })
+                .collect()
+        }
+        async fn add_native_links(
+            &self,
+            links: &[onetaskgraph_plugin_api::NativeLink],
+        ) -> Vec<Result<(), SourceError>> {
+            links.iter().map(|_| self.next()).collect()
+        }
+        async fn remove_native_links(
+            &self,
+            links: &[onetaskgraph_plugin_api::NativeLink],
+        ) -> Vec<Result<(), SourceError>> {
+            links.iter().map(|_| self.next()).collect()
+        }
         async fn query_tasks(
             &self,
             _query: &TaskQuery,
@@ -1313,6 +1405,129 @@ mod tests {
             }) => retry_after_seconds,
             other => panic!("not a rate limit: {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_relation_read_that_named_a_reset_holds_off_every_relation_call_until_it() {
+        let (source, calls, clock) = held(vec![limited(Some(30))]);
+        let id = NativeId::from("T-1");
+        block_on(async {
+            assert!(matches!(
+                source
+                    .read_relations(std::slice::from_ref(&id))
+                    .await
+                    .as_slice(),
+                [Err(SourceError::RateLimited {
+                    retry_after_seconds: Some(30),
+                    ..
+                })]
+            ));
+            assert_eq!(calls.load(Atomic::SeqCst), 1, "the refusal itself was sent");
+            clock.advance(10_000);
+            let write = onetaskgraph_plugin_api::ParentWrite {
+                child: id.clone(),
+                parent: None,
+                if_version: None,
+            };
+            let parents = source.set_parents(std::slice::from_ref(&write)).await;
+            assert!(matches!(
+                parents.as_slice(),
+                [Err(SourceError::RateLimited {
+                    retry_after_seconds: Some(20),
+                    ..
+                })]
+            ));
+            assert!(
+                source
+                    .read_relations(std::slice::from_ref(&id))
+                    .await
+                    .iter()
+                    .all(Result::is_err)
+            );
+            assert_eq!(
+                calls.load(Atomic::SeqCst),
+                1,
+                "nothing sent before the reset"
+            );
+            clock.advance(20_000);
+            assert!(
+                source
+                    .read_relations(std::slice::from_ref(&id))
+                    .await
+                    .iter()
+                    .all(Result::is_ok)
+            );
+            assert_eq!(source.set_parents(&[write]).await.len(), 1);
+            assert_eq!(calls.load(Atomic::SeqCst), 3, "reached again at the reset");
+        });
+    }
+
+    #[test]
+    fn a_native_link_write_that_named_a_reset_holds_off_every_native_link_write_until_it() {
+        let (source, calls, clock) = held(vec![limited(Some(30))]);
+        let configured = std::collections::BTreeMap::from([(
+            "caused-by".to_owned(),
+            serde_json::from_value::<onetaskgraph_plugin_api::LinkTypeConfig>(
+                serde_json::json!({"native": "related"}),
+            )
+            .expect("a link type"),
+        )]);
+        let types =
+            onetaskgraph_plugin_api::LinkTypes::checked("test", &configured, &["related"], &[])
+                .expect("a mirrored type");
+        let link = onetaskgraph_plugin_api::NativeLink {
+            from: NativeId::from("T-1"),
+            to: NativeId::from("T-2"),
+            native: types.native("caused-by").expect("its word").clone(),
+        };
+        block_on(async {
+            let added = source.add_native_links(std::slice::from_ref(&link)).await;
+            assert!(matches!(
+                added.as_slice(),
+                [Err(SourceError::RateLimited {
+                    retry_after_seconds: Some(30),
+                    ..
+                })]
+            ));
+            assert_eq!(calls.load(Atomic::SeqCst), 1, "the refusal itself was sent");
+            clock.advance(10_000);
+            // Neither an addition nor a removal is sent before the reset, each told how long.
+            for answers in [
+                source.add_native_links(std::slice::from_ref(&link)).await,
+                source
+                    .remove_native_links(std::slice::from_ref(&link))
+                    .await,
+            ] {
+                assert!(matches!(
+                    answers.as_slice(),
+                    [Err(SourceError::RateLimited {
+                        retry_after_seconds: Some(20),
+                        ..
+                    })]
+                ));
+            }
+            assert_eq!(
+                calls.load(Atomic::SeqCst),
+                1,
+                "nothing sent before the reset"
+            );
+            clock.advance(20_000);
+            assert!(
+                source
+                    .add_native_links(std::slice::from_ref(&link))
+                    .await
+                    .iter()
+                    .all(Result::is_ok)
+            );
+            assert!(
+                source
+                    .remove_native_links(std::slice::from_ref(&link))
+                    .await
+                    .iter()
+                    .all(Result::is_ok)
+            );
+            assert_eq!(calls.load(Atomic::SeqCst), 3, "reached again at the reset");
+        });
     }
 
     #[test]

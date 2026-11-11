@@ -250,3 +250,14 @@ budgets:
     unit: requests
     direction: max
     threshold: 24
+  # llmlint: ignore[budgets_track_product_owner_outcomes] The task registering it fixes it: one batch of relation calls — a relations read, a parent batch and a link batch, then the same again unchanged — is what a follow-up grouping costs the production Linear key, a figure no per-operation bound states.
+  - id: linear-requests-per-relation-batch
+    description: >-
+      Linear requests one relation batch sends over 20 tickets, first pass and unchanged
+      repeat, protecting the Linear key every manager on a host shares.
+    measure: reported
+    # llmlint: ignore[budget_commands_measure_directly] As every budget of this file: the runner entry the task names reads only the telemetry `relations.rs` recorded and hands it to onebudgetspec, which alone judges it.
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_relation_batch", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-linear-e2e"]
+    unit: requests
+    direction: max
+    threshold: 12

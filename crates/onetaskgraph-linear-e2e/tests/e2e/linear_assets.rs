@@ -4004,3 +4004,103 @@ fn a_copy_that_loses_its_create_before_an_upload_or_its_retry_sends_no_further_u
         assert_eq!(intent_attempt(&journey, &id), Some(taker), "{point}");
     }
 }
+
+#[test]
+fn rendering_a_linked_task_with_an_image_asset_keeps_its_links_section_out_of_its_content() {
+    // Two tasks on the team, the first linking the second — a link kept in the store's
+    // metadata, so no native relation is written.
+    let task = |id: &str| {
+        json!({"id": id, "title": format!("Ticket {id}"), "content": format!("The body of {id}."),
+               "status": {"category": "todo", "name": "Todo"}, "labels": []})
+    };
+    let journey = Journey::holding_all(
+        1,
+        json!({"tasks": [task("R-0"), task("R-1")], "projects": [], "documents": [],
+               "labels": [], "task_dependencies": [], "project_dependencies": []}),
+    );
+    let run = |arguments: &[&str]| {
+        let output = journey
+            .sandbox
+            .command()
+            .envs(journey.workspace.clock.client_env(0))
+            .args(arguments)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "`{}`: {}{}",
+            arguments.join(" "),
+            stdout(&output),
+            stderr(&output)
+        );
+        stdout(&output)
+    };
+    let inputs = journey.sandbox.subdirectory("linked-render-inputs");
+    let batch = inputs.join("links.json");
+    std::fs::write(
+        &batch,
+        json!({"schema_version": 1, "links": [
+            {"from": "dest:R-0", "to": "dest:R-1", "type": "mentions"}]})
+        .to_string(),
+    )
+    .unwrap();
+    run(&[
+        "task",
+        "link",
+        "add-many",
+        "--input",
+        batch.to_str().unwrap(),
+    ]);
+    let linked = journey.workspace.held.long_form("tasks", "R-0").unwrap();
+    let start = linked.find("## Links\n").expect("the section is rendered");
+    let end = linked.find("<!--").expect("the metadata slot");
+    let section = linked[start..end].trim_end().to_owned();
+
+    let template = inputs.join("picture.md");
+    let image = inputs.join("picture.png");
+    std::fs::write(&template, "![rendered alt](./picture.png)\n").unwrap();
+    let bytes = images::png(803, 475_000);
+    std::fs::write(&image, &bytes).unwrap();
+    let before = journey.workspace.counts();
+    run(&[
+        "task",
+        "render",
+        "dest:R-0",
+        "--template",
+        template.to_str().unwrap(),
+        "--asset",
+        image.to_str().unwrap(),
+        "--no-interactive",
+    ]);
+    // The asset went through the upload stand-in, once.
+    assert_eq!(journey.workspace.counts().0, before.0 + 1);
+    let stored = journey.workspace.held.long_form("tasks", "R-0").unwrap();
+    assert!(stored.starts_with("![rendered alt](http://"), "{stored}");
+    assert!(
+        stored.contains(&format!("\n\n{section}\n")),
+        "the section survives the rendering: {stored}"
+    );
+    assert!(stored.contains("onetaskgraph.assets"), "{stored}");
+    assert!(stored.contains(&asset_sha256(&bytes)), "{stored}");
+    assert!(stored.contains("onetaskgraph.links"), "{stored}");
+
+    let shown: Value = serde_json::from_str(&run(&["task", "show", "dest:R-0", "--json"])).unwrap();
+    let content = shown["items"][0]["item"]["content"]
+        .as_str()
+        .expect("content");
+    assert!(content.starts_with("![rendered alt](http://"), "{content}");
+    assert!(!content.contains("## Links"), "{content}");
+    let relations: Value = serde_json::from_str(&run(&[
+        "task",
+        "relations",
+        "dest:R-0",
+        "dest:R-1",
+        "--json",
+    ]))
+    .unwrap();
+    assert_eq!(
+        relations["items"][0]["links"],
+        json!([{"type": "mentions", "direction": "out", "other": "dest:R-1",
+                "other_end": "present"}])
+    );
+}

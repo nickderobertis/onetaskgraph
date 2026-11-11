@@ -1,0 +1,13 @@
+# The files in this directory that do not stand in for a store, each with the reason.
+#
+# `scripts/check-store-fixtures.sh` reads this file beside the fixtures it classifies: every
+# JSON file under a `tests/fixtures` directory must be a store fixture that check names, or
+# be recorded as not one — here, for a file this crate owns, or in that check's own table.
+
+["relationless-issue.json"]
+reason = """\
+Not a store: no query reads it and nothing serves it. It is the expected stored form of one \
+issue holding no relation — what the loopback board holds of it after `relations.rs`'s \
+`an_item_with_no_relation_is_written_byte_for_byte_as_before_relations_existed` creates, \
+updates and sets metadata on it — compared with what the board stores, so a relation setting \
+that touched an item holding none fails there."""

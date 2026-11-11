@@ -662,6 +662,7 @@ mod expected;
 pub use expected::{CONTEXT_VERSION, WHOLE_MEMBERS, context_shapes};
 mod pacing;
 mod projection;
+mod relations;
 mod visibility;
 
 use accounting::Accounting;
@@ -709,6 +710,11 @@ pub const COPY_DETAIL_BATCH: usize = 21;
 /// kinds, three `createIssue`, three `addProjectV2ItemById`, three field updates, an
 /// `addSubIssue` and an `addBlockedBy`, and every one ran — and no more was established.
 pub const MUTATION_BATCH: usize = 11;
+
+/// The most relation writes — `addSubIssue`, `removeSubIssue`, `addRelatesTo`,
+/// `removeRelatesTo` — one request carries: a 60-alias `addRelatesTo` answered HTTP 504 after
+/// landing 58 of its 60 (`spike-relations`), and 30 were accepted every time.
+pub const RELATION_BATCH: usize = 30;
 /// How many aliased writes one request of a copy's board field values and blocked-by edges
 /// carries: [`graphql::WRITE_FIELD_VALUES`], [`graphql::ADD_BLOCKED_BYS`] and, for a request
 /// holding both kinds, [`graphql::WRITE_FIELDS_AND_EDGES`].
@@ -2279,6 +2285,138 @@ pub mod graphql {
         board_issue!()
     );
 
+    /// One alias of [`ISSUE_RELATIONS`]: the item a batch's `$id<n>` names, as a read of it by
+    /// its own id reads it, with a page of its sub-issues' ids.
+    macro_rules! issue_relations_alias {
+        ($n:literal) => {
+            concat!(
+                "\n      i",
+                stringify!($n),
+                ":node(id:$id",
+                stringify!($n),
+                "){__typename ...BoardIssue ... on Issue{subIssues(first:$first){nodes{id}pageInfo{hasNextPage}}}}"
+            )
+        };
+    }
+
+    /// [`ISSUE_DETAILS`] with each issue's sub-issues in place of its comments: what `task
+    /// relations` and a link write read of [`DETAIL_BATCH`](super::DETAIL_BATCH) tasks at once
+    /// on a source reading sub-issues as children — each task whole, its parent and the ids of up
+    /// to `$first` of its children.
+    pub const ISSUE_RELATIONS: &str = concat!(
+        r#"query($id0:ID!,$id1:ID!,$id2:ID!,$id3:ID!,$id4:ID!,$id5:ID!,$id6:ID!,$id7:ID!,$id8:ID!,$id9:ID!,$id10:ID!,$id11:ID!,$id12:ID!,$id13:ID!,$id14:ID!,$id15:ID!,$id16:ID!,$id17:ID!,$id18:ID!,$id19:ID!,$id20:ID!,$id21:ID!,$id22:ID!,$id23:ID!,$first:Int!,$nestedFirst:Int!,$boardItems:Int!,$duplicates:Boolean!"#,
+        relationship_events_variable!(),
+        r#"){"#,
+        issue_relations_alias!(0),
+        issue_relations_alias!(1),
+        issue_relations_alias!(2),
+        issue_relations_alias!(3),
+        issue_relations_alias!(4),
+        issue_relations_alias!(5),
+        issue_relations_alias!(6),
+        issue_relations_alias!(7),
+        issue_relations_alias!(8),
+        issue_relations_alias!(9),
+        issue_relations_alias!(10),
+        issue_relations_alias!(11),
+        issue_relations_alias!(12),
+        issue_relations_alias!(13),
+        issue_relations_alias!(14),
+        issue_relations_alias!(15),
+        issue_relations_alias!(16),
+        issue_relations_alias!(17),
+        issue_relations_alias!(18),
+        issue_relations_alias!(19),
+        issue_relations_alias!(20),
+        issue_relations_alias!(21),
+        issue_relations_alias!(22),
+        issue_relations_alias!(23),
+        "\n    }",
+        board_issue!()
+    );
+
+    /// Up to [`RELATION_BATCH`](super::RELATION_BATCH) parent writes in one request:
+    /// `parent<n>` an `addSubIssue` (a re-parent carrying `replaceParent: true`) and `unparent<n>`
+    /// a `removeSubIssue`, each sent only while its own `send…<n>` holds. GitHub runs each alias
+    /// on its own and answers one it refused — a cycle, a depth or children limit — at its own
+    /// path, beside the others.
+    pub const SET_PARENTS: &str = concat!(
+        "mutation(",
+        wide_variables!("parent", "AddSubIssueInput", "sendParent"; 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29),
+        wide_variables!("unparent", "RemoveSubIssueInput", "sendUnparent"; 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29),
+        "){",
+        wide_slots!("parent", "addSubIssue", "issue{id} subIssue{id}", "sendParent"; 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29),
+        wide_slots!("unparent", "removeSubIssue", "issue{id} subIssue{id}", "sendUnparent"; 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29),
+        "}"
+    );
+
+    /// Up to [`RELATION_BATCH`](super::RELATION_BATCH) `relates-to` relations added in one
+    /// request, each `relate<n>` sent only while `$send<n>` holds: what a link of a type a
+    /// source mirrors natively writes beside its metadata.
+    pub const ADD_RELATES_TO: &str = concat!(
+        "mutation(",
+        wide_variables!("relate", "AddRelatesToInput", "send"; 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29),
+        "){",
+        wide_slots!("relate", "addRelatesTo", "issue{id} relatedIssue{id}", "send"; 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29),
+        "}"
+    );
+
+    /// [`ADD_RELATES_TO`]'s removal: up to [`RELATION_BATCH`](super::RELATION_BATCH)
+    /// `relates-to` relations removed in one request.
+    pub const REMOVE_RELATES_TO: &str = concat!(
+        "mutation(",
+        wide_variables!("unrelate", "RemoveRelatesToInput", "send"; 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29),
+        "){",
+        wide_slots!("unrelate", "removeRelatesTo", "issue{id} relatedIssue{id}", "send"; 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29),
+        "}"
+    );
+
+    /// One alias of [`RELATES_TO_READS`]: the issue `$id<n>` names and the ids of up to
+    /// `$first` of the issues it relates to.
+    macro_rules! relates_to_alias {
+        ($n:literal) => {
+            concat!(
+                "\n      r",
+                stringify!($n),
+                ":node(id:$id",
+                stringify!($n),
+                "){... on Issue{id relatesTo(first:$first){nodes{id}pageInfo{hasNextPage}}}}"
+            )
+        };
+    }
+
+    /// What [`DETAIL_BATCH`](super::DETAIL_BATCH) issues relate to, one alias each: read
+    /// after a relation write whose answer never arrived, so each relation is answered from what
+    /// GitHub holds rather than sent again blindly.
+    pub const RELATES_TO_READS: &str = concat!(
+        r#"query($id0:ID!,$id1:ID!,$id2:ID!,$id3:ID!,$id4:ID!,$id5:ID!,$id6:ID!,$id7:ID!,$id8:ID!,$id9:ID!,$id10:ID!,$id11:ID!,$id12:ID!,$id13:ID!,$id14:ID!,$id15:ID!,$id16:ID!,$id17:ID!,$id18:ID!,$id19:ID!,$id20:ID!,$id21:ID!,$id22:ID!,$id23:ID!,$first:Int!){"#,
+        relates_to_alias!(0),
+        relates_to_alias!(1),
+        relates_to_alias!(2),
+        relates_to_alias!(3),
+        relates_to_alias!(4),
+        relates_to_alias!(5),
+        relates_to_alias!(6),
+        relates_to_alias!(7),
+        relates_to_alias!(8),
+        relates_to_alias!(9),
+        relates_to_alias!(10),
+        relates_to_alias!(11),
+        relates_to_alias!(12),
+        relates_to_alias!(13),
+        relates_to_alias!(14),
+        relates_to_alias!(15),
+        relates_to_alias!(16),
+        relates_to_alias!(17),
+        relates_to_alias!(18),
+        relates_to_alias!(19),
+        relates_to_alias!(20),
+        relates_to_alias!(21),
+        relates_to_alias!(22),
+        relates_to_alias!(23),
+        "\n    }"
+    );
+
     /// What a mutation of a write the store's cache expects selects of the issue it wrote:
     /// everything [`ISSUE_DETAIL`] reads of it, so its response shows the task whole — its
     /// change token's every part and the first page of its comments.
@@ -2441,7 +2579,18 @@ pub mod graphql {
     /// `documents_are_all_inventoried` reads this file back and fails naming any `pub
     /// const` here that this list omits, so the two cannot part — which is the same guard
     /// `CATEGORIES` carries, in the one shape available to a set of `&str` constants.
-    pub const DOCUMENTS: [(&str, &str); 63] = [
+    pub const DOCUMENTS: [(&str, &str); 68] = [
+        (
+            ISSUE_RELATIONS,
+            "reading several issues with their parents and sub-issues",
+        ),
+        (SET_PARENTS, "writing several issues' parents"),
+        (ADD_RELATES_TO, "adding several relates-to relations"),
+        (REMOVE_RELATES_TO, "removing several relates-to relations"),
+        (
+            RELATES_TO_READS,
+            "reading what several issues relate to after a relation write went unanswered",
+        ),
         (
             ISSUES_BY_CREATION,
             "listing a repository's issues newest first for a create key",
@@ -3213,6 +3362,49 @@ pub struct GitHubProjectsConfig {
     /// GitHub's own published limits rather than taste. See [`Pacing`].
     #[serde(default)]
     pub pacing: PacingConfig,
+    /// What an issue's sub-issues mean on this board.
+    ///
+    /// `project`, the default, is this source's meaning since it was first written: an issue
+    /// with sub-issues reads as a project and its sub-issues as that project's tasks. `parent`
+    /// reads every issue as a task and a sub-issue as a child under the parent relation, which
+    /// `task parent set-many` writes and `task relations` reads; a project write to such a
+    /// source is refused naming this setting. The two meanings answer differently for the same
+    /// issues, so a `parent` source needs a board of its own: two sources naming one board with
+    /// different `sub_issues` are refused when the configuration is read.
+    #[serde(default, skip_serializing_if = "SubIssues::is_project")]
+    pub sub_issues: SubIssues,
+    /// The link types this source also writes as GitHub's own `relates-to` relation, beside the
+    /// store's metadata, so they show in the issue's Relationships panel: each type name mapped
+    /// to `{"native": "relates-to"}`. A type not named here is kept in metadata alone. Any other
+    /// word — `blocks`, `blocked-by`, `duplicate`, `similar` among them — is refused when the
+    /// source is built.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    // Kept in the schema as `"default": {}` although a serialized configuration leaves an empty
+    // map out, so both SDKs model an absent map as an empty one rather than as `null`.
+    #[schemars(!skip_serializing_if)]
+    pub link_types: BTreeMap<String, onetaskgraph_plugin_api::LinkTypeConfig>,
+}
+
+/// What an issue's sub-issues mean on a GitHub Projects board: see
+/// [`GitHubProjectsConfig::sub_issues`].
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum SubIssues {
+    /// An issue with sub-issues is a project, and its sub-issues are its tasks.
+    #[default]
+    Project,
+    /// Every issue is a task, and a sub-issue is a child under the parent relation.
+    Parent,
+}
+
+impl SubIssues {
+    /// Whether this is the default meaning, which a serialized configuration leaves out.
+    #[must_use]
+    pub const fn is_project(&self) -> bool {
+        matches!(self, Self::Project)
+    }
 }
 
 /// Which option of the board's `Priority` field each priority lands on.
@@ -4173,6 +4365,10 @@ pub struct GitHubProjectsSource {
     priorities: Option<PriorityMapping>,
     /// The metadata values this instance projects onto board text fields, in configured order.
     metadata_fields: Vec<MetadataField>,
+    /// What this board's sub-issues mean.
+    sub_issues: SubIssues,
+    /// The link types this source mirrors as `relates-to`.
+    link_types: onetaskgraph_plugin_api::LinkTypes,
     /// Built on the first request rather than with the source, as [`Self::client`] says.
     client: std::sync::OnceLock<Client>,
     /// Built on the first attachment request, as [`Self::asset_client`] says.
@@ -5533,6 +5729,19 @@ impl GitHubProjectsSource {
                 .map(|mapping| PriorityMapping::resolve(mapping, name))
                 .transpose()?,
             metadata_fields: MetadataField::resolve(config.metadata_fields, name)?,
+            sub_issues: config.sub_issues,
+            link_types: onetaskgraph_plugin_api::LinkTypes::checked(
+                KIND,
+                &config.link_types,
+                &[relations::RELATES_TO],
+                relations::REFUSED_WORDS,
+            )
+            .map_err(|error| match error {
+                SourceError::Config { message } => SourceError::Config {
+                    message: format!("source {name}: {message}"),
+                },
+                other => other,
+            })?,
             client: std::sync::OnceLock::new(),
             created: Mutex::new(Vec::new()),
             updated: Mutex::new(Vec::new()),
@@ -6112,6 +6321,9 @@ impl GitHubProjectsSource {
             graphql::SEARCH_BATCH,
             graphql::ADD_COMMENTS,
             graphql::WRITE_TASKS,
+            graphql::SET_PARENTS,
+            graphql::ADD_RELATES_TO,
+            graphql::REMOVE_RELATES_TO,
         ]
         .contains(&query)
         {
@@ -8056,7 +8268,24 @@ impl GitHubProjectsSource {
             message: format!("GitHub issue {content_id}: {message}"),
         })?;
         let raw_title = required_str(content, "title")?;
-        let kind = BoardKind::of(raw_title, parent.is_some(), sub_issues, marked);
+        // Read as children, a sub-issue is filed under no project and nothing is a project: the
+        // GitHub parent is the parent relation instead.
+        let (kind, parent, issue_parent) = match self.sub_issues {
+            SubIssues::Project => (
+                BoardKind::of(raw_title, parent.is_some(), sub_issues, marked),
+                parent,
+                None,
+            ),
+            SubIssues::Parent => (
+                if raw_title.starts_with(DESIGN_TITLE_PREFIX) {
+                    BoardKind::Document
+                } else {
+                    BoardKind::Work(ItemKind::Task)
+                },
+                None,
+                parent,
+            ),
+        };
         // The title a person wrote, which for a document is the one without the prefix —
         // the same way `content` above is the body without this source's metadata slot.
         let title = match kind {
@@ -8123,6 +8352,7 @@ impl GitHubProjectsSource {
             delivered_by,
             labels: item_labels.clone(),
             parent,
+            issue_parent,
             origin: text_field(nodes, ORIGIN_FIELD)?.filter(|value| !value.is_empty()),
             projected: self.held_projections(nodes)?,
             number: match content_kind {
@@ -8935,6 +9165,8 @@ impl GitHubProjectsSource {
             return Ok(None);
         };
         let held = item.raw_body.clone().unwrap_or_default();
+        // The task's `## Links` section, re-rendered from the links it holds, stays with it.
+        let content = &onetaskgraph_plugin_api::relinked(content, item.body.as_deref(), &item.slot);
         let body = with_content(&held, &self.marked(content))?;
         // Checked before anything is sent: content ending in what this source reads as its own
         // metadata slot would read back as metadata rather than as the content it was.
@@ -9239,7 +9471,13 @@ impl GitHubProjectsSource {
             record_edges(&mut slot, recorded);
         }
         let held = item.raw_body.clone().unwrap_or_default();
-        let content = match &update.content {
+        // A content write keeps the task's `## Links` section, re-rendered from the links the
+        // slot holds once written.
+        let relinked = update
+            .content
+            .as_deref()
+            .map(|content| onetaskgraph_plugin_api::relinked(content, item.body.as_deref(), &slot));
+        let content = match &relinked {
             Some(content) => with_content(&held, &self.marked(content))?,
             None => held.clone(),
         };
@@ -9254,7 +9492,7 @@ impl GitHubProjectsSource {
         // Checked before anything is sent, as a content write checks it: content ending in
         // what this source reads as its own slot would read back as metadata.
         let (visible, read) = self.visible(Some(body.clone()))?;
-        let wanted = update.content.as_deref().or(item.body.as_deref());
+        let wanted = relinked.as_deref().or(item.body.as_deref());
         if visible.as_deref().unwrap_or_default() != wanted.unwrap_or_default() || read != slot {
             return Err(SourceError::Refused {
                 message: format!(
@@ -9461,6 +9699,8 @@ impl GitHubProjectsSource {
         } else {
             content
         };
+        let relinked = onetaskgraph_plugin_api::relinked(content, item.body.as_deref(), &slot);
+        let content = relinked.as_str();
         let body = with_slot(&with_content(&held, &self.marked(content))?, &slot)?;
         // Checked before anything is sent, as a content write checks it.
         let (visible, read) = self.visible(Some(body.clone()))?;
@@ -9480,11 +9720,13 @@ impl GitHubProjectsSource {
         }
         item.body = visible.filter(|value| !value.is_empty());
         item.raw_body = Some(body);
+        // The content as a read answers it: without the `## Links` section of a linked task.
+        let answered = onetaskgraph_plugin_api::read_content(Some(content.to_owned()), &read);
         item.slot = read;
         self.remember_written(item, false)?;
         Ok(Some(onetaskgraph_plugin_api::AssetsWritten {
             id: id.clone(),
-            content: Some(content.to_owned()),
+            content: answered,
         }))
     }
 
@@ -9758,7 +10000,7 @@ impl GitHubProjectsSource {
             .iter()
             .map(|value| {
                 let related = NativeId(required_str(value, "id")?.into());
-                let related_kind = related_kind(value)?;
+                let related_kind = related_kind(value, self.sub_issues)?;
                 let (from, to) = match direction {
                     Direction::DependsOn => (
                         DependencyEndpoint::from_native(id.clone(), near_kind),
@@ -10288,6 +10530,15 @@ impl GitHubProjectsSource {
             }
             None => incoming.content.map(str::to_owned),
         };
+        // A write over an existing item keeps its `## Links` section, re-rendered from the
+        // links it holds.
+        let content = content.map(|content| {
+            onetaskgraph_plugin_api::relinked(
+                &content,
+                existing.and_then(|item| item.body.as_deref()),
+                incoming.metadata,
+            )
+        });
         let marked = content.as_deref().map(|content| self.marked(content));
         let body = compose_body(marked.as_deref(), &slot)?;
         // Read before anything is created, for the reason the field below is: a value
@@ -10587,6 +10838,7 @@ impl GitHubProjectsSource {
             delivered_by: incoming.delivered_by.to_vec(),
             labels: incoming.labels.to_vec(),
             parent: incoming.parent.cloned(),
+            issue_parent: None,
             origin: (!origin.is_empty()).then(|| origin.to_owned()),
             projected,
             number,
@@ -11991,7 +12243,7 @@ impl GitHubProjectsSource {
                     kind: if required_str(node, "title")?.starts_with(DESIGN_TITLE_PREFIX) {
                         BoardKind::Document
                     } else {
-                        BoardKind::Work(related_kind(node)?)
+                        BoardKind::Work(related_kind(node, self.sub_issues)?)
                     },
                     content_kind: ContentKind::Issue,
                 }),
@@ -13109,6 +13361,10 @@ struct Resolved {
     delivered_by: Vec<TaskRef>,
     labels: Vec<Label>,
     parent: Option<NativeId>,
+    /// The issue's GitHub parent on a source reading sub-issues as children (`sub_issues:
+    /// parent`), where [`Self::parent`] — the project it is filed under — is always `None`.
+    #[serde(default)]
+    issue_parent: Option<NativeId>,
     // llmlint: ignore[invalid_states_unrepresentable] The write side's reason, read back: this is the engine's qualified id, taken out of a board text field and handed on untouched. A newtype here would have this plugin define the syntax of an id `docs/metadata.md` says no plugin ever constructs or interprets.
     origin: Option<String>,
     /// What each board text field this instance projects metadata onto holds for this item,
@@ -13308,12 +13564,14 @@ impl Resolved {
                 });
             }
         };
+        let metadata = self.metadata();
         Ok(Task {
             version: self.version(),
             id: self.id.clone(),
             key: self.key(),
             title: self.title.clone(),
-            content: self.body.clone(),
+            // The `## Links` section the engine rendered is stripped, so content round-trips.
+            content: onetaskgraph_plugin_api::read_content(self.body.clone(), &metadata),
             status: self.status.clone(),
             priority,
             labels: self.labels.clone(),
@@ -13322,7 +13580,7 @@ impl Resolved {
             location: self.location(),
             created_at: self.created_at,
             updated_at: self.updated_at,
-            metadata: self.metadata(),
+            metadata,
             repositories: self.repositories.clone(),
             delivers: self.delivers.clone(),
             delivered_by: self.delivered_by.clone(),
@@ -14780,6 +15038,9 @@ impl TaskSource for GitHubProjectsSource {
     /// metadata slot under their reserved keys, in place of any caller metadata of those
     /// names.
     async fn write_task(&self, write: &ItemWrite<Task>) -> Result<NativeId, SourceError> {
+        if write.item.project.is_some() {
+            self.projectless()?;
+        }
         self.write_task_assets(write, None)
             .await
             .map(|written| written.id)
@@ -14832,6 +15093,9 @@ impl TaskSource for GitHubProjectsSource {
 
     // llmlint: ignore[invalid_states_unrepresentable] The signature is the plugin contract's additive `TaskSource::write_tasks`, which the manager approved taking `ItemWrite<Task>` as `write_task` does; a create-only input type would be a new contract type. A write naming an existing target is refused below before anything is sent.
     async fn write_tasks(&self, writes: &[ItemWrite<Task>]) -> Result<Vec<NativeId>, SourceError> {
+        if writes.iter().any(|write| write.item.project.is_some()) {
+            self.projectless()?;
+        }
         if let Some(write) = writes.iter().find(|write| write.target.is_some()) {
             return Err(SourceError::Refused {
                 message: format!(
@@ -14884,6 +15148,7 @@ impl TaskSource for GitHubProjectsSource {
     }
 
     async fn write_project(&self, write: &ItemWrite<Project>) -> Result<NativeId, SourceError> {
+        self.projectless()?;
         self.write_item(
             &Incoming {
                 written: Written::Work(ItemKind::Project, &write.item.status),
@@ -15105,6 +15370,7 @@ impl TaskSource for GitHubProjectsSource {
         id: &NativeId,
         category: StatusCategory,
     ) -> Result<Option<Status>, SourceError> {
+        self.projectless()?;
         self.set_status(id, ItemKind::Project, category).await
     }
 
@@ -15184,6 +15450,7 @@ impl TaskSource for GitHubProjectsSource {
         provenance: &Value,
         _answers: &BTreeMap<String, Value>,
     ) -> Result<Option<()>, SourceError> {
+        self.projectless()?;
         self.replace_rendering(
             id,
             BoardKind::Work(ItemKind::Project),
@@ -15204,6 +15471,40 @@ impl TaskSource for GitHubProjectsSource {
         update: &TaskUpdate,
     ) -> Result<Option<TaskUpdateOutcome>, SourceError> {
         self.targeted_update(id, update).await
+    }
+
+    /// Each issue's sub-issue parent and children and its links, read in batches.
+    async fn read_relations(
+        &self,
+        ids: &[NativeId],
+    ) -> Vec<Result<Option<onetaskgraph_plugin_api::Relations>, SourceError>> {
+        self.relations_of(ids).await
+    }
+
+    async fn set_parents(
+        &self,
+        writes: &[onetaskgraph_plugin_api::ParentWrite],
+    ) -> Vec<Result<onetaskgraph_plugin_api::ParentAnswer, SourceError>> {
+        self.parents_set(writes).await
+    }
+
+    fn link_types(&self) -> onetaskgraph_plugin_api::LinkTypes {
+        self.link_types.clone()
+    }
+
+    async fn add_native_links(
+        &self,
+        links: &[onetaskgraph_plugin_api::NativeLink],
+    ) -> Vec<Result<(), SourceError>> {
+        self.native_links(links, relations::NativeWrite::Add).await
+    }
+
+    async fn remove_native_links(
+        &self,
+        links: &[onetaskgraph_plugin_api::NativeLink],
+    ) -> Vec<Result<(), SourceError>> {
+        self.native_links(links, relations::NativeWrite::Remove)
+            .await
     }
 
     /// Every task read together — [`DETAIL_BATCH`] to a [`graphql::ISSUE_DETAILS`] request —
@@ -15261,6 +15562,7 @@ impl TaskSource for GitHubProjectsSource {
         key: &MetadataKey,
         value: &Value,
     ) -> Result<Option<Project>, SourceError> {
+        self.projectless()?;
         Ok(self
             .set_slot_key(id, BoardKind::Work(ItemKind::Project), key, value)
             .await?
@@ -15315,6 +15617,7 @@ impl TaskSource for GitHubProjectsSource {
     }
 
     async fn delete_project(&self, id: &NativeId) -> Result<(), SourceError> {
+        self.projectless()?;
         self.delete_item(id).await
     }
 
@@ -16032,7 +16335,7 @@ fn recorded_page(edges: Vec<DependencyEdge>, offset: usize, limit: usize) -> Pag
 /// project read can. There is no third value to return — `ItemKind` has no document
 /// variant, because nothing may point at a document — so the relationship itself is what
 /// the person is told about.
-fn related_kind(value: &Value) -> Result<ItemKind, SourceError> {
+fn related_kind(value: &Value, meaning: SubIssues) -> Result<ItemKind, SourceError> {
     let id = required_str(value, "id")?;
     if required_str(value, "title")?.starts_with(DESIGN_TITLE_PREFIX) {
         return Err(SourceError::Refused {
@@ -16044,7 +16347,7 @@ fn related_kind(value: &Value) -> Result<ItemKind, SourceError> {
         });
     }
     let parent = optional_str(value.get("parent").unwrap_or(&Value::Null), "id")?;
-    if parent.is_some() {
+    if parent.is_some() || meaning == SubIssues::Parent {
         return Ok(ItemKind::Task);
     }
     let (_, slot) = metadata_body(optional_str(value, "body")?.map(str::to_owned))?;

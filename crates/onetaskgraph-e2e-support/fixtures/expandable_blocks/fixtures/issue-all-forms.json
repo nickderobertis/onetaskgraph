@@ -10575,14 +10575,8 @@
       "parsed_as": "collapsible_section",
       "summary_stored_text": "Probe P01: Plain summary text",
       "summary_marks": [],
-      "body_node_types": [
-        "paragraph",
-        "paragraph"
-      ],
-      "body_all_node_types": [
-        "paragraph",
-        "paragraph"
-      ],
+      "body_node_types": ["paragraph", "paragraph"],
+      "body_all_node_types": ["paragraph", "paragraph"],
       "end_marker_inside": true
     },
     {
@@ -10593,14 +10587,8 @@
       "parsed_as": "collapsible_section",
       "summary_stored_text": "Probe P02: Entities & <tag> in a summary",
       "summary_marks": [],
-      "body_node_types": [
-        "paragraph",
-        "paragraph"
-      ],
-      "body_all_node_types": [
-        "paragraph",
-        "paragraph"
-      ],
+      "body_node_types": ["paragraph", "paragraph"],
+      "body_all_node_types": ["paragraph", "paragraph"],
       "end_marker_inside": true
     },
     {
@@ -10610,17 +10598,9 @@
       "body_variant": "paragraph",
       "parsed_as": "collapsible_section",
       "summary_stored_text": "Probe P03: Inline code copy --dry-run in backticks",
-      "summary_marks": [
-        "code"
-      ],
-      "body_node_types": [
-        "paragraph",
-        "paragraph"
-      ],
-      "body_all_node_types": [
-        "paragraph",
-        "paragraph"
-      ],
+      "summary_marks": ["code"],
+      "body_node_types": ["paragraph", "paragraph"],
+      "body_all_node_types": ["paragraph", "paragraph"],
       "end_marker_inside": true
     },
     {
@@ -10631,14 +10611,8 @@
       "parsed_as": "collapsible_section",
       "summary_stored_text": "Probe P04: Inline code <code>copy --dry-run</code> as HTML",
       "summary_marks": [],
-      "body_node_types": [
-        "paragraph",
-        "paragraph"
-      ],
-      "body_all_node_types": [
-        "paragraph",
-        "paragraph"
-      ],
+      "body_node_types": ["paragraph", "paragraph"],
+      "body_all_node_types": ["paragraph", "paragraph"],
       "end_marker_inside": true
     },
     {
@@ -10648,17 +10622,9 @@
       "body_variant": "paragraph",
       "parsed_as": "collapsible_section",
       "summary_stored_text": "Probe P05: Bold text in a summary",
-      "summary_marks": [
-        "strong"
-      ],
-      "body_node_types": [
-        "paragraph",
-        "paragraph"
-      ],
-      "body_all_node_types": [
-        "paragraph",
-        "paragraph"
-      ],
+      "summary_marks": ["strong"],
+      "body_node_types": ["paragraph", "paragraph"],
+      "body_all_node_types": ["paragraph", "paragraph"],
       "end_marker_inside": true
     },
     {
@@ -10669,14 +10635,8 @@
       "parsed_as": "collapsible_section",
       "summary_stored_text": "Probe P06: <strong>Bold</strong> as HTML",
       "summary_marks": [],
-      "body_node_types": [
-        "paragraph",
-        "paragraph"
-      ],
-      "body_all_node_types": [
-        "paragraph",
-        "paragraph"
-      ],
+      "body_node_types": ["paragraph", "paragraph"],
+      "body_all_node_types": ["paragraph", "paragraph"],
       "end_marker_inside": true
     },
     {
@@ -10687,14 +10647,8 @@
       "parsed_as": "collapsible_section",
       "summary_stored_text": "Probe P07: Body — paragraph",
       "summary_marks": [],
-      "body_node_types": [
-        "paragraph",
-        "paragraph"
-      ],
-      "body_all_node_types": [
-        "paragraph",
-        "paragraph"
-      ],
+      "body_node_types": ["paragraph", "paragraph"],
+      "body_all_node_types": ["paragraph", "paragraph"],
       "end_marker_inside": true
     },
     {
@@ -10705,11 +10659,7 @@
       "parsed_as": "collapsible_section",
       "summary_stored_text": "Probe P08: Body — lists",
       "summary_marks": [],
-      "body_node_types": [
-        "bullet_list",
-        "ordered_list",
-        "paragraph"
-      ],
+      "body_node_types": ["bullet_list", "ordered_list", "paragraph"],
       "body_all_node_types": [
         "bullet_list",
         "list_item",
@@ -10733,13 +10683,7 @@
       "parsed_as": "collapsible_section",
       "summary_stored_text": "Probe P09: Body — headings",
       "summary_marks": [],
-      "body_node_types": [
-        "heading",
-        "paragraph",
-        "heading",
-        "paragraph",
-        "paragraph"
-      ],
+      "body_node_types": ["heading", "paragraph", "heading", "paragraph", "paragraph"],
       "body_all_node_types": [
         "heading(level 3.0)",
         "paragraph",
@@ -10757,14 +10701,8 @@
       "parsed_as": "collapsible_section",
       "summary_stored_text": "Probe P10: Body — fenced code",
       "summary_marks": [],
-      "body_node_types": [
-        "code_block",
-        "paragraph"
-      ],
-      "body_all_node_types": [
-        "code_block(language python)",
-        "paragraph"
-      ],
+      "body_node_types": ["code_block", "paragraph"],
+      "body_all_node_types": ["code_block(language python)", "paragraph"],
       "end_marker_inside": true
     },
     {
@@ -10775,14 +10713,8 @@
       "parsed_as": "collapsible_section",
       "summary_stored_text": "Probe P11: Body — image",
       "summary_marks": [],
-      "body_node_types": [
-        "image",
-        "paragraph"
-      ],
-      "body_all_node_types": [
-        "image",
-        "paragraph"
-      ],
+      "body_node_types": ["image", "paragraph"],
+      "body_all_node_types": ["image", "paragraph"],
       "end_marker_inside": true
     },
     {
@@ -10793,10 +10725,7 @@
       "parsed_as": "collapsible_section",
       "summary_stored_text": "Probe P12: Body — table",
       "summary_marks": [],
-      "body_node_types": [
-        "table",
-        "paragraph"
-      ],
+      "body_node_types": ["table", "paragraph"],
       "body_all_node_types": [
         "table",
         "table_row",
@@ -10826,10 +10755,7 @@
       "parsed_as": "collapsible_section",
       "summary_stored_text": "Probe P13: Body — nested",
       "summary_marks": [],
-      "body_node_types": [
-        "collapsible_section",
-        "paragraph"
-      ],
+      "body_node_types": ["collapsible_section", "paragraph"],
       "body_all_node_types": [
         "collapsible_section",
         "collapsible_heading",
@@ -10847,14 +10773,8 @@
       "parsed_as": "collapsible_section",
       "summary_stored_text": "Probe R01: Plain summary text",
       "summary_marks": [],
-      "body_node_types": [
-        "paragraph",
-        "paragraph"
-      ],
-      "body_all_node_types": [
-        "paragraph",
-        "paragraph"
-      ],
+      "body_node_types": ["paragraph", "paragraph"],
+      "body_all_node_types": ["paragraph", "paragraph"],
       "end_marker_inside": true
     },
     {
@@ -10865,14 +10785,8 @@
       "parsed_as": "collapsible_section",
       "summary_stored_text": "Probe R02: Entities & <tag> in a summary",
       "summary_marks": [],
-      "body_node_types": [
-        "paragraph",
-        "paragraph"
-      ],
-      "body_all_node_types": [
-        "paragraph",
-        "paragraph"
-      ],
+      "body_node_types": ["paragraph", "paragraph"],
+      "body_all_node_types": ["paragraph", "paragraph"],
       "end_marker_inside": true
     },
     {
@@ -10882,17 +10796,9 @@
       "body_variant": "paragraph",
       "parsed_as": "collapsible_section",
       "summary_stored_text": "Probe R03: Inline code copy --dry-run in backticks",
-      "summary_marks": [
-        "code"
-      ],
-      "body_node_types": [
-        "paragraph",
-        "paragraph"
-      ],
-      "body_all_node_types": [
-        "paragraph",
-        "paragraph"
-      ],
+      "summary_marks": ["code"],
+      "body_node_types": ["paragraph", "paragraph"],
+      "body_all_node_types": ["paragraph", "paragraph"],
       "end_marker_inside": true
     },
     {
@@ -10903,14 +10809,8 @@
       "parsed_as": "collapsible_section",
       "summary_stored_text": "Probe R04: Inline code <code>copy --dry-run</code> as HTML",
       "summary_marks": [],
-      "body_node_types": [
-        "paragraph",
-        "paragraph"
-      ],
-      "body_all_node_types": [
-        "paragraph",
-        "paragraph"
-      ],
+      "body_node_types": ["paragraph", "paragraph"],
+      "body_all_node_types": ["paragraph", "paragraph"],
       "end_marker_inside": true
     },
     {
@@ -10920,17 +10820,9 @@
       "body_variant": "paragraph",
       "parsed_as": "collapsible_section",
       "summary_stored_text": "Probe R05: Bold text in a summary",
-      "summary_marks": [
-        "strong"
-      ],
-      "body_node_types": [
-        "paragraph",
-        "paragraph"
-      ],
-      "body_all_node_types": [
-        "paragraph",
-        "paragraph"
-      ],
+      "summary_marks": ["strong"],
+      "body_node_types": ["paragraph", "paragraph"],
+      "body_all_node_types": ["paragraph", "paragraph"],
       "end_marker_inside": true
     },
     {
@@ -10941,14 +10833,8 @@
       "parsed_as": "collapsible_section",
       "summary_stored_text": "Probe R06: <strong>Bold</strong> as HTML",
       "summary_marks": [],
-      "body_node_types": [
-        "paragraph",
-        "paragraph"
-      ],
-      "body_all_node_types": [
-        "paragraph",
-        "paragraph"
-      ],
+      "body_node_types": ["paragraph", "paragraph"],
+      "body_all_node_types": ["paragraph", "paragraph"],
       "end_marker_inside": true
     },
     {
@@ -10959,14 +10845,8 @@
       "parsed_as": "collapsible_section",
       "summary_stored_text": "Probe R07: Body — paragraph",
       "summary_marks": [],
-      "body_node_types": [
-        "paragraph",
-        "paragraph"
-      ],
-      "body_all_node_types": [
-        "paragraph",
-        "paragraph"
-      ],
+      "body_node_types": ["paragraph", "paragraph"],
+      "body_all_node_types": ["paragraph", "paragraph"],
       "end_marker_inside": true
     },
     {
@@ -10977,11 +10857,7 @@
       "parsed_as": "collapsible_section",
       "summary_stored_text": "Probe R08: Body — lists",
       "summary_marks": [],
-      "body_node_types": [
-        "bullet_list",
-        "ordered_list",
-        "paragraph"
-      ],
+      "body_node_types": ["bullet_list", "ordered_list", "paragraph"],
       "body_all_node_types": [
         "bullet_list",
         "list_item",
@@ -11005,13 +10881,7 @@
       "parsed_as": "collapsible_section",
       "summary_stored_text": "Probe R09: Body — headings",
       "summary_marks": [],
-      "body_node_types": [
-        "heading",
-        "paragraph",
-        "heading",
-        "paragraph",
-        "paragraph"
-      ],
+      "body_node_types": ["heading", "paragraph", "heading", "paragraph", "paragraph"],
       "body_all_node_types": [
         "heading(level 3.0)",
         "paragraph",
@@ -11029,14 +10899,8 @@
       "parsed_as": "collapsible_section",
       "summary_stored_text": "Probe R10: Body — fenced code",
       "summary_marks": [],
-      "body_node_types": [
-        "code_block",
-        "paragraph"
-      ],
-      "body_all_node_types": [
-        "code_block(language python)",
-        "paragraph"
-      ],
+      "body_node_types": ["code_block", "paragraph"],
+      "body_all_node_types": ["code_block(language python)", "paragraph"],
       "end_marker_inside": true
     },
     {
@@ -11047,14 +10911,8 @@
       "parsed_as": "collapsible_section",
       "summary_stored_text": "Probe R11: Body — image",
       "summary_marks": [],
-      "body_node_types": [
-        "image",
-        "paragraph"
-      ],
-      "body_all_node_types": [
-        "image",
-        "paragraph"
-      ],
+      "body_node_types": ["image", "paragraph"],
+      "body_all_node_types": ["image", "paragraph"],
       "end_marker_inside": true
     },
     {
@@ -11065,10 +10923,7 @@
       "parsed_as": "collapsible_section",
       "summary_stored_text": "Probe R12: Body — table",
       "summary_marks": [],
-      "body_node_types": [
-        "table",
-        "paragraph"
-      ],
+      "body_node_types": ["table", "paragraph"],
       "body_all_node_types": [
         "table",
         "table_row",
@@ -11098,9 +10953,7 @@
       "parsed_as": "collapsible_section",
       "summary_stored_text": "Probe R13: Body — nested",
       "summary_marks": [],
-      "body_node_types": [
-        "collapsible_section"
-      ],
+      "body_node_types": ["collapsible_section"],
       "body_all_node_types": [
         "collapsible_section",
         "collapsible_heading",

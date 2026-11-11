@@ -97,6 +97,41 @@ EXCEPTIONS = {
         "write's hold and priority guard on the source's own read, which a source batching "
         "its reads applies exactly as the defaults do"
     ),
+    "relationless": (
+        "a free function, not one of the contract's types — the one refusal a source that "
+        "holds no relations answers `TaskSource::read_relations`, `set_parents` and the native "
+        "link writes with by default"
+    ),
+    "read_content": (
+        "a free function, not one of the contract's types — how every source strips the "
+        "`## Links` section the engine renders from what a read answers, spelled once so no "
+        "two plugins strip it differently"
+    ),
+    "strip_links_section": (
+        "a free function, not one of the contract's types — the section parser `read_content` "
+        "applies, which accepts Linear's `*` bullets and changed blank lines"
+    ),
+    "with_links_section": (
+        "a free function, not one of the contract's types — the renderer `strip_links_section` "
+        "is the exact inverse of"
+    ),
+    "relinked": (
+        "a free function, not one of the contract's types — how every source re-renders an "
+        "item's `## Links` section on a content write, spelled once so no two plugins render it "
+        "differently"
+    ),
+    "link_line": (
+        "a free function, not one of the contract's types — the `## Links` line `relinked` "
+        "writes for a link no stored line shows"
+    ),
+    "arrow": (
+        "a free function, not one of the contract's types — the arrow a `## Links` line shows "
+        "a link's direction with"
+    ),
+    "LINKS_HEADING": (
+        "a constant, not one of the contract's types — the heading the `## Links` section is "
+        "rendered and recognised under"
+    ),
     "SIMULATED_CLOCK_VARIABLE": (
         "a const, not one of the contract's types — the name of the variable that selects the "
         "simulated `Clock`, spelled once for the binary that reads it and the harness that "

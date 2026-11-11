@@ -1500,42 +1500,27 @@
     {
       "summary": "Examples",
       "summary_marks": [],
-      "body_node_types": [
-        "paragraph",
-        "code_block"
-      ]
+      "body_node_types": ["paragraph", "code_block"]
     },
     {
       "summary": "Adds a --dry-run flag to copy",
-      "summary_marks": [
-        "code"
-      ],
-      "body_node_types": [
-        "paragraph"
-      ]
+      "summary_marks": ["code"],
+      "body_node_types": ["paragraph"]
     },
     {
       "summary": "Prints items in the order the copy would write them",
       "summary_marks": [],
-      "body_node_types": [
-        "paragraph"
-      ]
+      "body_node_types": ["paragraph"]
     },
     {
       "summary": "Exits 4 when any item would be refused",
-      "summary_marks": [
-        "code"
-      ],
-      "body_node_types": [
-        "paragraph"
-      ]
+      "summary_marks": ["code"],
+      "body_node_types": ["paragraph"]
     },
     {
       "summary": "Task table",
       "summary_marks": [],
-      "body_node_types": [
-        "table"
-      ]
+      "body_node_types": ["table"]
     }
   ]
 }

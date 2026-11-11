@@ -10,6 +10,7 @@
 //! knows has no row here. Every registered plugin is implemented, so every row carries a
 //! working source fixture.
 
+use crate::linear_relations;
 use onetaskgraph_plugin_api::{Capabilities, DependencySupport, Support};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -26,6 +27,8 @@ use std::{
 
 use crate::common::{Sandbox, SourceBoundary};
 use crate::loopback;
+
+mod github_relations;
 
 /// One row: a source kind, in one configuration, over the shared dataset.
 pub struct Row {
@@ -1339,6 +1342,9 @@ struct GitHubBoard {
     /// Items an aliased mutation naming them is refused for at its own path, once — each by its
     /// own id and its board item's.
     rejecting: Vec<(String, String)>,
+    /// The board's issues' relations: its `relates-to` pairs, and how its next relation write
+    /// is cut short (`github_relations`).
+    relations: github_relations::Relations,
 }
 
 /// Whether one request — its document and its variables — is one a [`BoardHook`] counts.
@@ -3863,7 +3869,8 @@ pub enum AliasAnswer {
     Missing,
     /// With another item's id than the one its input named.
     NamingAnother,
-    /// With another issue than the one its input named as blocking, the blocked one right.
+    /// With another issue than the one its input named as blocking, the blocked one right — or,
+    /// for a sub-issue write, than the one it named as the parent, the sub-issue right.
     NamingAnotherBlocker,
 }
 
@@ -4032,6 +4039,7 @@ fn github_projects_board_at(
         truncating: Vec::new(),
         refusing_search_pages: Vec::new(),
         rejecting: Vec::new(),
+        relations: github_relations::Relations::default(),
     }));
     let mut owed_failures: Vec<&'static str> = fail_first.to_vec();
     let watched = Arc::clone(&board);
@@ -4277,6 +4285,15 @@ fn github_projects_board_at(
         if dropped {
             // Applied, and never answered: the caller cannot know which.
             return None;
+        }
+        if board.lock().unwrap().relations.timed_out() {
+            // Applied in part, and answered as GitHub's gateway answers a document it gave up
+            // waiting on: what landed is told by a read alone.
+            let body = r#"{"message":"We couldn't respond to your request in time."}"#;
+            return Some(format!(
+                "HTTP/1.1 504 Gateway Timeout\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            ));
         }
         let date = board
             .lock()
@@ -4688,6 +4705,9 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         return answer;
     }
     board.lock().unwrap().counted_types = TimelineEvent::counted_by(query);
+    if let Some(answer) = github_relations::answer(board, query, variables) {
+        return answer;
+    }
     if query == onetaskgraph_github_projects::graphql::PROJECT_VISIBILITY {
         let mut held = board.lock().unwrap();
         if held.project_scope_withheld {
@@ -6674,7 +6694,7 @@ pub fn linear_workspace_with(
 /// What a journey reads of one Linear workspace it configured.
 #[derive(Clone)]
 pub struct LinearWorkspace {
-    state: Arc<Mutex<Value>>,
+    pub(crate) state: Arc<Mutex<Value>>,
     ledger: Arc<Mutex<Vec<(String, Value)>>>,
     /// What this workspace answered each of those requests with, at the same index.
     answers: Arc<Mutex<Vec<Value>>>,
@@ -7601,6 +7621,7 @@ fn linear_serve(
                 );
                 continue;
             }
+            let request = linear_identifiers_resolved(request, &state.lock().unwrap());
             let aliased = onetaskgraph_linear::graphql::decomposed(
                 request["query"].as_str().unwrap_or_default(),
             );
@@ -8243,6 +8264,14 @@ impl LinearWorkspace {
         self.add_row("documents", row);
     }
 
+    /// Resolve an issue's identifier (`ENG-R0`) wherever a request's variables name an issue
+    /// by it, as Linear resolves either spelling of an issue, and answer with the issue's id as
+    /// Linear does. Off unless a journey turns it on, so every other journey's requests are read
+    /// exactly as they were sent.
+    pub fn resolve_identifiers(&self) {
+        self.state.lock().unwrap()["_linear_resolve_identifiers"] = json!(true);
+    }
+
     fn add_row(&self, collection: &str, row: Value) {
         let mut data = self.state.lock().unwrap();
         data[collection]
@@ -8250,6 +8279,43 @@ impl LinearWorkspace {
             .expect("the workspace holds the collection")
             .push(row);
     }
+}
+
+/// `request` with each variable value that is exactly an issue's identifier replaced by that
+/// issue's id, when the workspace was asked to [`resolve_identifiers`](LinearWorkspace::resolve_identifiers);
+/// `request` unchanged otherwise.
+fn linear_identifiers_resolved(mut request: Value, data: &Value) -> Value {
+    if data["_linear_resolve_identifiers"] != json!(true) {
+        return request;
+    }
+    let ids: std::collections::BTreeMap<String, String> = data["tasks"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|row| {
+            let id = row["id"].as_str()?;
+            let identifier = row["_identifier"]
+                .as_str()
+                .map_or_else(|| linear_identifier(id), str::to_owned);
+            Some((identifier, id.to_owned()))
+        })
+        .collect();
+    fn resolve(value: &mut Value, ids: &std::collections::BTreeMap<String, String>) {
+        match value {
+            Value::String(text) => {
+                if let Some(id) = ids.get(text.as_str()) {
+                    *text = id.clone();
+                }
+            }
+            Value::Array(items) => items.iter_mut().for_each(|item| resolve(item, ids)),
+            Value::Object(fields) => fields.values_mut().for_each(|field| resolve(field, ids)),
+            _ => {}
+        }
+    }
+    if let Some(variables) = request.get_mut("variables") {
+        resolve(variables, &ids);
+    }
+    request
 }
 
 /// A copy's batched origin read: each aliased connection answered as the `issues` and
@@ -8328,6 +8394,11 @@ fn linear_response(
         serde_json::from_value(request.clone()).map_err(|_| "invalid GraphQL request")?;
     use onetaskgraph_linear::graphql;
     let operation = request.query.as_str();
+    if let Some(answer) =
+        linear_relations::answer(operation, &Value::Object(request.variables.clone()), data)
+    {
+        return answer;
+    }
     if operation == graphql::COUNTERPART_LOOKUPS || operation == graphql::COUNTERPART_LOOKUPS_CACHED
     {
         return linear_origin_lookups(operation, &Value::Object(request.variables), recorded, data);
@@ -8457,6 +8528,10 @@ fn linear_response(
             linear_response(&json!({"query": wide, "variables": vars}), recorded, data)?;
         if let Some(item) = answer.get_mut(root).and_then(Value::as_object_mut) {
             item.retain(|member, _| selected.iter().any(|kept| kept == member));
+            // The item's own id, where the document selects it, is the one it was asked for.
+            if selected.iter().any(|kept| kept == "id") {
+                item.insert("id".to_owned(), vars["id"].clone());
+            }
         }
         return Ok(answer);
     }
@@ -8848,9 +8923,9 @@ fn linear_uncached(operation: &str) -> Option<&'static str> {
 fn linear_narrowed(operation: &str) -> Option<(&'static str, &'static str)> {
     use onetaskgraph_linear::graphql;
     match operation {
-        graphql::ISSUE_DEPENDS_ON | graphql::ISSUE_DEPENDED_ON_BY => {
-            Some((graphql::ISSUE_RELATIONS, "issue"))
-        }
+        graphql::ISSUE_DEPENDS_ON
+        | graphql::ISSUE_DEPENDED_ON_BY
+        | graphql::ISSUE_LINK_RELATIONS => Some((graphql::ISSUE_RELATIONS, "issue")),
         graphql::PROJECT_DEPENDS_ON | graphql::PROJECT_DEPENDED_ON_BY => {
             Some((graphql::PROJECT_RELATIONS, "project"))
         }
@@ -9363,7 +9438,7 @@ pub fn linear_states(states: &[(&str, &str, &str)]) -> Value {
 ///
 /// A counter rather than the wall clock, so two writes in the same second still read back
 /// in the order they were made, and an edit's `updatedAt` always moves.
-fn linear_tick(data: &mut Value) -> (u64, String) {
+pub(crate) fn linear_tick(data: &mut Value) -> (u64, String) {
     let tick = data["_linear_clock"].as_u64().unwrap_or(0) + 1;
     data["_linear_clock"] = json!(tick);
     let stamp = format!(
@@ -9560,8 +9635,11 @@ fn linear_write_relation(
     }]
     .as_array_mut()
     .ok_or("fixture edges are not an array")?;
-    // A relation Linear already derived from a link is the one asked for.
-    if !edges.contains(&edge) {
+    // A relation Linear already derived from a link is the one asked for — and a `related` one
+    // has no direction, so one created again the other way round is the same relation (spike
+    // `spike-relations`, requests 190–191).
+    let reversed = json!({"from": edge["to"], "to": edge["from"], "kind": edge["kind"]});
+    if !edges.contains(&edge) && !(kind == "related" && edges.contains(&reversed)) {
         edges.push(edge);
     }
     Ok(if project {
@@ -10063,7 +10141,7 @@ fn linear_narrow_issue_update(
     Ok(json!({"issueUpdate":{"success":true,"issue":issue}}))
 }
 
-fn linear_task(v: &Value, data: &Value) -> Value {
+pub(crate) fn linear_task(v: &Value, data: &Value) -> Value {
     let identifier = v
         .get("_identifier")
         .filter(|identifier| identifier.is_string())

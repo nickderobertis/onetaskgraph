@@ -19,7 +19,7 @@ Keys are free-form, with two prefixes reserved:
      in `crates/onetaskgraph-e2e/tests/e2e/surface.rs` reads this bullet, and fails when the keys it
      lists or the count it states in words differ from the constants each key is spelled once
      as — `MetadataKey::COPIES_KEY` among them. -->
-- `onetaskgraph.` belongs to this product. It defines exactly nineteen keys, each spelled
+- `onetaskgraph.` belongs to this product. It defines exactly twenty keys, each spelled
   once so no source can invent its own: `onetaskgraph.repositories`
   (`Repository::METADATA_KEY`), `onetaskgraph.depends_on`
   (`DependencyEdge::RECORDED_KEY`), `onetaskgraph.delivers` (`TaskRef::DELIVERS_KEY`),
@@ -37,7 +37,9 @@ Keys are free-form, with two prefixes reserved:
   a create safe to retry — `onetaskgraph.creating` (`MetadataKey::CREATING_KEY`), held by an item
   only while a copy is creating its counterpart, and `onetaskgraph.create_key`
   (`MetadataKey::CREATE_KEY`), which an item a copy created keeps (README, "A create safe to
-  retry") —
+  retry") — and the typed links an item holds, `onetaskgraph.links`
+  (`TaskLink::METADATA_KEY`; README, "Relations: a parent, and typed links"), which every
+  endpoint of a link holds and no copy carries —
   in the contract crate, and
   `onetaskgraph.origin` (`GlobalId::ORIGIN_KEY`) and `onetaskgraph.lineage`
   (`GlobalId::LINEAGE_KEY`) in the engine —
@@ -508,6 +510,7 @@ The reserved keys keep the owners they had:
 | `onetaskgraph.lineage` | the copy, which records the root of the chain of copies its source is one of — the source's own lineage, else its origin — where that is not the origin it records, and keeps the destination's own wherever it keeps its origin; never an id whose provenance the write withholds |
 | `onetaskgraph.copies`, `onetaskgraph.members`, `onetaskgraph.member_of`, `onetaskgraph.assets`, `onetaskgraph.create_key` | the destination, which keeps what it holds whatever the source carries |
 | `onetaskgraph.creating` | neither: an intent to create is the copied item's own, so it is never carried to a counterpart |
+| `onetaskgraph.links` | the destination, which keeps the links it holds of its own: a link names its two endpoints, and the copy is neither |
 | `onetaskgraph.repositories`, `onetaskgraph.depends_on`, `onetaskgraph.delivers`, `onetaskgraph.delivered_by` | neither: the typed fields carry them, so they are dropped from both sides' metadata (above) |
 | `onetaskgraph.template`, `onetaskgraph.item_kind` | the source: where the source holds none, the destination's is dropped, so provenance that no longer describes the content does not survive it |
 | `onetaskgraph.copied_version`, `onetaskgraph.copied_with_comments`, `onetaskgraph.copied_destination_version` | the copy, which writes its own record of itself on every task, project and document it writes and keeps neither end's (below) |

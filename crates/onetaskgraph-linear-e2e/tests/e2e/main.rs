@@ -38,6 +38,7 @@ mod pinning_walk;
 mod plan_copy;
 mod plan_road;
 mod project_create;
+mod relations;
 mod store_cost;
 mod stored_digest;
 mod telemetry;

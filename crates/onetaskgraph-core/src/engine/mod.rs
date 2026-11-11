@@ -39,6 +39,7 @@ mod metadata;
 mod narrow;
 mod plan_graph;
 mod projection;
+pub(crate) mod relations;
 mod rendered;
 mod resume;
 mod stored;
@@ -114,6 +115,11 @@ pub use local::ProjectSelector;
 pub use metadata::MetadataSet;
 pub use narrow::{GuardOutcome, PriorityGuard, TaskContentSet, TaskPrioritySet};
 pub use plan_graph::{PlanCreated, PlanMember, PlannedMember, PlannedProject};
+pub use relations::{
+    LinkBatch, LinkItem, LinkOp, LinkOutcome, LinkResult, LinksWritten, OtherEnd, ParentBatch,
+    ParentEdge, ParentOutcome, ParentResult, ParentsSet, RELATIONS_SCHEMA_VERSION, ReadLink,
+    RelationsItem, TaskRelations,
+};
 pub use rendered::{
     Body, DocumentCreate, ProjectCreate, Regenerated, Regeneration, RenderRequest, RenderTemplate,
     RenderedRecord, TaskCreate, TaskCreated, TemplateAnswers, UnusedAnswers,
@@ -892,6 +898,17 @@ pub enum EngineError {
     UnnarrowedQuery {
         /// The query's key.
         key: String,
+    },
+
+    /// `task relations --complete` read an item whose children were not read whole.
+    #[error(
+        "the relations of {items} were not read whole, so --complete refuses the answer\n\
+         next: drop --complete to take what was read, with each item's `children_complete` \
+         saying which are partial"
+    )]
+    RelationsIncomplete {
+        /// The items read in part.
+        items: String,
     },
 
     /// `task comments --item` named a task of a source other than the one listed.

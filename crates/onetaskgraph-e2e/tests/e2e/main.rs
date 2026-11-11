@@ -216,6 +216,12 @@ mod project_status;
 // seconds. Creating and regenerating an item is the engine's, so it cannot sit behind a plugin
 // crate's edge, which AGENTS.md forbids depending on the engine at any depth.
 mod rendered;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
+// narrower edge for it: every journey drives the binary against folders of Markdown and an
+// in-memory source, with no credential and no network, in a few seconds. Parents and links are
+// the engine's verbs, and a link across two sources crosses plugins, so they cannot sit behind
+// one plugin crate's edge, which AGENTS.md forbids depending on the engine at any depth.
+mod relations;
 mod section_links;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
 // narrower edge for it: every journey here drives the binary against folders of Markdown and

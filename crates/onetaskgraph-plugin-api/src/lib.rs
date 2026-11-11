@@ -28,6 +28,7 @@ mod issue;
 mod metadata;
 mod metering;
 mod query;
+mod relation;
 mod section;
 mod source;
 mod status_mapping;
@@ -65,6 +66,11 @@ pub use metering::{Metered, Metering};
 pub use query::{
     Cursor, DocumentQuery, LabelFilter, MetadataMatch, Page, PageRequest, ProjectFilter,
     ProjectQuery, TaskQuery, TextFields, TextQuery,
+};
+pub use relation::{
+    LINKS_HEADING, LinkDirection, LinkTypeConfig, LinkTypes, NativeLink, NativeWord, ParentAnswer,
+    ParentWrite, Relations, TaskLink, arrow, link_line, read_content, relationless, relinked,
+    strip_links_section, with_links_section,
 };
 pub use section::{BodyMarkup, SharedBodyMarkup, StoredHeading};
 pub use source::{Health, SecretResolver, SourcePlugin, TaskSource};

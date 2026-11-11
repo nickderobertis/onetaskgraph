@@ -2,11 +2,12 @@
 
 use onetaskgraph_plugin_api::{
     Capabilities, Comment, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport,
-    Document, ItemKind, Label, NativeId, Priority, Project, Support, Task, TaskRef, WriteSupport,
+    Document, ItemKind, Label, LinkTypeConfig, NativeId, Priority, Project, Support, Task, TaskRef,
+    WriteSupport,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, de::Error as _};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU32;
 
 /// Everything an in-memory source serves, plus what it claims it can do.
@@ -48,6 +49,11 @@ pub struct InMemoryConfig {
     /// local Markdown document's `depends_on` takes its level from the document.
     #[serde(deserialize_with = "project_edges")]
     pub project_dependencies: Vec<DependencyEdge>,
+    /// Each task's parent, a task of this source, by the child's id.
+    pub parents: BTreeMap<NativeId, NativeId>,
+    /// The link types this source would mirror natively — none, as it has no relation of its
+    /// own: a type naming a `native` word is refused when the source is built.
+    pub link_types: BTreeMap<String, LinkTypeConfig>,
 }
 
 /// One comment, and the task it is on.
@@ -300,6 +306,33 @@ impl InMemoryConfig {
             }
         }
 
+        // Each parent names two tasks of this source, and no chain of them returns to its start.
+        for (child, parent) in &self.parents {
+            for (role, id) in [("child", child), ("parent", parent)] {
+                if !task_ids.contains(id) {
+                    problems.push(format!(
+                        "parents names {id} as a {role}, which is no task of this source; a \
+                         parent and its child are both tasks this source serves"
+                    ));
+                }
+            }
+            let mut at = Some(parent);
+            let mut steps = 0;
+            while let Some(ancestor) = at {
+                if ancestor == child {
+                    problems.push(format!(
+                        "parents makes {child} its own ancestor through {parent}, which is a \
+                         cycle; a parent chain ends at a task with no parent"
+                    ));
+                    break;
+                }
+                steps += 1;
+                if steps > self.parents.len() {
+                    break;
+                }
+                at = self.parents.get(ancestor);
+            }
+        }
         if problems.is_empty() {
             Ok(())
         } else {

@@ -119,7 +119,7 @@ impl LinearSource {
     /// # Errors
     ///
     /// As [`Self::send_aliased`].
-    async fn send_aliased_each(
+    pub(crate) async fn send_aliased_each(
         &self,
         single: &str,
         each: &[Value],

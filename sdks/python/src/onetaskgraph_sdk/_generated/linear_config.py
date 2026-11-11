@@ -46,6 +46,16 @@ class LinearProjectId(RootModel[str]):
     ]
 
 
+class LinkTypeConfig(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    native: Annotated[
+        str | None,
+        Field(description="The destination's own relation this type is mirrored as."),
+    ] = None
+
+
 class StatusNames1(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
@@ -114,3 +124,10 @@ class LinearConfig(BaseModel):
             description="The id of one Linear project of the configured team, scoping this source to it.\n\nWhen set, every task read is narrowed to that project's issues, project and document\nreads return only that project and its documents, a task or a document written with\nno project is placed in it, and one naming another project is refused. Absent, the\nsource reads and writes team-wide."
         ),
     ] = None
+    link_types: Annotated[
+        dict[str, LinkTypeConfig],
+        Field(
+            description='The link types this source mirrors as Linear\'s own `related` issue relation, each as\n`<type>: {"native": "related"}` — the one word a Linear source mirrors a link as. A type\nnot named here is kept in the store\'s metadata alone.',
+            validate_default=True,
+        ),
+    ] = {}

@@ -58,7 +58,7 @@ fn every_budget_names_the_one_runner_and_no_shell() {
     let budgets = file["budgets"].as_array().expect("a list of budgets");
     assert!(!budgets.is_empty(), "budgets.yaml declares no budget");
     let first = &budgets[0]["command"];
-    // The one runner, under the names the tasks registering two budgets gave it: each entry is
+    // The one runner, under the names the tasks registering three budgets gave it: each entry is
     // `budget_runner::report` itself, reading the record ONEBUDGETSPEC_BUDGET_ID selects.
     let named = |entry: &str| {
         let mut command = first.clone();
@@ -73,6 +73,7 @@ fn every_budget_names_the_one_runner_and_no_shell() {
         first.clone(),
         named("budget_runner::report_private_plan_road"),
         named("budget_runner::report_follow_up_cycle"),
+        named("budget_runner::report_relation_batch"),
     ];
     for budget in budgets {
         let id = budget["id"].as_str().expect("an id");

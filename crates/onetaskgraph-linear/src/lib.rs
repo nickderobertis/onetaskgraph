@@ -567,6 +567,7 @@ pub mod live_artifact;
 
 mod batch;
 mod origins;
+mod relations;
 mod shared;
 
 /// The plugin kind a `linear` source's `plugin:` field names.
@@ -723,10 +724,11 @@ pub mod graphql {
     /// along because its metadata slot is where an edge to another source is recorded, so
     /// those edges cost no second request.
     pub const ISSUE_DEPENDS_ON: &str = "query($id:String!,$first:Int!,$after:String){ issue(id:$id){ description relations(first:$first,after:$after){nodes{id type relatedIssue{id}} pageInfo{hasNextPage endCursor}} } }";
-    /// What depends on one issue: [`ISSUE_RELATIONS`] with its `inverseRelations` alone. No
-    /// `description`: the reverse of a recorded edge is derived from the far end, never
-    /// written down on the near item.
-    pub const ISSUE_DEPENDED_ON_BY: &str = "query($id:String!,$first:Int!,$after:String){ issue(id:$id){ inverseRelations(first:$first,after:$after){nodes{id type issue{id}} pageInfo{hasNextPage endCursor}} } }";
+    /// What depends on one issue: [`ISSUE_RELATIONS`] with its `inverseRelations` alone. The
+    /// `description` is read for its links alone — never for a recorded edge, whose reverse is
+    /// derived from the far end — so a `related` relation mirroring a link is told from a
+    /// `related` dependency at no request of its own.
+    pub const ISSUE_DEPENDED_ON_BY: &str = "query($id:String!,$first:Int!,$after:String){ issue(id:$id){ description inverseRelations(first:$first,after:$after){nodes{id type issue{id}} pageInfo{hasNextPage endCursor}} } }";
     /// What one project depends on, on the terms of [`ISSUE_DEPENDS_ON`].
     pub const PROJECT_DEPENDS_ON: &str = "query($id:String!,$first:Int!,$after:String){ project(id:$id){ content relations(first:$first,after:$after){nodes{id type relatedProject{id}} pageInfo{hasNextPage endCursor}} } }";
     /// What depends on one project, on the terms of [`ISSUE_DEPENDED_ON_BY`].
@@ -933,9 +935,20 @@ pub mod graphql {
     /// Remove a comment.
     pub const COMMENT_DELETE: &str = "mutation($id:String!){ commentDelete(id:$id){success} }";
 
+    /// [`ISSUE_RELATIONS`] with the issue's own `id`, as a mirrored link's removal reads the
+    /// relations of its `from`: every alias's answer is held to the issue it asked for, so an
+    /// answer about another issue never names a relation to delete.
+    pub const ISSUE_LINK_RELATIONS: &str = "query($id:String!,$first:Int!,$after:String){ issue(id:$id){ id relations(first:$first,after:$after){nodes{id type relatedIssue{id}} pageInfo{hasNextPage endCursor}} inverseRelations(first:$first,after:$after){nodes{id type issue{id}} pageInfo{hasNextPage endCursor}} } }";
+
+    /// One issue as a relation read reads it: the task, its parent and a first page of its
+    /// children — and nothing else, because the selection is what moves a read's complexity.
+    pub const ISSUE_PARENT_READ: &str = "query($id:String!){ issue(id:$id){ id identifier title description url createdAt updatedAt archivedAt state{name type} priority labels{nodes{id name color}} project{id} parent{id} children(first:50){nodes{id} pageInfo{hasNextPage}} } }";
+    /// Set or remove one issue's parent — `parentId: null` removes it — reading the issue back.
+    pub const ISSUE_PARENT_UPDATE: &str = "mutation($id:String!,$input:IssueUpdateInput!){ issueUpdate(id:$id,input:$input){success issue{ id identifier title description descriptionState url createdAt updatedAt archivedAt state{name type} priority labels{nodes{id name color}} project{id} parent{id} }} }";
+
     /// The documents this source sends batched by [`composed`], each the single-root document it
     /// batches.
-    pub const BATCHED: [&str; 13] = [
+    pub const BATCHED: [&str; 17] = [
         ISSUE_CREATE,
         ISSUE_LABEL,
         PROJECT_LABEL,
@@ -949,6 +962,10 @@ pub mod graphql {
         PROJECT,
         PROJECT_DEPENDS_ON,
         DOCUMENT,
+        ISSUE_PARENT_READ,
+        ISSUE_PARENT_UPDATE,
+        ISSUE_LINK_RELATIONS,
+        ISSUE_RELATION_DELETE,
     ];
 
     /// `single` — a document of one root field, as this source sends it alone — `count` times
@@ -1127,6 +1144,10 @@ pub struct LinearConfig {
     /// no project is placed in it, and one naming another project is refused. Absent, the
     /// source reads and writes team-wide.
     project: Option<ProjectScope>,
+    /// The link types this source mirrors as Linear's own `related` issue relation, each as
+    /// `<type>: {"native": "related"}` — the one word a Linear source mirrors a link as. A type
+    /// not named here is kept in the store's metadata alone.
+    link_types: std::collections::BTreeMap<String, onetaskgraph_plugin_api::LinkTypeConfig>,
 }
 
 /// The id of one Linear project, which a scoped source holds alone.
@@ -1221,6 +1242,7 @@ impl Default for LinearConfig {
             endpoint: Endpoint(DEFAULT_ENDPOINT.into()),
             status_mapping: StatusMapping::default(),
             project: None,
+            link_types: std::collections::BTreeMap::new(),
         }
     }
 }
@@ -1884,6 +1906,8 @@ struct LinearSource {
     /// What [`TaskSource::read_ahead_origins_for_copy`] read, until the next write or
     /// [`TaskSource::end_command`]; see [`origins::OriginsAhead`].
     origins_ahead: std::sync::Mutex<origins::OriginsAhead>,
+    /// The link types this source mirrors as Linear's `related` relation.
+    link_types: onetaskgraph_plugin_api::LinkTypes,
 }
 
 /// One item's dependency read in one direction, as [`LinearSource::edges_versions`] keys it.
@@ -1905,6 +1929,18 @@ impl LinearSource {
                     .map(|(category, mapped)| (category, mapped.as_str())),
             )?;
         }
+        let link_types = onetaskgraph_plugin_api::LinkTypes::checked(
+            KIND,
+            &config.link_types,
+            &[relations::MIRRORED],
+            relations::REFUSED_WORDS,
+        )
+        .map_err(|error| match error {
+            SourceError::Config { message } => SourceError::Config {
+                message: format!("source {name}: {message}"),
+            },
+            other => other,
+        })?;
         let key = secrets
             .get(&config.api_key_env.0)
             .filter(|v| !v.expose_secret().trim().is_empty())
@@ -1938,6 +1974,7 @@ impl LinearSource {
             body_markup: std::sync::OnceLock::new(),
             answered: std::sync::Mutex::new(std::collections::HashMap::new()),
             origins_ahead: std::sync::Mutex::new(origins::OriginsAhead::default()),
+            link_types,
         })
     }
 }
@@ -1960,7 +1997,8 @@ fn issue_relation_type(kind: DependencyKind) -> &'static str {
 enum HeldRelations<'a> {
     /// None: the item was just created.
     None,
-    /// The first page of them, as the rewrite's own answer reported it.
+    /// The item as the rewrite's own answer reported it, the first page of its relations and
+    /// its long form among its members.
     Page(&'a Value),
     /// Nothing yet, so they are read.
     Unread,
@@ -3330,7 +3368,13 @@ impl LinearSource {
         {
             input.insert("title".into(), json!(title));
         }
-        let content = update.content.as_deref().or(visible.as_deref());
+        // A content write keeps the task's `## Links` section, re-rendered from the links the
+        // slot holds once written.
+        let relinked = update
+            .content
+            .as_deref()
+            .map(|content| onetaskgraph_plugin_api::relinked(content, visible.as_deref(), &slot));
+        let content = relinked.as_deref().or(visible.as_deref());
         if content != visible.as_deref() || slot != held {
             let written = Self::described(content, &slot)?;
             // Checked before anything is sent: content ending in what this source reads as
@@ -3649,9 +3693,15 @@ impl LinearSource {
         let deferred = matches!(held, HeldRelations::None)
             && matches!(kind, WriteKind::Task)
             && self.deferring.load(std::sync::atomic::Ordering::SeqCst);
+        // The `related` relations mirroring a link the item holds, which no dependency write
+        // takes away: read off the long form beside the relations wherever it was read.
+        let mut mirrors = std::collections::BTreeSet::new();
         let mut answered = match held {
             HeldRelations::None => None,
-            HeldRelations::Page(page) => Some(page.clone()),
+            HeldRelations::Page(issue) => {
+                mirrors = self.mirrored_in(issue.get("description").and_then(Value::as_str))?;
+                Some(issue["relations"].clone())
+            }
             HeldRelations::Unread => Some(Value::Null),
         };
         while let Some(page) = answered.take() {
@@ -3677,6 +3727,10 @@ impl LinearSource {
                     .ok_or_else(|| SourceError::Malformed {
                         message: "missing relation item".into(),
                     })?;
+                if matches!(kind, WriteKind::Task) {
+                    mirrors
+                        .extend(self.mirrored_in(root.get("description").and_then(Value::as_str))?);
+                }
                 root.get("relations")
                     .cloned()
                     .ok_or_else(|| SourceError::Malformed {
@@ -3693,6 +3747,13 @@ impl LinearSource {
                 })?
             {
                 let id = backend_id(relation, "id")?;
+                if !mirrors.is_empty()
+                    && str_at(relation, "type")? == relations::MIRRORED
+                    && backend_id(&relation["relatedIssue"], "id")
+                        .is_ok_and(|far| mirrors.contains(far))
+                {
+                    continue;
+                }
                 if !wanted.is_empty() {
                     let far = backend_id(&relation["relatedIssue"], "id")?;
                     let relation_type = str_at(relation, "type")?;
@@ -4009,8 +4070,16 @@ impl LinearSource {
             TaskRef::DELIVERED_BY_KEY,
             &write.item.delivered_by,
         );
+        // A linked task keeps its `## Links` section, each line rendered from its links: the
+        // write holds no stored description to keep the other ends' titles from, and reading
+        // one would cost every write a request.
+        let content = write
+            .item
+            .content
+            .as_deref()
+            .map(|content| onetaskgraph_plugin_api::relinked(content, None, &metadata));
         let description = self.write_description(
-            write.item.content.as_deref(),
+            content.as_deref(),
             &metadata,
             &write.item.repositories,
             write.item.classification,
@@ -5186,6 +5255,9 @@ impl TaskSource for LinearSource {
             return Ok(None);
         };
         let issue = task.id;
+        // The task's `## Links` section, re-rendered from the links it holds, stays with it.
+        let (stored, held) = metadata_description(description.clone())?;
+        let content = &onetaskgraph_plugin_api::relinked(content, stored.as_deref(), &held);
         let slot = match description.as_deref() {
             Some(description) => metadata_slot(description)?.map(str::to_owned),
             None => None,
@@ -5399,8 +5471,10 @@ impl TaskSource for LinearSource {
         let Some((task, description)) = self.issue_held(id, Read::ForWrite).await? else {
             return Ok(None);
         };
-        let (_, mut slot) = metadata_description(description.clone())?;
+        let (stored, mut slot) = metadata_description(description.clone())?;
         slot.insert(MetadataKey::TEMPLATE_KEY.to_owned(), provenance.clone());
+        // A rendering keeps the task's `## Links` section, re-rendered from its links.
+        let content = &onetaskgraph_plugin_api::relinked(content, stored.as_deref(), &slot);
         // No read-back check, unlike a content write: this slot is never empty, it is written
         // after the content, and a read takes the last slot off first, so the content reads
         // back as itself whatever it ends in.
@@ -5443,12 +5517,14 @@ impl TaskSource for LinearSource {
         let Some((item, held)) = self.issue_held(id, Read::ForWrite).await? else {
             return Ok(None);
         };
-        let (_, mut metadata) = metadata_description(held)?;
+        let (stored, mut metadata) = metadata_description(held)?;
         metadata.insert(MetadataKey::TEMPLATE_KEY.to_owned(), provenance.clone());
         let uploads = self.upload_assets(assets).await?;
         let content =
             onetaskgraph_plugin_api::serve_asset_references(content, &mut metadata, &uploads);
-        let written = Self::described(Some(&content), &metadata)?;
+        // A rendering keeps the task's `## Links` section, re-rendered from its links.
+        let relinked = onetaskgraph_plugin_api::relinked(&content, stored.as_deref(), &metadata);
+        let written = Self::described(Some(&relinked), &metadata)?;
         self.write_description_alone(&item.id, written.as_deref())
             .await?;
         Ok(Some(onetaskgraph_plugin_api::AssetsWritten {
@@ -5510,6 +5586,40 @@ impl TaskSource for LinearSource {
     ) -> Result<Option<TaskUpdateOutcome>, SourceError> {
         self.targeted_update(id, update).await
     }
+
+    /// Each issue's parent, children and links, in one aliased relation read.
+    async fn read_relations(
+        &self,
+        ids: &[NativeId],
+    ) -> Vec<Result<Option<onetaskgraph_plugin_api::Relations>, SourceError>> {
+        self.relations_read(ids).await
+    }
+
+    async fn set_parents(
+        &self,
+        writes: &[onetaskgraph_plugin_api::ParentWrite],
+    ) -> Vec<Result<onetaskgraph_plugin_api::ParentAnswer, SourceError>> {
+        self.parents_written(writes).await
+    }
+
+    fn link_types(&self) -> onetaskgraph_plugin_api::LinkTypes {
+        self.link_types.clone()
+    }
+
+    async fn add_native_links(
+        &self,
+        links: &[onetaskgraph_plugin_api::NativeLink],
+    ) -> Vec<Result<(), SourceError>> {
+        self.native_links_added(links).await
+    }
+
+    async fn remove_native_links(
+        &self,
+        links: &[onetaskgraph_plugin_api::NativeLink],
+    ) -> Vec<Result<(), SourceError>> {
+        self.native_links_removed(links).await
+    }
+
     /// Every issue read in one aliased read and every update that changes something sent in
     /// one aliased `issueUpdate` document — see the `batch` module for where one is sent alone.
     async fn update_tasks(
@@ -5644,7 +5754,7 @@ fn held_relations<'a>(
     written
         .get("relations")
         .filter(|relations| !relations.is_null())
-        .map(HeldRelations::Page)
+        .map(|_| HeldRelations::Page(written))
         .ok_or_else(|| SourceError::Malformed {
             message: "a rewrite answered without the relations it was asked for".into(),
         })
@@ -6744,6 +6854,21 @@ impl LinearSource {
         };
         self.note_edges_version(root, direction, id, &d, walked);
         let mut answered = relation_page(&d, root, id, direction)?;
+        // A `related` relation mirroring a link the issue holds is the link's, not a dependency.
+        if matches!(root, DependencyRoot::Issue) {
+            let mirrors =
+                self.mirrored_in(d.pointer("/issue/description").and_then(Value::as_str))?;
+            if !mirrors.is_empty() {
+                answered.items.retain(|edge| {
+                    let far = if direction == Direction::DependsOn {
+                        edge.to.id()
+                    } else {
+                        edge.from.id()
+                    };
+                    edge.kind != DependencyKind::Related || !mirrors.contains(far)
+                });
+            }
+        }
         // Only forwards: the reverse of a recorded edge is derived from the far end, never
         // written down on the near item. They ride on the last page of relations, which read
         // the long form they are recorded in, as far as the page has room — so they cost no
@@ -6878,6 +7003,8 @@ fn map_task(
     // and reporting it there as well would hand a consumer two spellings of one list.
     let delivers = delivery_list(&mut metadata, TaskRef::DELIVERS_KEY, &id, source)?;
     let delivered_by = delivery_list(&mut metadata, TaskRef::DELIVERED_BY_KEY, &id, source)?;
+    // The `## Links` section the store renders beside an issue's links is not its content.
+    let content = onetaskgraph_plugin_api::read_content(content, &metadata);
     Ok(Task {
         version: change_token::task(v, spelling),
         id,

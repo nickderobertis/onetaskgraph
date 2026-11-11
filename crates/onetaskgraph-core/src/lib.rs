@@ -93,6 +93,11 @@ pub use engine::{
     FieldOutcome, ItemOutcome, SweepCoverage, SweepField, SweepItem, SweepKind, SweepReport,
     SweepRequests, Uncovered,
 };
+pub use engine::{
+    LinkBatch, LinkItem, LinkOp, LinkOutcome, LinkResult, LinksWritten, OtherEnd, ParentBatch,
+    ParentEdge, ParentOutcome, ParentResult, ParentsSet, RELATIONS_SCHEMA_VERSION, ReadLink,
+    RelationsItem, TaskRelations,
+};
 pub use environment::Environment;
 pub use failure::{Failure, FailureClass, FailureDocument, classify};
 pub use global_id::GlobalId;

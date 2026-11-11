@@ -14,7 +14,9 @@ use serde::{Deserialize, Serialize};
 ///
 /// Rendered `<source>:<native>` and parsed by splitting on the **first** colon,
 /// so a native id may contain colons freely.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
 #[serde(try_from = "String", into = "String")]
 pub struct GlobalId {
     /// The configured source the item came from.

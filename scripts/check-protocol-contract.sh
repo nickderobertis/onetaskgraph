@@ -141,6 +141,26 @@ NOT_METHODS = {
         "not a message: §4.16 says the engine answers it for a hosted source by the trait's "
         "default, one `add_comment` per comment"
     ),
+    "read_relations": (
+        "not a message: §4.21 says the engine answers it for a hosted source by the trait's "
+        "default, a refusal: a hosted source holds no relations"
+    ),
+    "set_parents": (
+        "not a message: §4.21 says the engine answers it for a hosted source by the trait's "
+        "default, a refusal: a hosted source holds no relations"
+    ),
+    "add_native_links": (
+        "not a message: §4.21 says the engine answers it for a hosted source by the trait's "
+        "default, a refusal: a hosted source holds no relations"
+    ),
+    "remove_native_links": (
+        "not a message: §4.21 says the engine answers it for a hosted source by the trait's "
+        "default, a refusal: a hosted source holds no relations"
+    ),
+    "link_types": (
+        "not a message: §4.21 says the engine answers it for a hosted source by the trait's "
+        "default, no type mirrored"
+    ),
     "update_tasks": (
         "not a message: §4.21 says the engine answers it for a hosted source by the trait's "
         "default, one `update_task` per update"

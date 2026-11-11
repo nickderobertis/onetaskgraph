@@ -55,6 +55,11 @@ RESPONSE_ROOTS = {
     # Many held updates and many comments of one source, each answered on its own.
     "task_update_many": "TasksUpdated",
     "task_comment_add_many": "CommentsAdded",
+    # Many parents and many typed links, each answered on its own, and the relations of tasks.
+    "task_parent_set_many": "ParentsSet",
+    "task_link_add_many": "LinksWritten",
+    "task_link_remove_many": "LinksWritten",
+    "task_relations": "TaskRelations",
     "project_list": "QueryResponseOfQualifiedProject",
     "project_show": "QueryResponseOfQualifiedProject",
     "project_deps": "QueryResponseOfQualifiedEdge",
@@ -198,6 +203,13 @@ CONTRACT_ROOTS = {
     "UpdateBatch",
     "CommentBatch",
     "BatchOutcome",
+    # The request documents `task parent set-many` and `task link add-many`/`remove-many` read,
+    # and the outcome vocabularies they and `task relations` answer in.
+    "ParentBatch",
+    "LinkBatch",
+    "ParentOutcome",
+    "LinkOutcome",
+    "OtherEnd",
 }
 # Commands that answer in more than one shape, by the plugin of the source they are asked
 # about: each command's RESPONSE_ROOTS entry is one shape, and these are the others. `sources
@@ -954,7 +966,7 @@ def operands(command: tuple[str, ...]) -> tuple[str, ...]:
             return ("text",)
         case ("sources", "status-options" | "fields" | "route" | "sanitize"):
             return ("source",)
-        case ("task" | "document", "copy") | ("task", "show-many" | "locate"):
+        case ("task" | "document", "copy") | ("task", "show-many" | "locate" | "relations"):
             return ("ids",)
         case ("task", "comment", "add" | "list"):
             return ("id",)
@@ -1072,6 +1084,15 @@ DOCUMENT_COMMANDS: dict[tuple[str, ...], DocumentCommand] = {
     ("task", "comment", "add-many"): DocumentCommand(
         option="input", parameter="batch", model="CommentBatch"
     ),
+    ("task", "parent", "set-many"): DocumentCommand(
+        option="input", parameter="batch", model="ParentBatch"
+    ),
+    ("task", "link", "add-many"): DocumentCommand(
+        option="input", parameter="batch", model="LinkBatch"
+    ),
+    ("task", "link", "remove-many"): DocumentCommand(
+        option="input", parameter="batch", model="LinkBatch"
+    ),
 }
 
 # The options of one command that take either one string or a list of them: `task copy
@@ -1120,7 +1141,7 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         "from functools import cache",
         "from typing import TYPE_CHECKING, Literal, overload",
         "",
-        "from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError",
+        "from pydantic import BaseModel, JsonValue, RootModel, TypeAdapter, ValidationError",
         "",
         # The models are read through `models` when a method runs, so importing this module
         # imports none of them: each is built when the first method answering with it is
@@ -1199,7 +1220,8 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         "",
         "    Taken as its model, or as a mapping validated to it here, so a malformed member is",
         "    refused before the binary is started, naming the member; written by its wire names,",
-        "    leaving out every member that is `None`, which the binary reads as absent.",
+        "    leaving out every member that is `None`, which the binary reads as absent — but for a",
+        "    member it requires, which it reads as `null`.",
         '    """',
         "    match document:",
         "        case BaseModel() if isinstance(document, model):",
@@ -1217,7 +1239,42 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         '                "a mapping of its members"',
         "            )",
         "            raise TypeError(message)",
-        "    return checked.model_dump_json(by_alias=True, exclude_none=True)",
+        '    dumped = checked.model_dump(mode="json", by_alias=True, exclude_none=True)',
+        "    written = _required_nulls(checked, dumped)",
+        '    compact = (",", ":")',
+        "    return json.dumps(written, allow_nan=False, ensure_ascii=False, separators=compact)",
+        "",
+        "",
+        "def _required_nulls(value: object, dumped: object) -> object:",
+        '    """`dumped`, with every required member of `value` that is `None` written as `null`.',
+        "",
+        "    `exclude_none` leaves out every `None`, which the binary reads as absent; a member it",
+        "    requires and reads `null` in — a parent edge's `parent`, whose `null` removes the",
+        "    parent — would then be refused as missing rather than read as what it says.",
+        '    """',
+        "    match value, dumped:",
+        "        case RootModel() as root, _:",
+        "            return _required_nulls(root.root, dumped)",
+        "        case BaseModel() as model, dict() as out:",
+        "            for name, field in type(model).model_fields.items():",
+        "                key = field.serialization_alias or field.alias or name",
+        "                member = getattr(model, name)",
+        "                if member is None:",
+        "                    if field.is_required():",
+        "                        out[key] = None",
+        "                elif key in out:",
+        "                    out[key] = _required_nulls(member, out[key])",
+        "            return out",
+        "        case list() | tuple() as items, list() as out if len(items) == len(out):",
+        "            pairs = zip(items, out, strict=True)",
+        "            return [_required_nulls(item, written) for item, written in pairs]",
+        "        case Mapping() as mapping, dict() as out:",
+        "            for key, item in mapping.items():",
+        "                if isinstance(key, str) and key in out:",
+        "                    out[key] = _required_nulls(item, out[key])",
+        "            return out",
+        "        case _:",
+        "            return dumped",
         "",
         "",
         "def _string_or_strings(",
@@ -1325,8 +1382,9 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
     ]
     positional_types = {
         "id": "GlobalId | str",
-        # `task copy`, `document copy`, `task show-many` and `task locate` take one or more ids,
-        # the variadic positionals the command surface has; the client passes each through.
+        # `task copy`, `document copy`, `task show-many`, `task locate` and `task relations` take
+        # one or more ids, the variadic positionals the command surface has; the client passes
+        # each through.
         "ids": "list[GlobalId | str] | tuple[GlobalId | str, ...]",
         # `task status set` takes the category it sets as its second operand, spelled as the
         # binary's status vocabulary spells it — which is exactly the generated enum's values.

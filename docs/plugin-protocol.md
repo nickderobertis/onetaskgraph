@@ -2243,6 +2243,14 @@ not a message of this protocol: for a hosted source the engine answers it by the
 default, one `update_task` per update, preceded by a `get_task` of each task an update is held
 to a version of or guarded by a priority.
 
+A task's parent and its typed links are not messages of this protocol either.
+`TaskSource::read_relations`, `TaskSource::set_parents`, `TaskSource::add_native_links` and
+`TaskSource::remove_native_links` are answered for a hosted source by the trait's defaults —
+each refused as holding no relations — and `TaskSource::link_types` by its default, no type
+mirrored. A link's ends are written through `update_task`'s metadata and content, but the
+engine reads each end with `read_relations` first, so no link is ever written to a hosted
+source and no `## Links` section reaches one.
+
 ### 4.22 `end_command`
 
 Sent only to a plugin that answered `ends_commands: true` at the handshake (§3.11), and never

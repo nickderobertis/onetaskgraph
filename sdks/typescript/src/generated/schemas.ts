@@ -77,6 +77,9 @@ export type RuntimeSchemaRoot =
   | "ItemType"
   | "Label"
   | "LinearConfig"
+  | "LinkBatch"
+  | "LinkOutcome"
+  | "LinksWritten"
   | "LocateReport"
   | "Located"
   | "Location"
@@ -85,6 +88,7 @@ export type RuntimeSchemaRoot =
   | "NativeId"
   | "NewComment"
   | "Origin"
+  | "OtherEnd"
   | "OutputFormat"
   | "PageOfComment"
   | "PageOfDependencyEdge"
@@ -94,6 +98,9 @@ export type RuntimeSchemaRoot =
   | "PageOfTask"
   | "PageRequest"
   | "PageToken"
+  | "ParentBatch"
+  | "ParentOutcome"
+  | "ParentsSet"
   | "Placement"
   | "PlannedProject"
   | "Predicate"
@@ -118,8 +125,10 @@ export type RuntimeSchemaRoot =
   | "QueryResponseOfQualifiedProject"
   | "QueryResponseOfQualifiedTask"
   | "QueryResponseOfSearchHit"
+  | "ReadLink"
   | "ReconcileOutcome"
   | "Regenerated"
+  | "RelationsItem"
   | "RenderedTemplate"
   | "Repository"
   | "RepositoryVisibility"
@@ -151,9 +160,11 @@ export type RuntimeSchemaRoot =
   | "TaskContentSet"
   | "TaskDetail"
   | "TaskDetails"
+  | "TaskLink"
   | "TaskPrioritySet"
   | "TaskQuery"
   | "TaskRef"
+  | "TaskRelations"
   | "TaskStatusSet"
   | "TaskUpdate"
   | "TaskUpdateOutcome"
@@ -11568,6 +11579,14 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
           }
         ],
         "default": null
+      },
+      "link_types": {
+        "description": "The link types this source mirrors as Linear's own `related` issue relation, each as\n`<type>: {\"native\": \"related\"}` — the one word a Linear source mirrors a link as. A type\nnot named here is kept in the store's metadata alone.",
+        "type": "object",
+        "additionalProperties": {
+          "$ref": "#/$defs/LinkTypeConfig"
+        },
+        "default": {}
       }
     },
     "additionalProperties": false,
@@ -11697,6 +11716,336 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
         "description": "The id of one Linear project, which a scoped source holds alone.",
         "type": "string",
         "minLength": 1
+      },
+      "LinkTypeConfig": {
+        "description": "One entry of a source's `link_types` configuration, as written.",
+        "type": "object",
+        "properties": {
+          "native": {
+            "description": "The destination's own relation this type is mirrored as.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "LinkBatch": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "LinkBatch",
+    "description": "What `task link add-many` and `task link remove-many` read: many typed links.",
+    "type": "object",
+    "properties": {
+      "schema_version": {
+        "description": "`1`.",
+        "type": "integer",
+        "format": "uint32",
+        "minimum": 0
+      },
+      "links": {
+        "description": "The links, each added or removed on its own.",
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/LinkItem"
+        }
+      }
+    },
+    "additionalProperties": false,
+    "required": [
+      "schema_version",
+      "links"
+    ],
+    "$defs": {
+      "LinkItem": {
+        "description": "One link of a [`LinkBatch`]: a type name over a directed pair of items.",
+        "type": "object",
+        "properties": {
+          "from": {
+            "description": "The link's `from`, a qualified task id.",
+            "type": "string"
+          },
+          "to": {
+            "description": "The link's `to`, a qualified task id of any configured source.",
+            "type": "string"
+          },
+          "type": {
+            "description": "The link's type name.",
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "from",
+          "to",
+          "type"
+        ]
+      }
+    }
+  },
+  "LinkOutcome": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "LinkOutcome",
+    "description": "What became of one link.",
+    "oneOf": [
+      {
+        "description": "Every endpoint it needed was written.",
+        "type": "string",
+        "const": "written"
+      },
+      {
+        "description": "An add of a link both endpoints already hold; nothing was written.",
+        "type": "string",
+        "const": "exists"
+      },
+      {
+        "description": "A removal of a link neither endpoint holds; nothing was written.",
+        "type": "string",
+        "const": "absent"
+      },
+      {
+        "description": "One endpoint landed and the other did not; `reason` names the one that landed, and\nrepeating the call completes the other.",
+        "type": "string",
+        "const": "partial"
+      },
+      {
+        "description": "Nothing of it was written; `reason` says why.",
+        "type": "string",
+        "const": "error"
+      }
+    ]
+  },
+  "LinksWritten": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "LinksWritten",
+    "description": "What `task link add-many` and `task link remove-many` answer: one result per link.",
+    "type": "object",
+    "properties": {
+      "schema_version": {
+        "description": "`1`.",
+        "type": "integer",
+        "format": "uint32",
+        "minimum": 0
+      },
+      "results": {
+        "description": "One per link, in the order given.",
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/LinkResult"
+        }
+      },
+      "sanitization": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Sanitization"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "required": [
+      "schema_version",
+      "results"
+    ],
+    "$defs": {
+      "LinkResult": {
+        "description": "What became of one link of a [`LinkBatch`].",
+        "type": "object",
+        "properties": {
+          "from": {
+            "description": "The `from` as the batch named it.",
+            "type": "string"
+          },
+          "to": {
+            "description": "The `to` as the batch named it.",
+            "type": "string"
+          },
+          "type": {
+            "description": "The link's type name.",
+            "type": "string"
+          },
+          "outcome": {
+            "description": "What became of it.",
+            "$ref": "#/$defs/LinkOutcome"
+          },
+          "from_version": {
+            "description": "The `from` endpoint's version — after this call's write of it, else as read.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "to_version": {
+            "description": "The `to` endpoint's version — after this call's write of it, else as read.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "description": "Why it is answered `partial` — naming the endpoint that landed — or `error`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "type",
+          "outcome"
+        ]
+      },
+      "LinkOutcome": {
+        "description": "What became of one link.",
+        "oneOf": [
+          {
+            "description": "Every endpoint it needed was written.",
+            "type": "string",
+            "const": "written"
+          },
+          {
+            "description": "An add of a link both endpoints already hold; nothing was written.",
+            "type": "string",
+            "const": "exists"
+          },
+          {
+            "description": "A removal of a link neither endpoint holds; nothing was written.",
+            "type": "string",
+            "const": "absent"
+          },
+          {
+            "description": "One endpoint landed and the other did not; `reason` names the one that landed, and\nrepeating the call completes the other.",
+            "type": "string",
+            "const": "partial"
+          },
+          {
+            "description": "Nothing of it was written; `reason` says why.",
+            "type": "string",
+            "const": "error"
+          }
+        ]
+      },
+      "Sanitization": {
+        "description": "What the screened writes of one command replaced, and what sanitise-on-refusal changed:\nthe `sanitization` member a write's answer carries when it is not empty.",
+        "type": "object",
+        "properties": {
+          "replaced": {
+            "description": "Spans the writes' own sanitisations rewrote.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "side_effect": {
+            "description": "Each field or comment of an item sanitisation changed beyond the write itself.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/SideEffect"
+            }
+          },
+          "dry_run": {
+            "description": "Whether nothing was written, the changes only reported.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "replaced",
+          "side_effect",
+          "dry_run"
+        ]
+      },
+      "SideEffect": {
+        "description": "One field or comment of an item a sanitisation changed, named by screened locators.",
+        "type": "object",
+        "properties": {
+          "item": {
+            "description": "The item, by its qualified id as screened.",
+            "$ref": "#/$defs/Locator"
+          },
+          "field": {
+            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`.",
+            "$ref": "#/$defs/Locator"
+          }
+        },
+        "required": [
+          "item",
+          "field"
+        ]
+      },
+      "Locator": {
+        "description": "A screened locator: the string verbatim, or its redacted form.",
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "redacted": {
+                "const": true
+              },
+              "kind": {
+                "$ref": "#/$defs/LocatorKind"
+              },
+              "ordinal": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "redacted",
+              "kind",
+              "ordinal"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "LocatorKind": {
+        "description": "What a locator names.",
+        "oneOf": [
+          {
+            "description": "A source name.",
+            "type": "string",
+            "const": "source"
+          },
+          {
+            "description": "An item id.",
+            "type": "string",
+            "const": "item"
+          },
+          {
+            "description": "A user-defined field name.",
+            "type": "string",
+            "const": "field"
+          },
+          {
+            "description": "A metadata key.",
+            "type": "string",
+            "const": "metadata-key"
+          },
+          {
+            "description": "A comment id.",
+            "type": "string",
+            "const": "comment"
+          },
+          {
+            "description": "A file path.",
+            "type": "string",
+            "const": "path"
+          },
+          {
+            "description": "A repository identity.",
+            "type": "string",
+            "const": "identity"
+          }
+        ]
       }
     }
   },
@@ -12864,6 +13213,28 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
           "layer",
           "flag"
         ]
+      }
+    ]
+  },
+  "OtherEnd": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "OtherEnd",
+    "description": "Whether a link's other end holds it too.",
+    "oneOf": [
+      {
+        "description": "The other end holds the same link.",
+        "type": "string",
+        "const": "present"
+      },
+      {
+        "description": "The other end was read and does not hold it — a whole-body rewrite there lost it.",
+        "type": "string",
+        "const": "missing"
+      },
+      {
+        "description": "The other end is not among the ids asked, so it was not read.",
+        "type": "string",
+        "const": "unread"
       }
     ]
   },
@@ -14107,6 +14478,317 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
     "title": "PageToken",
     "description": "The engine's own resume token: one plugin cursor per source stream, opaque to the\ncaller exactly as a plugin's cursor is opaque to the engine.\n\nRendered as lower-case hex, which is not obfuscation — the inside is not a secret —\nbut the one property a token a person copies off a terminal has to have: it survives\na shell. The document underneath holds a plugin's own cursor, and a cursor may hold\nanything at all, so a token spelled as the raw JSON would carry quotes, braces and\nspaces straight into the next command line. Hex has no character a shell reads.\n\n# What a token is and is not checked for\n\nBoth ways in go through [`parse`](Self::parse) — including deserialising one — and\nwhat that establishes is **structural**: the string is hex, the bytes are this\nengine's own resume document, and every state in it is well formed. It does not, and\ncannot, establish that this engine is the one that wrote it. A token is not a\ncredential and carries nothing secret; forging one buys a caller nothing they could\nnot have asked for outright, since every cursor inside is handed straight back to the\nsource that issued it and is validated there.\n\nWhat a forged token *could* do is name a stream this configuration has no source for,\nor resume further into a page than the engine ever pages. Both are refused where the\ntoken meets the query it is resuming, by\n[`Engine`](crate::Engine) — see `EngineError::Token` — because only the engine knows\nwhich sources are configured and what page ceiling each declares.",
     "type": "string"
+  },
+  "ParentBatch": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "ParentBatch",
+    "description": "What `task parent set-many` reads: many parent writes.",
+    "type": "object",
+    "properties": {
+      "schema_version": {
+        "description": "`1`.",
+        "type": "integer",
+        "format": "uint32",
+        "minimum": 0
+      },
+      "edges": {
+        "description": "The edges, each written on its own.",
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/ParentEdge"
+        }
+      }
+    },
+    "additionalProperties": false,
+    "required": [
+      "schema_version",
+      "edges"
+    ],
+    "$defs": {
+      "ParentEdge": {
+        "description": "One edge of a [`ParentBatch`]: `child`'s parent set to `parent`, or removed for `null`.",
+        "type": "object",
+        "properties": {
+          "child": {
+            "description": "The child's qualified id, `<source>:<native-id>`.",
+            "type": "string"
+          },
+          "parent": {
+            "description": "The parent's qualified id, a task of the child's own source, or `null` to remove the\nchild's parent. Required: an edge leaving it out is refused rather than read as a removal.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "if_version": {
+            "description": "The version the child must be at for anything to be written, as a read reported it.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "child",
+          "parent"
+        ]
+      }
+    }
+  },
+  "ParentOutcome": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "ParentOutcome",
+    "description": "What became of one parent edge.",
+    "oneOf": [
+      {
+        "description": "It was written.",
+        "type": "string",
+        "const": "written"
+      },
+      {
+        "description": "The child already had that parent; nothing was written.",
+        "type": "string",
+        "const": "unchanged"
+      },
+      {
+        "description": "The child was at another version than the one it was held to; nothing was written.",
+        "type": "string",
+        "const": "version-moved"
+      },
+      {
+        "description": "The edge was refused on its own — a cycle, a parent in another source, or a limit of\nthe destination on children or depth — and nothing was written.",
+        "type": "string",
+        "const": "refused"
+      },
+      {
+        "description": "It could not be written; `reason` says why.",
+        "type": "string",
+        "const": "error"
+      }
+    ]
+  },
+  "ParentsSet": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "ParentsSet",
+    "description": "What `task parent set-many` answers: one result per edge, in the order given.",
+    "type": "object",
+    "properties": {
+      "schema_version": {
+        "description": "`1`.",
+        "type": "integer",
+        "format": "uint32",
+        "minimum": 0
+      },
+      "results": {
+        "description": "One per edge.",
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/ParentResult"
+        }
+      },
+      "sanitization": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Sanitization"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "required": [
+      "schema_version",
+      "results"
+    ],
+    "$defs": {
+      "ParentResult": {
+        "description": "What became of one edge of a [`ParentBatch`].",
+        "type": "object",
+        "properties": {
+          "child": {
+            "description": "The child as the batch named it.",
+            "type": "string"
+          },
+          "parent": {
+            "description": "The parent as the batch named it, `null` for a removal.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "outcome": {
+            "description": "What became of it.",
+            "$ref": "#/$defs/ParentOutcome"
+          },
+          "version": {
+            "description": "The child's version: after the write when `written` and the write's answer says, as read\nwhen `unchanged`, and the version it was found at when `version-moved`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "description": "Why it is answered `refused` or `error`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "child",
+          "outcome"
+        ]
+      },
+      "ParentOutcome": {
+        "description": "What became of one parent edge.",
+        "oneOf": [
+          {
+            "description": "It was written.",
+            "type": "string",
+            "const": "written"
+          },
+          {
+            "description": "The child already had that parent; nothing was written.",
+            "type": "string",
+            "const": "unchanged"
+          },
+          {
+            "description": "The child was at another version than the one it was held to; nothing was written.",
+            "type": "string",
+            "const": "version-moved"
+          },
+          {
+            "description": "The edge was refused on its own — a cycle, a parent in another source, or a limit of\nthe destination on children or depth — and nothing was written.",
+            "type": "string",
+            "const": "refused"
+          },
+          {
+            "description": "It could not be written; `reason` says why.",
+            "type": "string",
+            "const": "error"
+          }
+        ]
+      },
+      "Sanitization": {
+        "description": "What the screened writes of one command replaced, and what sanitise-on-refusal changed:\nthe `sanitization` member a write's answer carries when it is not empty.",
+        "type": "object",
+        "properties": {
+          "replaced": {
+            "description": "Spans the writes' own sanitisations rewrote.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "side_effect": {
+            "description": "Each field or comment of an item sanitisation changed beyond the write itself.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/SideEffect"
+            }
+          },
+          "dry_run": {
+            "description": "Whether nothing was written, the changes only reported.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "replaced",
+          "side_effect",
+          "dry_run"
+        ]
+      },
+      "SideEffect": {
+        "description": "One field or comment of an item a sanitisation changed, named by screened locators.",
+        "type": "object",
+        "properties": {
+          "item": {
+            "description": "The item, by its qualified id as screened.",
+            "$ref": "#/$defs/Locator"
+          },
+          "field": {
+            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`.",
+            "$ref": "#/$defs/Locator"
+          }
+        },
+        "required": [
+          "item",
+          "field"
+        ]
+      },
+      "Locator": {
+        "description": "A screened locator: the string verbatim, or its redacted form.",
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "redacted": {
+                "const": true
+              },
+              "kind": {
+                "$ref": "#/$defs/LocatorKind"
+              },
+              "ordinal": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "redacted",
+              "kind",
+              "ordinal"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "LocatorKind": {
+        "description": "What a locator names.",
+        "oneOf": [
+          {
+            "description": "A source name.",
+            "type": "string",
+            "const": "source"
+          },
+          {
+            "description": "An item id.",
+            "type": "string",
+            "const": "item"
+          },
+          {
+            "description": "A user-defined field name.",
+            "type": "string",
+            "const": "field"
+          },
+          {
+            "description": "A metadata key.",
+            "type": "string",
+            "const": "metadata-key"
+          },
+          {
+            "description": "A comment id.",
+            "type": "string",
+            "const": "comment"
+          },
+          {
+            "description": "A file path.",
+            "type": "string",
+            "const": "path"
+          },
+          {
+            "description": "A repository identity.",
+            "type": "string",
+            "const": "identity"
+          }
+        ]
+      }
+    }
   },
   "Placement": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -20763,6 +21445,77 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
       }
     }
   },
+  "ReadLink": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "ReadLink",
+    "description": "One link as one endpoint holds it.",
+    "type": "object",
+    "properties": {
+      "type": {
+        "description": "The link's type name.",
+        "type": "string"
+      },
+      "direction": {
+        "description": "Which end of the link this item is.",
+        "$ref": "#/$defs/LinkDirection"
+      },
+      "other": {
+        "description": "The other item's qualified id.",
+        "$ref": "#/$defs/GlobalId"
+      },
+      "other_end": {
+        "description": "Whether the other end holds this link too: `present` or `missing` when the other item\nis among the ids asked, and `unread` otherwise.",
+        "$ref": "#/$defs/OtherEnd"
+      }
+    },
+    "required": [
+      "type",
+      "direction",
+      "other",
+      "other_end"
+    ],
+    "$defs": {
+      "LinkDirection": {
+        "description": "Which end of a directed link an item is.",
+        "oneOf": [
+          {
+            "description": "This item is the link's `from`.",
+            "type": "string",
+            "const": "out"
+          },
+          {
+            "description": "This item is the link's `to`.",
+            "type": "string",
+            "const": "in"
+          }
+        ]
+      },
+      "GlobalId": {
+        "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
+        "type": "string"
+      },
+      "OtherEnd": {
+        "description": "Whether a link's other end holds it too.",
+        "oneOf": [
+          {
+            "description": "The other end holds the same link.",
+            "type": "string",
+            "const": "present"
+          },
+          {
+            "description": "The other end was read and does not hold it — a whole-body rewrite there lost it.",
+            "type": "string",
+            "const": "missing"
+          },
+          {
+            "description": "The other end is not among the ids asked, so it was not read.",
+            "type": "string",
+            "const": "unread"
+          }
+        ]
+      }
+    }
+  },
   "ReconcileOutcome": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "ReconcileOutcome",
@@ -21047,6 +21800,127 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "description": "A repository identity.",
             "type": "string",
             "const": "identity"
+          }
+        ]
+      }
+    }
+  },
+  "RelationsItem": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "RelationsItem",
+    "description": "One task's relations.",
+    "type": "object",
+    "properties": {
+      "item": {
+        "description": "The task's qualified id.",
+        "$ref": "#/$defs/GlobalId"
+      },
+      "parent": {
+        "description": "Its parent's qualified id, or `null`.",
+        "anyOf": [
+          {
+            "$ref": "#/$defs/GlobalId"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "children": {
+        "description": "Its children's qualified ids.",
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/GlobalId"
+        }
+      },
+      "children_complete": {
+        "description": "Whether `children` is every child.",
+        "type": "boolean"
+      },
+      "links": {
+        "description": "Its links, as it holds them.",
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/ReadLink"
+        }
+      },
+      "links_complete": {
+        "description": "Whether `links` is every link it holds.",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "item",
+      "children",
+      "children_complete",
+      "links",
+      "links_complete"
+    ],
+    "$defs": {
+      "GlobalId": {
+        "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
+        "type": "string"
+      },
+      "ReadLink": {
+        "description": "One link as one endpoint holds it.",
+        "type": "object",
+        "properties": {
+          "type": {
+            "description": "The link's type name.",
+            "type": "string"
+          },
+          "direction": {
+            "description": "Which end of the link this item is.",
+            "$ref": "#/$defs/LinkDirection"
+          },
+          "other": {
+            "description": "The other item's qualified id.",
+            "$ref": "#/$defs/GlobalId"
+          },
+          "other_end": {
+            "description": "Whether the other end holds this link too: `present` or `missing` when the other item\nis among the ids asked, and `unread` otherwise.",
+            "$ref": "#/$defs/OtherEnd"
+          }
+        },
+        "required": [
+          "type",
+          "direction",
+          "other",
+          "other_end"
+        ]
+      },
+      "LinkDirection": {
+        "description": "Which end of a directed link an item is.",
+        "oneOf": [
+          {
+            "description": "This item is the link's `from`.",
+            "type": "string",
+            "const": "out"
+          },
+          {
+            "description": "This item is the link's `to`.",
+            "type": "string",
+            "const": "in"
+          }
+        ]
+      },
+      "OtherEnd": {
+        "description": "Whether a link's other end holds it too.",
+        "oneOf": [
+          {
+            "description": "The other end holds the same link.",
+            "type": "string",
+            "const": "present"
+          },
+          {
+            "description": "The other end was read and does not hold it — a whole-body rewrite there lost it.",
+            "type": "string",
+            "const": "missing"
+          },
+          {
+            "description": "The other end is not among the ids asked, so it was not read.",
+            "type": "string",
+            "const": "unread"
           }
         ]
       }
@@ -27942,6 +28816,49 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
       }
     }
   },
+  "TaskLink": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "TaskLink",
+    "description": "One typed link, as one endpoint holds it under [`TaskLink::METADATA_KEY`].",
+    "type": "object",
+    "properties": {
+      "type": {
+        "description": "The link's type name — the caller's word, which no destination stores natively.",
+        "type": "string"
+      },
+      "direction": {
+        "description": "Which end of the directed link this item is.",
+        "$ref": "#/$defs/LinkDirection"
+      },
+      "other": {
+        "description": "The other item's qualified id, `<source>:<native-id>`.",
+        "type": "string"
+      }
+    },
+    "additionalProperties": false,
+    "required": [
+      "type",
+      "direction",
+      "other"
+    ],
+    "$defs": {
+      "LinkDirection": {
+        "description": "Which end of a directed link an item is.",
+        "oneOf": [
+          {
+            "description": "This item is the link's `from`.",
+            "type": "string",
+            "const": "out"
+          },
+          {
+            "description": "This item is the link's `to`.",
+            "type": "string",
+            "const": "in"
+          }
+        ]
+      }
+    }
+  },
   "TaskPrioritySet": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "TaskPrioritySet",
@@ -28749,6 +29666,150 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
     "title": "TaskRef",
     "description": "One task named by another task's [`Task::delivers`] or [`Task::delivered_by`].\n\nA string with one of two spellings, decided the way a [`DependencyEndpoint`] decides it:\none holding a colon is `<source>:<native>` and names a task of any source, and one\nwithout is a bare native id naming a task of the source that holds the list. So a\nnative id holding a colon cannot be named bare, exactly as it cannot in\n`onetaskgraph.depends_on`.",
     "type": "string"
+  },
+  "TaskRelations": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "TaskRelations",
+    "description": "What `task relations` answers: one item per id asked, in the order asked.",
+    "type": "object",
+    "properties": {
+      "schema_version": {
+        "description": "`1`.",
+        "type": "integer",
+        "format": "uint32",
+        "minimum": 0
+      },
+      "items": {
+        "description": "One per id.",
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/RelationsItem"
+        }
+      }
+    },
+    "required": [
+      "schema_version",
+      "items"
+    ],
+    "$defs": {
+      "RelationsItem": {
+        "description": "One task's relations.",
+        "type": "object",
+        "properties": {
+          "item": {
+            "description": "The task's qualified id.",
+            "$ref": "#/$defs/GlobalId"
+          },
+          "parent": {
+            "description": "Its parent's qualified id, or `null`.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/GlobalId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "children": {
+            "description": "Its children's qualified ids.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/GlobalId"
+            }
+          },
+          "children_complete": {
+            "description": "Whether `children` is every child.",
+            "type": "boolean"
+          },
+          "links": {
+            "description": "Its links, as it holds them.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/ReadLink"
+            }
+          },
+          "links_complete": {
+            "description": "Whether `links` is every link it holds.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "item",
+          "children",
+          "children_complete",
+          "links",
+          "links_complete"
+        ]
+      },
+      "GlobalId": {
+        "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
+        "type": "string"
+      },
+      "ReadLink": {
+        "description": "One link as one endpoint holds it.",
+        "type": "object",
+        "properties": {
+          "type": {
+            "description": "The link's type name.",
+            "type": "string"
+          },
+          "direction": {
+            "description": "Which end of the link this item is.",
+            "$ref": "#/$defs/LinkDirection"
+          },
+          "other": {
+            "description": "The other item's qualified id.",
+            "$ref": "#/$defs/GlobalId"
+          },
+          "other_end": {
+            "description": "Whether the other end holds this link too: `present` or `missing` when the other item\nis among the ids asked, and `unread` otherwise.",
+            "$ref": "#/$defs/OtherEnd"
+          }
+        },
+        "required": [
+          "type",
+          "direction",
+          "other",
+          "other_end"
+        ]
+      },
+      "LinkDirection": {
+        "description": "Which end of a directed link an item is.",
+        "oneOf": [
+          {
+            "description": "This item is the link's `from`.",
+            "type": "string",
+            "const": "out"
+          },
+          {
+            "description": "This item is the link's `to`.",
+            "type": "string",
+            "const": "in"
+          }
+        ]
+      },
+      "OtherEnd": {
+        "description": "Whether a link's other end holds it too.",
+        "oneOf": [
+          {
+            "description": "The other end holds the same link.",
+            "type": "string",
+            "const": "present"
+          },
+          {
+            "description": "The other end was read and does not hold it — a whole-body rewrite there lost it.",
+            "type": "string",
+            "const": "missing"
+          },
+          {
+            "description": "The other end is not among the ids asked, so it was not read.",
+            "type": "string",
+            "const": "unread"
+          }
+        ]
+      }
+    }
   },
   "TaskStatusSet": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",

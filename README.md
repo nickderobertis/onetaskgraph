@@ -444,6 +444,108 @@ document type, so `github-projects` reads one as an ordinary issue whose title b
 back, so a design note copied out of a board and back returns the title it started with.
 `docs/metadata.md` records the whole of that rule.
 
+### Relations: a parent, and typed links
+
+<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by the journeys that
+     drive each statement through the binary: `crates/onetaskgraph-e2e/tests/e2e/relations.rs`
+     over folders of Markdown and an in-memory source, and the `relations` journeys of
+     `crates/onetaskgraph-github-projects-e2e` and `crates/onetaskgraph-linear-e2e` against the
+     loopback board and workspace; the shapes are `onetaskgraph schema`'s roots. -->
+Two relations between tasks sit beside `depends_on`, which keeps its meaning: a task's
+**parent**, many-to-one and as many levels deep as the destination allows, and **typed links**,
+many-to-many, each a type name of your own over a directed pair of tasks. A source that writes
+neither holds neither, and reads, writes and copies exactly as it did.
+
+- `task parent set-many --input FILE` sets or removes parents, `{"schema_version": 1, "edges":
+  [{"child", "parent", "if_version"}]}` with `parent` `null` to remove one, answering `{"schema_version":
+  1, "results": [{"child", "parent", "outcome", "version", "reason"}]}` — `written`, `unchanged`,
+  `version-moved`, `refused` or `error`. A parent is a task of the child's own source; one in
+  another source is refused naming both, and so is a cycle, each for its own edge alone.
+- `task link add-many --input FILE` and `task link remove-many --input FILE` take
+  `{"schema_version": 1, "links": [{"from", "to", "type"}]}`, `from` and `to` tasks of any
+  configured sources, and answer `{"schema_version": 1, "results": [{"from", "to", "type",
+  "outcome", "from_version", "to_version", "reason"}]}` — `written`, `exists` for an add both ends
+  already hold, `absent` for a removal neither holds, `partial` naming the one end that landed, or
+  `error`. A link is its type and its ordered ends, so a repeated add writes nothing; repeating a
+  call that answered `partial` completes the other end.
+- `task relations <ID>... [--complete]` answers `{"schema_version": 1, "items": [{"item",
+  "parent", "children", "children_complete", "links": [{"type", "direction", "other",
+  "other_end"}], "links_complete"}]}`. A link's `other_end` is `present` or `missing` when the
+  other task is among the ids asked and `unread` otherwise, so the comparison costs no request;
+  `--complete` refuses an answer whose children were not read whole.
+
+Each item is answered on its own, and the parent and link batches exit `4` when any is not
+settled. Every update of a link's end is checked against the version this call read it at just
+before it is written; on GitHub and Linear an edit landing between that read and the write can
+still be overwritten, as with every held write there.
+
+**Where a parent lives.** On a folder of Markdown it is the task's `parent:` front-matter entry,
+on an in-memory source its configuration's `parents` map, on Linear the issue's own parent — a
+parent in another team of the same source is allowed — and on a GitHub Projects source the
+issue's sub-issue link, only when that source's `sub_issues` is `parent` (below). A re-parent on
+GitHub is `addSubIssue` with `replaceParent`, and a parent in another repository of the source is
+allowed. GitHub allows 8 levels — a root and 7 layers of sub-issues — and 100 sub-issues per
+parent; an edge past either is refused alone with GitHub's own words and the rest of the call goes
+on. Linear accepted at least 10 levels and 105 children when measured and states no limit, so the
+store states none of its own and reports Linear's refusal if one comes.
+
+**Where a link lives.** On every plugin the authority is the store's own metadata on both ends,
+the reserved `onetaskgraph.links`, a list of `{"type", "direction": "out"|"in", "other":
+"<source>:<id>"}`, beside a `## Links` section the store renders at the end of each end's
+content, one line per link naming its type and linking the other task. Every read strips that
+section, so content round-trips; a `## Links` heading followed by anything but bullets is a
+person's and is left alone, and Linear's `*` bullets and changed blank lines are still the
+section. Every write of a linked task's content — `task content set`, `task update`, a render,
+a copy over it — re-renders the section from the links the task holds, keeping each line it
+already showed; a copy over a Linear issue, which has no stored text at hand to keep a line
+from, writes each line from the link itself. All of one task's links in a call go in one
+write. A copy carries neither a parent nor
+links, and never the `onetaskgraph.links` key.
+
+**A native mirror is opt-in per type.** A source's `link_types` maps a type to the destination's
+own relation, so the link also shows in that tracker's relationship panel:
+
+```yaml
+sources:
+  issues:
+    plugin: linear
+    config:
+      team: TES2
+      link_types:
+        caused-by: {native: related}
+        duplicate-of: {}          # metadata and the `## Links` section only
+```
+
+`relates-to` on GitHub (`addRelatesTo`) and `related` on Linear (`issueRelationCreate`) are the
+only words. Neither destination stores a type name and both relations are symmetric, so the type
+and the direction live only in the metadata, and several mirrored links between one pair share
+one native relation, removed only with the last of them. On Linear that relation is the same
+kind a `related` dependency is stored as, so a task's own mirrored link is left out of its
+`task deps` and never removed by a `depends_on` rewrite. `blocks`, `blocked-by` and every other
+word are refused when the configuration loads, naming the source, the type and the word, because
+`depends_on` already means blocking. **A duplicate link has no native mirror**: `duplicate` and
+`similar` are refused too, because a native duplicate closes the issue on GitHub and moves it to
+`Duplicate` on Linear. A folder of Markdown and an in-memory source have no relation of their
+own, so any `native` word there is refused. A link whose ends are in two sources is metadata on
+both ends and is mirrored by neither.
+
+**What a person sees of a link with no mirror** is the `## Links` section alone: nothing appears
+in GitHub's Relationships panel or Linear's related issues. A mirrored link shows there too, as
+`Relates to` on GitHub and a related issue on Linear, with the type name in the section.
+
+**A whole-body rewrite loses that end's links.** On GitHub and Linear a task's metadata rides in
+its body, so a person replacing the body whole removes that end's links while the other end still
+holds them. A read writes nothing about it: `task relations` of both ends answers the survivor's
+link `other_end: missing`. Repeating `task link add-many` for it restores the lost end and answers
+`written`; `task link remove-many` removes the end that remains.
+
+On GitHub one relation mutation document carries at most 30 aliases — a 60-alias `addRelatesTo`
+was measured answering HTTP 504 after landing 58 of them — and after such an answer the store
+reads the document's tasks back and answers each from what it finds rather than sending it again.
+Every aliased relation write is charged to the source's pacing as one content creation, because
+GitHub's secondary limit, not its point budget, is what sustained relation writes reach.
+<!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
+
 ### Seeing which plan you got
 
 `--explain` renders the plan the query ran, per source. Here one `--label` query reaches
@@ -2357,6 +2459,40 @@ sources:
       project_number: 7
       repository: example-org/store
       creation_owners: [example-org]
+```
+<!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
+
+### What a GitHub Projects source's sub-issues mean
+
+<!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by the `relations`
+     journeys of `crates/onetaskgraph-github-projects-e2e`, which drive both meanings and the
+     refusal of two sources sharing a board against the loopback board. -->
+A `github-projects` source's `sub_issues` says what an issue's sub-issues are. `project`, the
+default and the meaning every board had before this setting: an issue with sub-issues reads as a
+project and its sub-issues as that project's members. `parent`: every issue reads as a task, a
+sub-issue is a child of its parent under `task parent set-many` and `task relations`, and every
+project write to the source is refused naming the setting. On a `project` source `task
+relations` reports a member as having no parent: the two meanings never mix on one source.
+
+**A `parent` source needs a board of its own.** On one board the two meanings answer differently
+for the same issues, and an edge written from either side rewrites the other's view, so two
+configured sources naming one board with different `sub_issues` are refused when the
+configuration loads, naming both. No configuration check can see what GitHub does on its own
+side: an issue of a `parent` source added to a board read with the default meaning reads there as
+a project, and GitHub's default `Auto-add sub-issues to project` workflow pulls its sub-issues
+onto that board too.
+
+```yaml
+sources:
+  follow-ups:
+    plugin: github-projects
+    config:
+      owner: example-org
+      project_number: 9
+      repository: example-org/store
+      sub_issues: parent
+      link_types:
+        caused-by: {native: relates-to}
 ```
 <!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 

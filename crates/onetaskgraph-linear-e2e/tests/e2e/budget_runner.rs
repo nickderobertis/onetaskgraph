@@ -54,6 +54,13 @@ fn report_private_plan_road() {
 fn report_follow_up_cycle() {
     report();
 }
+
+/// The runner `linear-requests-per-relation-batch` names: [`report`], under the name its task
+/// registered it with.
+#[test]
+fn report_relation_batch() {
+    report();
+}
 // llmlint: ignore-end[tests_assert_real_behavior]
 
 #[test]
@@ -70,6 +77,11 @@ fn each_named_runner_hands_over_the_figure_its_budget_recorded() {
             "budget_runner::report_follow_up_cycle",
             "linear-requests-per-follow-up-cycle",
             22,
+        ),
+        (
+            "budget_runner::report_relation_batch",
+            "linear-requests-per-relation-batch",
+            10,
         ),
     ] {
         telemetry::record_in(&recorded, budget, value, "as the journey counted them");
