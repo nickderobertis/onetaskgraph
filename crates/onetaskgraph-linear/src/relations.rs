@@ -70,7 +70,10 @@ impl LinearSource {
             {
                 AliasedEach::Answered(values) => {
                     for (at, value) in pending.iter().zip(values) {
-                        read[*at] = Some(value.and_then(|issue| self.relations_of(&issue)));
+                        read[*at] = Some(value.and_then(|issue| {
+                            answered_for(&issue, &ids[*at])?;
+                            self.relations_of(&issue)
+                        }));
                     }
                     pending.clear();
                 }
@@ -106,13 +109,21 @@ impl LinearSource {
         if !self.in_scope(task.project.as_ref()) {
             return Ok(None);
         }
-        let parent = issue
-            .get("parent")
-            .filter(|parent| !parent.is_null())
-            .map(|parent| optional_str(parent, "id"))
-            .transpose()?
-            .flatten()
-            .map(|id| NativeId(id.to_owned()));
+        let parent = match issue.get("parent") {
+            None => {
+                return Err(SourceError::Malformed {
+                    message: "a relation read answered an issue without its parent".into(),
+                });
+            }
+            Some(Value::Null) => None,
+            Some(parent) => Some(NativeId(
+                optional_str(parent, "id")?
+                    .ok_or_else(|| SourceError::Malformed {
+                        message: "a relation read answered a parent without an id".into(),
+                    })?
+                    .to_owned(),
+            )),
+        };
         let children = issue
             .get("children")
             .ok_or_else(|| SourceError::Malformed {
@@ -139,7 +150,9 @@ impl LinearSource {
         let more = children
             .pointer("/pageInfo/hasNextPage")
             .and_then(Value::as_bool)
-            .unwrap_or(false);
+            .ok_or_else(|| SourceError::Malformed {
+                message: "a relation read answered children without pageInfo.hasNextPage".into(),
+            })?;
         Ok(Some(Read {
             relations: Relations {
                 task,
@@ -180,7 +193,17 @@ impl LinearSource {
         let mut answers: Vec<Option<Result<ParentAnswer, SourceError>>> =
             writes.iter().map(|_| None).collect();
         let mut sending: Vec<usize> = Vec::new();
+        // A write naming a child an earlier write of this call names is made after the batch,
+        // alone and in order, decided on what the writes before it left.
+        let mut later: Vec<usize> = Vec::new();
         for (at, write) in writes.iter().enumerate() {
+            if writes[..at]
+                .iter()
+                .any(|earlier| earlier.child == write.child)
+            {
+                later.push(at);
+                continue;
+            }
             let Some(child) = held(&write.child) else {
                 answers[at] = Some(Ok(ParentAnswer::Missing {
                     what: write.child.clone(),
@@ -207,14 +230,6 @@ impl LinearSource {
                 answers[at] = Some(Ok(ParentAnswer::Unchanged {
                     version: child.task.version.clone(),
                 }));
-                continue;
-            }
-            // A child an earlier write of this call names is written after it, alone.
-            if sending
-                .iter()
-                .any(|earlier| writes[*earlier].child == write.child)
-            {
-                answers[at] = Some(self.parent_alone(write).await);
                 continue;
             }
             sending.push(at);
@@ -267,6 +282,44 @@ impl LinearSource {
                 }
             }
         }
+        for at in later {
+            let write = &writes[at];
+            // What the writes of this child before it left: the parent and version the last of
+            // them wrote, or the child as it was read when none wrote it.
+            let mut state =
+                held(&write.child).map(|child| (child.parent.clone(), child.task.version.clone()));
+            for earlier in (0..at).filter(|earlier| writes[*earlier].child == write.child) {
+                if let Some(Ok(ParentAnswer::Written { version })) = &answers[earlier] {
+                    state = Some((writes[earlier].parent.clone(), version.clone()));
+                }
+            }
+            answers[at] = Some(match state {
+                None => Ok(ParentAnswer::Missing {
+                    what: write.child.clone(),
+                }),
+                Some((_, version))
+                    if write.if_version.as_ref().is_some_and(|expected| {
+                        !version_at(self, version.as_deref(), expected)
+                    }) =>
+                {
+                    Ok(ParentAnswer::VersionMoved { found: version })
+                }
+                Some(_)
+                    if write
+                        .parent
+                        .as_ref()
+                        .is_some_and(|parent| held(parent).is_none()) =>
+                {
+                    Ok(ParentAnswer::Missing {
+                        what: write.parent.clone().unwrap_or_else(|| write.child.clone()),
+                    })
+                }
+                Some((parent, version)) if parent == write.parent => {
+                    Ok(ParentAnswer::Unchanged { version })
+                }
+                Some(_) => self.parent_alone(write).await,
+            });
+        }
         answers
             .into_iter()
             .map(|answer| {
@@ -279,7 +332,7 @@ impl LinearSource {
             .collect()
     }
 
-    /// One parent write on its own, after an earlier write of the same child in the same call.
+    /// One parent write on its own, after the batch an earlier write of the same child went in.
     async fn parent_alone(&self, write: &ParentWrite) -> Result<ParentAnswer, SourceError> {
         let each = [json!({"id": write.child.0,
                            "input": {"parentId": write.parent.as_ref().map(|parent| &parent.0)}})];
@@ -293,8 +346,21 @@ impl LinearSource {
                 })??;
                 self.parent_answer(&value, &write.child)
             }
+            AliasedEach::Refused(_, refusal) if refusal.entity_missing() => {
+                Ok(ParentAnswer::Missing {
+                    what: write.child.clone(),
+                })
+            }
             AliasedEach::Refused(_, refusal) => Ok(ParentAnswer::Refused {
-                reason: refusal.0.said(),
+                reason: format!(
+                    "Linear refused making {} the parent of {}: {}",
+                    write
+                        .parent
+                        .as_ref()
+                        .map_or_else(|| "nothing".to_owned(), ToString::to_string),
+                    write.child,
+                    refusal.0.said()
+                ),
             }),
         }
     }
@@ -364,10 +430,12 @@ impl LinearSource {
     }
 
     /// Every `related` relation between each pair of `links` deleted: the relations of each
-    /// pair's `from` read in one aliased [`graphql::ISSUE_RELATIONS`] read — both directions,
-    /// because Linear holds the one relation with whichever end created it first — and every
-    /// one found deleted in one aliased [`graphql::ISSUE_RELATION_DELETE`] document. A pair with
-    /// no such relation is no change.
+    /// pair's `from` read in one aliased [`graphql::ISSUE_RELATIONS`] read of its largest page —
+    /// both directions, because Linear holds the one relation with whichever end created it
+    /// first — and every one found deleted in one aliased [`graphql::ISSUE_RELATION_DELETE`]
+    /// document. A pair with no such relation is no change; one whose `from` holds more
+    /// relations than that page is refused, because what it did not read could hold the
+    /// relation.
     pub(crate) async fn native_links_removed(
         &self,
         links: &[NativeLink],
@@ -391,7 +459,8 @@ impl LinearSource {
             links.iter().map(|_| None).collect();
         let mut deleting: Vec<(usize, String)> = Vec::new();
         for (at, (link, value)) in links.iter().zip(read).enumerate() {
-            match value.and_then(|issue| related_between(&issue, &link.to)) {
+            // Positional: the relations read selects no id to check an alias's answer against.
+            match value.and_then(|issue| related_between(&issue, &link.from, &link.to)) {
                 Ok(found) if found.is_empty() => answers[at] = Some(Ok(())),
                 Ok(found) => deleting.extend(found.into_iter().map(|id| (at, id))),
                 Err(error) => answers[at] = Some(Err(error)),
@@ -430,30 +499,80 @@ impl LinearSource {
     }
 }
 
-/// The ids of every `related` relation `issue` holds with `other`, either way round.
-fn related_between(issue: &Value, other: &NativeId) -> Result<Vec<String>, SourceError> {
+/// Refuse an alias's answer naming another issue than the one it asked for.
+fn answered_for(issue: &Value, asked: &NativeId) -> Result<(), SourceError> {
+    match issue.get("id").and_then(Value::as_str) {
+        Some(id) if id == asked.0 => Ok(()),
+        _ if issue.is_null() => Ok(()),
+        answered => Err(SourceError::Malformed {
+            message: format!(
+                "Linear answered the alias asking for {asked} with {}",
+                answered.map_or_else(|| "an issue without an id".to_owned(), str::to_owned)
+            ),
+        }),
+    }
+}
+
+/// The ids of every `related` relation `issue` holds with `other`, either way round — every
+/// one, because a connection with another page is refused rather than read in part, and a row
+/// that does not say its id, its type or its other end is refused rather than passed over.
+fn related_between(
+    issue: &Value,
+    near: &NativeId,
+    other: &NativeId,
+) -> Result<Vec<String>, SourceError> {
     if issue.is_null() {
         return Ok(Vec::new());
     }
     let mut found = Vec::new();
     for (connection, end) in [("relations", "relatedIssue"), ("inverseRelations", "issue")] {
-        for relation in issue
-            .pointer(&format!("/{connection}/nodes"))
-            .and_then(Value::as_array)
+        let held = issue
+            .get(connection)
             .ok_or_else(|| SourceError::Malformed {
-                message: format!("missing {connection}.nodes"),
-            })?
+                message: format!("missing {connection}"),
+            })?;
+        match held
+            .pointer("/pageInfo/hasNextPage")
+            .and_then(Value::as_bool)
         {
-            let names = relation
+            Some(false) => {}
+            Some(true) => {
+                return Err(SourceError::Refused {
+                    message: format!(
+                        "{near} holds more {connection} than one page of {MAX_PAGE_SIZE}, so \
+                         whether one mirrors this link cannot be told; nothing was removed"
+                    ),
+                });
+            }
+            None => {
+                return Err(SourceError::Malformed {
+                    message: format!("missing {connection}.pageInfo.hasNextPage"),
+                });
+            }
+        }
+        for relation in
+            held.get("nodes")
+                .and_then(Value::as_array)
+                .ok_or_else(|| SourceError::Malformed {
+                    message: format!("missing {connection}.nodes"),
+                })?
+        {
+            let malformed = |what: &str| SourceError::Malformed {
+                message: format!("a relation of {connection} without {what}"),
+            };
+            let id = relation
+                .get("id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| malformed("an id"))?;
+            let kind = relation
+                .get("type")
+                .and_then(Value::as_str)
+                .ok_or_else(|| malformed("a type"))?;
+            let far = relation
                 .pointer(&format!("/{end}/id"))
                 .and_then(Value::as_str)
-                == Some(other.0.as_str());
-            if names && relation.get("type").and_then(Value::as_str) == Some(MIRRORED) {
-                let id = relation.get("id").and_then(Value::as_str).ok_or_else(|| {
-                    SourceError::Malformed {
-                        message: "a relation without an id".into(),
-                    }
-                })?;
+                .ok_or_else(|| malformed("its other end"))?;
+            if far == other.0 && kind == MIRRORED {
                 found.push(id.to_owned());
             }
         }

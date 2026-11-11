@@ -84,8 +84,12 @@ impl Team {
                           "task_dependencies": dependencies, "project_dependencies": []});
         let (mut config, workspace) = linear_workspace(&sandbox, held);
         config["link_types"] = link_types.clone();
+        // A folder of Markdown beside the team, for the journeys that copy into it.
+        let notes = sandbox.subdirectory("notes");
+        std::fs::create_dir_all(notes.join("tasks")).expect("the tasks folder");
         let configuration: Value = serde_json::from_str(&document(&json!({
             "team": {"plugin": "linear", "config": config},
+            "notes": {"plugin": "local-md", "config": {"root": notes}},
         })))
         .expect("a configuration document");
         sandbox.project_document(&configuration.to_string());
@@ -765,4 +769,245 @@ fn every_content_write_of_a_linked_task_keeps_its_links_section() {
         links_of(&items[0]),
         [link("caused-by", "out", "R-1", "present")]
     );
+}
+
+#[test]
+fn writes_naming_one_child_twice_apply_in_order_each_decided_on_what_the_one_before_left() {
+    let team = Team::of(4);
+    let read = team.version("R-1");
+    let input = team.batch(&json!({"schema_version": 1, "edges": [
+        {"child": "team:R-1", "parent": "team:R-0"},
+        {"child": "team:R-3", "parent": "team:R-0"},
+        {"child": "team:R-1", "parent": "team:R-2"},
+        {"child": "team:R-1", "parent": "team:R-2"},
+        {"child": "team:R-1", "parent": null, "if_version": read},
+    ]}));
+    let set = team.run(&["task", "parent", "set-many", "--input", &input]);
+    assert_eq!(
+        outcomes(&set),
+        [
+            "written",
+            "written",
+            "written",
+            "unchanged",
+            "version-moved"
+        ],
+        "{}",
+        set.json
+    );
+    // The later edge is answered at the version the write before it left, not the one read.
+    let third = set.json["results"][2]["version"].clone();
+    assert_eq!(set.json["results"][3]["version"], third);
+    assert_eq!(set.json["results"][4]["version"], third);
+    assert_ne!(third, json!(read));
+    // The first write of each child together, then the later one alone, after it.
+    let documents: Vec<Vec<Value>> = set
+        .sent
+        .iter()
+        .filter(|(query, _)| query.contains("issueUpdate"))
+        .map(|(query, variables)| {
+            linear_per_item(&[(query.clone(), variables.clone())])
+                .into_iter()
+                .map(|(_, variables)| variables)
+                .collect()
+        })
+        .collect();
+    assert_eq!(
+        documents,
+        [
+            vec![
+                json!({"id": "R-1", "input": {"parentId": "R-0"}}),
+                json!({"id": "R-3", "input": {"parentId": "R-0"}}),
+            ],
+            vec![json!({"id": "R-1", "input": {"parentId": "R-2"}})],
+        ]
+    );
+    assert_eq!(team.workspace.parent_of("R-1").as_deref(), Some("R-2"));
+}
+
+#[test]
+fn more_children_than_one_read_selects_answer_incomplete_and_complete_refuses_it() {
+    let team = Team::of(53);
+    let edges: Vec<(String, String)> = (1..=51)
+        .map(|at| (format!("R-{at}"), "R-0".to_owned()))
+        .collect();
+    let edges: Vec<(&str, Option<&str>)> = edges
+        .iter()
+        .map(|(child, parent)| (child.as_str(), Some(parent.as_str())))
+        .collect();
+    let set = team.parents(&edges);
+    assert!(outcomes(&set).iter().all(|outcome| outcome == "written"));
+    let read = team.ok(&["task", "relations", "team:R-0", "team:R-52"]);
+    let items = read.json["items"].as_array().expect("items");
+    assert_eq!(items[0]["children_complete"], json!(false));
+    assert_eq!(items[0]["children"].as_array().map(Vec::len), Some(50));
+    assert_eq!(items[1]["children_complete"], json!(true));
+    let refused = team.run(&["task", "relations", "team:R-0", "--complete"]);
+    assert_ne!(refused.code, Some(0));
+    assert_eq!(
+        refused.json["failure"]["kind"],
+        json!("relations-incomplete"),
+        "{}{}",
+        refused.json,
+        refused.stderr
+    );
+    assert!(
+        refused.json["failure"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("team:R-0")),
+        "{}",
+        refused.json
+    );
+}
+
+#[test]
+fn a_native_relation_linear_refuses_leaves_that_link_unwritten_at_both_ends_alone() {
+    let team = Team::of(4);
+    // Linear refuses any write naming R-2 — the relation it is the near end of among them — and,
+    // an aliased document of mutations being applied whole or not at all, refuses that document.
+    team.workspace.refuse_writes_of("R-2");
+    let added = team.links(
+        "add-many",
+        &[("R-0", "R-1", "caused-by"), ("R-2", "R-3", "caused-by")],
+    );
+    assert_eq!(outcomes(&added), ["written", "error"], "{}", added.json);
+    let reason = added.json["results"][1]["reason"].as_str().unwrap();
+    assert!(reason.contains("native `related` relation"), "{reason}");
+    assert_eq!(
+        team.workspace.related_pairs(),
+        [("R-0".to_owned(), "R-1".to_owned())]
+    );
+    for id in ["R-2", "R-3"] {
+        let stored = team.workspace.long_form("tasks", id).expect("held");
+        assert!(!stored.contains("onetaskgraph.links"), "{id}: {stored}");
+        assert!(!stored.contains("## Links"), "{id}: {stored}");
+    }
+    let items = team.relations(&["R-0", "R-1", "R-2", "R-3"]);
+    assert_eq!(
+        links_of(&items[0]),
+        [link("caused-by", "out", "R-1", "present")]
+    );
+    assert!(links_of(&items[2]).is_empty() && links_of(&items[3]).is_empty());
+}
+
+#[test]
+fn a_rendering_of_a_linked_task_keeps_its_links_section() {
+    let team = Team::of(2);
+    let added = team.links("add-many", &[("R-0", "R-1", "caused-by")]);
+    assert_eq!(outcomes(&added), ["written"], "{}", added.json);
+    let rendered = links_section(&team.workspace.long_form("tasks", "R-0").expect("held"));
+    let template = team.sandbox.subdirectory("templates").join("note.md");
+    std::fs::create_dir_all(template.parent().expect("a folder")).expect("the folder");
+    std::fs::write(&template, "A rendered body.\n").expect("a template");
+    let ran = team.ok(&[
+        "task",
+        "render",
+        "team:R-0",
+        "--template",
+        template.to_str().expect("a path"),
+        "--no-interactive",
+    ]);
+    assert_eq!(ran.json["changed"], json!(true), "{}", ran.json);
+    let stored = team.workspace.long_form("tasks", "R-0").expect("held");
+    assert!(
+        stored.starts_with("A rendered body.\n\n\n## Links\n"),
+        "{stored}"
+    );
+    assert_eq!(links_section(&stored), rendered);
+    assert!(stored.contains("onetaskgraph.template"), "{stored}");
+    let shown = team.ok(&["task", "show", "team:R-0"]);
+    assert_eq!(
+        shown.json["items"][0]["item"]["content"],
+        json!("A rendered body.\n")
+    );
+    let items = team.relations(&["R-0", "R-1"]);
+    assert_eq!(
+        links_of(&items[0]),
+        [link("caused-by", "out", "R-1", "present")]
+    );
+}
+
+#[test]
+fn a_copy_over_a_linked_counterpart_keeps_its_links_section_rendered_from_its_links() {
+    let team = Team::of(2);
+    let notes = team.sandbox.subdirectory("notes").join("tasks");
+    std::fs::write(
+        notes.join("N-1.md"),
+        "---\ntitle: A note\nstatus: todo\n---\nThe note's first body.\n",
+    )
+    .expect("a task file");
+    let first = team.ok(&["task", "copy", "notes:N-1", "--to", "team"]);
+    let landed = first.json["items"][0]["destination_id"]
+        .as_str()
+        .or_else(|| first.json["items"][0]["landed"].as_str())
+        .map(str::to_owned)
+        .unwrap_or_else(|| {
+            let text = first.json.to_string();
+            let start = text.find("team:").expect("the copy names where it landed");
+            text[start..].split('"').next().expect("an id").to_owned()
+        });
+    let native = landed.trim_start_matches("team:").to_owned();
+    let added = team.links("add-many", &[(native.as_str(), "R-1", "caused-by")]);
+    assert_eq!(outcomes(&added), ["written"], "{}", added.json);
+
+    std::fs::write(
+        notes.join("N-1.md"),
+        std::fs::read_to_string(notes.join("N-1.md"))
+            .expect("the note")
+            .replace("The note's first body.", "The note's second body."),
+    )
+    .expect("the edited note");
+    let again = team.ok(&["task", "copy", "notes:N-1", "--to", "team"]);
+    assert!(again.json.to_string().contains("updated"), "{}", again.json);
+    let stored = team.workspace.long_form("tasks", &native).expect("held");
+    assert!(
+        stored.starts_with("The note's second body.\n\n## Links\n"),
+        "{stored}"
+    );
+    let section = links_section(&stored);
+    assert!(section.contains("**caused-by**"), "{section}");
+    assert!(section.contains("`team:R-1`"), "{section}");
+    let shown = team.ok(&["task", "show", &landed]);
+    assert_eq!(
+        shown.json["items"][0]["item"]["content"],
+        json!("The note's second body.")
+    );
+    let items = team.relations(&[native.as_str(), "R-1"]);
+    assert_eq!(
+        links_of(&items[0]),
+        [link("caused-by", "out", "R-1", "present")]
+    );
+}
+
+#[test]
+fn a_relation_read_linear_answers_malformed_is_refused_rather_than_read_as_no_relation() {
+    type Bend = fn(&mut Value);
+    let bends: [(&str, Bend); 4] = [
+        ("an issue without its parent", |data| {
+            data["a0"]
+                .as_object_mut()
+                .map(|issue| issue.remove("parent"));
+        }),
+        ("missing field id", |data| {
+            data["a0"]["parent"] = json!({});
+        }),
+        ("children without pageInfo.hasNextPage", |data| {
+            data["a0"]["children"]["pageInfo"] = json!({});
+        }),
+        ("the alias asking for R-0 with R-9", |data| {
+            data["a0"]["id"] = json!("R-9");
+        }),
+    ];
+    for (named, bend) in bends {
+        let team = Team::of(2);
+        team.workspace.bend_answers(
+            |query, _| query.contains("a0: issue(id:$id_0){ id identifier title description url"),
+            1,
+            move |_, data| bend(data),
+        );
+        let ran = team.run(&["task", "relations", "team:R-0"]);
+        assert_ne!(ran.code, Some(0), "{named}: {}", ran.json);
+        let said = format!("{}{}", ran.json, ran.stderr);
+        assert!(said.contains(named), "{named}: {said}");
+    }
 }

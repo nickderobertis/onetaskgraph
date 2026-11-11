@@ -22,6 +22,7 @@ pub const LINEAR_CHILD_LIMIT: &str = "Issue cannot have more sub-issues";
 const CHILDREN_PAGE: usize = 50;
 
 /// The answer to `operation` when it is one of the relation documents, `None` otherwise.
+// llmlint: ignore[code_lands_in_the_domain_that_owns_it] AGENTS.md places every loopback server in this shared harness, once ("the loopback servers and the table above — is `crates/onetaskgraph-e2e-support`, once"), so a Linear suite cannot answer a request of the loopback Linear from outside it; this is that loopback's answer to the Linear plugin's two relation documents.
 pub(super) fn answer(
     operation: &str,
     vars: &Value,
