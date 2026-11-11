@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.13](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.14.12...onetaskgraph-github-projects-v0.14.13) - 2026-11-11
+
+### Added
+
+- add a parent relation and typed links between items ([#3982](https://github.com/nickderobertis/onetaskgraph/pull/3982))
+
+### Fixed
+
+- *(ci)* keep lint within its timeout and make the Windows and Linear-live flakes deterministic ([#3981](https://github.com/nickderobertis/onetaskgraph/pull/3981))
+
 ## [0.14.12](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.14.11...onetaskgraph-github-projects-v0.14.12) - 2026-11-11
 
 ### Added
