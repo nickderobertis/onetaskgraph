@@ -118,7 +118,7 @@ pub(super) fn without_record(metadata: &BTreeMap<String, Value>) -> BTreeMap<Str
 /// Caller metadata as a copy writes it: repository names are already digested from the
 /// item's `repositories` field. Hosted sources also expose that field's transport slot in
 /// metadata, while a folder keeps it in front matter; that duplication is not an edit.
-fn digest_metadata(metadata: &BTreeMap<String, Value>) -> BTreeMap<String, Value> {
+pub(super) fn digest_metadata(metadata: &BTreeMap<String, Value>) -> BTreeMap<String, Value> {
     let mut kept = without_record(metadata);
     kept.remove(Repository::METADATA_KEY);
     kept

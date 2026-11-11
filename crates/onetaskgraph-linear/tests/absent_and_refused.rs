@@ -789,12 +789,21 @@ async fn an_issue_and_a_document_land_under_the_next_id_or_finish_their_earlier_
                 if query == read && holds {
                     return (200, json!({"data":{field:item(asked)}}));
                 }
-                if query == rewrite && holds {
+                // A document's earlier attempt is finished by a whole write; an issue's by a
+                // compared update of what differs, and its relations read to reconcile them.
+                let finishing = query == rewrite
+                    || (record == MetadataRecord::Task && query == graphql::ISSUE_UPDATE_READ);
+                if finishing && holds {
                     record_rewrites.lock().unwrap().push(asked.to_owned());
                     return (
                         200,
                         json!({"data":{updated:{"success":true,field:item(asked)}}}),
                     );
+                }
+                if query == graphql::ISSUE_RELATIONS && holds {
+                    let page =
+                        json!({"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}});
+                    return (200, json!({"data":{"issue":{"relations":page}}}));
                 }
                 if query == graphql::RESOLUTION {
                     return (200, resolution());

@@ -1236,7 +1236,16 @@ fn a_comment_snapshot_narrowed_to_backlog_copies_only_the_commented_proposed_iss
         .served()
         .into_iter()
         .filter(|(query, _)| query.contains("comments(last:"))
-        .filter_map(|(_, variables)| variables["id"].as_str().map(str::to_owned))
+        // An aliased read names each issue it reads under `id_<n>`.
+        .flat_map(|(_, variables)| {
+            variables
+                .as_object()
+                .into_iter()
+                .flatten()
+                .filter(|(name, _)| *name == "id" || name.starts_with("id_"))
+                .filter_map(|(_, id)| id.as_str().map(str::to_owned))
+                .collect::<Vec<_>>()
+        })
         .collect();
     assert!(
         read.iter().all(|id| id.starts_with("P-")),

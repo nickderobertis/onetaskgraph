@@ -410,11 +410,30 @@ impl GitHubProjectsSource {
     /// facets read by exactly the rules a read takes them by — and the issue settled by the
     /// response's own clock.
     fn token_of(&self, issue: &Value) -> Option<String> {
+        let served = optional_time(issue, SERVED_AT).ok()??;
+        let (_, parts) = self.token_parts(issue)?;
+        change_token::settled(parts.issue, parts.item, served).then(|| change_token::spell(&parts))
+    }
+
+    /// The change token `issue`, as a write's own response shows it, holds now that the write
+    /// landed — with its board item's id — whether or not it has settled.
+    ///
+    /// What a written task's `version` answers (see `GitHubProjectsSource::written_tokens`):
+    /// spelled from exactly the parts a read takes, so the read that finds it settled spells
+    /// the same token, and a write held to it then goes ahead. Until it settles a read gives no
+    /// token, so a write held to this one before then is refused rather than let through.
+    pub(super) fn written_token_of(&self, issue: &Value) -> Option<(String, String)> {
+        let (item, parts) = self.token_parts(issue)?;
+        Some((item, change_token::spell(&parts)))
+    }
+
+    /// Every part of the change token `issue` spells, as a response shows it, and the id of its
+    /// board item on this board — `None` when any part is missing.
+    fn token_parts(&self, issue: &Value) -> Option<(String, change_token::Parts)> {
         let updated = optional_time(issue, "updatedAt").ok()??;
         let nodes = issue.pointer("/projectItems/nodes")?.as_array()?;
         let entry = self.board_entry(nodes)?;
         let item = optional_time(entry, "updatedAt").ok()??;
-        let served = optional_time(issue, SERVED_AT).ok()??;
         let parts = change_token::Parts {
             issue: updated,
             item,
@@ -428,7 +447,7 @@ impl GitHubProjectsSource {
             ))
             .ok()?,
         };
-        change_token::settled(parts.issue, parts.item, served).then(|| change_token::spell(&parts))
+        Some((entry.get("id")?.as_str()?.to_owned(), parts))
     }
 
     /// The task `issue` is, whole, at `version` — when the response carried every part the
@@ -514,7 +533,7 @@ pub const WHOLE_MEMBERS: [&str; 15] = [
 
 /// The issue a mutation's response shows, and each field the mutation set with the value that
 /// response shows it holding — `null` where it shows none.
-fn read_back<'a>(
+pub(super) fn read_back<'a>(
     document: &str,
     variables: &Value,
     data: &'a Value,
@@ -537,7 +556,13 @@ fn read_back<'a>(
             json!({"deleted": variables.pointer("/input/id")}),
         );
         None
-    } else if [graphql::UPDATE_ISSUE, graphql::UPDATE_ISSUE_WHOLE].contains(&document) {
+    } else if [
+        graphql::UPDATE_ISSUE,
+        graphql::UPDATE_ISSUE_WHOLE,
+        graphql::UPDATE_ISSUE_TOKEN,
+    ]
+    .contains(&document)
+    {
         let issue = data.pointer("/updateIssue/issue");
         let input = variables.get("input");
         for (asked, shown) in [
@@ -556,11 +581,23 @@ fn read_back<'a>(
             }
         }
         issue
-    } else if [graphql::UPDATE_FIELD, graphql::UPDATE_FIELD_WHOLE].contains(&document) {
+    } else if [
+        graphql::UPDATE_FIELD,
+        graphql::UPDATE_FIELD_WHOLE,
+        graphql::UPDATE_FIELD_TOKEN,
+    ]
+    .contains(&document)
+    {
         let item = data.pointer("/updateProjectV2ItemFieldValue/projectV2Item");
         field_values(variables, item, &mut fields);
         item.and_then(|item| item.get("content"))
-    } else if [graphql::CLEAR_FIELD, graphql::CLEAR_FIELD_WHOLE].contains(&document) {
+    } else if [
+        graphql::CLEAR_FIELD,
+        graphql::CLEAR_FIELD_WHOLE,
+        graphql::CLEAR_FIELD_TOKEN,
+    ]
+    .contains(&document)
+    {
         let item = data.pointer("/clearProjectV2ItemFieldValue/projectV2Item");
         field_values(variables, item, &mut fields);
         item.and_then(|item| item.get("content"))

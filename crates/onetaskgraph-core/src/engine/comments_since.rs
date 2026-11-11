@@ -20,7 +20,8 @@ use std::num::NonZeroU32;
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use onetaskgraph_plugin_api::{
-    AuthorKind, MetadataMatch, NativeId, SourceName, StatusCategory, TaskSource,
+    AuthorKind, MetadataMatch, NativeId, PageRequest, SourceName, StatusCategory, TaskDetailRead,
+    TaskSource,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -140,13 +141,51 @@ impl Engine {
             });
         }
         let wanted: BTreeSet<String> = request.items.iter().map(ToString::to_string).collect();
-        let mut comments = Vec::new();
-        for task in tasks
+        let matched: Vec<GlobalId> = tasks
             .items
             .into_iter()
             .filter(|task| wanted.is_empty() || wanted.contains(&task.id.to_string()))
-        {
-            for comment in self.comments(&task.id).await?.comments {
+            .map(|task| task.id)
+            .collect();
+        // Every matched task's first page of comments in the source's one batched detail read —
+        // a source that reads many items together answers them in few requests — and only a
+        // task holding more than a page, or one that read could not answer, walked on its own.
+        // A caching source's comments are read through `comments`, which keeps its entries.
+        let firsts = if self.caches(&request.source) || matched.is_empty() {
+            Vec::new()
+        } else {
+            let page = PageRequest {
+                cursor: None,
+                limit: source.source().capabilities().max_page_size.max(1),
+            };
+            let natives: Vec<NativeId> = matched.iter().map(|id| id.native.clone()).collect();
+            let read = source
+                .source()
+                .get_task_details(&natives, Some(&page))
+                .await;
+            // An answer of another count says nothing of which answer is whose, so every task
+            // is read on its own instead.
+            if read.len() == natives.len() {
+                read
+            } else {
+                Vec::new()
+            }
+        };
+        let mut comments = Vec::new();
+        for (at, task) in matched.iter().enumerate() {
+            // Taken only when it is this task's page, whole: anything else is read on its own.
+            let first = match firsts.get(at) {
+                Some(Ok(Some(TaskDetailRead {
+                    task: read,
+                    comments: Some(Ok(Some(page))),
+                }))) if page.next.is_none() && read.id == task.native => Some(page.items.clone()),
+                _ => None,
+            };
+            let held = match first {
+                Some(held) => held,
+                None => self.comments(task).await?.comments,
+            };
+            for comment in held {
                 let Some(created_at) = comment.created_at.or(comment.updated_at) else {
                     continue;
                 };
@@ -155,7 +194,7 @@ impl Engine {
                     continue;
                 }
                 comments.push(CommentActivity {
-                    item: task.id.clone(),
+                    item: task.clone(),
                     author_kind: source.source().comment_author_kind(&comment),
                     id: comment.id,
                     url: comment.url,

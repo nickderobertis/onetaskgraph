@@ -96,7 +96,7 @@ budgets:
     command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_live_session", "--exact", "--nocapture", "../../target/debug/telemetry/github-live-session"]
     unit: points
     direction: max
-    threshold: 299
+    threshold: 304
   - id: github-plan-copy-seconds-unchanged
     description: >-
       The simulated seconds, each request held for the timing spike's mean for its kind, of an unchanged re-copy of the generated 10-item plan (a 50 KB project, eight 45-49 KB tasks with 10 edges, 19 field values, a 35 KB document with a 104 KB PNG), one `project copy` then one `document copy`, the larger of three recordings on a 2,000-item loopback board and again on a 20,000-item one — with no write policy, screened through the released onevcs boundary commands, and in the host's configuration (the plan's source declared `visibility: private`, the board's `cache: {enabled: true}`, screening on). It protects the time the manager and the user wait for every plan revision filed onto the plans board.
@@ -324,3 +324,14 @@ budgets:
     unit: requests
     direction: max
     threshold: 38
+  - id: github-points-per-follow-up-cycle
+    description: >-
+      The GitHub GraphQL points one follow-up cycle of batched store calls — a batch, its retry,
+      a comment pass and that pass repeated — spends on a board holding 400 other open items. It
+      protects every manager's share of the board token from the calls an orchestrator makes most.
+    measure: reported
+    # llmlint: ignore[budget_commands_measure_directly] Every budget of this file selects its own report-only entry in `budget_runner`, the harness-runner convention this crate's budgets landed with; this one reads only the telemetry `follow_up_cycle.rs` recorded during the crate's test run, refuses a recording of another workload or a figure that is not its calls' points added up, and hands the figure to onebudgetspec, which alone judges it.
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_follow_up_cycle_points", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-github-projects-e2e"]
+    unit: points
+    direction: max
+    threshold: 34

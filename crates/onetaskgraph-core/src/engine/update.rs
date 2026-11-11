@@ -55,6 +55,10 @@ pub struct TaskUpdated {
     /// update wrote no status, and for a task with no projection.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub projection: Option<GlobalId>,
+    /// What `--when-priority` found the task's priority at, and whether the update was written
+    /// or held — absent for an update given no priority guard.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guard: Option<super::PriorityGuard>,
 }
 
 impl Engine {
@@ -87,13 +91,45 @@ impl Engine {
         id: &GlobalId,
         update: &TaskUpdate,
     ) -> Result<TaskUpdated, EngineError> {
-        let source = self.built(&id.source)?;
+        let source = self.updatable(&id.source)?;
+        let update = self.prepared_update(source, id, update).await?;
+        let before = readings(&[source]).await;
+        let outcome = source
+            .source()
+            .update_task(&id.native, &update)
+            .await
+            .map_err(|error| source_failed(source, error))?
+            .ok_or_else(|| EngineError::NoSuchTask { id: id.to_string() })?;
+        self.updated(source, id, &update, outcome, &before).await
+    }
+
+    /// The source `name` names, refused as [`EngineError::UpdateNotWritable`] when it has no
+    /// write side.
+    pub(super) fn updatable(
+        &self,
+        name: &SourceName,
+    ) -> Result<&super::ResolvedSource, EngineError> {
+        let source = self.built(name)?;
         if !source.source().writes().is_supported() {
             return Err(EngineError::UpdateNotWritable {
                 name: source.name().to_string(),
                 kind: source.kind().to_owned(),
             });
         }
+        Ok(source)
+    }
+
+    /// `update` of the task `id` as its source is to be sent it: refused when it contradicts
+    /// itself, names a priority the source holds none of or a private reference it may not
+    /// carry, and with every far end named as its source names it and every value the write
+    /// policy rewrites rewritten — everything [`update_task`](Self::update_task) checks before
+    /// it sends anything.
+    pub(super) async fn prepared_update(
+        &self,
+        source: &super::ResolvedSource,
+        id: &GlobalId,
+        update: &TaskUpdate,
+    ) -> Result<TaskUpdate, EngineError> {
         update
             .consistent()
             .map_err(|error| source_failed(source, error))?;
@@ -178,13 +214,20 @@ impl Engine {
         }
         let mut update = update;
         rewrite.update(&mut update);
-        let before = readings(&[source]).await;
-        let outcome = source
-            .source()
-            .update_task(&id.native, &update)
-            .await
-            .map_err(|error| source_failed(source, error))?
-            .ok_or_else(|| EngineError::NoSuchTask { id: id.to_string() })?;
+        Ok(update)
+    }
+
+    /// What `update` of the task `id`, which its source answered with `outcome`, came to: every
+    /// task it delivers kept in step when it named a status or `delivers`, its status mirrored
+    /// to its public projection when it wrote one, and what the call spent since `before`.
+    pub(super) async fn updated(
+        &self,
+        source: &super::ResolvedSource,
+        id: &GlobalId,
+        update: &TaskUpdate,
+        outcome: onetaskgraph_plugin_api::TaskUpdateOutcome,
+        before: &[Option<onetaskgraph_plugin_api::Metering>],
+    ) -> Result<TaskUpdated, EngineError> {
         let delivered = if update.status.is_some() || update.delivers.is_some() {
             let now = targets(&outcome.task.delivers, &id.source);
             let dropped = targets(&outcome.delivers_before, &id.source);
@@ -199,7 +242,7 @@ impl Engine {
         } else {
             Vec::new()
         };
-        let spent = spent_between(&before, &readings(&[source]).await);
+        let spent = spent_between(before, &readings(&[source]).await);
         let (result, fallback, _) = self.expected_parts(id);
         let result = self
             .verb_result(source, id, Some(&outcome.task), result)
@@ -219,6 +262,7 @@ impl Engine {
             result,
             fallback,
             projection,
+            guard: None,
         })
     }
 }

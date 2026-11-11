@@ -23,6 +23,7 @@ mod approval;
 // its reporter reads and whose `budgets` target judges it, as every budget of this crate does;
 // it is loopback-only and seconds long, beside the plan copy it builds on.
 mod approval_seconds;
+mod batched_calls;
 mod boundary;
 mod cache;
 mod cache_assets;
@@ -37,6 +38,8 @@ mod copy_status;
 mod copy_unsettled;
 mod creation_owners;
 mod fields;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] The github-points-per-follow-up-cycle workload must run in this crate's `test` target, whose saved telemetry its reporter reads and whose `budgets` target judges it, as every budget of this crate does (`plan_copy`, `store_cost`); it is loopback-only and seconds long.
+mod follow_up_cycle;
 mod github_status_by_kind;
 mod graph;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] The human-task-projection-points workload must run in this crate's `test` target, whose saved telemetry its reporter reads and whose `budgets` target judges it, as every budget of this crate does (`plan_copy`, `store_cost`); it is about six seconds of loopback-only work, and its default inputs are the crate's own, shared by every journey here.

@@ -779,17 +779,25 @@ fn a_shape_that_is_not_the_authored_form_is_never_translated_and_linear_stores_i
                         ("documentCreate", "content")
                     };
                     let title = format!("Shape {}", shape.key);
+                    // A create sent alone carries `input`; creates the source sends together
+                    // in one aliased document carry `input_<n>`, one per alias.
                     let sent: Vec<String> = workspace
                         .served()
                         .into_iter()
-                        .filter(|(query, variables)| {
-                            query.contains(create) && variables["input"]["title"] == json!(title)
-                        })
-                        .map(|(_, variables)| {
-                            variables["input"][member]
-                                .as_str()
-                                .unwrap_or_default()
-                                .to_owned()
+                        .filter(|(query, _)| query.contains(create))
+                        .flat_map(|(_, variables)| {
+                            variables
+                                .as_object()
+                                .into_iter()
+                                .flatten()
+                                .filter(|(name, input)| {
+                                    (*name == "input" || name.starts_with("input_"))
+                                        && input["title"] == json!(title)
+                                })
+                                .map(|(_, input)| {
+                                    input[member].as_str().unwrap_or_default().to_owned()
+                                })
+                                .collect::<Vec<_>>()
                         })
                         .collect();
                     assert_eq!(sent.len(), 1, "{what}: one create");

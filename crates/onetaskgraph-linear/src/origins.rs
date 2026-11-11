@@ -39,6 +39,10 @@ pub(crate) struct OriginsAhead {
     /// in one request per [`ORIGIN_BATCH`], at the first lookup by origin — so a copy that never
     /// looks an issue or a project up by its origin, a document copy among them, sends none.
     pending: Vec<String>,
+    /// The origins a copy asked about together — two or more in one read ahead — for the whole
+    /// command: a copy creating several issues, whose lookup of each that lists none is not
+    /// followed by a read of the id its key derives; see [`LinearSource::tasks_with_copied_by_key`].
+    together: std::collections::BTreeSet<String>,
 }
 
 /// The one task query a copy asks by origin — no other member set — which is the only query
@@ -78,6 +82,7 @@ impl LinearSource {
             held.pending.clear();
             if all {
                 held.organization = None;
+                held.together.clear();
             }
         }
     }
@@ -124,6 +129,9 @@ impl LinearSource {
             return Ok(());
         }
         let mut held = self.origins_ahead()?;
+        if origins.len() > 1 {
+            held.together.extend(origins.iter().cloned());
+        }
         for origin in origins {
             if slot_phrase(origin).is_some()
                 && !held.tasks.contains_key(origin)
@@ -476,7 +484,12 @@ impl LinearSource {
     }
 
     /// `listed`, a page of `query`'s issues, with the one [`Self::copied_by_origin_key`] reads in
-    /// its place when `query` is exactly a copy's lookup by origin and its first page listed none.
+    /// its place when `query` is exactly a copy's lookup by origin and its first page listed none
+    /// — but for an origin a copy asked about together with others. A copy creating several
+    /// issues sends no read of each first: one an earlier copy made under that origin's key, which
+    /// a lagging lookup did not list, is found by the keyed create's own conflict, Linear refusing
+    /// a create under an id a record holds — which no index can lag — and is brought in step
+    /// there by a compared update.
     pub(crate) async fn tasks_with_copied_by_key(
         &self,
         query: &TaskQuery,
@@ -484,7 +497,10 @@ impl LinearSource {
         listed: Page<Task>,
     ) -> Result<Page<Task>, SourceError> {
         match &query.origin {
-            Some(origin) if *query == origin_query(origin) => {
+            Some(origin)
+                if *query == origin_query(origin)
+                    && !self.origins_ahead()?.together.contains(origin) =>
+            {
                 self.with_copied_by_key(
                     MetadataRecord::Task,
                     origin,

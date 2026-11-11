@@ -51,7 +51,8 @@ and four fewer reads of one issue — on top of this branch's lanes. The two add
 
 ## Whole credentialed lane
 
-The budget is `github-live-session-points`, max 299 in the GitHub e2e budgets file.
+The budget is `github-live-session-points`, max 304 in the GitHub e2e budgets file (299 until
+the batched search's reconciliation, below).
 One selected credentialed Linux job runs the main and asset entry points sequentially,
 under one fresh session identity. Other platform and coverage runs remain credentialless.
 The reporter reads both completed records and hands the attributed sum to onebudgetspec;
@@ -308,3 +309,42 @@ records 239 requests / 300,990 nodes and 224 attributed GraphQL points. Only dra
 items travel with a board copy; issues and pull requests stay on the template.
 The copy waits for that draft count on two consecutive reads within the same bound.
 No budget ceiling changes.
+
+## The batched search's rounds share one page of resumed rows
+
+`graphql::SEARCH_BATCH` — the twenty search slots and five origin slots `task find` sends in one
+request — asked every resumed slot for a whole page of `SEARCH_PAGE_SIZE` rows, so a round in
+which all of them walked on cost 22 points, and the reconciliation, which prices each document
+at the largest request this source sends, spent those 22 on one request: a measured session went
+from 292 points to 315 against the 299 `github-live-session-points` holds it to (Reconciliation
+40 → 62). Every resumed page of one round now shares one `SEARCH_PAGE_SIZE` of rows
+(`search_batch_resumed_page`); a query with more to answer is walked on over more rounds, every
+page still read. The largest round this source sends is then every slot on its first page of
+`SEARCH_BATCH_FIRST_PAGE` rows and one resumed slot asking all the shared rows
+(`search_batch_largest_round`), 4 points: `tests/point_cost.rs` holds every round shape to it,
+and the reconciliation prices the document under it. The worst case of every slot at a whole
+page is still pinned at 22 by the same file and held under the node limit by
+`tests/node_count.rs`. The offline record moves from 399,965 worst-case nodes to 325,488 at the
+same 239 requests. A credentialed session of both entry points then measured 300 (Reconciliation
+44, Setup 57, the rest as main's), and GitHub priced the largest round at 4 points, hypothetical
+and executed. Those 4 are the new document's real cost over main's 292, and Setup's board-copy
+polling spreads 52-57 between runs, so by the manager's ruling of 2026-11-11 the ceiling is 304.
+
+| Phase | main (#3971) | branch, whole resumed pages | branch, shared resumed rows |
+| --- | ---: | ---: | ---: |
+| Admission | 2 | 2 | 2 |
+| Schema | 13 | 13 | 13 |
+| Reconciliation | 40 | 62 | 44 |
+| Setup | 53 | 54 | 57 |
+| Capabilities | 31 | 31 | 31 |
+| CommentActivity | 17 | 17 | 16 |
+| ChangeToken | 83 | 83 | 84 |
+| Cleanup | 27 | 27 | 27 |
+| OrphanRecovery | 3 | 3 | 3 |
+| AssetSetup | 11 | 11 | 11 |
+| AssetTask | 6 | 6 | 6 |
+| AssetDocument | 6 | 6 | 6 |
+| **Total** | **292** | **315** | **300** |
+
+The first two columns are CI sessions (the second, run 43001415572); the third is a credentialed
+local session of both entry points over the template's 60 items.

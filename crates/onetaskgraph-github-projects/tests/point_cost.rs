@@ -22,8 +22,9 @@
 //! `rateLimit(dryRun: true)` probe `tests/journey/mod.rs` already sends per read document.
 
 use onetaskgraph_github_projects::{
-    COPY_DETAIL_BATCH, DETAIL_BATCH, MEMBER_PAGE_SIZE, Variables, graphql, largest_page_sizes,
-    worst_case_point_cost,
+    COPY_DETAIL_BATCH, DETAIL_BATCH, MEMBER_PAGE_SIZE, SEARCH_BATCH, SEARCH_BATCH_FIRST_PAGE,
+    SEARCH_BATCH_ORIGINS, Variables, graphql, largest_page_sizes, point_cost,
+    search_batch_largest_round, search_batch_resumed_page, worst_case_point_cost,
 };
 
 /// What each document this source sends costs, in points, under the largest page sizes it
@@ -100,6 +101,11 @@ const PRICES: &[(&str, u64)] = &[
     (graphql::ADD_COMMENT, 1),
     (graphql::UPDATE_COMMENT, 1),
     (graphql::DELETE_COMMENT, 1),
+    // llmlint: ignore-block[tests_hold_no_nonfunctional_thresholds] As at `SUB_ISSUES` above: the price is the instrument, not a threshold. These are the batched documents `task find`, `task comment add-many` and `task update-many` send, and the sweep below refuses any document in `graphql::DOCUMENTS` without a recorded price; what a follow-up cycle spends is the `github-points-per-follow-up-cycle` budget's, judged by onebudgetspec. The batched search is priced here at every slot's largest page; it is sent at three rows a slot on a first page, which `follow_up_cycle.rs` prices as sent.
+    (graphql::SEARCH_BATCH, 22),
+    (graphql::ADD_COMMENTS, 1),
+    (graphql::WRITE_TASKS, 1),
+    // llmlint: ignore-end[tests_hold_no_nonfunctional_thresholds]
     // The whole-issue twins an expected write sends in place of the document beside each, so
     // the store's cache can take what their responses show: each selects what `ISSUE_DETAIL`
     // does, and costs the one point it does.
@@ -109,6 +115,14 @@ const PRICES: &[(&str, u64)] = &[
     (graphql::UPDATE_ISSUE_WHOLE, 1),
     (graphql::UPDATE_FIELD_WHOLE, 1),
     (graphql::CLEAR_FIELD_WHOLE, 1),
+    // llmlint: ignore-end[tests_hold_no_nonfunctional_thresholds]
+    // The twins a targeted update sends in place of the document beside each, so its answer
+    // spells the version the written task holds: each selects what a read of the issue does,
+    // and costs the one point the plain document does.
+    // llmlint: ignore-block[tests_hold_no_nonfunctional_thresholds] As at `SUB_ISSUES` above: the price is the instrument, not a threshold. These three are new documents, and the sweep below refuses any document in `graphql::DOCUMENTS` without a recorded price; what a follow-up cycle spends is the `github-points-per-follow-up-cycle` budget's, judged by onebudgetspec.
+    (graphql::UPDATE_ISSUE_TOKEN, 1),
+    (graphql::UPDATE_FIELD_TOKEN, 1),
+    (graphql::CLEAR_FIELD_TOKEN, 1),
     // llmlint: ignore-end[tests_hold_no_nonfunctional_thresholds]
     (graphql::STATUS_OPTIONS_SNAPSHOT, 1),
     (graphql::STATUS_OPTIONS_UPDATE, 1),
@@ -308,3 +322,57 @@ fn largest_at_one_point(document: &str, batch: usize, name: &str) {
     );
 }
 // llmlint: ignore-end[tests_hold_no_nonfunctional_thresholds]
+
+/// [`search_batch_largest_round`] is the largest round of the batched search this source sends,
+/// which is what makes the credentialed lane's reconciliation of the document under it a
+/// reconciliation of every round: each way a round can split its search slots and origin item
+/// listings between first pages, resumed pages and slots it does not ask is priced at the pages
+/// `search_round` binds — a first page at [`SEARCH_BATCH_FIRST_PAGE`] rows, every resumed page
+/// at [`search_batch_resumed_page`]'s share of the round, and a slot not asked at one — and none
+/// is larger. It compares two prices of one document under GitHub's published model, not a price
+/// with a ceiling: the full every-slot-at-a-whole-page worst case is pinned in the table above,
+/// and what a find spends is `github-points-per-follow-up-cycle`'s, judged by onebudgetspec.
+#[test]
+fn the_largest_round_of_the_batched_search_is_the_largest_round_it_sends() {
+    let largest = point_cost(graphql::SEARCH_BATCH, &search_batch_largest_round()).unwrap();
+    assert!(largest <= worst_case_point_cost(graphql::SEARCH_BATCH).unwrap());
+    for searches_first in 0..=SEARCH_BATCH {
+        for searches_resumed in 0..=SEARCH_BATCH - searches_first {
+            for origins_first in 0..=SEARCH_BATCH_ORIGINS {
+                for origins_resumed in 0..=SEARCH_BATCH_ORIGINS - origins_first {
+                    let shared = search_batch_resumed_page(searches_resumed + origins_resumed);
+                    let pages = |first: usize, resumed: usize, slot: usize| {
+                        if slot < first {
+                            SEARCH_BATCH_FIRST_PAGE
+                        } else if slot < first + resumed {
+                            shared
+                        } else {
+                            1
+                        }
+                    };
+                    let mut sizes = largest_page_sizes();
+                    for slot in 0..SEARCH_BATCH {
+                        sizes.insert(
+                            format!("first{slot}"),
+                            pages(searches_first, searches_resumed, slot),
+                        );
+                    }
+                    for slot in 0..SEARCH_BATCH_ORIGINS {
+                        sizes.insert(
+                            format!("itemsFirst{slot}"),
+                            pages(origins_first, origins_resumed, slot),
+                        );
+                    }
+                    let cost = point_cost(graphql::SEARCH_BATCH, &sizes).unwrap();
+                    assert!(
+                        cost <= largest,
+                        "a round of {searches_first} first and {searches_resumed} resumed \
+                         searches and {origins_first} first and {origins_resumed} resumed origin \
+                         listings is larger than search_batch_largest_round: {cost} points \
+                         against {largest}"
+                    );
+                }
+            }
+        }
+    }
+}

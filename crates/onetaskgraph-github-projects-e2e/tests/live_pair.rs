@@ -482,9 +482,9 @@ fn run_pair(scenario: &str) {
         let said = String::from_utf8_lossy(&outputs[0].stderr);
         assert!(said.contains("using executed read-only reconciliation"));
         // Every read document of `graphql::DOCUMENTS` is reconciled, the closed-items read of
-        // `task status reconcile` and the read by issue reference of `task status complete` among
-        // them.
-        assert!(said.contains("28 documents agreed"), "{said}");
+        // `task status reconcile`, the read by issue reference of `task status complete` and the
+        // aliased search of `task find` among them.
+        assert!(said.contains("29 documents agreed"), "{said}");
         assert!(!outputs[1].status.success());
         assert!(
             String::from_utf8_lossy(&outputs[1].stderr)
@@ -516,8 +516,8 @@ fn run_pair(scenario: &str) {
             .count();
         let probes: Vec<_> = phase[rechecked..].to_vec();
         // One probe per document reconciled — `ISSUES_BY_CREATION`, a retried copy's listing by
-        // create key, among them.
-        assert_eq!(probes.len(), 31);
+        // create key, and `SEARCH_BATCH`, `task find`'s aliased search, among them.
+        assert_eq!(probes.len(), 32);
         assert_eq!(
             probes[1].outcome,
             if scenario == "aliases" {

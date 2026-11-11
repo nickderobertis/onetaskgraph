@@ -184,7 +184,11 @@ fn a_private_declaration_is_verified_inside_the_cold_read_and_spends_no_request(
         1,
         "verified once per instance: {spent:#?}"
     );
-    assert_eq!(mutations(&spent), 4, "one create per item: {spent:#?}");
+    assert_eq!(
+        mutations(&crate::fixtures::linear_per_item(&spent)),
+        4,
+        "one create per item: {spent:#?}"
+    );
 
     let undeclared = Setup::new(None, held(), true, 3);
     for index in 0..3 {

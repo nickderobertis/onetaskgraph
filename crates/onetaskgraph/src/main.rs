@@ -6,6 +6,7 @@
 //! shell sees.
 
 mod attest;
+mod batch;
 mod cli;
 mod render;
 mod rendered;
@@ -610,6 +611,12 @@ async fn run_inner(
         Command::Task {
             command: TaskCommand::Comment { command },
         } => comment(out, loaded, command).await,
+        Command::Task {
+            command: TaskCommand::Find(args),
+        } => batch::find(out, loaded, args).await,
+        Command::Task {
+            command: TaskCommand::UpdateMany(args),
+        } => batch::update_many(out, loaded, args).await,
 
         Command::Task {
             command: TaskCommand::Comments(args),
@@ -966,8 +973,17 @@ async fn run_inner(
                     .iter()
                     .map(|priority| priority.priority())
                     .collect(),
+                versions: std::collections::HashMap::new(),
             };
-            copy(out, loaded, &request, args.held.if_version.as_deref()).await
+            let held = copy_versions(&request, &args.if_version)?;
+            if let CopyHeld::Each(versions) = &held {
+                request.conditions.versions.clone_from(versions);
+            }
+            let whole = match &held {
+                CopyHeld::Whole(version) => Some(version.as_str()),
+                _ => None,
+            };
+            copy(out, loaded, &request, whole).await
         }
 
         Command::Task {
@@ -1474,6 +1490,10 @@ fn term_scope(command: &Command) -> Option<Vec<String>> {
                 command: MetadataCommand::Set(args),
             } => &args.term_scope,
             TaskCommand::Update(args) => &args.term_scope,
+            TaskCommand::UpdateMany(args) => &args.term_scope,
+            TaskCommand::Comment {
+                command: CommentCommand::AddMany(args),
+            } => &args.term_scope,
             TaskCommand::Attest(args) => &args.term_scope,
             TaskCommand::Create(args) => &args.item.term_scope,
             TaskCommand::Render(args) => &args.render.term_scope,
@@ -1748,6 +1768,7 @@ async fn comment(
     command: &CommentCommand,
 ) -> Result<u8, Failure> {
     let rendered = match command {
+        CommentCommand::AddMany(args) => return batch::add_many(out, loaded, args).await,
         CommentCommand::Add(args) => {
             // The body is read and refused before anything is built or read, so an empty
             // one never reaches a source.
@@ -1921,6 +1942,60 @@ fn content(path: &std::path::Path) -> Result<String, Failure> {
             ),
         )
     })
+}
+
+/// What `task copy --if-version` holds: nothing, the one task's counterpart to one version, or
+/// each named task's counterpart to its own.
+enum CopyHeld {
+    None,
+    Whole(String),
+    Each(std::collections::HashMap<GlobalId, String>),
+}
+
+/// Read every `--if-version` against the ids a copy names: `<ID>=<VERSION>` for one of those
+/// ids, or one bare version beside exactly one id, refused before anything is read otherwise.
+fn copy_versions(request: &CopyRequest, given: &[String]) -> Result<CopyHeld, Failure> {
+    if given.is_empty() {
+        return Ok(CopyHeld::None);
+    }
+    let ids = request.items.as_slice();
+    let mut each = std::collections::HashMap::new();
+    for value in given {
+        let parsed = value
+            .split_once('=')
+            .and_then(|(id, version)| Some((id.parse::<GlobalId>().ok()?, version.to_owned())));
+        let named = parsed.clone().filter(|(id, _)| ids.contains(id));
+        match named {
+            Some((id, version)) => {
+                each.insert(id, version);
+            }
+            // A qualified id before the `=` names a task, and it is not one this copy copies.
+            None if let Some((id, _)) = parsed => {
+                return Err(Failure::decided(
+                    "if-version-one-task",
+                    format!(
+                        "--if-version {value}: {id} is not one of the ids this copy is given\n\
+                         next: name one of them before the `=`, or give a bare version beside \
+                         exactly one id."
+                    ),
+                ));
+            }
+            None if given.len() == 1 && ids.len() == 1 && request.items.query().is_none() => {
+                return Ok(CopyHeld::Whole(value.clone()));
+            }
+            None => {
+                return Err(Failure::decided(
+                    "if-version-one-task",
+                    format!(
+                        "--if-version {value}: it names none of the ids this copy is given\n\
+                         next: give it as <ID>=<VERSION> for one of the ids copied, once per \
+                         id, or as a bare version beside exactly one id."
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(CopyHeld::Each(each))
 }
 
 /// Drive the engine's own copy API and write what it did.
@@ -2825,7 +2900,10 @@ mod tests {
                 "task comment list",
                 "task comment edit",
                 "task comment delete",
+                "task comment add-many",
                 "task comments",
+                "task find",
+                "task update-many",
                 "task status set",
                 "task status reconcile",
                 "task status complete",

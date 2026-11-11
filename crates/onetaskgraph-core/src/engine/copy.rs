@@ -134,6 +134,13 @@ pub struct CopyConditions {
     /// priority over it; at any other the counterpart keeps its own, and every other field is
     /// written as it would be. Empty sets no condition.
     pub priority: Vec<Priority>,
+    /// The version each named task's counterpart must be at for the copy to write it, keyed by
+    /// the qualified id the task is copied from — `task copy --if-version <ID>=<VERSION>`.
+    /// A counterpart at any other version is written nothing and answered `failed` as
+    /// `version-moved`, its `held.version` the version it is at, while every other item is
+    /// copied; a task this copy creates holds nothing, since there is no version for it to be
+    /// at. Empty holds nothing.
+    pub versions: HashMap<GlobalId, String>,
 }
 
 /// What a guarded copy found a counterpart's status at, and whether that met the condition.
@@ -2269,7 +2276,8 @@ impl Engine {
         let conditions = &request.conditions;
         if (!conditions.status.is_empty()
             || conditions.otherwise.is_some()
-            || !conditions.priority.is_empty())
+            || !conditions.priority.is_empty()
+            || !conditions.versions.is_empty())
             && request.scope != CopyScope::Tasks
         {
             return Err(EngineError::ConditionsNotTasks);
@@ -5457,7 +5465,11 @@ impl Engine {
         .await?;
         // Each record a body links to is written before the body, so a link is addressable when
         // its body is first written rather than finished by a write of its own.
-        let mut planned = targets_first(planned);
+        let planned = targets_first(planned, false);
+        // Reported in that order: a task written ahead of another only so its edges land with
+        // its own create moves no line of the report.
+        let reported: Vec<GlobalId> = planned.iter().map(|item| item.source.clone()).collect();
+        let mut planned = targets_first(planned, true);
         self.note_derived_relations(&mut planned)?;
         // Once a document's references point where they land, and before anything is compared
         // with the destination or written to it: every status is what its destination will
@@ -5886,7 +5898,52 @@ impl Engine {
         for (index, outcome) in left_out {
             outcomes.insert(index.min(outcomes.len()), outcome);
         }
+        outcomes.sort_by_key(|outcome| {
+            reported
+                .iter()
+                .position(|source| source == &outcome.source)
+                .unwrap_or(usize::MAX)
+        });
         Ok(outcomes)
+    }
+
+    /// Stamp `landing`, a task created together with others at a destination whose creates
+    /// together carry the copy's record, exactly as [`Self::write`] stamps a create of it: the
+    /// mark that its every edge is on its own record, and the record of this copy — so the write
+    /// the copy then makes of it says what its create already did.
+    fn stamp_created(
+        &self,
+        destination: &ResolvedSource,
+        item: &Planned,
+        suggested: &NativeId,
+        edges: &[DependencyEdge],
+        landing: &mut Item,
+        journal: &mut Journal,
+    ) {
+        // Tasks are created together only by a copy that does not always record itself — one
+        // that does creates each on its own — so this is the stamping its write of each uses.
+        let stamping = Stamping::WithCarrier;
+        let Item::Task(task) = landing else {
+            return;
+        };
+        let stamped = stamping.stamps(task, None);
+        if self.declared(destination.name()) != crate::config::SourceVisibility::Private {
+            let recorded = stamped
+                || task
+                    .metadata
+                    .contains_key(MetadataKey::COPIED_DESTINATION_VERSION_KEY);
+            if edges.len() != item.edges.len() {
+                task.metadata.remove(MetadataKey::EDGES_ON_RECORD_KEY);
+            } else if recorded {
+                task.metadata
+                    .insert(MetadataKey::EDGES_ON_RECORD_KEY.to_owned(), Value::from(1));
+            }
+        }
+        if stamped {
+            let digested = self.digested_comments(destination, item, suggested, journal);
+            let record = record_of(item, landing, edges, destination.name(), None, digested);
+            record.stamp(metadata_of(landing));
+        }
     }
 
     /// Create, together, the tasks of `planned` that land as new items at a destination creating
@@ -5907,10 +5964,20 @@ impl Engine {
     ) -> Result<BTreeMap<usize, NativeId>, EngineError> {
         let mut together: Vec<(SourceName, Vec<usize>)> = Vec::new();
         for (index, item) in planned.iter().enumerate() {
+            // At a destination whose creates together carry the copy's record, a task depending
+            // on another of this copy, or linking to one, is created on its own, after what it
+            // names, so its edges and links land with its create rather than in a second write.
+            let whole = self
+                .writable(&item.to)
+                .is_ok_and(|destination| destination.source().records_created_together());
             if !(matches!(item.item, Item::Task(_))
                 && matches!(item.target, Target::Create)
                 && !item.skipped
-                && item.assets.is_empty())
+                && item.assets.is_empty()
+                && !(whole
+                    && planned
+                        .iter()
+                        .any(|other| depends_on(item, other) || body_links_to(item, other))))
             {
                 continue;
             }
@@ -5948,18 +6015,29 @@ impl Engine {
                         &running.private,
                     ));
                     let project = filed[*index].clone();
-                    let landing = as_written(
+                    let suggested = created_id(&item.item, project.as_ref());
+                    let mut landing = as_written(
                         destination,
                         item,
                         outgoing(
                             item,
-                            created_id(&item.item, project.as_ref()),
+                            suggested.clone(),
                             project.clone(),
                             &recorded(item, None),
                             &delivers,
                             None,
                         ),
                     );
+                    if destination.source().records_created_together() {
+                        self.stamp_created(
+                            destination,
+                            item,
+                            &suggested,
+                            &edges,
+                            &mut landing,
+                            journal,
+                        );
+                    }
                     self.at_write(
                         destination,
                         &item.source.to_string(),
@@ -6909,15 +6987,15 @@ impl Engine {
             return;
         }
         let reachable = self.routes.reachable(&request.destination);
-        let mut wanted: Vec<(SourceName, Vec<NativeId>)> = Vec::new();
+        let mut wanted: Vec<(SourceName, Vec<(MetadataRecord, NativeId)>)> = Vec::new();
         let mut origins: Vec<(SourceName, Vec<String>)> = Vec::new();
-        let mut want = |there: &SourceName, native: NativeId| match wanted
-            .iter_mut()
-            .find(|(name, _)| name == there)
-        {
-            Some((_, natives)) if natives.contains(&native) => {}
-            Some((_, natives)) => natives.push(native),
-            None => wanted.push((there.clone(), vec![native])),
+        let mut want = |there: &SourceName, record: MetadataRecord, native: NativeId| {
+            let native = (record, native);
+            match wanted.iter_mut().find(|(name, _)| name == there) {
+                Some((_, natives)) if natives.contains(&native) => {}
+                Some((_, natives)) => natives.push(native),
+                None => wanted.push((there.clone(), vec![native])),
+            }
         };
         // Each destination project this copy names, with the origin it records there and why
         // the copy names it: what a cache standing in front of that destination is pinned
@@ -6955,12 +7033,12 @@ impl Engine {
             if !(request.comments && read.item.level() == Level::Task) {
                 for there in &reachable {
                     if let Some(link) = link_of(metadata, there) {
-                        want(there, link.native);
+                        want(there, read.item.level().record(), link.native);
                     }
                     if let Some(origin) =
                         origin_of(metadata).filter(|origin| &origin.source == there)
                     {
-                        want(there, origin.native);
+                        want(there, read.item.level().record(), origin.native);
                     }
                 }
             }
@@ -7060,7 +7138,7 @@ impl Engine {
                     {
                         screened_homes.push(there.clone());
                     }
-                    want(there, link.native.clone());
+                    want(there, MetadataRecord::Project, link.native.clone());
                     homes.push((
                         there.clone(),
                         link.native,
@@ -7130,7 +7208,7 @@ impl Engine {
             }
             if let Ok(there) = self.writable(&name) {
                 // Nothing is decided by it: each read it would have answered is made as before.
-                let _ = there.source().read_ahead_for_copy(&natives).await;
+                let _ = there.source().read_ahead_records_for_copy(&natives).await;
             }
         }
     }
@@ -8134,8 +8212,8 @@ impl Engine {
         // A task created together with others is written once more, as the item its create
         // made, now that it can name its edges to them: it was journalled when it was created.
         let stamping = match created {
-            Some(_) => Stamping::Never,
-            None => Stamping::of(request, rerecord),
+            Some(_) if !destination.source().records_created_together() => Stamping::Never,
+            _ => Stamping::of(request, rerecord),
         };
         // What the item holds once written, as the copy sent it and the destination reads a
         // status back: refined from the destination's own answers once the whole copy is done.
@@ -11097,7 +11175,10 @@ fn decide_conditions(
 ) -> HashMap<usize, EngineError> {
     let conditions = &request.conditions;
     let mut refused = HashMap::new();
-    if conditions.status.is_empty() && conditions.priority.is_empty() {
+    if conditions.status.is_empty()
+        && conditions.priority.is_empty()
+        && conditions.versions.is_empty()
+    {
         return refused;
     }
     for (index, item) in planned.iter_mut().enumerate() {
@@ -11112,6 +11193,28 @@ fn decide_conditions(
         let id = id.clone();
         let held_category = held.status.category;
         let held_priority = held.priority;
+        // A held version is decided first: an item it refuses is written nothing at all, so
+        // no other condition of it is decided.
+        if let Some(version) = conditions.versions.get(&item.source)
+            && held.version.as_deref() != Some(version.as_str())
+        {
+            let found = held.version.clone().unwrap_or_default();
+            refused.insert(
+                index,
+                EngineError::VersionMoved {
+                    id: GlobalId::new(item.to.clone(), id).to_string(),
+                    expected: version.clone(),
+                    held: Box::new(WriteResult {
+                        version: Some(found.clone()),
+                        parts: None,
+                        status: None,
+                        priority: None,
+                    }),
+                    found,
+                },
+            );
+            continue;
+        }
         if !conditions.priority.is_empty() {
             item.priority_condition = Some(PriorityCondition {
                 held: held_priority,
@@ -11828,10 +11931,12 @@ async fn read_destination(
     .map_err(|error| refused(destination, error))
 }
 
-/// `planned` with every item a planned body links to ahead of that body, and otherwise in the
-/// order it came in: an item is taken once every item of `planned` it links to has been,
-/// and where links run in a cycle, the earliest item left is taken as it stands.
-fn targets_first(planned: Vec<Planned>) -> Vec<Planned> {
+/// `planned` with every item a planned body links to — and, with `dependencies`, every item a
+/// planned task depends on — ahead of it, and otherwise in the order it came in: an item is taken once every item of
+/// `planned` it links to or depends on has been, and where they run in a cycle, the earliest
+/// item left is taken as it stands. A task created after what it depends on lands with its
+/// edges in its own write, rather than in a second write once its far end exists.
+fn targets_first(planned: Vec<Planned>, dependencies: bool) -> Vec<Planned> {
     let links: Vec<Vec<usize>> = planned
         .iter()
         .map(|item| {
@@ -11847,9 +11952,9 @@ fn targets_first(planned: Vec<Planned>) -> Vec<Planned> {
                 .filter(|(_, other)| {
                     other.to == item.to
                         && !std::ptr::eq(*other, item)
-                        && referents.iter().any(|referent| {
+                        && (referents.iter().any(|referent| {
                             referent.level == other.item.level() && referent.id == other.source
-                        })
+                        }) || (dependencies && depends_on(item, other)))
                 })
                 .map(|(index, _)| index)
                 .collect()
@@ -11873,6 +11978,34 @@ fn targets_first(planned: Vec<Planned>) -> Vec<Planned> {
         .into_iter()
         .map(|index| slots[index].take().expect("each item taken once"))
         .collect()
+}
+
+/// Whether the planned `item`'s body links to the planned `other` — a link it can only finish
+/// once `other` is written.
+fn body_links_to(item: &Planned, other: &Planned) -> bool {
+    !std::ptr::eq(item, other)
+        && item
+            .links
+            .iter()
+            .chain(item.comment_links.iter().map(|(_, links, _)| links))
+            .flat_map(|links| &links.referents)
+            .any(|referent| referent.level == other.item.level() && referent.id == other.source)
+}
+
+/// Whether the planned `item` depends on the planned `other`: one of its edges names `other`'s
+/// source id, qualified or by the native id its own source names its own items by.
+fn depends_on(item: &Planned, other: &Planned) -> bool {
+    item.edges.iter().any(|edge| {
+        let kind = match other.item.level() {
+            Level::Task => ItemKind::Task,
+            Level::Project => ItemKind::Project,
+            Level::Document => return false,
+        };
+        edge.to.kind == kind
+            && (edge.to.id() == other.source.to_string()
+                || (other.source.source == item.source.source
+                    && edge.to.id() == other.source.native.as_str()))
+    })
 }
 
 /// One item a copy call writes: the source it lands in, its interface and its source id.
@@ -12252,8 +12385,11 @@ fn same(held: &Item, outgoing: &Item, destination: &SourceName) -> bool {
                 && held.priority == outgoing.priority
                 && held.labels == outgoing.labels
                 && held.project == outgoing.project
-                && record::without_record(&held.metadata)
-                    == record::without_record(&outgoing.metadata)
+                // Repositories are compared as the field they are: a hosted destination also
+                // reports the slot it carries them in as metadata, which a folder keeps in its
+                // front matter instead — the one difference `record::digest` leaves out too.
+                && record::digest_metadata(&held.metadata)
+                    == record::digest_metadata(&outgoing.metadata)
                 && held.repositories == outgoing.repositories
                 && held.classification == outgoing.classification
         }

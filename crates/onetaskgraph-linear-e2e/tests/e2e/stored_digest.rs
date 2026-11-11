@@ -392,8 +392,9 @@ fn a_copied_plan_reads_back_from_linear_as_the_digest_its_provenance_records() {
         assert!(errors.is_empty(), "{errors}");
         if !cache {
             // Every request this copy sends, and nothing else: one origin read for the project
-            // and its task, one read of each item by the id its origin's key derives before it
-            // is created under that id, one write of each item as composed, one follow-up write
+            // and its task, one read of the project by the id its origin's key derives before it
+            // is created under that id — a copy creating several items reads no issue's id
+            // first, the keyed create's own conflict finding an earlier copy's — one write of each item as composed, one follow-up write
             // of each item Linear rewrote — all three — and the document's own origin lookup; no
             // read of an item after a write of it, and no read of the destination project the
             // document is filed under. What Linear stores is read off each mutation's own answer.
@@ -403,7 +404,6 @@ fn a_copied_plan_reads_back_from_linear_as_the_digest_its_provenance_records() {
                 [
                     "originIssues",
                     "project",
-                    "issue",
                     "projectCreate",
                     "issueCreate",
                     "projectUpdate",
@@ -713,9 +713,10 @@ fn over_the_stdio_protocol_linear_stores_what_the_copy_records_and_refuses_what_
 }
 
 /// An item that depends on another of the same copy lands first without that edge and is
-/// written again once its far end exists; that second write's answer is read exactly as the
-/// first's was, its follow-up answered for, so a backend storing its own stored content
-/// otherwise from that write on is still refused.
+/// written again once its far end exists — which, a copy creating what an item depends on
+/// before the item, takes two tasks depending on each other; that second write's answer is
+/// read exactly as the first's was, its follow-up answered for, so a backend storing its own
+/// stored content otherwise from that write on is still refused.
 #[test]
 fn a_repair_write_linear_stores_otherwise_is_refused_as_stored_content_diverged() {
     let plan = Plan::new();
@@ -728,7 +729,7 @@ fn a_repair_write_linear_stores_otherwise_is_refused_as_stored_content_diverged(
     .expect("a task file");
     std::fs::write(
         tasks.join("B.md"),
-        "---\ntitle: Upstream\nstatus: todo\n---\nDone first.\n",
+        "---\ntitle: Upstream\nstatus: todo\ndepends_on: [A]\n---\nDone first.\n",
     )
     .expect("a task file");
     // Linear stores its own stored content otherwise from the moment it has created the second

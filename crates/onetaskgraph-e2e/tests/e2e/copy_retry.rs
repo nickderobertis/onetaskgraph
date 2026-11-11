@@ -745,7 +745,7 @@ fn an_intent_entry_that_is_not_one_is_refused_and_nothing_is_created() {
 }
 
 #[test]
-fn a_linear_create_answered_as_an_id_already_held_is_read_by_that_id_and_written_whole() {
+fn a_linear_create_answered_as_an_id_already_held_is_read_by_that_id_and_brought_in_step() {
     let stores = Stores::new();
     let stopped = stores.run(
         &["task", "copy", NOTE, "--to", "linear"],
@@ -2337,7 +2337,7 @@ fn a_linear_create_renews_before_each_relation_write_its_call_sends() {
 }
 
 #[test]
-fn a_linear_create_finished_as_an_id_held_renews_before_its_whole_write() {
+fn a_linear_create_finished_as_an_id_held_renews_before_its_compared_update() {
     // The earlier attempt's issue lands under the key's id once the retry has looked for it and
     // not found it, so the retry's create is refused and finished by a whole write — sent three
     // seconds after the refusal, past the two-second lease the intent was taken under.
@@ -2464,7 +2464,8 @@ fn a_linear_create_that_loses_its_create_before_its_relation_sends_no_further_wr
 }
 
 /// Assert the Linear requests from `from` on hold a create, then a read of the issue by its id,
-/// then a whole write of it: a create answered as an id already held, finished.
+/// then a compared update of it: a create answered as an id already held, brought in step with
+/// what the create would have written, only what differs sent.
 fn finished_as_held(stores: &Stores, from: usize) {
     use onetaskgraph_linear::graphql;
     let sent: Vec<String> = stores.linear.served()[from..]
@@ -2477,8 +2478,8 @@ fn finished_as_held(stores: &Stores, from: usize) {
     let after = created.map(|at| &sent[at + 1..]).unwrap_or_default();
     let read = after.iter().position(|document| document == graphql::ISSUE);
     assert!(
-        read.is_some_and(|read| after[read + 1..].contains(&graphql::ISSUE_REWRITE.to_owned())),
-        "a create, a read by its id, then a whole write: {sent:#?}"
+        read.is_some_and(|read| after[read + 1..].contains(&graphql::ISSUE_UPDATE.to_owned())),
+        "a create, a read by its id, then a compared update: {sent:#?}"
     );
 }
 

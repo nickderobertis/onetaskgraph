@@ -1370,3 +1370,43 @@ The session record includes those dependency connections: 5,000 additional worst
 nodes in that reconciliation call (100 tasks with 50 dependency nodes each), raising
 the document from 20,150 to 25,150 nodes and the session total from 295,892 to 300,892.
 The session still sends 241 requests; this updates its measured record, not a budget.
+
+## Batched searches, comments and updates, and what they moved
+
+`task find`, `task comment add-many` and `task update-many` send three new documents —
+`SEARCH_BATCH`, twenty board-scoped searches and five origin lookups' board halves as aliased
+fields of one request; `ADD_COMMENTS`; and `WRITE_TASKS`, many tasks' field writes and issue
+updates. The live reconciliation probes `SEARCH_BATCH` like every other read document, at its
+largest page in every slot: one more reconciliation request in place of nothing, **91,700**
+worst-case nodes, priced at **22** points (`tests/point_cost.rs`). A first round of a find sends
+three rows a slot, which GitHub prices at three points; the twenty-two is what the probe spends,
+once a session. The two mutations are not probed, as no mutation is.
+
+A comment-activity read now confirms its candidates by one batched detail read of their first
+comment pages rather than one comment read each, and that page answers the comment listing that
+follows. The journey's one comment-activity read had three candidates: two `reading a task's
+comments` requests (200 nodes) become one more `reading a batch of issues with their comments`
+(7,272 nodes).
+
+**`session-cost.txt`**: requests stay **239**, and nodes go 300,990 → **399,762**.
+
+## A written update answers the version it left, and what that moved
+
+A targeted update (`task update`, and each update of `task update-many` written on its own)
+now reports the change token the task holds after its writes, never the one it was read at.
+Each of its mutations is sent as a twin selecting, inline, what a read of the issue selects —
+every part of its change token and no comment (`graphql::token_twin`: `UPDATE_ISSUE_TOKEN`,
+`UPDATE_FIELD_TOKEN`, `CLEAR_FIELD_TOKEN`) — with the plain document's root fields, at its one
+point (`tests/point_cost.rs`), and the last one's answer spells the token. Where no answer shows
+the issue (several board fields written in one `UPDATE_FIELDS`, or a `blockedBy` difference
+alone), one read of the issue right after the writes does. A batch of updates sent in
+`WRITE_TASKS` has each `update<n>` select the issue it updated the same way, through the
+`BoardIssue` fragment, and that document still costs one point; only a task whose update wrote
+its board fields alone is read once more, in one batched detail read after every write.
+
+**`copy-cost.txt`**: (e) still sends 3 requests and 2 mutations, at one point each; its
+worst-case node count goes 456 → **862**, the `Status` field write and the `updateIssue` each
+selecting the issue's token parts (203 nodes apiece). (f) sends no mutation and does not move.
+
+**`session-cost.txt`**: requests stay **239**; the live journey's one targeted update sends its
+`updateIssue` as the token twin, so nodes go 399,762 → **399,965**, at the same one point.

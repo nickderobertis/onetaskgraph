@@ -28,13 +28,16 @@ from onetaskgraph_sdk import (
     AttestationState,
     Attested,
     AuthorKind,
+    BatchOutcome,
     CacheCleared,
     CacheUse,
     Classification,
     Client,
     Comment,
     CommentActivity,
+    CommentBatch,
     CommentList,
+    CommentsAdded,
     CommentsSince,
     CommentWritten,
     CopyAction,
@@ -52,6 +55,8 @@ from onetaskgraph_sdk import (
     ExpectedWrite,
     FailureDocument,
     FieldsReport,
+    FindRequest,
+    FoundTasks,
     GlobalId,
     HumanTaskProjected,
     HumanTaskProjection,
@@ -106,11 +111,13 @@ from onetaskgraph_sdk import (
     TaskPrioritySet,
     TaskRef,
     TaskStatusSet,
+    TasksUpdated,
     TaskUpdated,
     TemplateAnswers,
     TemplateProvenance,
     TemplateVariable,
     TemplateVariables,
+    UpdateBatch,
     UpdatedField,
     VariableType,
     VersionMovedError,
@@ -136,6 +143,9 @@ from onetaskgraph_sdk._generated.models import (
     AuthorKind as ModelsAuthorKind,
 )
 from onetaskgraph_sdk._generated.models import (
+    BatchOutcome as ModelsBatchOutcome,
+)
+from onetaskgraph_sdk._generated.models import (
     CacheCleared as ModelsCacheCleared,
 )
 from onetaskgraph_sdk._generated.models import (
@@ -151,7 +161,13 @@ from onetaskgraph_sdk._generated.models import (
     CommentActivity as ModelsCommentActivity,
 )
 from onetaskgraph_sdk._generated.models import (
+    CommentBatch as ModelsCommentBatch,
+)
+from onetaskgraph_sdk._generated.models import (
     CommentList as ModelsCommentList,
+)
+from onetaskgraph_sdk._generated.models import (
+    CommentsAdded as ModelsCommentsAdded,
 )
 from onetaskgraph_sdk._generated.models import (
     CommentsSince as ModelsCommentsSince,
@@ -203,6 +219,12 @@ from onetaskgraph_sdk._generated.models import (
 )
 from onetaskgraph_sdk._generated.models import (
     FieldsReport as ModelsFieldsReport,
+)
+from onetaskgraph_sdk._generated.models import (
+    FindRequest as ModelsFindRequest,
+)
+from onetaskgraph_sdk._generated.models import (
+    FoundTasks as ModelsFoundTasks,
 )
 from onetaskgraph_sdk._generated.models import (
     GlobalId as ModelsGlobalId,
@@ -361,6 +383,9 @@ from onetaskgraph_sdk._generated.models import (
     TaskStatusSet as ModelsTaskStatusSet,
 )
 from onetaskgraph_sdk._generated.models import (
+    TasksUpdated as ModelsTasksUpdated,
+)
+from onetaskgraph_sdk._generated.models import (
     TaskUpdated as ModelsTaskUpdated,
 )
 from onetaskgraph_sdk._generated.models import (
@@ -374,6 +399,9 @@ from onetaskgraph_sdk._generated.models import (
 )
 from onetaskgraph_sdk._generated.models import (
     TemplateVariables as ModelsTemplateVariables,
+)
+from onetaskgraph_sdk._generated.models import (
+    UpdateBatch as ModelsUpdateBatch,
 )
 from onetaskgraph_sdk._generated.models import (
     UpdatedField as ModelsUpdatedField,
@@ -417,6 +445,13 @@ def test_this_file_imports_every_name_the_module_exports(module: object) -> None
 
 FROM_ROOT: dict[str, object] = {
     "client": client,
+    "BatchOutcome": BatchOutcome,
+    "CommentBatch": CommentBatch,
+    "CommentsAdded": CommentsAdded,
+    "FindRequest": FindRequest,
+    "FoundTasks": FoundTasks,
+    "TasksUpdated": TasksUpdated,
+    "UpdateBatch": UpdateBatch,
     "Attestation": Attestation,
     "AttestationCheck": AttestationCheck,
     "AttestationState": AttestationState,
@@ -515,6 +550,13 @@ FROM_ROOT: dict[str, object] = {
 """Every name imported from the package root, by the name it was imported as."""
 
 FROM_MODELS: dict[str, object] = {
+    "BatchOutcome": ModelsBatchOutcome,
+    "CommentBatch": ModelsCommentBatch,
+    "CommentsAdded": ModelsCommentsAdded,
+    "FindRequest": ModelsFindRequest,
+    "FoundTasks": ModelsFoundTasks,
+    "TasksUpdated": ModelsTasksUpdated,
+    "UpdateBatch": ModelsUpdateBatch,
     "Attestation": ModelsAttestation,
     "AttestationCheck": ModelsAttestationCheck,
     "AttestationState": ModelsAttestationState,
@@ -677,6 +719,12 @@ def test_client_methods_answer_with_the_types_they_declare(binary: Path, tmp_pat
 
 
 MODEL_CLASSES: dict[str, type[BaseModel]] = {
+    "CommentBatch": CommentBatch,
+    "CommentsAdded": CommentsAdded,
+    "FindRequest": FindRequest,
+    "FoundTasks": FoundTasks,
+    "TasksUpdated": TasksUpdated,
+    "UpdateBatch": UpdateBatch,
     "Attestation": Attestation,
     "AttestationCheck": AttestationCheck,
     "Attested": Attested,
@@ -758,6 +806,12 @@ MODEL_CLASSES: dict[str, type[BaseModel]] = {
 """Every export that is a pydantic model, read from the package root as a model class."""
 
 MODELS_MODEL_CLASSES: dict[str, type[BaseModel]] = {
+    "CommentBatch": ModelsCommentBatch,
+    "CommentsAdded": ModelsCommentsAdded,
+    "FindRequest": ModelsFindRequest,
+    "FoundTasks": ModelsFoundTasks,
+    "TasksUpdated": ModelsTasksUpdated,
+    "UpdateBatch": ModelsUpdateBatch,
     "Attestation": ModelsAttestation,
     "AttestationCheck": ModelsAttestationCheck,
     "Attested": ModelsAttested,

@@ -34,12 +34,12 @@ requests per call
 
 (e) a targeted update of 1 of those 10 tasks, naming its status, three metadata keys set and one removed
 requests 3
-node count 456
+node count 862
 
 requests per call
     1     456  reading one issue
-    1       0  updating an issue
-    1       0  writing a board field
+    1     203  updating an issue, answered with its version
+    1     203  writing a board field, answered with the issue's version
 
 (f) the same targeted update again, every value it names already held
 requests 1

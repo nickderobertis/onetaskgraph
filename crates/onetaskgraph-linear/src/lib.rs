@@ -565,7 +565,9 @@ pub const LIVE_ARTIFACT_TITLE_PREFIX: &str = "onetaskgraph live cleanup ";
 /// Exact ownership grammar shared by live lanes and their cleanup.
 pub mod live_artifact;
 
+mod batch;
 mod origins;
+mod shared;
 
 /// The plugin kind a `linear` source's `plugin:` field names.
 pub const KIND: &str = "linear";
@@ -921,6 +923,160 @@ pub mod graphql {
     pub const COMMENT_UPDATE: &str = "mutation($id:String!,$input:CommentUpdateInput!){ commentUpdate(id:$id,input:$input){success comment{id body url createdAt updatedAt user{displayName}}} }";
     /// Remove a comment.
     pub const COMMENT_DELETE: &str = "mutation($id:String!){ commentDelete(id:$id){success} }";
+
+    /// The documents this source sends batched by [`composed`], each the single-root document it
+    /// batches.
+    pub const BATCHED: [&str; 13] = [
+        ISSUE_CREATE,
+        ISSUE_LABEL,
+        PROJECT_LABEL,
+        ISSUE_RELATION_CREATE,
+        ISSUE,
+        ISSUES,
+        ISSUE_UPDATE_READ,
+        COMMENT_CREATE,
+        ISSUE_DETAIL,
+        ISSUE_DEPENDS_ON,
+        PROJECT,
+        PROJECT_DEPENDS_ON,
+        DOCUMENT,
+    ];
+
+    /// `single` — a document of one root field, as this source sends it alone — `count` times
+    /// in one document, as [`composed`] composes it.
+    #[must_use]
+    pub fn aliased(single: &str, count: usize) -> String {
+        composed(&vec![single; count])
+    }
+
+    /// The documents `singles` — each of one root field, as this source sends it alone, all
+    /// queries or all mutations — in one document: the `i`th aliased `a<i>`, each of its
+    /// variables `$<name>` renamed `$<name>_<i>`.
+    ///
+    /// What batches many reads, or many writes, into one request. Linear executes each aliased
+    /// field as it would the document alone, and answers it under its alias; a field it refuses
+    /// is answered with an error whose `path` starts at that alias, and — every root this source
+    /// batches being non-null — with no `data` at all. A document of mutations is applied whole
+    /// or not at all: one refused alias leaves every other unapplied, as measured against a
+    /// sandbox team on 2026-11-11.
+    #[must_use]
+    pub fn composed(singles: &[&str]) -> String {
+        let mut kind = "query";
+        let mut declared = Vec::with_capacity(singles.len());
+        let mut fields = Vec::with_capacity(singles.len());
+        for (at, single) in singles.iter().enumerate() {
+            let (head, body) = parts(single);
+            let (operation, variables) = head
+                .split_once('(')
+                .map_or((head.trim(), ""), |(operation, rest)| {
+                    (operation.trim(), rest.trim_end().trim_end_matches(')'))
+                });
+            kind = operation;
+            if !variables.is_empty() {
+                declared.push(suffixed(variables, at));
+            }
+            fields.push(format!("a{at}: {}", suffixed(body, at)));
+        }
+        if declared.is_empty() {
+            format!("{kind}{{ {} }}", fields.join(" "))
+        } else {
+            format!("{kind}({}){{ {} }}", declared.join(","), fields.join(" "))
+        }
+    }
+
+    /// A single-root document split into what comes before its selection and the selection's
+    /// one root field.
+    fn parts(single: &str) -> (&str, &str) {
+        let (head, body) = single.split_once('{').unwrap_or((single, ""));
+        (
+            head,
+            body.trim_end().strip_suffix('}').unwrap_or(body).trim(),
+        )
+    }
+
+    /// The documents of [`BATCHED`] `document` composes, in order, when it is one [`composed`]
+    /// spells — what a server answering it answers each alias as.
+    #[must_use]
+    pub fn decomposed(document: &str) -> Option<Vec<&'static str>> {
+        let count = (0..)
+            .take_while(|at| document.contains(&format!(" a{at}: ")))
+            .count();
+        if count == 0 {
+            return None;
+        }
+        let mut singles = Vec::with_capacity(count);
+        for at in 0..count {
+            let single = BATCHED.into_iter().find(|single| {
+                document.contains(&format!("a{at}: {}", suffixed(parts(single).1, at)))
+            })?;
+            singles.push(single);
+        }
+        (composed(&singles) == document).then_some(singles)
+    }
+
+    /// Every `$name` in `text` renamed `$name_<at>`.
+    fn suffixed(text: &str, at: usize) -> String {
+        let mut renamed = String::with_capacity(text.len() + 8);
+        let mut chars = text.chars().peekable();
+        while let Some(character) = chars.next() {
+            renamed.push(character);
+            if character != '$' {
+                continue;
+            }
+            while let Some(next) = chars.peek().copied() {
+                if next.is_ascii_alphanumeric() || next == '_' {
+                    renamed.push(next);
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
+            renamed.push_str(&format!("_{at}"));
+        }
+        renamed
+    }
+
+    /// The variables of an [`aliased`] document: each item's own, each name suffixed `_<i>`.
+    #[must_use]
+    pub fn aliased_variables(each: &[serde_json::Value]) -> serde_json::Value {
+        let mut merged = serde_json::Map::new();
+        for (at, variables) in each.iter().enumerate() {
+            for (name, value) in variables.as_object().into_iter().flatten() {
+                merged.insert(format!("{name}_{at}"), value.clone());
+            }
+        }
+        serde_json::Value::Object(merged)
+    }
+
+    /// The single document [`aliased`] batched `document` repeats and how many times, when it is
+    /// one.
+    #[must_use]
+    pub fn unaliased(document: &str) -> Option<(&'static str, usize)> {
+        let singles = decomposed(document)?;
+        let first = *singles.first()?;
+        singles
+            .iter()
+            .all(|single| *single == first)
+            .then_some((first, singles.len()))
+    }
+
+    /// The variables of the `at`th item of an [`aliased`] document, as its single document
+    /// takes them.
+    #[must_use]
+    pub fn alias_variables(variables: &serde_json::Value, at: usize) -> serde_json::Value {
+        let suffix = format!("_{at}");
+        serde_json::Value::Object(
+            variables
+                .as_object()
+                .into_iter()
+                .flatten()
+                .filter_map(|(name, value)| {
+                    name.strip_suffix(&suffix)
+                        .map(|plain| (plain.to_owned(), value.clone()))
+                })
+                .collect(),
+        )
+    }
 }
 
 use graphql::{
@@ -1656,6 +1812,30 @@ struct LinearSource {
     /// moment later answers (spike `spike-linear-stored-content`), so a follow-up write that
     /// keeps the metadata slot byte for byte reads nothing after the write before it.
     written: std::sync::Mutex<std::collections::HashMap<(MetadataRecord, NativeId), Value>>,
+    /// Each issue as the last read or write of it in this process answered it, whole: what
+    /// `write_context` hands the store's cache to keep beside its entry, so a write it expects at
+    /// that version takes it back instead of reading the issue again.
+    contexts: std::sync::Mutex<std::collections::HashMap<NativeId, Value>>,
+    /// Whether `write_tasks` is gathering the creates it sends together: each `write_task` it
+    /// makes is queued rather than sent.
+    deferring_creates: std::sync::atomic::AtomicBool,
+    /// The creates `write_tasks` gathered, in order.
+    queued_creates: std::sync::Mutex<Vec<batch::QueuedCreate>>,
+    /// What each issue `write_tasks` created was sent, by its id, until the write a copy then
+    /// makes of it — see `just_created_as`.
+    created_inputs: std::sync::Mutex<std::collections::HashMap<NativeId, Value>>,
+    /// Whether a copy asked, through `begin_deferred_writes`, for the relations of the issues it
+    /// creates to wait for its `finish_writes`.
+    deferring: std::sync::atomic::AtomicBool,
+    /// The relation creates waiting for `finish_writes`: each near issue and its variables.
+    deferred_relations: std::sync::Mutex<Vec<(NativeId, Value)>>,
+    /// What a copy's read ahead read of each item it named — its raw fields, and for a task or
+    /// a project the first page of its forward relations — each answering the next read of it
+    /// once, and none outliving the command or any write; see
+    /// [`TaskSource::read_ahead_records_for_copy`].
+    ahead: std::sync::Mutex<std::collections::HashMap<(MetadataRecord, NativeId), Value>>,
+    /// The forward relations page [`Self::ahead`] read beside each task and project.
+    edges_ahead: std::sync::Mutex<std::collections::HashMap<(MetadataRecord, NativeId), Value>>,
     /// Where each item this instance wrote is, as its latest write's own answer said — what
     /// [`TaskSource::written_location`] answers, so a copy records where it landed an item it
     /// created without reading it.
@@ -1719,6 +1899,14 @@ impl LinearSource {
             edges_versions: std::sync::Mutex::new(std::collections::HashMap::new()),
             stored: std::sync::Mutex::new(std::collections::HashMap::new()),
             written: std::sync::Mutex::new(std::collections::HashMap::new()),
+            contexts: std::sync::Mutex::new(std::collections::HashMap::new()),
+            deferring_creates: std::sync::atomic::AtomicBool::new(false),
+            queued_creates: std::sync::Mutex::new(Vec::new()),
+            created_inputs: std::sync::Mutex::new(std::collections::HashMap::new()),
+            deferring: std::sync::atomic::AtomicBool::new(false),
+            deferred_relations: std::sync::Mutex::new(Vec::new()),
+            ahead: std::sync::Mutex::new(std::collections::HashMap::new()),
+            edges_ahead: std::sync::Mutex::new(std::collections::HashMap::new()),
             locations: std::sync::Mutex::new(std::collections::HashMap::new()),
             headings: std::sync::Mutex::new(std::collections::HashMap::new()),
             body_markup: std::sync::OnceLock::new(),
@@ -1727,8 +1915,10 @@ impl LinearSource {
         })
     }
 }
-#[derive(Clone, Copy)]
-enum WriteKind {
+/// Which kind of item a write is of — and so, for a label, which of Linear's two label sets
+/// it names.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum WriteKind {
     Task,
     Project,
 }
@@ -1749,11 +1939,11 @@ enum HeldRelations<'a> {
     /// Nothing yet, so they are read.
     Unread,
 }
-enum Lookup<'a> {
-    IssueLabel(&'a str),
-    ProjectLabel(&'a str),
+enum Lookup {
+    IssueLabel(String),
+    ProjectLabel(String),
 }
-impl Lookup<'_> {
+impl Lookup {
     fn query(&self) -> &'static str {
         match self {
             Self::IssueLabel(_) => graphql::ISSUE_LABEL,
@@ -1841,6 +2031,10 @@ struct GqlError {
     // deserialization when Linear sends extensions without one, turning a refusal this
     // source could explain into an unexplained malformed response.
     extensions: Option<Value>,
+    /// Where in the answer the error is, its first member the root field — or the alias — it
+    /// is about; absent for an error about the whole request.
+    #[serde(default)]
+    path: Option<Vec<Value>>,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1907,6 +2101,19 @@ enum GqlErrorCode {
 struct Refusal(GqlError);
 
 impl Refusal {
+    /// The index of the alias of an [`graphql::aliased`] document this refusal is about, when
+    /// its path names one.
+    fn alias(&self) -> Option<usize> {
+        self.0
+            .path
+            .as_ref()?
+            .first()?
+            .as_str()?
+            .strip_prefix('a')?
+            .parse()
+            .ok()
+    }
+
     /// Whether Linear refused because the issue the request addressed is not there.
     ///
     /// Linear answers a mutation addressing an id it does not hold with an errored response —
@@ -1965,6 +2172,16 @@ impl Refusal {
             message: self.0.said(),
         }
     }
+}
+
+/// One targeted update composed for sending — see `LinearSource::compose_update`.
+struct Composed {
+    /// The issue as it was read before the update.
+    before: Task,
+    /// What `issueUpdate` is sent; empty when nothing differs.
+    input: serde_json::Map<String, Value>,
+    /// The relations to write after it, when the update names dependencies that differ.
+    relations: Option<Vec<DependencyEdge>>,
 }
 
 /// How [`LinearSource::answer_with`] reads a GraphQL error Linear sends under HTTP 400 that is no
@@ -2154,6 +2371,12 @@ impl LinearSource {
                         .copied_at(record, &NativeId(id.clone()), origin)
                         .await?
                 {
+                    // An issue an earlier copy made of this origin is this create's counterpart,
+                    // which a copy finds by its create's own conflict rather than by a read
+                    // before it: it is brought in step by a compared update — see `write_task`.
+                    if record == MetadataRecord::Task {
+                        return Ok(Written::Held(held));
+                    }
                     return Err(SourceError::Refused {
                         message: format!(
                             "Linear already holds {} {}, which an earlier copy made of {origin}, \
@@ -2212,6 +2435,7 @@ impl LinearSource {
         // A write may change which items record an origin, so nothing read ahead outlives it.
         if query.trim_start().starts_with("mutation") {
             self.forget_origins_ahead(false);
+            self.forget_ahead();
         }
         // Every body crosses here, so this is the one place the engine's markup is applied: each
         // one sent is written in it, and each one answered read back out of it.
@@ -2654,8 +2878,14 @@ impl LinearSource {
         })
     }
 
-    async fn one_id(&self, lookup: Lookup<'_>) -> Result<NativeId, SourceError> {
+    async fn one_id(&self, lookup: Lookup) -> Result<NativeId, SourceError> {
         let data = self.send(lookup.query(), lookup.variables()).await?;
+        self.only_id(&lookup, &data)
+    }
+
+    /// The one id `data`, a lookup's answer, names — refused naming the lookup when it names
+    /// none or several.
+    fn only_id(&self, lookup: &Lookup, data: &Value) -> Result<NativeId, SourceError> {
         let connection = lookup.connection();
         let nodes = data
             .get(connection)
@@ -2716,14 +2946,43 @@ impl LinearSource {
             .vocabulary
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(read.clone());
+        if let Some(key) = self.shared_key() {
+            shared::vocabularies().insert(key, read.clone());
+        }
         Ok((read, true))
     }
 
     fn held_vocabulary(&self) -> Option<std::sync::Arc<Vocabulary>> {
-        self.vocabulary
+        let mut held = self
+            .vocabulary
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if held.is_none() {
+            // What another instance of this tracker in this process already read.
+            *held = self
+                .shared_key()
+                .and_then(|key| shared::vocabularies().get(&key).cloned());
+        }
+        held.clone()
+    }
+
+    /// The tracker this source reads: its endpoint and the workspace its API key belongs to,
+    /// told apart by a digest of the key that never leaves this process — every hosted source
+    /// shares one endpoint, and two workspaces may each have a team spelled the same.
+    fn tracker(&self) -> String {
+        use std::hash::{Hash as _, Hasher as _};
+        let mut digest = std::collections::hash_map::DefaultHasher::new();
+        self.key.expose_secret().hash(&mut digest);
+        format!("{} {:016x}", self.endpoint.0, digest.finish())
+    }
+
+    /// The key every instance of this source's tracker in this process shares what it reads of
+    /// the team under: the tracker and the team — `None` for a source with no team, which
+    /// resolves nothing.
+    fn shared_key(&self) -> Option<(String, String)> {
+        self.team
+            .as_ref()
+            .map(|team| (self.tracker(), team.0.clone()))
     }
 
     /// Drop what this instance holds, after a write carrying one of its ids failed: the id may
@@ -2733,6 +2992,10 @@ impl LinearSource {
             .vocabulary
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        if let Some(key) = self.shared_key() {
+            shared::vocabularies().remove(&key);
+            shared::labels().retain(|(tracker, _, _), _| *tracker != key.0);
+        }
     }
 
     /// Hold one name `sources fields --apply` created beside the ones read, so the writes after
@@ -2744,6 +3007,9 @@ impl LinearSource {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(vocabulary) = guard.as_mut() {
             std::sync::Arc::make_mut(vocabulary).add(created.clone());
+            if let Some(key) = self.shared_key() {
+                shared::vocabularies().insert(key, vocabulary.clone());
+            }
         }
     }
 
@@ -2797,23 +3063,55 @@ impl LinearSource {
         })
     }
 
+    /// The ids of `labels`, each held for every instance of this tracker in this process once
+    /// read, and every one not yet held read in one aliased request.
     async fn label_ids(
         &self,
         labels: &[Label],
         kind: WriteKind,
     ) -> Result<Vec<NativeId>, SourceError> {
-        let mut ids = Vec::with_capacity(labels.len());
-        for label in labels {
-            ids.push(
-                self.one_id(if matches!(kind, WriteKind::Project) {
-                    Lookup::ProjectLabel(&label.name)
-                } else {
-                    Lookup::IssueLabel(&label.name)
-                })
-                .await?,
-            );
+        let tracker = self.tracker();
+        let key = |name: &str| (tracker.clone(), kind, name.to_owned());
+        let lookup = |name: &'_ str| match kind {
+            WriteKind::Project => Lookup::ProjectLabel(name.to_owned()),
+            WriteKind::Task => Lookup::IssueLabel(name.to_owned()),
+        };
+        let missing: Vec<&str> = {
+            let held = shared::labels();
+            let mut missing: Vec<&str> = Vec::new();
+            for label in labels {
+                if !held.contains_key(&key(&label.name)) && !missing.contains(&label.name.as_str())
+                {
+                    missing.push(label.name.as_str());
+                }
+            }
+            missing
+        };
+        match missing.as_slice() {
+            [] => {}
+            [name] => {
+                let id = self.one_id(lookup(name)).await?;
+                shared::labels().insert(key(name), id);
+            }
+            names => {
+                let lookups: Vec<Lookup> = names.iter().map(|name| lookup(name)).collect();
+                let each: Vec<Value> = lookups.iter().map(Lookup::variables).collect();
+                let single = lookups[0].query();
+                let values = match self.send_aliased(single, &each).await? {
+                    batch::Aliased::Answered(values) => values,
+                    batch::Aliased::Refused(_, refusal) => return Err(refusal.into_error()),
+                };
+                for ((name, lookup), value) in names.iter().zip(&lookups).zip(values) {
+                    let id = self.only_id(lookup, &json!({ lookup.connection(): value }))?;
+                    shared::labels().insert(key(name), id);
+                }
+            }
         }
-        Ok(ids)
+        let held = shared::labels();
+        Ok(labels
+            .iter()
+            .filter_map(|label| held.get(&key(&label.name)).cloned())
+            .collect())
     }
     fn write_description(
         &self,
@@ -2902,52 +3200,16 @@ impl LinearSource {
     ///
     /// Either way the task answered is the one the mutation's own selection reports, so its
     /// status is Linear's, and nothing is read after the write.
-    async fn targeted_update(
+    /// The `issueUpdate` input that applies `update` to the issue `before` holds, whose raw
+    /// description is `description` — empty when nothing differs — and the relations it is to
+    /// write after, when it names dependencies that differ. Nothing is sent but the reads of
+    /// its forward edges such an update needs.
+    async fn compose_update(
         &self,
-        id: &NativeId,
         update: &TaskUpdate,
-    ) -> Result<Option<TaskUpdateOutcome>, SourceError> {
-        update.consistent()?;
-        if let Some(delivers) = &update.delivers {
-            TaskRef::listed(
-                TaskRef::DELIVERS_KEY,
-                id,
-                Some(&self.name),
-                delivers.clone(),
-            )
-            .map_err(|message| SourceError::Refused { message })?;
-        }
-        // Before any request: a category the mapping gives a task no name for is not one
-        // Linear could answer differently for another issue.
-        if let Some(status) = &update.status {
-            self.statuses
-                .name_for(status.category, ItemKind::Task)
-                .map_err(|why| why.refusal(&self.name, status.category, ItemKind::Task))?;
-        }
-        if let Some(status) = update.status.as_ref().filter(|_| {
-            TaskUpdate {
-                status: None,
-                ..update.clone()
-            }
-            .is_empty()
-        }) {
-            let Some(task) = self.status_written(id, status.category).await? else {
-                return Ok(None);
-            };
-            return Ok(Some(TaskUpdateOutcome {
-                delivers_before: task.delivers.clone(),
-                written: std::iter::once(UpdatedField::Status).collect(),
-                task,
-            }));
-        }
-        let held = if update.status.is_some() && self.held_vocabulary().is_none() {
-            self.issue_resolving(id).await?
-        } else {
-            self.issue_held(id, Read::ForWrite).await?
-        };
-        let Some((before, description)) = held else {
-            return Ok(None);
-        };
+        before: Task,
+        description: Option<String>,
+    ) -> Result<Composed, SourceError> {
         let (visible, held) = metadata_description(description)?;
         let mut slot = held.clone();
         for (key, value) in &update.metadata_set {
@@ -3034,6 +3296,82 @@ impl LinearSource {
         {
             input.insert("priority".into(), json!(linear_priority(priority)));
         }
+        Ok(Composed {
+            before,
+            input,
+            relations,
+        })
+    }
+
+    async fn targeted_update(
+        &self,
+        id: &NativeId,
+        update: &TaskUpdate,
+    ) -> Result<Option<TaskUpdateOutcome>, SourceError> {
+        self.update_checked(id, update)?;
+        if let Some(status) = update.status.as_ref().filter(|_| {
+            TaskUpdate {
+                status: None,
+                ..update.clone()
+            }
+            .is_empty()
+        }) {
+            let Some(task) = self.status_written(id, status.category).await? else {
+                return Ok(None);
+            };
+            return Ok(Some(TaskUpdateOutcome {
+                delivers_before: task.delivers.clone(),
+                written: std::iter::once(UpdatedField::Status).collect(),
+                task,
+            }));
+        }
+        let held = if update.status.is_some() && self.held_vocabulary().is_none() {
+            self.issue_resolving(id).await?
+        } else {
+            self.issue_held(id, Read::ForWrite).await?
+        };
+        let Some((before, description)) = held else {
+            return Ok(None);
+        };
+        let composed = self.compose_update(update, before, description).await?;
+        self.send_composed(id, update, composed).await
+    }
+
+    /// Refuse, before any request, an update that contradicts itself, a `delivers` list naming
+    /// what a task cannot deliver, and a category the mapping gives a task no name for — none of
+    /// which Linear could answer differently for another issue.
+    fn update_checked(&self, id: &NativeId, update: &TaskUpdate) -> Result<(), SourceError> {
+        update.consistent()?;
+        if let Some(delivers) = &update.delivers {
+            TaskRef::listed(
+                TaskRef::DELIVERS_KEY,
+                id,
+                Some(&self.name),
+                delivers.clone(),
+            )
+            .map_err(|message| SourceError::Refused { message })?;
+        }
+        if let Some(status) = &update.status {
+            self.statuses
+                .name_for(status.category, ItemKind::Task)
+                .map_err(|why| why.refusal(&self.name, status.category, ItemKind::Task))?;
+        }
+        Ok(())
+    }
+
+    /// Send one composed update alone — its `issueUpdate` when anything differs, then the
+    /// relations it writes — and answer what `update_task` answers.
+    async fn send_composed(
+        &self,
+        id: &NativeId,
+        update: &TaskUpdate,
+        composed: Composed,
+    ) -> Result<Option<TaskUpdateOutcome>, SourceError> {
+        let Composed {
+            before,
+            input,
+            relations,
+        } = composed;
         let carries_state = input.contains_key("stateId");
         let task = if input.is_empty() {
             before.clone()
@@ -3129,6 +3467,7 @@ impl LinearSource {
         if optional_str(issue, "identifier")? != Some(asked.0.as_str()) {
             written_is(issue, asked)?;
         }
+        self.remember_context(asked, issue);
         let task = optional(&json!({ "issue": issue }), "issue", |v| {
             map_task(v, &self.name, &self.statuses, self.spelling())
         })?;
@@ -3239,6 +3578,11 @@ impl LinearSource {
             .collect();
         let mut kept = std::collections::BTreeSet::new();
         let mut cursor: Option<Cursor> = None;
+        // A created issue holds no relation to reconcile, so its creates may wait for the
+        // copy's `finish_writes` and go with every other's in one request.
+        let deferred = matches!(held, HeldRelations::None)
+            && matches!(kind, WriteKind::Task)
+            && self.deferring.load(std::sync::atomic::Ordering::SeqCst);
         let mut answered = match held {
             HeldRelations::None => None,
             HeldRelations::Page(page) => Some(page.clone()),
@@ -3396,6 +3740,13 @@ impl LinearSource {
                     json!({"issueId":near.0,"relatedIssueId":far,"type":relation_type}),
                 )
             };
+            if deferred {
+                self.deferred_relations
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push((near.clone(), json!({"input": input})));
+                continue;
+            }
             let data = self.send(query, json!({"input":input})).await?;
             self.unknown_version(near);
             let mutation = if matches!(kind, WriteKind::Project) {
@@ -3539,6 +3890,156 @@ const PROJECT_EDGES_UNATTACHED: &str = "a linear project's updatedAt moved for 0
 /// Why a Linear document's token does not vouch for its assets.
 const DOCUMENT_ASSETS_UNCOVERED: &str =
     "linear's asset reads send no request, so there is nothing for a cache to save";
+
+/// What `write_or_queue` did with one task write.
+pub(crate) enum Landed {
+    /// It was written, and the issue is held under this id.
+    At(NativeId),
+    /// It was composed and queued for the `write_tasks` gathering it; nothing was sent.
+    Queued,
+}
+
+impl LinearSource {
+    /// [`TaskSource::write_task`], or — while `write_tasks` gathers creates — the create
+    /// composed and queued for it.
+    pub(crate) async fn write_or_queue(
+        &self,
+        write: &ItemWrite<Task>,
+    ) -> Result<Landed, SourceError> {
+        // Before anything is read or written, because nothing Linear could answer changes
+        // either: neither list may name the task itself or name one task twice, a category
+        // this source has disabled is refused in the words a status write is refused with,
+        // and a project other than the one this source is scoped to is refused naming both.
+        let near = write.target.as_ref().unwrap_or(&write.item.id);
+        for (key, entries) in [
+            (TaskRef::DELIVERS_KEY, &write.item.delivers),
+            (TaskRef::DELIVERED_BY_KEY, &write.item.delivered_by),
+        ] {
+            TaskRef::listed(key, near, Some(&self.name), entries.clone())
+                .map_err(|message| SourceError::Refused { message })?;
+        }
+        let project = self.filed_in(write.item.project.as_ref(), "task")?;
+        // The status is resolved before anything else is sent: a category the mapping gives a
+        // task no name for is refused before any request, and a name the team lacks before any
+        // mutation. The mapping decides alone; the status's own name plays no part.
+        let (state, _) = self
+            .status_id(write.item.status.category, ItemKind::Task)
+            .await?;
+        let edges = self
+            .prepare_edges(&write.depends_on, WriteKind::Task)
+            .await?;
+        let team = self.team_id().await?;
+        let labels = self.label_ids(&write.item.labels, WriteKind::Task).await?;
+        // The typed lists are what land, whatever the caller's own metadata held under their
+        // keys: a key of either name travelling beside the field would be a second answer to
+        // the same question, and the field is the one the contract names.
+        let mut metadata = write.item.metadata.clone();
+        // A create's key is the issue's own id here, and stays in its slot as every source keeps
+        // it, so a later copy reads the issue as the one it wrote.
+        let create_id = self.create_id(MetadataRecord::Task, &metadata, write.target.as_ref())?;
+        set_task_list(&mut metadata, TaskRef::DELIVERS_KEY, &write.item.delivers);
+        set_task_list(
+            &mut metadata,
+            TaskRef::DELIVERED_BY_KEY,
+            &write.item.delivered_by,
+        );
+        let description = self.write_description(
+            write.item.content.as_deref(),
+            &metadata,
+            &write.item.repositories,
+            write.item.classification,
+            &edges,
+            WriteKind::Task,
+        )?;
+        // `priority` on a create and on an update alike, `0` included: an update that left
+        // it out would keep whatever the destination held, so a copy moving an issue back to
+        // no priority would report success for a priority the destination still carries.
+        let input = json!({"title":write.item.title,"description":description,"stateId":state,"priority":linear_priority(write.item.priority),"labelIds":labels,"projectId":project});
+        // The write a copy makes of an issue it has just created together with others, saying
+        // exactly what that create wrote and naming no edge, writes nothing: what Linear answered
+        // the create stands as this write's answer.
+        if let Some(id) = &write.target
+            && edges.is_empty()
+            && self.just_created_as(id, &input)?
+        {
+            return Ok(Landed::At(id.clone()));
+        }
+        let sent_input = input.clone();
+        if write.target.is_none()
+            && self
+                .deferring_creates
+                .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            self.create_queued(write, input, team, &create_id, edges)?;
+            return Ok(Landed::Queued);
+        }
+        let (query, variables, root) = match &write.target {
+            // Its relations read back in the same request, so a rewrite needs no read of them.
+            Some(id) => (
+                graphql::ISSUE_REWRITE,
+                json!({"id":id.0,"input":input,"first":MAX_PAGE_SIZE}),
+                MutationRoot::IssueUpdate,
+            ),
+            None => (
+                graphql::ISSUE_CREATE,
+                {
+                    let mut input = input;
+                    input["teamId"] = Value::String(team.0);
+                    json!({"input":input})
+                },
+                MutationRoot::IssueCreate,
+            ),
+        };
+        let (data, sent) = match self
+            .send_write(MetadataRecord::Task, query, variables, &create_id)
+            .await
+        {
+            Ok(Written::Answered { data, sent }) => (data, sent),
+            // An earlier attempt's issue, or a concurrent one's: this create's, brought in step
+            // with what this create would have written by a compared update of only the fields
+            // that differ — so what a person did to it since, a metadata key they added among
+            // them, is kept.
+            Ok(Written::Held(held)) => {
+                self.bring_in_step(
+                    &held,
+                    write,
+                    &state,
+                    &labels,
+                    description.as_deref(),
+                    &edges,
+                )
+                .await?;
+                // The write a copy makes of it next, saying what this create did, is the one
+                // this compared update already made, and writes nothing more.
+                self.created_inputs
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .insert(held.clone(), sent_input);
+                return Ok(Landed::At(held));
+            }
+            Err(error) => {
+                self.forget_vocabulary();
+                return Err(error);
+            }
+        };
+        let issue =
+            mutation_payload(&data, root)?
+                .get("issue")
+                .ok_or_else(|| SourceError::Malformed {
+                    message: format!("missing {}.issue", root.as_str()),
+                })?;
+        let id = created_as(
+            NativeId(backend_id(issue, "id")?.into()),
+            sent.as_ref(),
+            "issue",
+        )?;
+        self.hold_stored(MetadataRecord::Task, &id, issue)?;
+        let held = held_relations(write.target.as_ref(), issue)?;
+        self.write_relations(&id, &edges, WriteKind::Task, held)
+            .await?;
+        Ok(Landed::At(id))
+    }
+}
 
 #[async_trait::async_trait]
 impl TaskSource for LinearSource {
@@ -3815,6 +4316,11 @@ impl TaskSource for LinearSource {
         ids: &[NativeId],
         comments: Option<&PageRequest>,
     ) -> Vec<Result<Option<TaskDetailRead>, SourceError>> {
+        if let Some(page) = comments
+            && let Some(read) = self.details_batched(ids, page).await
+        {
+            return read;
+        }
         let mut read = Vec::with_capacity(ids.len());
         for id in ids {
             read.push(match comments {
@@ -4013,109 +4519,13 @@ impl TaskSource for LinearSource {
     }
 
     async fn write_task(&self, write: &ItemWrite<Task>) -> Result<NativeId, SourceError> {
-        // Before anything is read or written, because nothing Linear could answer changes
-        // either: neither list may name the task itself or name one task twice, a category
-        // this source has disabled is refused in the words a status write is refused with,
-        // and a project other than the one this source is scoped to is refused naming both.
-        let near = write.target.as_ref().unwrap_or(&write.item.id);
-        for (key, entries) in [
-            (TaskRef::DELIVERS_KEY, &write.item.delivers),
-            (TaskRef::DELIVERED_BY_KEY, &write.item.delivered_by),
-        ] {
-            TaskRef::listed(key, near, Some(&self.name), entries.clone())
-                .map_err(|message| SourceError::Refused { message })?;
+        match self.write_or_queue(write).await? {
+            Landed::At(id) => Ok(id),
+            // Only `write_tasks` queues, and it never hands a queued create back as one written.
+            Landed::Queued => Err(SourceError::Malformed {
+                message: "a create was queued outside write_tasks".to_owned(),
+            }),
         }
-        let project = self.filed_in(write.item.project.as_ref(), "task")?;
-        // The status is resolved before anything else is sent: a category the mapping gives a
-        // task no name for is refused before any request, and a name the team lacks before any
-        // mutation. The mapping decides alone; the status's own name plays no part.
-        let (state, _) = self
-            .status_id(write.item.status.category, ItemKind::Task)
-            .await?;
-        let edges = self
-            .prepare_edges(&write.depends_on, WriteKind::Task)
-            .await?;
-        let team = self.team_id().await?;
-        let labels = self.label_ids(&write.item.labels, WriteKind::Task).await?;
-        // The typed lists are what land, whatever the caller's own metadata held under their
-        // keys: a key of either name travelling beside the field would be a second answer to
-        // the same question, and the field is the one the contract names.
-        let mut metadata = write.item.metadata.clone();
-        // A create's key is the issue's own id here, and stays in its slot as every source keeps
-        // it, so a later copy reads the issue as the one it wrote.
-        let create_id = self.create_id(MetadataRecord::Task, &metadata, write.target.as_ref())?;
-        set_task_list(&mut metadata, TaskRef::DELIVERS_KEY, &write.item.delivers);
-        set_task_list(
-            &mut metadata,
-            TaskRef::DELIVERED_BY_KEY,
-            &write.item.delivered_by,
-        );
-        let description = self.write_description(
-            write.item.content.as_deref(),
-            &metadata,
-            &write.item.repositories,
-            write.item.classification,
-            &edges,
-            WriteKind::Task,
-        )?;
-        // `priority` on a create and on an update alike, `0` included: an update that left
-        // it out would keep whatever the destination held, so a copy moving an issue back to
-        // no priority would report success for a priority the destination still carries.
-        let input = json!({"title":write.item.title,"description":description,"stateId":state,"priority":linear_priority(write.item.priority),"labelIds":labels,"projectId":project});
-        let (query, variables, root) = match &write.target {
-            // Its relations read back in the same request, so a rewrite needs no read of them.
-            Some(id) => (
-                graphql::ISSUE_REWRITE,
-                json!({"id":id.0,"input":input,"first":MAX_PAGE_SIZE}),
-                MutationRoot::IssueUpdate,
-            ),
-            None => (
-                graphql::ISSUE_CREATE,
-                {
-                    let mut input = input;
-                    input["teamId"] = Value::String(team.0);
-                    json!({"input":input})
-                },
-                MutationRoot::IssueCreate,
-            ),
-        };
-        let (data, sent) = match self
-            .send_write(MetadataRecord::Task, query, variables, &create_id)
-            .await
-        {
-            Ok(Written::Answered { data, sent }) => (data, sent),
-            // An earlier attempt's issue, or a concurrent one's: this create's, so it is written
-            // whole, finishing what that attempt left.
-            Ok(Written::Held(held)) => {
-                return self
-                    .write_task(&ItemWrite {
-                        target: Some(held),
-                        item: write.item.clone(),
-                        depends_on: write.depends_on.clone(),
-                    })
-                    .await;
-            }
-            Err(error) => {
-                self.forget_vocabulary();
-                return Err(error);
-            }
-        };
-        let issue =
-            mutation_payload(&data, root)?
-                .get("issue")
-                .ok_or_else(|| SourceError::Malformed {
-                    message: format!("missing {}.issue", root.as_str()),
-                })?;
-        let id = created_as(
-            NativeId(backend_id(issue, "id")?.into()),
-            sent.as_ref(),
-            "issue",
-        )?;
-        self.hold_stored(MetadataRecord::Task, &id, issue)?;
-        let held = held_relations(write.target.as_ref(), issue)?;
-        self.write_relations(&id, &edges, WriteKind::Task, held)
-            .await?;
-        Ok(id)
     }
     async fn write_project(&self, write: &ItemWrite<Project>) -> Result<NativeId, SourceError> {
         // Before anything is read or written, and before the item's own description
@@ -5034,6 +5444,93 @@ impl TaskSource for LinearSource {
     ) -> Result<Option<TaskUpdateOutcome>, SourceError> {
         self.targeted_update(id, update).await
     }
+    /// Every issue read in one aliased read and every update that changes something sent in
+    /// one aliased `issueUpdate` document — see the `batch` module for where one is sent alone.
+    async fn update_tasks(
+        &self,
+        updates: &[onetaskgraph_plugin_api::BatchUpdate],
+    ) -> Vec<Result<onetaskgraph_plugin_api::BatchAnswer<TaskUpdateOutcome>, SourceError>> {
+        self.update_batched(updates).await
+    }
+    /// Every issue read in one aliased read and every comment created in one aliased
+    /// `commentCreate` document — see the `batch` module.
+    async fn add_comments(
+        &self,
+        comments: &[onetaskgraph_plugin_api::BatchComment],
+    ) -> Vec<Result<onetaskgraph_plugin_api::BatchAnswer<Comment>, SourceError>> {
+        self.comment_batched(comments).await
+    }
+    /// The issue as this process last read or wrote it, whole, for the store's cache to keep
+    /// beside its entry.
+    fn write_context(&self, id: &NativeId) -> Option<Value> {
+        self.contexts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(id)
+            .cloned()
+    }
+    /// The issue the cache kept at the version a write expects, taken as that write's read of it,
+    /// so a write of what differs sends its `issueUpdate` and nothing before it. A context that
+    /// does not read as this issue — another issue's included — is not taken.
+    fn prime_write(&self, id: &NativeId, context: &Value, _board: Option<&Value>) -> bool {
+        let reads = map_task(context, &self.name, &self.statuses, self.spelling())
+            .is_ok_and(|task| task.id == *id)
+            && context.get("description").is_some();
+        if reads {
+            self.written
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert((MetadataRecord::Task, id.clone()), context.clone());
+        }
+        reads
+    }
+    /// Let go of a context `prime_write` took, its write not made.
+    fn unprime(&self, id: &NativeId) {
+        self.take_written(MetadataRecord::Task, id);
+    }
+    /// As many as one aliased `issueCreate` document carries — see the `batch` module.
+    fn create_batch_limit(&self) -> usize {
+        batch::CREATE_BATCH
+    }
+    /// Linear answers a batched create with exactly what it stored for each issue, so each may
+    /// carry the copy's record as a create alone does.
+    fn records_created_together(&self) -> bool {
+        true
+    }
+    /// Every create in one aliased `issueCreate` document, each answered as a create alone is
+    /// — see the `batch` module.
+    async fn write_tasks(&self, writes: &[ItemWrite<Task>]) -> Result<Vec<NativeId>, SourceError> {
+        self.create_batched(writes).await
+    }
+    /// The relations of every issue the copy creates from here on are created together, in
+    /// [`finish_writes`](Self::finish_writes).
+    fn begin_deferred_writes(&self) {
+        self.deferring
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+    /// Every relation held back since `begin_deferred_writes`, created in one aliased
+    /// `issueRelationCreate` document — see the `batch` module.
+    async fn finish_writes(&self) -> Result<(), SourceError> {
+        self.deferring
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        self.finish_relations().await
+    }
+    /// Every task and project with its forward relations, and every document, the copy names
+    /// read in one mixed aliased read — see the `batch` module.
+    async fn read_ahead_records_for_copy(
+        &self,
+        records: &[(MetadataRecord, NativeId)],
+    ) -> Result<(), SourceError> {
+        self.read_ahead_batched(records).await
+    }
+    /// Every query not by origin as one aliased `issues` read per round — see the `batch`
+    /// module.
+    async fn query_tasks_batch(
+        &self,
+        asks: &[(TaskQuery, PageRequest)],
+    ) -> Vec<Result<Page<Task>, SourceError>> {
+        self.query_batched(asks).await
+    }
 
     /// The tokens its dependency walks spelled and the items its writes were answered with, and
     /// nothing else: what this source holds across a command is its [`Vocabulary`] — the team's
@@ -5044,6 +5541,7 @@ impl TaskSource for LinearSource {
     /// command that wrote it, so the next command already reads each item as a person left it.
     async fn end_command(&self) -> Result<(), SourceError> {
         self.edges_versions().clear();
+        self.forget_ahead();
         self.forget_origins_ahead(true);
         self.written
             .lock()
@@ -5054,6 +5552,12 @@ impl TaskSource for LinearSource {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clear();
         self.headings
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+        // A person may edit an issue between commands, so the whole issue a read answered is
+        // never a later command's write context.
+        self.contexts
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clear();
@@ -5372,6 +5876,40 @@ impl LinearSource {
         }
     }
 
+    /// What the copy's read ahead read of the `record` `id`, taken.
+    fn take_ahead(&self, record: MetadataRecord, id: &NativeId) -> Option<Value> {
+        self.ahead
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&(record, id.clone()))
+    }
+
+    /// The forward relations page the copy's read ahead read beside the item `id` of `root`,
+    /// taken, as the data a relations read of it answers.
+    fn take_edges_ahead(&self, root: DependencyRoot, id: &NativeId) -> Option<Value> {
+        let (record, field) = match root {
+            DependencyRoot::Issue => (MetadataRecord::Task, "issue"),
+            DependencyRoot::Project => (MetadataRecord::Project, "project"),
+        };
+        self.edges_ahead
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&(record, id.clone()))
+            .map(|value| json!({ field: value }))
+    }
+
+    /// Let go of everything the copy's read ahead holds.
+    fn forget_ahead(&self) {
+        self.ahead
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+        self.edges_ahead
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+    }
+
     /// The whole item the latest long-form write of the `record` `id` was answered with,
     /// taken; see [`Self::written`].
     fn take_written(&self, record: MetadataRecord, id: &NativeId) -> Option<Value> {
@@ -5489,6 +6027,15 @@ impl LinearSource {
         id: &NativeId,
         read: Read,
     ) -> Result<Option<(Task, Option<String>)>, SourceError> {
+        if let Some(issue) = self.take_ahead(MetadataRecord::Task, id) {
+            return Ok(optional(&json!({"issue": issue}), "issue", |v| {
+                Ok((
+                    map_task(v, &self.name, &self.statuses, self.spelling())?,
+                    optional_string(v, "description")?,
+                ))
+            })?
+            .filter(|(task, _)| self.in_scope(task.project.as_ref())));
+        }
         let document = match read {
             Read::Load => self.read_document(ISSUE),
             Read::ForWrite => {
@@ -5508,6 +6055,9 @@ impl LinearSource {
         else {
             return Ok(None);
         };
+        if let Some(issue) = data.get("issue").filter(|issue| !issue.is_null()) {
+            self.remember_context(id, issue);
+        }
         Ok(optional(&data, "issue", |v| {
             Ok((
                 map_task(v, &self.name, &self.statuses, self.spelling())?,
@@ -5515,6 +6065,16 @@ impl LinearSource {
             ))
         })?
         .filter(|(task, _)| self.in_scope(task.project.as_ref())))
+    }
+
+    /// Keep `issue`, as a read or a write of `id` answered it whole, for `write_context`.
+    fn remember_context(&self, id: &NativeId, issue: &Value) {
+        if issue.get("description").is_some() && issue.get("state").is_some() {
+            self.contexts
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert(id.clone(), issue.clone());
+        }
     }
 
     /// [`Self::issue_held`] for a write, with the resolution a status write needs read in the
@@ -5539,6 +6099,9 @@ impl LinearSource {
             return Ok(None);
         };
         let read = std::sync::Arc::new(Vocabulary::read(&data, &self.name, &team.0)?);
+        if let Some(key) = self.shared_key() {
+            shared::vocabularies().insert(key, read.clone());
+        }
         *self
             .vocabulary
             .lock()
@@ -5597,6 +6160,15 @@ impl LinearSource {
         id: &NativeId,
         read: Read,
     ) -> Result<Option<(Project, Option<String>)>, SourceError> {
+        if let Some(project) = self.take_ahead(MetadataRecord::Project, id) {
+            return Ok(optional(&json!({"project": project}), "project", |v| {
+                Ok((
+                    map_project(v, &self.statuses, self.spelling())?,
+                    optional_string(v, "content")?,
+                ))
+            })?
+            .filter(|(project, _)| self.in_scope(Some(&project.id))));
+        }
         let document = match read {
             Read::Load => self.read_document(PROJECT),
             Read::ForWrite => {
@@ -5634,7 +6206,10 @@ impl LinearSource {
         // the reason `delete_task` records: Linear answers an id naming nothing with an
         // errored response rather than a null, and reading the null defensively is what
         // keeps a responder that does answer one from being a malformed-response failure.
-        if let Some(document) = self.take_written(MetadataRecord::Document, id) {
+        if let Some(document) = self
+            .take_written(MetadataRecord::Document, id)
+            .or_else(|| self.take_ahead(MetadataRecord::Document, id))
+        {
             return Ok(Some((
                 map_document(&document)?,
                 optional_string(&document, "content")?,
@@ -6080,9 +6655,22 @@ impl LinearSource {
                 limit as usize,
             ));
         }
-        let d = self
-            .send(query, json!({"id":id.0,"first":limit,"after":cursor}))
-            .await?;
+        let ahead = (cursor.is_none()
+            && direction == Direction::DependsOn
+            && limit == MAX_PAGE_SIZE
+            && matches!(
+                query,
+                graphql::ISSUE_DEPENDS_ON | graphql::PROJECT_DEPENDS_ON
+            ))
+        .then(|| self.take_edges_ahead(root, id))
+        .flatten();
+        let d = match ahead {
+            Some(d) => d,
+            None => {
+                self.send(query, json!({"id":id.0,"first":limit,"after":cursor}))
+                    .await?
+            }
+        };
         let walked = if cursor.is_none() {
             WalkPage::First
         } else {

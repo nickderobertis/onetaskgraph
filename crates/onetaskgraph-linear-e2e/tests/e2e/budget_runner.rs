@@ -40,6 +40,61 @@ fn report() {
     }
 }
 
+// llmlint: ignore-block[tests_assert_real_behavior] Report-only command entry points the budgets of budgets.yaml name, which report nothing without ONEBUDGETSPEC_BUDGET_ID; `each_named_runner_hands_over_the_figure_its_budget_recorded` below runs each as onebudgetspec does and asserts the figure it hands over.
+/// The runner `linear-requests-per-private-plan-road` names: [`report`], under the name its task
+/// registered it with.
+#[test]
+fn report_private_plan_road() {
+    report();
+}
+
+/// The runner `linear-requests-per-follow-up-cycle` names: [`report`], under the name its task
+/// registered it with.
+#[test]
+fn report_follow_up_cycle() {
+    report();
+}
+// llmlint: ignore-end[tests_assert_real_behavior]
+
+#[test]
+fn each_named_runner_hands_over_the_figure_its_budget_recorded() {
+    let sandbox = Sandbox::new();
+    let recorded = sandbox.subdirectory("telemetry");
+    for (entry, budget, value) in [
+        (
+            "budget_runner::report_private_plan_road",
+            "linear-requests-per-private-plan-road",
+            24_usize,
+        ),
+        (
+            "budget_runner::report_follow_up_cycle",
+            "linear-requests-per-follow-up-cycle",
+            22,
+        ),
+    ] {
+        telemetry::record_in(&recorded, budget, value, "as the journey counted them");
+        let value = u32::try_from(value).map(f64::from).expect("a small figure");
+        let result = sandbox.project().join(format!("{budget}.result.json"));
+        let output = Command::new(std::env::current_exe().expect("this test executable"))
+            .args([entry, "--exact", "--nocapture"])
+            .env(telemetry::DIRECTORY, &recorded)
+            .env("ONEBUDGETSPEC_BUDGET_ID", budget)
+            .env("ONEBUDGETSPEC_RESULT", &result)
+            .output()
+            .expect("the runner starts");
+        assert!(
+            output.status.success(),
+            "{entry}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let handed: Value = serde_json::from_str(
+            &std::fs::read_to_string(&result).expect("the runner wrote its result"),
+        )
+        .expect("the result is JSON");
+        assert_eq!(handed["value"].as_f64(), Some(value), "{entry}: {handed}");
+    }
+}
+
 /// End the runner with `reason` as the last of its stderr, and nothing after it.
 ///
 /// onebudgetspec keeps only the tail of a failed command's stderr, so a panic would not do: the

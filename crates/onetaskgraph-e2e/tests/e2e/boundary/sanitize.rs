@@ -4640,3 +4640,72 @@ fn an_attestation_on_a_public_item_is_screened_rewritten_previewed_and_refused()
     assert_eq!(failure, "boundary-refused");
     assert_eq!(tree(&store.folder("site")), before);
 }
+
+/// One batched call of `verb` on `site` with `document` as its input, its answer and its code.
+fn batched(store: &Store, verb: &[&str], document: &Value) -> (Option<i32>, Value) {
+    let input = store.body(&document.to_string());
+    let mut arguments = verb.to_vec();
+    arguments.extend(["site", "--input", &input, "--json"]);
+    let output = store.run(&arguments);
+    let answer = serde_json::from_str(&stdout(&output))
+        .unwrap_or_else(|_| panic!("JSON: {}{}", stdout(&output), stderr(&output)));
+    (output.status.code(), answer)
+}
+
+#[test]
+fn each_item_of_a_batched_public_write_is_screened_and_rewritten_on_its_own() {
+    let (store, _) = sanitizing(replaced());
+    for id in ["one", "two", "three"] {
+        store.record(
+            "site",
+            "tasks",
+            id,
+            &format!("title: {id}\nstatus: todo"),
+            PLAIN,
+        );
+    }
+    let (code, added) = batched(
+        &store,
+        &["task", "comment", "add-many"],
+        &json!({"schema_version": 1, "comments": [
+            {"item": "site:one", "body": format!("Asked {TERM} about it.")},
+            {"item": "site:two", "body": "Nothing private here."},
+        ]}),
+    );
+    assert_eq!(code, Some(0), "{added:#}");
+    let text = text_of(&store, "site");
+    assert!(!text.contains(TERM), "{text}");
+    assert!(text.contains(&format!("Asked {WITH} about it.")), "{text}");
+    assert!(text.contains("Nothing private here."), "{text}");
+
+    let before = std::fs::read(store.folder("site").join("tasks/two.md")).expect("two");
+    let (code, updated) = batched(
+        &store,
+        &["task", "update-many"],
+        &json!({"schema_version": 1, "updates": [
+            {"item": "site:one", "body": format!("Rewritten for {TERM}.\n")},
+            // A metadata key is a field no replacement rewrites.
+            {"item": "site:two", "metadata": {format!("{TERM}.key"): "x"}},
+            {"item": "site:three", "title": "Three, plainly"},
+        ]}),
+    );
+    assert_eq!(code, Some(4), "{updated:#}");
+    let outcomes: Vec<&str> = updated["results"]
+        .as_array()
+        .expect("results")
+        .iter()
+        .map(|result| result["outcome"].as_str().expect("an outcome"))
+        .collect();
+    assert_eq!(outcomes, ["written", "error", "written"], "{updated:#}");
+    let reason = updated["results"][1]["reason"].as_str().unwrap_or_default();
+    assert!(!reason.contains(TERM), "the refusal is neutral: {reason}");
+    assert_eq!(
+        std::fs::read(store.folder("site").join("tasks/two.md")).expect("two"),
+        before,
+        "nothing of the refused update was written"
+    );
+    let text = text_of(&store, "site");
+    assert!(!text.contains(TERM), "{text}");
+    assert!(text.contains(&format!("Rewritten for {WITH}.")), "{text}");
+    assert!(text.contains("Three, plainly"), "{text}");
+}

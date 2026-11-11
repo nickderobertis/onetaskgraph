@@ -69,7 +69,7 @@ pub(crate) struct Workspace {
 
 impl Workspace {
     /// The storage, over a team already holding everything `held` names.
-    fn holding(sandbox: &Sandbox, clients: usize, held: Value) -> (Value, Self) {
+    pub(crate) fn holding(sandbox: &Sandbox, clients: usize, held: Value) -> (Value, Self) {
         let (mut config, held) = linear_workspace(sandbox, held);
         let backend = config["endpoint"]
             .as_str()

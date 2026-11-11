@@ -462,6 +462,137 @@ fn the_plan_approval_report_hands_over_the_recorded_figure_and_refuses_another_w
     assert_eq!(written["value"], 1.636, "{written}");
 }
 
+// llmlint: ignore-block[tests_assert_real_behavior] A report-only command entry point budgets.yaml selects, which reports nothing without ONEBUDGETSPEC_BUDGET_ID; `the_follow_up_cycle_report_hands_over_the_recorded_figure_and_refuses_another_workload` below asserts what it hands over and refuses.
+// llmlint: ignore-block[budget_commands_measure_directly] Every budget of this crate selects its own report-only entry here, the harness-runner convention it landed with (report_visibility_reads, report_metadata_fields), and the task registering this one names that pattern. It reads only the telemetry `follow_up_cycle.rs` recorded during the crate's ordinary test run, refuses a recording of another workload, and hands the figure to onebudgetspec, which alone judges it.
+#[test]
+fn report_follow_up_cycle_points() {
+    let Some(budget) = selected() else {
+        return;
+    };
+    let (value, detail) = follow_up_cycle_figure(&budget).unwrap_or_else(|error| refuse(&error));
+    hand_over(value, &detail);
+}
+// llmlint: ignore-end[budget_commands_measure_directly]
+// llmlint: ignore-end[tests_assert_real_behavior]
+
+/// What `follow_up_cycle.rs` recorded for `budget`, refused unless it is that journey's recording
+/// of the whole cycle — its four phases in order, each call a whole number of requests and of
+/// points — and its figure the points of every call added up.
+fn follow_up_cycle_figure(budget: &str) -> Result<(f64, String), String> {
+    let value = recorded(budget)?;
+    if value["workload"].as_str() != Some(super::follow_up_cycle::WORKLOAD) {
+        return Err("the recording is not of the follow-up cycle's workload".into());
+    }
+    let phases = value["phases"].as_array().ok_or("missing the phases")?;
+    let named: Vec<&str> = phases
+        .iter()
+        .map(|phase| phase["phase"].as_str().unwrap_or_default())
+        .collect();
+    if named != super::follow_up_cycle::PHASES {
+        return Err(format!(
+            "the recording's phases are {named:?}, not the cycle's {:?}",
+            super::follow_up_cycle::PHASES
+        ));
+    }
+    let mut total = 0_u64;
+    for phase in phases {
+        for call in phase["calls"]
+            .as_array()
+            .ok_or("a phase without its calls")?
+        {
+            if call["requests"].as_u64().is_none() {
+                return Err("a call without a whole number of requests".into());
+            }
+            total += call["points"]
+                .as_u64()
+                .ok_or("a call without a whole number of points")?;
+        }
+    }
+    let figure = value["value"]
+        .as_u64()
+        .ok_or("missing whole-number figure")?;
+    if figure != total {
+        return Err(format!(
+            "the figure {figure} is not the points of every call, {total}"
+        ));
+    }
+    let detail = value["detail"].as_str().ok_or("missing detail")?.to_owned();
+    let figure = u32::try_from(figure).map_err(|_| "figure out of range")?;
+    Ok((f64::from(figure), detail))
+}
+
+#[test]
+fn the_follow_up_cycle_report_hands_over_the_recorded_figure_and_refuses_another_workload() {
+    use onetaskgraph_e2e_support::common::Sandbox;
+    let sandbox = Sandbox::new();
+    let directory = sandbox.subdirectory("follow-up-cycle");
+    let budget = super::follow_up_cycle::BUDGET;
+    let run = |recorded: Option<Value>| {
+        let path = onetaskgraph_e2e_support::telemetry::file_in(&directory, budget);
+        let _ = std::fs::remove_file(&path);
+        if let Some(recorded) = recorded {
+            std::fs::write(&path, recorded.to_string()).unwrap();
+        }
+        let result = directory.join("result.json");
+        let _ = std::fs::remove_file(&result);
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "budget_runner::report_follow_up_cycle_points",
+                "--exact",
+                "--nocapture",
+            ])
+            .env("GITHUB_ASSET_TELEMETRY_DIR", &directory)
+            .env("ONEBUDGETSPEC_BUDGET_ID", budget)
+            .env("ONEBUDGETSPEC_RESULT", &result)
+            .output()
+            .unwrap();
+        (output, std::fs::read_to_string(&result).ok())
+    };
+    let call = |points: u64| json!({"call": "find", "requests": 1, "points": points});
+    let valid = json!({"budget": budget, "value": 7,
+        "workload": super::follow_up_cycle::WORKLOAD, "detail": "7 points",
+        "phases": super::follow_up_cycle::PHASES.iter().enumerate()
+            .map(|(at, phase)| json!({"phase": phase, "calls": [call(if at == 0 { 4 } else { 1 })]}))
+            .collect::<Vec<_>>()});
+    let with = |field: &str, value: Value| {
+        let mut changed = valid.clone();
+        changed[field] = value;
+        Some(changed)
+    };
+    let mut reordered = valid.clone();
+    reordered["phases"].as_array_mut().unwrap().swap(0, 1);
+    let mut fractional = valid.clone();
+    fractional["phases"][1]["calls"][0]["points"] = json!(1.5);
+    for (recorded, message) in [
+        (None, "no telemetry"),
+        (
+            with("workload", json!("another cycle")),
+            "not of the follow-up cycle's workload",
+        ),
+        (Some(reordered), "not the cycle's"),
+        (Some(fractional), "whole number of points"),
+        (with("value", json!(6)), "not the points of every call"),
+        (with("budget", json!("another-budget")), "different budget"),
+    ] {
+        let (output, written) = run(recorded);
+        assert!(!output.status.success(), "accepted {message}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(message),
+            "{message}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(written, None, "reported a figure over {message}");
+    }
+    let (output, written) = run(Some(valid));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let written: Value = serde_json::from_str(&written.expect("a result")).unwrap();
+    assert_eq!(written["value"], 7.0, "{written}");
+}
+
 /// What `plan_copy.rs` recorded for `budget`, refused unless the recording states the plan, the
 /// board size and the scenario the budget's workload names: its figure, and its detail.
 fn plan_copy_figure(budget: &str) -> Result<(f64, String), String> {

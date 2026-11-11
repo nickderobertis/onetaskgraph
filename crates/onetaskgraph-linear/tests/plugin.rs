@@ -1441,7 +1441,8 @@ async fn a_project_this_source_created_is_removed_again_over_real_http() {
 async fn writes_create_update_and_route_task_and_project_edges_over_real_http() {
     let id_page = |root: &str, id: &str| serde_json::json!({(root):{"nodes":[{"id":id}]}});
     // One source writes all four, so the resolution is read once, by the first write, and
-    // every write after it resolves its status from what that read answered. A create reads
+    // every write after it resolves its status from what that read answered; so is each label,
+    // by the first write naming it. A create reads
     // no relations first: an item that did not exist holds none to replace.
     let (endpoint, wire) = response_server(vec![
         writable_resolution(),
@@ -1450,7 +1451,7 @@ async fn writes_create_update_and_route_task_and_project_edges_over_real_http() 
         serde_json::json!({"issueRelationCreate":{"success":true,"issueRelation":{"id":"R-I"}}}),
         serde_json::json!({"issues":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":"next"}}}),
         serde_json::json!({"issues":{"nodes":[{"id":"I-FAR","identifier":"ENG-9","title":"far","description":"\n\n<!-- onetaskgraph.metadata\n{\"onetaskgraph.origin\":\"authored:FAR\"}\n-->","url":null,"createdAt":null,"updatedAt":null,"state":{"name":"Todo","type":"unstarted"},"priority":0,"labels":{"nodes":[]},"project":null}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}),
-        id_page("issueLabels", "LABEL"),
+        // The label is held from the first write's read of it, so the rewrite reads none.
         // A rewrite reads back the relations it replaces in its own answer.
         serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"I-NEW","description":null,"relations":{"nodes":[{"id":"OLD","type":"blocks","relatedIssue":{"id":"OLD-FAR"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}),
         serde_json::json!({"issueRelationDelete":{"success":true}}),
@@ -1459,7 +1460,6 @@ async fn writes_create_update_and_route_task_and_project_edges_over_real_http() 
         serde_json::json!({"projectCreate":{"success":true,"project":{"id":"P-NEW","content":null}}}),
         serde_json::json!({"projectRelationCreate":{"success":true,"projectRelation":{"id":"R-P"}}}),
         serde_json::json!({"projects":{"nodes":[{"id":"P-FAR","name":"far","content":"<!-- onetaskgraph.metadata\n{\"onetaskgraph.origin\":\"authored:PFAR\"}\n-->","url":null,"createdAt":null,"updatedAt":null,"status":{"name":"Todo","type":"unstarted"},"labels":{"nodes":[]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}),
-        id_page("projectLabels", "PLABEL"),
         serde_json::json!({"projectUpdate":{"success":true,"project":{"id":"P-NEW","content":null,"relations":{"nodes":[{"id":"OLD-P","type":"dependency","relatedProject":{"id":"P-FAR"}}],"pageInfo":{"hasNextPage":true,"endCursor":"next"}}}}}),
         serde_json::json!({"projectRelationDelete":{"success":true}}),
         serde_json::json!({"project":{"content":null,"relations":{"nodes":[{"id":"OLD-P2","type":"related","relatedProject":{"id":"P-OTHER"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}},"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
@@ -7128,9 +7128,9 @@ async fn a_batched_origin_read_answers_each_lookup_once_and_the_designator_for_t
             serde_json::json!([project_recording("P-1", "plan:big")]),
             false,
         ),
-        // t1's lookup listed nothing, so the issue its origin's key names is read by id, and
-        // the project t0's names: neither is there.
-        serde_json::json!({"issue": null}),
+        // t1's lookup listed nothing, and is one of the origins asked together, so no issue is
+        // read by the id its key names — the create's own conflict finds one; the project t0's
+        // key names is read by id, and is not there.
         serde_json::json!({"project": null}),
         // t0 asked a second time, on its own.
         serde_json::json!({"issues":{"nodes":[issue_recording("I-1", "plan:t0")],
@@ -7185,11 +7185,10 @@ async fn a_batched_origin_read_answers_each_lookup_once_and_the_designator_for_t
         sent,
         vec![
             graphql::COUNTERPART_LOOKUPS.to_owned(),
-            graphql::ISSUE.to_owned(),
             graphql::PROJECT.to_owned(),
         ],
-        "one request answered every lookup and the designator, and a lookup listing nothing \
-         reads its origin's key by id"
+        "one request answered every lookup and the designator, and a project lookup listing \
+         nothing reads its origin's key by id"
     );
 
     // Answered once: the same lookup again is sent.
@@ -7227,11 +7226,10 @@ async fn an_incomplete_batched_page_or_a_write_leaves_every_origin_to_its_own_lo
             serde_json::json!([]),
             true,
         ),
-        // Each lookup listing nothing reads its origin's key by id, which holds nothing.
+        // Each issue lookup listing nothing is one of the origins asked together, so reads no
+        // id by its key; the project lookup listing nothing reads its key's id, holding nothing.
         empty.clone(),
-        serde_json::json!({"issue": null}),
         empty.clone(),
-        serde_json::json!({"issue": null}),
         serde_json::json!({"projects":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}),
         serde_json::json!({"project": null}),
         // A write, then the lookup the origin held before it no longer stands in for.
@@ -7264,9 +7262,7 @@ async fn an_incomplete_batched_page_or_a_write_leaves_every_origin_to_its_own_lo
         vec![
             graphql::COUNTERPART_LOOKUPS.to_owned(),
             graphql::ISSUES.to_owned(),
-            graphql::ISSUE.to_owned(),
             graphql::ISSUES.to_owned(),
-            graphql::ISSUE.to_owned(),
             graphql::PROJECTS.to_owned(),
             graphql::PROJECT.to_owned(),
         ],
@@ -7729,4 +7725,113 @@ fn a_documents_body_is_sized_with_its_image_at_the_url_it_is_or_will_be_served_a
 /// The nil UUID, hyphenated: the length every UUID of an upload's URL has.
 fn uuid_nil() -> &'static str {
     "00000000-0000-0000-0000-000000000000"
+}
+
+#[test]
+fn a_kept_context_is_taken_as_a_write_s_read_only_for_the_issue_it_reads_as() {
+    // Nothing is sent: a context is taken or refused from what it holds alone.
+    let source = source("http://127.0.0.1:9/graphql");
+    let recorded: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/issues.json")).unwrap();
+    let issue = &recorded["data"]["issues"]["nodes"][0];
+    assert_eq!(issue["id"], "i1");
+    assert!(
+        !source.prime_write(&NativeId::from("i2"), issue, None),
+        "another issue's context is never taken as this one's read"
+    );
+    assert!(source.prime_write(&NativeId::from("i1"), issue, None));
+    let mut unreadable = issue.clone();
+    unreadable.as_object_mut().unwrap().remove("description");
+    assert!(!source.prime_write(&NativeId::from("i1"), &unreadable, None));
+}
+
+/// Two issues read with their comments in one aliased request: an alias Linear answers with
+/// another issue than the one it asked for is that issue's malformed answer, never taken for it,
+/// and the alias answered as asked is read as it is.
+#[tokio::test]
+async fn an_aliased_read_answered_with_another_issue_is_refused_for_that_issue_alone() {
+    let page = PageRequest {
+        cursor: None,
+        limit: 50,
+    };
+    let detail = |id: &str| {
+        let mut issue = held_issue(id)["issue"].clone();
+        issue["comments"] = serde_json::json!({"nodes":[],
+            "pageInfo":{"hasPreviousPage":false,"startCursor":null}});
+        issue
+    };
+    // The second alias asked for `i2` and is answered with `i1`.
+    let (endpoint, sent) = response_server(vec![serde_json::json!({
+        "a0": detail("i1"), "a1": detail("i1"),
+    })]);
+    let read = source(&endpoint)
+        .get_task_details(&["i1".into(), "i2".into()], Some(&page))
+        .await;
+    let request = sent.recv().expect("one request");
+    assert!(request.contains("a1:"), "one aliased request: {request}");
+    assert!(
+        matches!(&read[0], Ok(Some(detail)) if detail.task.id.as_str() == "i1"),
+        "{read:?}"
+    );
+    assert!(
+        matches!(&read[1], Err(SourceError::Malformed { message })
+            if message.contains("i2") && message.contains("i1")),
+        "{read:?}"
+    );
+}
+
+/// The whole issue a read answered is a write's context for the rest of that command alone: a
+/// person may edit it before the next, whose write must not be composed on it.
+#[tokio::test]
+async fn an_issue_read_in_one_command_is_no_write_context_in_the_next() {
+    let (endpoint, _) = response_server(vec![held_issue("i1")]);
+    let source = source(&endpoint);
+    let read = source.get_task(&"i1".into()).await.expect("the read");
+    assert!(read.is_some());
+    assert!(
+        source.write_context(&"i1".into()).is_some(),
+        "the read is this command's context"
+    );
+    source.end_command().await.expect("the command ends");
+    assert!(
+        source.write_context(&"i1".into()).is_none(),
+        "no context outlives its command"
+    );
+}
+
+#[tokio::test]
+async fn a_batched_comment_handed_an_author_is_refused_alone_and_its_neighbour_lands() {
+    let (endpoint, wire) = response_server(vec![
+        held_issue("i1"),
+        serde_json::json!({"commentCreate":{"success":true,
+            "comment":comment_node("c7", "plain", "2026-08-01T12:00:00Z")}}),
+    ]);
+    let comment = |author: Option<&str>, body: &str| onetaskgraph_plugin_api::BatchComment {
+        task: "i1".into(),
+        comment: NewComment {
+            body: CommentBody::new(body).unwrap(),
+            author: author.map(str::to_owned),
+        },
+        if_version: None,
+    };
+    let answers = writable_source(&endpoint)
+        .add_comments(&[comment(Some("grace"), "signed"), comment(None, "plain")])
+        .await;
+    assert!(
+        matches!(&answers[0], Err(SourceError::Refused { message })
+            if message.contains("grace") && message.contains("API key")),
+        "{:?}",
+        answers[0]
+    );
+    assert!(
+        matches!(
+            &answers[1],
+            Ok(onetaskgraph_plugin_api::BatchAnswer::Written(comment)) if comment.body == "plain"
+        ),
+        "{:?}",
+        answers[1]
+    );
+    let sent: Vec<String> = wire.try_iter().collect();
+    assert_eq!(sent.len(), 2, "one read and the one comment: {sent:?}");
+    assert!(!sent.iter().any(|request| request.contains("signed")));
 }

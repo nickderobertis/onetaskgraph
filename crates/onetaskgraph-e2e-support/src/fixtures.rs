@@ -1213,9 +1213,12 @@ struct GitHubBoard {
     /// Whether the board's own items read answers every page after the first with the cursor it
     /// was asked from: [`GitHubBoardFields::stall_the_items_cursor`].
     items_cursor_stalls: bool,
+    search_cursor_stalls: bool,
     /// Errors this board answers beside the data of the next request carrying each operation,
     /// once — an error GitHub reports about one part of a read it otherwise answered.
     erring_beside: Vec<(&'static str, String)>,
+    /// An alias, and the message of an error naming it to put beside the next answer holding it.
+    erring_at_alias: Vec<(&'static str, String)>,
     /// How the next read by issue reference bends its first slot's answer, once.
     reference_fault: Option<ReferenceFault>,
     /// The variables each of those documents was sent with, at the same index.
@@ -1330,6 +1333,12 @@ struct GitHubBoard {
     omitting: Vec<&'static str>,
     /// Connections of the issue, by pointer, a whole-issue document's answer says go on.
     truncating: Vec<&'static str>,
+    /// Aliased searches of a batched search this board refuses at their own path: each a
+    /// fragment of the search's query and how many of its pages are answered first.
+    refusing_search_pages: Vec<(String, usize)>,
+    /// Items an aliased mutation naming them is refused for at its own path, once — each by its
+    /// own id and its board item's.
+    rejecting: Vec<(String, String)>,
 }
 
 /// Whether one request — its document and its variables — is one a [`BoardHook`] counts.
@@ -1641,6 +1650,22 @@ impl GitHubBoardFields {
         self.board.lock().unwrap().items_cursor_stalls = true;
     }
 
+    /// Have every issue search answer each page after its first with the very cursor it was
+    /// asked from, saying there is more — a search that never ends if walked blindly.
+    pub fn stall_the_search_cursor(&self) {
+        self.board.lock().unwrap().search_cursor_stalls = true;
+    }
+
+    /// Answer the next request whose answer holds `alias` with an error naming that alias, its
+    /// message `message`, beside the alias's data, once — a field GitHub answered in part.
+    pub fn error_beside_alias_once(&self, alias: &'static str, message: &str) {
+        self.board
+            .lock()
+            .unwrap()
+            .erring_at_alias
+            .push((alias, message.to_owned()));
+    }
+
     /// Answer the next request carrying `operation` with `message` as an error beside its data,
     /// once.
     pub fn error_beside_once(&self, operation: &'static str, message: &str) {
@@ -1716,6 +1741,32 @@ impl GitHubBoardFields {
         self.board.lock().unwrap().project_visibility_error = Some(message.to_owned());
     }
     // llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
+
+    /// Answer the first `answered` pages of an aliased search of a batched search whose query
+    /// holds `fragment`, then refuse its next page at that alias's path, once — as GitHub
+    /// refuses one field of a request with an error naming its path and answers the others.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board's own answer to a batched search, which only its request loop here answers: that state is private to the loopback, so a suite can set it only through this handle, beside `refuse_after`.
+    pub fn refuse_search_page(&self, fragment: &str, answered: usize) {
+        self.board
+            .lock()
+            .unwrap()
+            .refusing_search_pages
+            .push((fragment.to_owned(), answered));
+    }
+
+    /// Refuse every aliased mutation of the next batched write naming the item `id` — a
+    /// comment on it, a field of its card, an update of its issue — at that alias's path,
+    /// applying none of them, as GitHub refuses one field of a mutation request with an error
+    /// naming its path and runs the others.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board's own answer to a batched write, which only its request loop here answers: that state is private to the loopback, so a suite can set it only through this handle, beside `fail_field_alias`.
+    pub fn reject_mutation_of(&self, id: &str) {
+        let mut board = self.board.lock().unwrap();
+        let card = board.find(&json!(id))["item"]
+            .as_str()
+            .expect("the item's card")
+            .to_owned();
+        board.rejecting.push((id.to_owned(), card));
+    }
 
     /// Refuse the next request carrying `operation`, once, from here on.
     pub fn refuse_once(&self, operation: &'static str) {
@@ -2513,6 +2564,18 @@ impl GitHubBoardFields {
         for _ in 0..seconds {
             board.tick();
         }
+    }
+
+    /// The instant this board's clock stands at — the time of its latest change — as GitHub
+    /// spells one: what a journey asking for what changed from here on gives `--since`.
+    #[must_use]
+    pub fn now(&self) -> String {
+        let board = self.board.lock().unwrap();
+        let epoch: chrono::DateTime<chrono::Utc> =
+            GITHUB_BOARD_EPOCH.parse().expect("the board's epoch");
+        let seconds = board.held_second.unwrap_or(board.comment_ticks);
+        (epoch + chrono::Duration::seconds(i64::try_from(seconds).expect("board seconds fit i64")))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
     }
 
     /// Seed an issue's comments together before a journey starts. Each comment and the
@@ -3893,7 +3956,9 @@ fn github_projects_board_at(
         closed_filter_leaks: false,
         closed_cursor_stalls: false,
         items_cursor_stalls: false,
+        search_cursor_stalls: false,
         erring_beside: Vec::new(),
+        erring_at_alias: Vec::new(),
         reference_fault: None,
         variables: Vec::new(),
         status_options: json!([
@@ -3965,6 +4030,8 @@ fn github_projects_board_at(
         refusing_stale: Vec::new(),
         omitting: Vec::new(),
         truncating: Vec::new(),
+        refusing_search_pages: Vec::new(),
+        rejecting: Vec::new(),
     }));
     let mut owed_failures: Vec<&'static str> = fail_first.to_vec();
     let watched = Arc::clone(&board);
@@ -4118,51 +4185,59 @@ fn github_projects_board_at(
                 .position(|operation| query.contains(operation))
                 .map(|at| held.refusing_stale.remove(at))
         };
-        let body = if let Some(operation) = stale {
-            json!({"data":Value::Null,
+        let body =
+            if let Some(operation) = stale {
+                json!({"data":Value::Null,
                        "errors":[{"message":format!(
                            "Could not resolve to a node with the global id of '{operation}'")}]})
-            .to_string()
-        } else if let Some(operation) = owed {
-            // The operation is named in the message so a journey can tell *which*
-            // failure reached the caller — a copy whose write failed and whose tidy-up
-            // then failed too has two, and which one it reports is the behaviour.
-            json!({"data":Value::Null,
+                .to_string()
+            } else if let Some(operation) = owed {
+                // The operation is named in the message so a journey can tell *which*
+                // failure reached the caller — a copy whose write failed and whose tidy-up
+                // then failed too has two, and which one it reports is the behaviour.
+                json!({"data":Value::Null,
                        "errors":[{"message":format!(
                            "Something went wrong while executing your query: {operation}")}]})
-            .to_string()
-        } else {
-            // A document selecting the whole issue it writes is answered as its plain twin
-            // is, and then with that issue as a read of it by its own id shows it.
-            let plain = github_plain_of(query);
-            let data = github_answer(&board, plain.unwrap_or(query), &variables);
-            let data = match plain {
-                Some(_) => board.lock().unwrap().whole(query, data, &variables),
-                None => data,
-            };
-            {
-                let mut held = board.lock().unwrap();
-                if let Some(at) = held
-                    .erring_beside
-                    .iter()
-                    .position(|(operation, _)| query.contains(operation))
-                {
-                    let (_, message) = held.erring_beside.remove(at);
-                    held.owed_errors.push(message);
-                }
-            }
-            let owed = std::mem::take(&mut board.lock().unwrap().owed_errors);
-            let objects = std::mem::take(&mut board.lock().unwrap().owed_error_objects);
-            if owed.is_empty() && objects.is_empty() {
-                json!({ "data": data }).to_string()
+                .to_string()
             } else {
-                json!({"data": data,
+                // A document selecting the whole issue it writes is answered as its plain twin
+                // is, and then with that issue as a read of it by its own id shows it.
+                let plain = github_plain_of(query);
+                let data = github_answer(&board, plain.unwrap_or(query), &variables);
+                let data = match plain {
+                    Some(_) => board.lock().unwrap().whole(query, data, &variables),
+                    None => data,
+                };
+                {
+                    let mut held = board.lock().unwrap();
+                    if let Some(at) = held
+                        .erring_beside
+                        .iter()
+                        .position(|(operation, _)| query.contains(operation))
+                    {
+                        let (_, message) = held.erring_beside.remove(at);
+                        held.owed_errors.push(message);
+                    }
+                    if let Some(at) = held.erring_at_alias.iter().position(|(alias, _)| {
+                        data.get(*alias).is_some_and(|value| !value.is_null())
+                    }) {
+                        let (alias, message) = held.erring_at_alias.remove(at);
+                        held.owed_error_objects
+                            .push(json!({"message": message, "path": [alias, "issue"]}));
+                    }
+                }
+                let owed = std::mem::take(&mut board.lock().unwrap().owed_errors);
+                let objects = std::mem::take(&mut board.lock().unwrap().owed_error_objects);
+                if owed.is_empty() && objects.is_empty() {
+                    json!({ "data": data }).to_string()
+                } else {
+                    json!({"data": data,
                            "errors": owed.iter().map(|message| json!({"message": message}))
                                .chain(objects)
                                .collect::<Vec<_>>()})
-                .to_string()
-            }
-        };
+                    .to_string()
+                }
+            };
         // Answered, and not yet sent: a change made here is one the next request sees and
         // this one did not.
         let due: Vec<BoardHook> = {
@@ -4422,7 +4497,9 @@ fn github_plain_of(query: &str) -> Option<&'static str> {
     graphql::DOCUMENTS
         .iter()
         .map(|(document, _)| *document)
-        .find(|plain| graphql::whole_twin(plain) == Some(query))
+        .find(|plain| {
+            graphql::whole_twin(plain) == Some(query) || graphql::token_twin(plain) == Some(query)
+        })
 }
 
 // llmlint: ignore[code_lands_in_the_domain_that_owns_it] How the loopback board answers a whole-issue document, which belongs beside the rest of its answers for the reason `GitHubBoard` records.
@@ -4446,14 +4523,15 @@ impl GitHubBoard {
                 .find(|held| held["id"] == comment)
                 .map_or(Value::Null, |held| held["issue"].clone());
             ("/updateIssueComment/issueComment/issue", issue)
-        } else if query == graphql::UPDATE_ISSUE_WHOLE {
+        } else if query == graphql::UPDATE_ISSUE_WHOLE || query == graphql::UPDATE_ISSUE_TOKEN {
             ("/updateIssue/issue", variables["input"]["id"].clone())
         } else {
-            let key = if query == graphql::UPDATE_FIELD_WHOLE {
-                "updateProjectV2ItemFieldValue"
-            } else {
-                "clearProjectV2ItemFieldValue"
-            };
+            let key =
+                if query == graphql::UPDATE_FIELD_WHOLE || query == graphql::UPDATE_FIELD_TOKEN {
+                    "updateProjectV2ItemFieldValue"
+                } else {
+                    "clearProjectV2ItemFieldValue"
+                };
             let item = variables["input"]["itemId"].clone();
             let issue = self
                 .items
@@ -4639,6 +4717,69 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
     // aliases, so the board ends exactly as it would after those sent one at a time.
     {
         use onetaskgraph_github_projects::graphql as documents;
+        // A batched search: each search slot answered exactly as the one search it aliases, and
+        // each origin slot as an origin lookup's board half.
+        if query == documents::SEARCH_BATCH {
+            let mut result = serde_json::Map::new();
+            for slot in 0..onetaskgraph_github_projects::SEARCH_BATCH {
+                if variables[format!("ask{slot}")] != true {
+                    continue;
+                }
+                let alias = format!("s{slot}");
+                let search = variables[format!("search{slot}")].clone();
+                let refused = {
+                    let mut held = board.lock().unwrap();
+                    let wanted = search.as_str().expect("a search query");
+                    let due = held
+                        .refusing_search_pages
+                        .iter()
+                        .position(|(fragment, _)| wanted.contains(fragment.as_str()));
+                    match due {
+                        Some(at) if held.refusing_search_pages[at].1 == 0 => {
+                            held.refusing_search_pages.remove(at);
+                            held.owed_error_objects.push(json!({
+                                "type": "SERVICE_UNAVAILABLE", "path": [alias],
+                                "locations": [], "message": format!(
+                                    "Something went wrong while executing your query: {alias}")}));
+                            true
+                        }
+                        Some(at) => {
+                            held.refusing_search_pages[at].1 -= 1;
+                            false
+                        }
+                        None => false,
+                    }
+                };
+                if refused {
+                    result.insert(alias, Value::Null);
+                    continue;
+                }
+                let one = json!({"search": search, "type": variables["type"],
+                    "first": variables[format!("first{slot}")],
+                    "after": variables[format!("after{slot}")],
+                    "nestedFirst": variables["nestedFirst"],
+                    "boardItems": variables["boardItems"],
+                    "duplicates": variables["duplicates"]});
+                let answer = github_answer(board, documents::SEARCH_ISSUES, &one);
+                result.insert(alias, answer["search"].clone());
+            }
+            for slot in 0..onetaskgraph_github_projects::SEARCH_BATCH_ORIGINS {
+                if variables[format!("origin{slot}")] != true {
+                    continue;
+                }
+                assert_eq!(variables["owner"], "fixture-owner");
+                assert_eq!(variables["number"], 7);
+                let one = json!({"type": variables["type"],
+                    "filter": variables[format!("filter{slot}")],
+                    "search": "project:fixture-owner/7 is:issue",
+                    "originFirst": variables[format!("itemsFirst{slot}")],
+                    "itemsAfter": variables[format!("itemsAfter{slot}")],
+                    "searchAfter": null});
+                let answer = board.lock().unwrap().origin_lookup(&one);
+                result.insert(format!("o{slot}"), answer["originItems"].clone());
+            }
+            return Value::Object(result);
+        }
         if query == documents::ORIGIN_LOOKUPS {
             let mut result = serde_json::Map::new();
             {
@@ -4714,7 +4855,27 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         let update: Kind = ("update", "send", documents::UPDATE_ISSUE, "updateIssue");
         let block: Kind = ("block", "send", documents::ADD_BLOCKED_BY, "addBlockedBy");
         let delete: Kind = ("delete", "send", documents::DELETE_ISSUE, "deleteIssue");
-        let batches: [(&str, Vec<Kind>, usize); 7] = [
+        let comment: Kind = ("comment", "send", documents::ADD_COMMENT, "addComment");
+        let batches: [(&str, Vec<Kind>, usize); 9] = [
+            (
+                documents::ADD_COMMENTS,
+                vec![comment],
+                onetaskgraph_github_projects::COMMENT_BATCH,
+            ),
+            (
+                documents::WRITE_TASKS,
+                vec![
+                    ("field", "sendField", field.2, field.3),
+                    (
+                        "clear",
+                        "sendClear",
+                        documents::CLEAR_FIELD,
+                        "clearProjectV2ItemFieldValue",
+                    ),
+                    ("update", "sendUpdate", update.2, update.3),
+                ],
+                onetaskgraph_github_projects::TASK_FIELD_BATCH,
+            ),
             (documents::CREATE_ISSUES, vec![create], MUTATION_BATCH),
             (documents::WRITE_FIELD_VALUES, vec![field], WRITE_BATCH),
             (documents::CLOSE_ISSUES, vec![close], MUTATION_BATCH),
@@ -4733,12 +4894,40 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         ];
         if let Some((_, kinds, slots)) = batches.iter().find(|(batched, ..)| *batched == query) {
             let mut result = serde_json::Map::new();
+            // The items this request's aliases are refused for, retired once it is answered.
+            let mut rejected: Vec<String> = Vec::new();
             for &(prefix, send, single, root) in kinds {
                 for slot in 0..*slots {
                     if variables[format!("{send}{slot}")] != true {
                         continue;
                     }
                     let alias = format!("{prefix}{slot}");
+                    let refused = {
+                        let mut held = board.lock().unwrap();
+                        let input = &variables[&alias];
+                        let names = ["subjectId", "itemId", "id"]
+                            .iter()
+                            .filter_map(|key| input[*key].as_str())
+                            .collect::<Vec<_>>();
+                        let refused = held
+                            .rejecting
+                            .iter()
+                            .find(|(id, card)| {
+                                names.contains(&id.as_str()) || names.contains(&card.as_str())
+                            })
+                            .map(|(id, _)| id.clone());
+                        if let Some(id) = &refused {
+                            held.owed_error_objects.push(json!({
+                                "type": "UNPROCESSABLE", "path": [alias], "locations": [],
+                                "message": format!("{alias} could not be written to {id}")}));
+                            rejected.push(id.clone());
+                        }
+                        refused.is_some()
+                    };
+                    if refused {
+                        result.insert(alias, Value::Null);
+                        continue;
+                    }
                     let failing = {
                         let mut held = board.lock().unwrap();
                         let field = variables[&alias]["fieldId"].as_str();
@@ -4760,7 +4949,7 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
                         continue;
                     }
                     let mut one = json!({"input": variables[&alias]});
-                    if single == documents::UPDATE_FIELD {
+                    if single == documents::UPDATE_FIELD || single == documents::CLEAR_FIELD {
                         one["readPriority"] = json!(false);
                         one["priorityName"] = json!("Priority");
                     }
@@ -4776,6 +4965,19 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
                         }
                     };
                     let mut answered = answer[root].clone();
+                    // The batch of updates selects each issue it updated whole, as a read of it
+                    // by its own id shows it.
+                    if query == documents::WRITE_TASKS && prefix == "update" {
+                        let node = board.lock().unwrap().detail_node(
+                            &variables[&alias]["id"],
+                            &Value::Null,
+                            &json!(100),
+                            true,
+                        );
+                        if node.is_object() {
+                            answered["issue"] = node;
+                        }
+                    }
                     match bent {
                         Some(AliasAnswer::Missing) => continue,
                         Some(AliasAnswer::NamingAnotherBlocker) => {
@@ -4797,6 +4999,11 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
                     result.insert(alias, answered);
                 }
             }
+            board
+                .lock()
+                .unwrap()
+                .rejecting
+                .retain(|(id, _)| !rejected.contains(id));
             return Value::Object(result);
         }
     }
@@ -5673,8 +5880,13 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
                 node
             })
             .collect::<Vec<_>>();
+        let (more, cursor) = if board.search_cursor_stalls && offset > 0 {
+            (true, offset.to_string())
+        } else {
+            (end < matched.len(), end.to_string())
+        };
         return json!({"search":{"nodes":nodes,
-            "pageInfo":{"hasNextPage":end < matched.len(),"endCursor":end.to_string()}}});
+            "pageInfo":{"hasNextPage":more,"endCursor":cursor}}});
     }
     if query.contains("subIssues(first:$memberFirst") {
         let id = variables["id"].as_str().expect("a node id").to_owned();
@@ -7061,6 +7273,67 @@ impl LinearWorkspace {
             .unwrap_or_default()
     }
 
+    /// Refuse every mutation naming the item `id` — an issue update by its id, a comment create
+    /// on it — from now on, as Linear refuses an input it rejects: alone it is answered refused,
+    /// and in an aliased batch it nulls the whole answer and no write of the batch lands.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback Linear's own answers, which only its server loop here answers, beside `refuse_create`; the batched journeys of the Linear suite drive it.
+    pub fn refuse_writes_of(&self, id: &str) {
+        let mut data = self.state.lock().unwrap();
+        let mut refused = data["_linear_refused_items"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        refused.push(json!(id));
+        data["_linear_refused_items"] = Value::Array(refused);
+    }
+
+    /// Refuse every page after the first of an issue search whose filter, as sent, holds
+    /// `needle`, from now on — a search Linear answered once and then failed.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] As `refuse_writes_of`.
+    pub fn refuse_later_pages_of(&self, needle: &str) {
+        let mut data = self.state.lock().unwrap();
+        let mut refused = data["_linear_refused_pages"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        refused.push(json!(needle));
+        data["_linear_refused_pages"] = Value::Array(refused);
+    }
+
+    /// Refuse every issue create titled `title`, from now on, as Linear refuses an input it
+    /// rejects: alone it is answered refused, and in an aliased batch nothing of the batch lands.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] As `refuse_writes_of`.
+    pub fn refuse_creates_titled(&self, title: &str) {
+        let mut data = self.state.lock().unwrap();
+        let mut refused = data["_linear_refused_titles"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        refused.push(json!(title));
+        data["_linear_refused_titles"] = Value::Array(refused);
+    }
+
+    /// Refuse every issue delete from now on — a workspace whose key may not delete what it
+    /// created.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] As `refuse_writes_of`.
+    pub fn refuse_issue_deletes(&self) {
+        self.state.lock().unwrap()["_linear_refuse_deletes"] = json!(true);
+    }
+
+    /// Answer every page after the first of an issue search whose filter, as sent, holds
+    /// `needle` with the very cursor it was asked from, saying there is more, from now on — a
+    /// search that never ends if walked blindly.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] As `refuse_writes_of`.
+    pub fn stall_later_pages_of(&self, needle: &str) {
+        let mut data = self.state.lock().unwrap();
+        let mut stalled = data["_linear_stalled_pages"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        stalled.push(json!(needle));
+        data["_linear_stalled_pages"] = Value::Array(stalled);
+    }
+
     /// Refuse every create of a workflow state or project status named `name`, from now on,
     /// as Linear refuses one the key may not make; [`Self::allow_create`] lifts it.
     pub fn refuse_create(&self, name: &str) {
@@ -7264,6 +7537,35 @@ fn linear_serve(
                 request["query"].as_str().unwrap_or_default().to_owned(),
                 request.get("variables").cloned().unwrap_or(Value::Null),
             ));
+            // An aliased document carrying an operation refused is refused at that alias, whole,
+            // as Linear refuses one item of a batch: nothing of it is applied.
+            let refused_alias = {
+                let mut pending = failing.lock().unwrap();
+                let operation = request["query"].as_str().unwrap_or_default();
+                onetaskgraph_linear::graphql::decomposed(operation).and_then(|singles| {
+                    singles.iter().enumerate().find_map(|(alias, single)| {
+                        pending
+                            .iter()
+                            .position(|failing| failing == single)
+                            .map(|at| {
+                                pending.remove(at);
+                                alias
+                            })
+                    })
+                })
+            };
+            if let Some(alias) = refused_alias {
+                let body = json!({"data": null, "errors": [{"message": LINEAR_REFUSED_WRITE,
+                                                            "path": [format!("a{alias}")]}]});
+                let text = body.to_string();
+                answers.lock().unwrap().push(body);
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{text}",
+                    text.len()
+                );
+                continue;
+            }
             let refused = {
                 let mut pending = failing.lock().unwrap();
                 let operation = request["query"].as_str().unwrap_or_default();
@@ -7299,13 +7601,19 @@ fn linear_serve(
                 );
                 continue;
             }
-            let (status, response) = match linear_response(
-                &request,
-                recorded.as_ref(),
-                &mut state.lock().unwrap(),
-            ) {
-                Ok(mut body) => {
-                    let operation = request["query"].as_str().unwrap_or_default();
+            let aliased = onetaskgraph_linear::graphql::decomposed(
+                request["query"].as_str().unwrap_or_default(),
+            );
+            let (status, response) = if let Some(singles) = aliased {
+                let mut answered = linear_aliased(
+                    &singles,
+                    &request,
+                    recorded.as_ref(),
+                    &mut state.lock().unwrap(),
+                );
+                let operation = request["query"].as_str().unwrap_or_default();
+                // A batch applied whole and answered as `bend_answers` asks.
+                if let Some(data) = answered.1.get_mut("data").filter(|data| !data.is_null()) {
                     let variables = request.get("variables").cloned().unwrap_or(Value::Null);
                     let mut bends = workspace.bends.lock().unwrap();
                     if let Some(bend) = bends
@@ -7313,41 +7621,68 @@ fn linear_serve(
                         .find(|bend| bend.times > 0 && (bend.matches)(operation, &variables))
                     {
                         bend.times -= 1;
-                        (bend.bend)(&variables, &mut body);
+                        (bend.bend)(&variables, data);
                     }
-                    let mut lost = workspace.lost.lock().unwrap();
-                    if let Some(at) = lost.iter().position(|lost| *lost == operation) {
+                }
+                // A batch applied whole and its answer then lost, as `lose_answer_once` asks.
+                let mut lost = workspace.lost.lock().unwrap();
+                match lost.iter().position(|lost| *lost == operation) {
+                    Some(at) if answered.1.get("errors").is_none() => {
                         lost.remove(at);
                         (
                             "502 Bad Gateway",
                             json!({"errors":[{"message":"the answer was lost"}]}),
                         )
-                    } else {
-                        ("200 OK", json!({"data":body}))
                     }
+                    _ => answered,
                 }
-                // A create under an id a record already holds is answered under HTTP 200, as
-                // Linear answers it, naming the id in its presentable sentence.
-                Err(message)
-                    if let Some(record) = LINEAR_ID_CONFLICTS.into_iter().find(|record| {
-                        onetaskgraph_linear::graphql::id_conflict_message(*record) == message
-                    }) =>
-                {
-                    let id = request["variables"]["input"]["id"]
-                        .as_str()
-                        .unwrap_or_default();
-                    (
-                        "200 OK",
-                        json!({"data": null, "errors": [{
+            } else {
+                match linear_response(&request, recorded.as_ref(), &mut state.lock().unwrap()) {
+                    Ok(mut body) => {
+                        let operation = request["query"].as_str().unwrap_or_default();
+                        let variables = request.get("variables").cloned().unwrap_or(Value::Null);
+                        let mut bends = workspace.bends.lock().unwrap();
+                        if let Some(bend) = bends
+                            .iter_mut()
+                            .find(|bend| bend.times > 0 && (bend.matches)(operation, &variables))
+                        {
+                            bend.times -= 1;
+                            (bend.bend)(&variables, &mut body);
+                        }
+                        let mut lost = workspace.lost.lock().unwrap();
+                        if let Some(at) = lost.iter().position(|lost| *lost == operation) {
+                            lost.remove(at);
+                            (
+                                "502 Bad Gateway",
+                                json!({"errors":[{"message":"the answer was lost"}]}),
+                            )
+                        } else {
+                            ("200 OK", json!({"data":body}))
+                        }
+                    }
+                    // A create under an id a record already holds is answered under HTTP 200, as
+                    // Linear answers it, naming the id in its presentable sentence.
+                    Err(message)
+                        if let Some(record) = LINEAR_ID_CONFLICTS.into_iter().find(|record| {
+                            onetaskgraph_linear::graphql::id_conflict_message(*record) == message
+                        }) =>
+                    {
+                        let id = request["variables"]["input"]["id"]
+                            .as_str()
+                            .unwrap_or_default();
+                        (
+                            "200 OK",
+                            json!({"data": null, "errors": [{
                                 "message": message,
                                 "path": [request["query"].as_str().and_then(linear_create_root)],
                                 "extensions": {"code": "INPUT_ERROR", "statusCode": 400,
                                     "type": "invalid input", "userError": true,
                                     "userPresentableMessage":
                                         onetaskgraph_linear::graphql::id_conflict_presentable(record, id)}}]}),
-                    )
+                        )
+                    }
+                    Err(message) => ("400 Bad Request", json!({"errors":[{"message":message}]})),
                 }
-                Err(message) => ("400 Bad Request", json!({"errors":[{"message":message}]})),
             };
             answers.lock().unwrap().push(response.clone());
             // Answered, and not yet sent: a change made here is one the next request sees and
@@ -7384,6 +7719,68 @@ fn linear_serve(
         }
     });
     json!({"endpoint":endpoint,"team":"FIX","status_mapping":linear_default_mapping()})
+}
+
+/// The requests `served` — as a loopback Linear served them — with each aliased document split
+/// into the one-item document and variables each of its aliases carries, in order: what a
+/// journey counting one item's reads or writes counts, however many items one request carried.
+pub fn linear_per_item(served: &[(String, Value)]) -> Vec<(String, Value)> {
+    served
+        .iter()
+        .flat_map(
+            |(query, variables)| match onetaskgraph_linear::graphql::decomposed(query) {
+                Some(singles) => singles
+                    .into_iter()
+                    .enumerate()
+                    .map(|(at, single)| {
+                        (
+                            single.to_owned(),
+                            onetaskgraph_linear::graphql::alias_variables(variables, at),
+                        )
+                    })
+                    .collect(),
+                None => vec![(query.clone(), variables.clone())],
+            },
+        )
+        .collect()
+}
+
+/// An aliased document — the documents `singles` composed — answered as Linear answers one, as
+/// observed on the sandbox team on 2026-11-11: each alias as its document alone answers it, in
+/// order, and the first one refused ends the answer with no `data` and one error at that alias's
+/// path, the whole document applied as one write — nothing of any alias before or after it lands.
+fn linear_aliased(
+    singles: &[&str],
+    request: &Value,
+    recorded: Option<&Value>,
+    data: &mut Value,
+) -> (&'static str, Value) {
+    let variables = request.get("variables").cloned().unwrap_or(Value::Null);
+    let before = data.clone();
+    let mut answered = serde_json::Map::new();
+    for (at, single) in singles.iter().enumerate() {
+        let alias = format!("a{at}");
+        let one = json!({"query": single,
+            "variables": onetaskgraph_linear::graphql::alias_variables(&variables, at)});
+        match linear_response(&one, recorded, data) {
+            Ok(body) => {
+                let value = body
+                    .as_object()
+                    .and_then(|roots| roots.values().next().cloned())
+                    .unwrap_or(Value::Null);
+                answered.insert(alias, value);
+            }
+            Err(message) => {
+                // Nothing of the document lands, the aliases before this one included.
+                *data = before;
+                return (
+                    "200 OK",
+                    json!({"data": null, "errors": [{"message": message, "path": [alias]}]}),
+                );
+            }
+        }
+    }
+    ("200 OK", json!({"data": answered}))
 }
 
 /// The priority write v0.12.13 and every release before it sent, selecting the priority alone:
@@ -7988,6 +8385,35 @@ fn linear_response(
         return Err("unknown GraphQL operation");
     }
     let vars = Value::Object(request.variables);
+    if operation.trim_start().starts_with("mutation") {
+        let named = [&vars["id"], &vars["input"]["issueId"]];
+        let refused = data["_linear_refused_items"]
+            .as_array()
+            .is_some_and(|refused| refused.iter().any(|id| named.contains(&id)));
+        let titled = operation == graphql::ISSUE_CREATE
+            && data["_linear_refused_titles"]
+                .as_array()
+                .is_some_and(|refused| refused.contains(&vars["input"]["title"]));
+        let deleted =
+            operation == graphql::ISSUE_DELETE && data["_linear_refuse_deletes"] == json!(true);
+        if refused || titled || deleted {
+            return Err(LINEAR_REFUSED_WRITE);
+        }
+    }
+    if operation == graphql::ISSUES && !vars["after"].is_null() {
+        let filter = vars["filter"].to_string();
+        let refused = data["_linear_refused_pages"]
+            .as_array()
+            .is_some_and(|refused| {
+                refused
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .any(|needle| filter.contains(needle))
+            });
+        if refused {
+            return Err("Linear refused this page of the search");
+        }
+    }
     // The workspace's own id, which a fixture names under `organization` — two fixtures naming
     // one are two loopback servers over the same workspace.
     if operation == graphql::ORGANIZATION {
@@ -8302,7 +8728,21 @@ fn linear_response(
             .filter(|v| v.get("_trashed").is_none_or(Value::is_null))
             .map(|v| linear_task(v, data))
             .collect();
-        return Ok(json!({"issues":linear_connection(std::mem::take(&mut rows),&vars)}));
+        let mut connection = linear_connection(std::mem::take(&mut rows), &vars);
+        let filter = vars["filter"].to_string();
+        let stalled = !vars["after"].is_null()
+            && data["_linear_stalled_pages"]
+                .as_array()
+                .is_some_and(|stalled| {
+                    stalled
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .any(|needle| filter.contains(needle))
+                });
+        if stalled {
+            connection["pageInfo"] = json!({"hasNextPage": true, "endCursor": vars["after"]});
+        }
+        return Ok(json!({"issues":connection}));
     }
     if operation == graphql::PROJECTS {
         let rows = data["projects"]

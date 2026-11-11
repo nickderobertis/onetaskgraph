@@ -62,6 +62,11 @@ pub use config::{
     Config, ConfigError, CreateSettings, Loaded, OutputFormat, SourceCacheConfig, SourceConfig,
 };
 pub use engine::boundary;
+pub use engine::{
+    AddedComment, BATCH_SCHEMA_VERSION, BatchOutcome, CommentAddResult, CommentBatch,
+    CommentBatchItem, CommentsAdded, FindAnswer, FindIn, FindQuery, FindRequest, FoundTasks,
+    TasksUpdated, UpdateBatch, UpdateBatchItem, UpdateResult,
+};
 pub use engine::{AttestRequest, PlanCreated, PlanMember, PlannedMember, PlannedProject};
 pub use engine::{
     Body, BudgetSpent, COMMENTS_SINCE_SCHEMA_VERSION, CommentActivity, CommentCounts, CommentList,

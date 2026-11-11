@@ -125,6 +125,26 @@ NOT_METHODS = {
         "not a message: §4.4 says the engine reads nothing ahead for a hosted source, so "
         "each counterpart crosses as its own `get_task`, `get_project` or `get_document`"
     ),
+    "read_ahead_records_for_copy": (
+        "not a message: §4.4 says the engine reads nothing ahead for a hosted source, so "
+        "each counterpart crosses as its own `get_task`, `get_project` or `get_document`"
+    ),
+    "query_tasks_batch": (
+        "not a message: §4.5 says the engine answers it for a hosted source by the trait's "
+        "default, one `query_tasks` per query"
+    ),
+    "records_created_together": (
+        "not a message: §4.9 says the engine answers it for a hosted source by the trait's "
+        "default, false, and never asks it `write_tasks`"
+    ),
+    "add_comments": (
+        "not a message: §4.16 says the engine answers it for a hosted source by the trait's "
+        "default, one `add_comment` per comment"
+    ),
+    "update_tasks": (
+        "not a message: §4.21 says the engine answers it for a hosted source by the trait's "
+        "default, one `update_task` per update"
+    ),
     "read_ahead_origins_for_copy": (
         "not a message: §4.4 says the engine reads nothing ahead for a hosted source, so "
         "each origin query crosses as its own `query_tasks`, `query_projects` or "

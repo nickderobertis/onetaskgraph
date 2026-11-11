@@ -978,6 +978,115 @@ fn a_relation_write_whose_far_edges_entry_cannot_be_retired_is_refused_unsent() 
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn a_batch_item_whose_entry_cannot_be_retired_is_refused_unsent_and_the_rest_are_written() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let cached = Cached::new(held());
+    filled(&cached, &COMMENTS);
+    let dir = cached.dir().expect("a cache").join("tasks");
+    let path = entry(&cached.dir().expect("a cache"), "tasks", "L-1");
+    // As above: an entry that can be neither removed nor emptied, and every process still reads.
+    let held_bytes = dir.join("held-elsewhere");
+    std::fs::rename(&path, &held_bytes).expect("moved aside");
+    std::os::unix::fs::symlink(&held_bytes, &path).expect("a symlink");
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).expect("read-only");
+    if std::fs::remove_file(&path).is_ok() {
+        // Running as a user no directory mode stops — nothing to prove here.
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).ok();
+        return;
+    }
+    let batch = cached.sandbox.project().join("updates.json");
+    std::fs::write(
+        &batch,
+        json!({"schema_version": 1, "updates": [
+            {"item": "linear:L-2", "title": "Second, retitled"},
+            {"item": "linear:L-1", "title": "First, retitled"},
+        ]})
+        .to_string(),
+    )
+    .expect("a batch");
+    let write = [
+        "task",
+        "update-many",
+        "linear",
+        "--input",
+        batch.to_str().expect("a path"),
+        "--json",
+    ];
+    let comments = cached.sandbox.project().join("comments.json");
+    std::fs::write(
+        &comments,
+        json!({"schema_version": 1, "comments": [
+            {"item": "linear:L-2", "body": "A note on the second."},
+            {"item": "linear:L-1", "body": "A note on the first."},
+        ]})
+        .to_string(),
+    )
+    .expect("a batch");
+    let comment = [
+        "task",
+        "comment",
+        "add-many",
+        "linear",
+        "--input",
+        comments.to_str().expect("a path"),
+        "--json",
+    ];
+    let before = cached.workspace.served().len();
+    let commented = cached.run(&comment);
+    let output = cached.run(&write);
+    let sent: Vec<(String, Value)> = cached.workspace.served()[before..].to_vec();
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).expect("writable");
+    assert_eq!(
+        output.status.code(),
+        Some(4),
+        "{}",
+        crate::common::stderr(&output)
+    );
+    assert_eq!(
+        commented.status.code(),
+        Some(4),
+        "{}",
+        crate::common::stderr(&commented)
+    );
+    // Each item answers on its own: L-2, whose entry could be retired, is written; L-1 is
+    // refused and nothing naming it is sent.
+    for answer in [&commented, &output] {
+        let answered: Value =
+            serde_json::from_str(&crate::common::stdout(answer)).expect("the batch answers JSON");
+        let results = answered["results"].as_array().expect("results");
+        assert_eq!(results[0]["outcome"], "written", "{answered:#}");
+        assert_eq!(results[1]["outcome"], "error", "{answered:#}");
+        assert!(
+            results[1]["reason"]
+                .as_str()
+                .is_some_and(|reason| reason.contains("the write was not sent")),
+            "{answered:#}"
+        );
+    }
+    let mutations: Vec<&(String, Value)> = sent
+        .iter()
+        .filter(|(document, _)| document.starts_with("mutation"))
+        .collect();
+    assert!(!mutations.is_empty(), "L-2 was written");
+    assert!(
+        !mutations
+            .iter()
+            .any(|(_, variables)| variables.to_string().contains("\"L-1\"")),
+        "nothing naming L-1 was sent: {mutations:?}"
+    );
+    // With the directory writable again, the same batch lands and the entry goes.
+    let (landed, _) = cached.ok(&write);
+    for result in landed["results"].as_array().expect("results") {
+        assert_eq!(result["outcome"], "written", "{result:#}");
+    }
+    assert!(
+        std::fs::symlink_metadata(&path).is_err(),
+        "the entry is retired"
+    );
+}
+
 #[test]
 fn a_project_edge_walk_is_kept_only_when_read_whole_in_one_command() {
     let mut workspace = held();

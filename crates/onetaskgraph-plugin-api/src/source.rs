@@ -502,6 +502,24 @@ pub trait TaskSource: Send + Sync {
         page: &PageRequest,
     ) -> Result<Page<Task>, SourceError>;
 
+    /// One page of each of many task queries, answered in the order asked, each exactly as
+    /// [`query_tasks`](Self::query_tasks) would answer it alone — the three capability rules
+    /// included, query by query.
+    ///
+    /// One query's page failing is that query's answer alone: the others are answered as
+    /// though it had not been asked. Defaulted to one [`query_tasks`](Self::query_tasks) per
+    /// query; a source whose backend answers several searches in one request overrides it.
+    async fn query_tasks_batch(
+        &self,
+        asks: &[(TaskQuery, PageRequest)],
+    ) -> Vec<Result<Page<Task>, SourceError>> {
+        let mut answers = Vec::with_capacity(asks.len());
+        for (query, page) in asks {
+            answers.push(self.query_tasks(query, page).await);
+        }
+        answers
+    }
+
     /// One page of tasks, optionally carrying each task's first comment page.
     ///
     /// With `comments` absent this answers exactly [`Self::query_tasks`], with no
@@ -1154,6 +1172,28 @@ pub trait TaskSource: Send + Sync {
         update.rewrite(self, id).await
     }
 
+    /// Apply many targeted updates, each on exactly the terms of
+    /// [`update_task`](Self::update_task), answering one [`BatchAnswer`] per update in the
+    /// order given.
+    ///
+    /// Each update is its own write, held to its own `if_version` and guarded by its own
+    /// `when_priority`: one answered [`BatchAnswer::VersionMoved`],
+    /// [`BatchAnswer::PriorityHeld`], [`BatchAnswer::Missing`] or an error writes nothing of
+    /// its own and never writes or refuses another. Every field one update names is written
+    /// together or not at all.
+    ///
+    /// Defaulted to one [`update_task`](Self::update_task) per update, preceded by one read of
+    /// the task where its hold or its guard needs one — exactly the requests a caller making
+    /// each update on its own would send. A source whose backend carries several updates in one
+    /// request overrides it, and sends on its own exactly the update its backend would refuse
+    /// as a whole.
+    async fn update_tasks(
+        &self,
+        updates: &[crate::BatchUpdate],
+    ) -> Vec<Result<crate::BatchAnswer<TaskUpdateOutcome>, SourceError>> {
+        crate::batch::update_each(self, updates).await
+    }
+
     /// Set one key of the metadata of one project this source holds, on exactly the terms of
     /// [`set_task_metadata`](Self::set_task_metadata).
     ///
@@ -1403,6 +1443,24 @@ pub trait TaskSource: Send + Sync {
         Ok(())
     }
 
+    /// [`read_ahead_for_copy`](Self::read_ahead_for_copy), with what each id is at this source —
+    /// a task, a project or a document — as the copy knows it: what a source whose reads by id
+    /// are each of one kind needs to read them together.
+    ///
+    /// Defaulted to [`read_ahead_for_copy`](Self::read_ahead_for_copy) of the ids alone, so a
+    /// source that reads any kind by one id is asked exactly as it was.
+    ///
+    /// # Errors
+    ///
+    /// As [`read_ahead_for_copy`](Self::read_ahead_for_copy).
+    async fn read_ahead_records_for_copy(
+        &self,
+        records: &[(MetadataRecord, NativeId)],
+    ) -> Result<(), SourceError> {
+        let ids: Vec<NativeId> = records.iter().map(|(_, id)| id.clone()).collect();
+        self.read_ahead_for_copy(&ids).await
+    }
+
     /// Ask, together, which items were copied from each of `origins` — the qualified ids a copy
     /// is about to look for at this destination by the `onetaskgraph.origin` each item records
     /// — and hold each answer
@@ -1452,6 +1510,18 @@ pub trait TaskSource: Send + Sync {
     ) -> Result<Option<Vec<(Classification, Vec<Repository>)>>, SourceError> {
         let _ = project;
         Ok(None)
+    }
+
+    /// Whether a task this source creates through [`write_tasks`](Self::write_tasks) may carry
+    /// everything a copy's own write of it would — the copy's record of it among them — so the
+    /// write a copy then makes of it, naming the same, writes nothing.
+    ///
+    /// A copy then creates together only the tasks that depend on no other task of the copy,
+    /// whose edges are all nameable at their create, and creates each of the others on its own,
+    /// after what it depends on. Defaulted to `false`: a task created together lands with no
+    /// record, and the write after it names its edges to the others.
+    fn records_created_together(&self) -> bool {
+        false
     }
 
     /// How many tasks this source creates in one [`write_tasks`](Self::write_tasks): more than
@@ -1593,6 +1663,23 @@ pub trait TaskSource: Send + Sync {
     ) -> Result<Option<Comment>, SourceError> {
         let _ = (task, comment);
         Err(commentless(self.kind()))
+    }
+
+    /// Add many comments, each on exactly the terms of [`add_comment`](Self::add_comment),
+    /// answering one [`BatchAnswer`] per comment in the order given.
+    ///
+    /// Each comment is its own write, held to its own `if_version`: one answered
+    /// [`BatchAnswer::VersionMoved`], [`BatchAnswer::Missing`] or an error writes nothing of its
+    /// own and never writes or refuses another.
+    ///
+    /// Defaulted to one [`add_comment`](Self::add_comment) per comment, preceded by one read of
+    /// the task where its hold needs one. A source whose backend carries several comments in one
+    /// request overrides it.
+    async fn add_comments(
+        &self,
+        comments: &[crate::BatchComment],
+    ) -> Vec<Result<crate::BatchAnswer<Comment>, SourceError>> {
+        crate::batch::comment_each(self, comments).await
     }
 
     /// Replace the body of the comment `comment` on `task`, answering with the comment as the

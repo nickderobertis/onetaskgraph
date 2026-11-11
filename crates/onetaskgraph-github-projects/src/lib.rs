@@ -656,6 +656,7 @@ use serde_json::{Value, json};
 
 pub mod accounting;
 mod assets;
+mod batch;
 pub mod change_token;
 mod expected;
 pub use expected::{CONTEXT_VERSION, WHOLE_MEMBERS, context_shapes};
@@ -725,6 +726,63 @@ pub const DELETE_BATCH: usize = 5;
 /// plan and the project's document, and no more, since each carries a page of the board's field
 /// filter and one of the issue search.
 pub const ORIGIN_BATCH: usize = 10;
+/// How many searches one [`graphql::SEARCH_BATCH`] request asks: what `task find` asks of a
+/// board in one call, each search an aliased `search` field of its own.
+pub const SEARCH_BATCH: usize = 20;
+/// How many origins one [`graphql::SEARCH_BATCH`] request looks up beside its searches, each by
+/// the board's own field filter in an aliased `items` field of its own and by one of the
+/// request's searches.
+pub const SEARCH_BATCH_ORIGINS: usize = 5;
+/// The rows each search of a [`graphql::SEARCH_BATCH`] request asks for on its first page.
+///
+/// A batched find asks narrowed questions that each expect a handful of answers, and every
+/// search slot is priced at its page size: three rows a slot keep a first round of
+/// [`SEARCH_BATCH`] searches at three points, where a page of [`SEARCH_PAGE_SIZE`] each would
+/// cost twenty. A search with more to answer is walked on at [`SEARCH_PAGE_SIZE`] rows a page.
+pub const SEARCH_BATCH_FIRST_PAGE: u32 = 3;
+
+/// The rows each resumed page of one [`graphql::SEARCH_BATCH`] round asks for, when `resumed`
+/// of its slots — searches and origin item listings alike — resume from a cursor.
+///
+/// Every resumed page of a round shares one [`SEARCH_PAGE_SIZE`] of rows, rather than each
+/// asking that many: a round in which all twenty searches walked on at twenty rows a slot cost
+/// 22 points in one request, while sharing holds every round to what its first pages cost and
+/// one page more. A search with more to answer is walked on over more rounds, each page still
+/// read, so what a walk answers is unchanged; a round of one resumed search asks the page a
+/// search alone asks.
+#[must_use]
+pub fn search_batch_resumed_page(resumed: usize) -> u32 {
+    let resumed = u32::try_from(resumed.max(1)).unwrap_or(u32::MAX);
+    (SEARCH_PAGE_SIZE / resumed).max(1)
+}
+
+/// The page sizes of the most expensive [`graphql::SEARCH_BATCH`] round this source sends:
+/// every slot on its first page, at [`SEARCH_BATCH_FIRST_PAGE`] rows, but one resumed slot
+/// asking all of [`search_batch_resumed_page`]'s shared rows.
+///
+/// `tests/point_cost.rs` holds every round shape [`search_batch_resumed_page`] allows to cost
+/// no more than this, and the credentialed lane reconciles GitHub's own price of the document
+/// under it. [`largest_page_sizes`] still binds every slot at [`SEARCH_PAGE_SIZE`], an upper
+/// bound on this, so the offline worst case covers more than any round sends.
+#[must_use]
+pub fn search_batch_largest_round() -> Variables {
+    let mut sizes = largest_page_sizes();
+    for slot in 0..SEARCH_BATCH {
+        sizes.insert(format!("first{slot}"), SEARCH_BATCH_FIRST_PAGE);
+    }
+    for slot in 0..SEARCH_BATCH_ORIGINS {
+        sizes.insert(format!("itemsFirst{slot}"), SEARCH_BATCH_FIRST_PAGE);
+    }
+    sizes.insert("first0".to_owned(), search_batch_resumed_page(1));
+    sizes
+}
+/// How many comments one [`graphql::ADD_COMMENTS`] request adds, and how many issue updates one
+/// [`graphql::WRITE_TASKS`] request carries: [`MUTATION_BATCH`], the most aliased mutations
+/// GitHub was seen to accept in one request.
+pub const COMMENT_BATCH: usize = MUTATION_BATCH;
+/// How many board field values one [`graphql::WRITE_TASKS`] request carries, beside
+/// [`MUTATION_BATCH`] field clears: [`WRITE_BATCH`].
+pub const TASK_FIELD_BATCH: usize = WRITE_BATCH;
 
 /// The most nodes any one document this source sends may be asked to return.
 ///
@@ -814,7 +872,7 @@ pub use github_graphql_node_count::{NodeCountError, Variables};
 /// not one configuration of it, which is what makes a bound computed under it a bound on
 /// every read.
 pub fn largest_page_sizes() -> Variables {
-    Variables::from([
+    let mut sizes = Variables::from([
         ("first".to_owned(), MAX_PAGE_SIZE),
         ("commentFirst".to_owned(), MAX_PAGE_SIZE),
         ("nestedFirst".to_owned(), NESTED_PAGE_SIZE),
@@ -822,7 +880,15 @@ pub fn largest_page_sizes() -> Variables {
         ("originFirst".to_owned(), ORIGIN_PAGE_SIZE),
         ("lookupFirst".to_owned(), ORIGIN_LOOKUPS_PAGE_SIZE),
         ("memberFirst".to_owned(), MEMBER_PAGE_SIZE),
-    ])
+    ]);
+    // Each slot of the batched search pages at most what one search does.
+    for slot in 0..SEARCH_BATCH {
+        sizes.insert(format!("first{slot}"), SEARCH_PAGE_SIZE);
+    }
+    for slot in 0..SEARCH_BATCH_ORIGINS {
+        sizes.insert(format!("itemsFirst{slot}"), SEARCH_PAGE_SIZE);
+    }
+    sizes
 }
 
 /// The most nodes `document` could be asked to return, by GitHub's published rules.
@@ -864,6 +930,19 @@ pub fn worst_case_point_cost(document: &str) -> Result<u64, NodeCountError> {
     github_graphql_node_count::point_cost(document, &largest_page_sizes())
 }
 
+/// The rate-limit points one call of `document` spends under `variables`, by GitHub's published
+/// rules: [`worst_case_point_cost`] is this under [`largest_page_sizes`], and a request this
+/// source sent is priced by it under the page sizes that request really bound — what GitHub
+/// charges the request, since it charges every connection at the page size asked for.
+///
+/// # Errors
+///
+/// Returns the calculation's own [`NodeCountError`] when `document` does not parse, holds
+/// no single operation, or binds a page size `variables` does not name.
+pub fn point_cost(document: &str, variables: &Variables) -> Result<u64, NodeCountError> {
+    github_graphql_node_count::point_cost(document, variables)
+}
+
 /// The most nodes `document` could be asked to return under `variables`.
 ///
 /// [`worst_case_node_count`] is this under [`largest_page_sizes`], and the accounting in
@@ -877,6 +956,27 @@ pub fn worst_case_point_cost(document: &str) -> Result<u64, NodeCountError> {
 /// no single operation, or binds a page size `variables` does not name.
 pub fn node_count(document: &str, variables: &Variables) -> Result<u64, NodeCountError> {
     github_graphql_node_count::node_count(document, variables)
+}
+
+/// `variables` with the page sizes and flags a token twin's inline issue selection binds,
+/// at a read's page sizes.
+fn token_variables(mut variables: Value) -> Value {
+    if let Some(object) = variables.as_object_mut() {
+        object.insert("nestedFirst".to_owned(), json!(NESTED_PAGE_SIZE));
+        object.insert("boardItems".to_owned(), json!(BOARD_ITEMS_PAGE_SIZE));
+        object.insert("duplicates".to_owned(), json!(true));
+    }
+    variables
+}
+
+/// The input members a mutation names the issue or board item it writes by.
+const WRITTEN_NAMES: [&str; 4] = ["id", "issueId", "subjectId", "itemId"];
+
+tokio::task_local! {
+    /// The source a targeted update is running on, by its address, while it runs: what has its
+    /// mutations sent as the twins selecting the whole issue, so the update answers the version
+    /// its own last response shows (see `GitHubProjectsSource::written_tokens`).
+    static SPELLING: usize;
 }
 
 /// The issue-title prefix that makes a board issue a document.
@@ -982,12 +1082,24 @@ pub mod graphql {
     macro_rules! board_issue {
         () => {
             concat!(
-                r#" fragment BoardIssue on Issue{__typename id number title body url createdAt updatedAt state stateReason(enableDuplicate:$duplicates) repository{nameWithOwner} parent{id} subIssuesSummary{total} commentCount:comments{totalCount} relationshipEvents:timelineItems(itemTypes:$relationshipEvents){totalCount}
+                r#" fragment BoardIssue on Issue{"#,
+                board_issue_fields!(),
+                "}"
+            )
+        };
+    }
+
+    /// What [`board_issue!`] selects of an issue, written out where a document selects it
+    /// inline rather than through the fragment.
+    macro_rules! board_issue_fields {
+        () => {
+            concat!(
+                r#"__typename id number title body url createdAt updatedAt state stateReason(enableDuplicate:$duplicates) repository{nameWithOwner} parent{id} subIssuesSummary{total} commentCount:comments{totalCount} relationshipEvents:timelineItems(itemTypes:$relationshipEvents){totalCount}
       labels(first:$nestedFirst){nodes{id name color}pageInfo{hasNextPage}}
       projectItems(first:$boardItems){nodes{id updatedAt project{id number}
         "#,
                 board_item_values!(),
-                r#"}pageInfo{hasNextPage endCursor}}}"#
+                r#"}pageInfo{hasNextPage endCursor}}"#
             )
         };
     }
@@ -2045,6 +2157,128 @@ pub mod graphql {
     /// Removes one issue comment. Its payload carries nothing about the comment it removed.
     pub const DELETE_COMMENT: &str = r#"mutation($input:DeleteIssueCommentInput!){deleteIssueComment(input:$input){clientMutationId}}"#;
 
+    /// The variables of the search slots `<n>` of [`SEARCH_BATCH`]: its search, where it
+    /// resumes, its page size and whether it is asked.
+    macro_rules! search_batch_variables {
+        ($($n:literal)+) => {
+            concat!($(
+                ",$search", stringify!($n), ":String!,$after", stringify!($n),
+                ":String,$first", stringify!($n), ":Int!,$ask", stringify!($n), ":Boolean!",
+            )+)
+        };
+    }
+    /// The search slots `<n>` of [`SEARCH_BATCH`]: [`SEARCH_ISSUES`]'s one connection, aliased
+    /// `s<n>`, sent only while `$ask<n>` holds.
+    macro_rules! search_batch_slots {
+        ($($n:literal)+) => {
+            concat!($(
+                "\n      s", stringify!($n), ":search(query:$search", stringify!($n),
+                ",type:$type,first:$first", stringify!($n), ",after:$after", stringify!($n),
+                ") @include(if:$ask", stringify!($n),
+                "){pageInfo{hasNextPage endCursor} nodes{__typename ...BoardIssue}}",
+            )+)
+        };
+    }
+    /// The variables of the origin slots `<n>` of [`SEARCH_BATCH`]: the board's field filter
+    /// naming the origin, where its items resume, their page size and whether it is asked.
+    macro_rules! origin_batch_variables {
+        ($($n:literal)+) => {
+            concat!($(
+                ",$filter", stringify!($n), ":String!,$itemsAfter", stringify!($n),
+                ":String,$itemsFirst", stringify!($n), ":Int!,$origin", stringify!($n),
+                ":Boolean!",
+            )+)
+        };
+    }
+    /// The origin slots `<n>` of [`SEARCH_BATCH`]: [`ORIGIN_LOOKUP`]'s board half, the board's
+    /// own items through its field filter, aliased `o<n>`, sent only while `$origin<n>` holds.
+    macro_rules! origin_batch_slots {
+        ($($n:literal)+) => {
+            concat!($(
+                "\n      o", stringify!($n), ":repositoryOwner(login:$owner) @include(if:$origin",
+                stringify!($n),
+                "){... on ProjectV2Owner{projectV2(number:$number){items(first:$itemsFirst",
+                stringify!($n), ",after:$itemsAfter", stringify!($n), ",query:$filter",
+                stringify!($n), "){nodes{id updatedAt ", board_item_values!(),
+                board_item_content!(), "} pageInfo{hasNextPage endCursor}}}}}",
+            )+)
+        };
+    }
+
+    /// Up to [`SEARCH_BATCH`](super::SEARCH_BATCH) board-scoped issue searches in one request,
+    /// each [`SEARCH_ISSUES`]'s connection in an aliased `s<n>` field with its own query, page
+    /// size and cursor, and beside them up to
+    /// [`SEARCH_BATCH_ORIGINS`](super::SEARCH_BATCH_ORIGINS) origin lookups' board halves —
+    /// [`ORIGIN_LOOKUP`]'s `items` filtered by the origin field — in aliased `o<n>` fields, each
+    /// origin's issue search in a search slot of its own.
+    ///
+    /// What `task find` asks a board, every search a page at a time: one request a round,
+    /// rather than one per search. A slot not asked is left out by `@include`, its page size
+    /// bound to one; GitHub answers an error about one slot at that slot's path, and the other
+    /// slots are answered beside it.
+    pub const SEARCH_BATCH: &str = concat!(
+        r#"query($owner:String!,$number:Int!,$type:SearchType!,$nestedFirst:Int!,$boardItems:Int!,$duplicates:Boolean!"#,
+        relationship_events_variable!(),
+        search_batch_variables!(0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19),
+        origin_batch_variables!(0 1 2 3 4),
+        "){",
+        search_batch_slots!(0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19),
+        origin_batch_slots!(0 1 2 3 4),
+        "\n    }",
+        board_issue!()
+    );
+
+    /// The comment slots `<n>` of [`ADD_COMMENTS`]: [`ADD_COMMENT`]'s mutation, aliased
+    /// `comment<n>`, sent only while `$send<n>` holds.
+    macro_rules! comment_slots {
+        ($($n:literal)+) => {
+            concat!($(
+                " comment", stringify!($n), ":addComment(input:$comment", stringify!($n),
+                ") @include(if:$send", stringify!($n), "){subject{id} commentEdge{node{",
+                issue_comment!(), "}}}",
+            )+)
+        };
+    }
+
+    /// Adds up to [`COMMENT_BATCH`](super::COMMENT_BATCH) comments in one request, each as
+    /// [`ADD_COMMENT`] adds one, in order: what `task comment add-many` sends. GitHub runs each
+    /// alias on its own and answers one it refused at its own path, beside the others.
+    pub const ADD_COMMENTS: &str = concat!(
+        "mutation(",
+        wide_variables!("comment", "AddCommentInput", "send"; 0 1 2 3 4 5 6 7 8 9 10),
+        "){",
+        comment_slots!(0 1 2 3 4 5 6 7 8 9 10),
+        "}"
+    );
+
+    /// Many tasks' targeted updates, each as [`UPDATE_FIELDS`] and [`UPDATE_ISSUE`] write one:
+    /// up to [`TASK_FIELD_BATCH`](super::TASK_FIELD_BATCH) board field values in `field<n>`,
+    /// [`MUTATION_BATCH`](super::MUTATION_BATCH) field clears in `clear<n>`, and as many
+    /// `updateIssue`s in `update<n>`, each sent only while its own `send…<n>` holds.
+    ///
+    /// What `task update-many` sends, in two requests at most: every item's field values and
+    /// clears first, then every issue update of an item whose fields all landed — the order one
+    /// item's update keeps, so a refusal part way leaves an item's body as it stood.
+    ///
+    /// Each `update<n>` selects the issue it updated as a read of it does, so its response spells
+    /// the change token the task holds after its batch's writes — the version `update-many`
+    /// answers — with no read after them. Its page sizes are bound by `$nestedFirst` and
+    /// `$boardItems`, as every read's are.
+    pub const WRITE_TASKS: &str = concat!(
+        "mutation(",
+        wide_variables!("field", "UpdateProjectV2ItemFieldValueInput", "sendField"; 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18),
+        wide_variables!("clear", "ClearProjectV2ItemFieldValueInput", "sendClear"; 0 1 2 3 4 5 6 7 8 9 10),
+        wide_variables!("update", "UpdateIssueInput", "sendUpdate"; 0 1 2 3 4 5 6 7 8 9 10),
+        r#"$nestedFirst:Int!,$boardItems:Int!,$duplicates:Boolean!"#,
+        relationship_events_variable!(),
+        "){",
+        wide_slots!("field", "updateProjectV2ItemFieldValue", "projectV2Item{id}", "sendField"; 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18),
+        wide_slots!("clear", "clearProjectV2ItemFieldValue", "projectV2Item{id}", "sendClear"; 0 1 2 3 4 5 6 7 8 9 10),
+        wide_slots!("update", "updateIssue", "issue{id ...BoardIssue}", "sendUpdate"; 0 1 2 3 4 5 6 7 8 9 10),
+        "}",
+        board_issue!()
+    );
+
     /// What a mutation of a write the store's cache expects selects of the issue it wrote:
     /// everything [`ISSUE_DETAIL`] reads of it, so its response shows the task whole — its
     /// change token's every part and the first page of its comments.
@@ -2125,6 +2359,63 @@ pub mod graphql {
         board_issue!()
     );
 
+    /// The variables every document selecting [`board_issue_fields!`] inline declares beside
+    /// its own.
+    macro_rules! token_variables {
+        () => {
+            concat!(
+                r#",$nestedFirst:Int!,$boardItems:Int!,$duplicates:Boolean!"#,
+                relationship_events_variable!()
+            )
+        };
+    }
+
+    /// [`UPDATE_ISSUE`], selecting what a read of the issue updated selects — every part of its
+    /// change token, and no comment — inline, so its root fields are the plain document's.
+    ///
+    /// What a targeted update sends in the plain document's place, so the version it answers
+    /// is the one its own last response spells (`GitHubProjectsSource::written_tokens`). It
+    /// costs the one point the plain document does.
+    pub const UPDATE_ISSUE_TOKEN: &str = concat!(
+        r#"mutation($input:UpdateIssueInput!"#,
+        token_variables!(),
+        r#"){updateIssue(input:$input){issue{"#,
+        board_issue_fields!(),
+        r#"}}}"#
+    );
+    /// [`UPDATE_FIELD`], selecting the issue behind the board item written as
+    /// [`UPDATE_ISSUE_TOKEN`] selects the issue it updates.
+    pub const UPDATE_FIELD_TOKEN: &str = concat!(
+        r#"mutation($input:UpdateProjectV2ItemFieldValueInput!,$readPriority:Boolean!,$priorityName:String!"#,
+        token_variables!(),
+        r#"){updateProjectV2ItemFieldValue(input:$input){projectV2Item{id fieldValueByName(name:$priorityName) @include(if:$readPriority){... on ProjectV2ItemFieldSingleSelectValue{name field{... on ProjectV2SingleSelectField{id name options{id name}}}}} content{... on Issue{"#,
+        board_issue_fields!(),
+        r#"}}}}}"#
+    );
+    /// [`CLEAR_FIELD`], selecting the issue behind the board item cleared as
+    /// [`UPDATE_ISSUE_TOKEN`] selects the issue it updates.
+    pub const CLEAR_FIELD_TOKEN: &str = concat!(
+        r#"mutation($input:ClearProjectV2ItemFieldValueInput!,$readPriority:Boolean!,$priorityName:String!"#,
+        token_variables!(),
+        r#"){clearProjectV2ItemFieldValue(input:$input){projectV2Item{id fieldValueByName(name:$priorityName) @include(if:$readPriority){... on ProjectV2ItemFieldSingleSelectValue{name field{... on ProjectV2SingleSelectField{id name options{id name}}}}} content{... on Issue{"#,
+        board_issue_fields!(),
+        r#"}}}}}"#
+    );
+
+    /// The document a targeted update sends in `document`'s place, when it has one: the twin
+    /// whose answer spells the change token of the issue written.
+    #[must_use]
+    pub fn token_twin(document: &str) -> Option<&'static str> {
+        [
+            (UPDATE_ISSUE, UPDATE_ISSUE_TOKEN),
+            (UPDATE_FIELD, UPDATE_FIELD_TOKEN),
+            (CLEAR_FIELD, CLEAR_FIELD_TOKEN),
+        ]
+        .into_iter()
+        .find(|(plain, _)| *plain == document)
+        .map(|(_, token)| token)
+    }
+
     /// The document sent in `document`'s place while a write the store's cache expects runs,
     /// when it has one.
     #[must_use]
@@ -2150,7 +2441,7 @@ pub mod graphql {
     /// `documents_are_all_inventoried` reads this file back and fails naming any `pub
     /// const` here that this list omits, so the two cannot part — which is the same guard
     /// `CATEGORIES` carries, in the one shape available to a set of `&str` constants.
-    pub const DOCUMENTS: [(&str, &str); 57] = [
+    pub const DOCUMENTS: [(&str, &str); 63] = [
         (
             ISSUES_BY_CREATION,
             "listing a repository's issues newest first for a create key",
@@ -2255,6 +2546,12 @@ pub mod graphql {
         (UPDATE_COMMENT, "editing a comment"),
         (DELETE_COMMENT, "deleting a comment"),
         (
+            SEARCH_BATCH,
+            "searching this board's issues several ways at once",
+        ),
+        (ADD_COMMENTS, "adding several comments together"),
+        (WRITE_TASKS, "updating several tasks together"),
+        (
             ADD_COMMENT_WHOLE,
             "adding a comment, answered with the whole issue",
         ),
@@ -2273,6 +2570,18 @@ pub mod graphql {
         (
             CLEAR_FIELD_WHOLE,
             "clearing a board field, answered with the whole issue",
+        ),
+        (
+            UPDATE_ISSUE_TOKEN,
+            "updating an issue, answered with its version",
+        ),
+        (
+            UPDATE_FIELD_TOKEN,
+            "writing a board field, answered with the issue's version",
+        ),
+        (
+            CLEAR_FIELD_TOKEN,
+            "clearing a board field, answered with the issue's version",
         ),
     ];
 }
@@ -3937,6 +4246,23 @@ pub struct GitHubProjectsSource {
     /// together by [`Self::send_held_updates`] before any other request goes out, so nothing
     /// this source sends or reads ever sees the board without them.
     held_updates: Mutex<Vec<HeldUpdate>>,
+    /// The first page of comments a comment-activity read read of each candidate it confirmed,
+    /// held for the one comment listing of that task that follows in this command — see
+    /// `batch::hold_comment_pages`.
+    held_comments: Mutex<BTreeMap<NativeId, Page<Comment>>>,
+    /// The board field writes and issue updates a batch of targeted updates is holding back,
+    /// while one runs — see `batch::TaskWrites`.
+    task_writes: Mutex<Option<batch::TaskWrites>>,
+    /// The change token each task a targeted update wrote in the current command holds after
+    /// that write, by the task's id with its board item's id — spelled from the write's own
+    /// last response, or from the read made right after it where no response showed the whole
+    /// issue: what [`TaskSource::written_task`] answers as its `version`. Any later mutation
+    /// naming the task or its board item drops its entry before it is sent, so an entry is
+    /// never one write behind.
+    /// A response that showed the issue whole but not every part of its token — a draft, or a
+    /// page of labels or field values that did not end — records `None`, which a read would
+    /// not improve on.
+    written_tokens: Mutex<BTreeMap<NativeId, (String, Option<String>)>>,
     clock: SharedClock,
     /// Whether the configuration declares this source private, as
     /// [`TaskSource::declare_visibility`] told it: what decides where a new issue whose one
@@ -5219,6 +5545,9 @@ impl GitHubProjectsSource {
             written: Mutex::new(BTreeMap::new()),
             deferred: Mutex::new(None),
             held_updates: Mutex::new(Vec::new()),
+            held_comments: Mutex::new(BTreeMap::new()),
+            task_writes: Mutex::new(None),
+            written_tokens: Mutex::new(BTreeMap::new()),
             clock: system_clock(),
             declared_private: std::sync::atomic::AtomicBool::new(false),
             numeric_repositories: tokio::sync::Mutex::new(BTreeMap::new()),
@@ -5293,23 +5622,137 @@ impl GitHubProjectsSource {
         if query != graphql::ORIGIN_LOOKUPS && query != graphql::ORIGIN_LOOKUPS_WITH_MEMBERS {
             Box::pin(self.send_pending_origins(None)).await?;
         }
-        if !self.expected.journaling() {
+        let journaling = self.expected.journaling();
+        let spelling = self.spelling();
+        if !journaling && !spelling {
             return self.graphql_sent(query, variables).await;
         }
         // While a write the store's cache expects runs, its mutations select the whole issue
         // they leave behind, so the response vouches for what the cache keeps — and every
         // request is recorded, so the write's parts are reported from their own responses.
-        let (query, variables) = match graphql::whole_twin(query) {
-            Some(twin) => (twin, expected::whole_variables(variables)),
-            None => (query, variables),
+        // A targeted update sends a twin of each selecting the issue's token parts inline, at
+        // the same price, so the version it answers is the one its own last response spells.
+        let (query, variables) = match (journaling, graphql::whole_twin(query)) {
+            (true, Some(twin)) => (twin, expected::whole_variables(variables)),
+            _ => match graphql::token_twin(query).filter(|_| spelling) {
+                Some(twin) => (twin, token_variables(variables)),
+                None => (query, variables),
+            },
         };
         let sent = self.graphql_sent(query, variables.clone()).await;
-        self.journal(query, &variables, &sent).await;
+        if spelling && let Ok(data) = &sent {
+            self.record_written_token(query, &variables, data);
+        }
+        if journaling {
+            self.journal(query, &variables, &sent).await;
+        }
         sent
+    }
+
+    /// Whether a targeted update of this source is running, whose mutations are each sent as
+    /// the twin selecting the whole issue (see [`Self::written_tokens`]).
+    fn spelling(&self) -> bool {
+        SPELLING
+            .try_with(|source| *source == std::ptr::from_ref(self) as usize)
+            .unwrap_or(false)
+    }
+
+    /// Record the change token the issue a mutation's response shows whole holds now, as
+    /// [`TaskSource::written_task`] answers it; a response showing no whole issue records
+    /// nothing.
+    fn record_written_token(&self, document: &str, variables: &Value, data: &Value) {
+        let (issue, _) = expected::read_back(document, variables, data);
+        if let Some(issue) = issue {
+            self.record_written_issue(issue);
+        }
+    }
+
+    /// Record the change token `issue`, as a write's own answer shows it whole, holds now — or,
+    /// where that answer lacks a part of one, that it was shown and spells none.
+    fn record_written_issue(&self, issue: &Value) {
+        // An answer naming the issue by its id alone did not show it, so it says nothing.
+        if issue.get("updatedAt").is_none() {
+            return;
+        }
+        let Some(id) = issue.get("id").and_then(Value::as_str) else {
+            return;
+        };
+        let (item, token) = match self.written_token_of(issue) {
+            Some((item, token)) => (item, Some(token)),
+            None => {
+                // Answered whole, but without every part of a token: its board item's id, where
+                // it says one, so a later write naming that item still drops the entry.
+                let item = issue
+                    .pointer("/projectItems/nodes")
+                    .and_then(Value::as_array)
+                    .and_then(|nodes| self.board_entry(nodes))
+                    .and_then(|entry| entry.get("id"))
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned();
+                (item, None)
+            }
+        };
+        if let Ok(mut tokens) = self.written_tokens.lock() {
+            tokens.insert(NativeId(id.to_owned()), (item, token));
+        }
+    }
+
+    /// Record `token` as the change token the task `item` holds after this command's write.
+    fn remember_written_token(&self, item: &Resolved, token: String) {
+        if let Ok(mut tokens) = self.written_tokens.lock() {
+            tokens.insert(item.id.clone(), (item.item_id.clone(), Some(token)));
+        }
+    }
+
+    /// The change token the task `id` holds after this command's latest write of it, when that
+    /// write's own response — or the read made right after it — showed one.
+    fn written_token(&self, id: &NativeId) -> Option<String> {
+        self.written_answer(id).flatten()
+    }
+
+    /// What this command's latest write of the task `id` showed of it: `Some` once a response
+    /// showed the issue whole — its token, or `None` where that response could not spell one —
+    /// and `None` where no response did.
+    fn written_answer(&self, id: &NativeId) -> Option<Option<String>> {
+        self.written_tokens
+            .lock()
+            .ok()?
+            .get(id)
+            .map(|(_, token)| token.clone())
+    }
+
+    /// Drop the written token of every task `variables` names, by its id or its board item's,
+    /// before a mutation that may move it is sent.
+    fn forget_written_tokens(&self, variables: &Value) {
+        let Ok(mut tokens) = self.written_tokens.lock() else {
+            return;
+        };
+        if tokens.is_empty() {
+            return;
+        }
+        let named: Vec<&str> = variables
+            .as_object()
+            .into_iter()
+            .flat_map(|arguments| arguments.values())
+            .flat_map(|input| {
+                WRITTEN_NAMES
+                    .iter()
+                    .filter_map(|key| input.get(key).and_then(Value::as_str))
+            })
+            .collect();
+        tokens.retain(|id, (item, _)| {
+            !named
+                .iter()
+                .any(|name| *name == id.0 || *name == item.as_str())
+        });
     }
 
     /// One document sent, retried while GitHub asks for a wait, exactly as asked.
     async fn graphql_sent(&self, query: &str, variables: Value) -> Result<Value, SourceError> {
+        if is_mutation(query) {
+            self.forget_written_tokens(&variables);
+        }
         if is_mutation(query)
             && ![
                 graphql::ADD_COMMENT,
@@ -5664,7 +6107,14 @@ impl GitHubProjectsSource {
         }
         let answered = if query == graphql::ISSUES_BY_REFERENCE {
             self.answer_unresolved(&body)
-        } else if query == graphql::CREATE_ISSUES {
+        } else if [
+            graphql::CREATE_ISSUES,
+            graphql::SEARCH_BATCH,
+            graphql::ADD_COMMENTS,
+            graphql::WRITE_TASKS,
+        ]
+        .contains(&query)
+        {
             answer_with_errors(&body).map_or_else(|| self.answer(&body), Ok)
         } else {
             self.answer(&body)
@@ -6888,6 +7338,10 @@ impl GitHubProjectsSource {
                 }
             };
             let rows = found.len();
+            // Every candidate of the page this read confirms by its comments is read together.
+            let candidates =
+                self.comment_candidates(found.iter().skip(position.offset), query, &query.project)?;
+            self.hold_comment_pages(&candidates).await?;
             for mut item in found.into_iter().skip(position.offset) {
                 if tasks.len() == limit {
                     break;
@@ -7226,6 +7680,17 @@ impl GitHubProjectsSource {
             ..TaskQuery::default()
         };
         let mut after: Option<String> = None;
+        // A first page read beside its fellow candidates answers as this read's own would.
+        let held = self.held_comments()?.get(&item.id).cloned();
+        if let Some(first) = held {
+            if query.comments_match(&first.items) {
+                return Ok(true);
+            }
+            match first.next {
+                Some(next) => after = Some(next.0),
+                None => return Ok(false),
+            }
+        }
         loop {
             let data = self
                 .graphql(
@@ -7514,6 +7979,8 @@ impl GitHubProjectsSource {
     /// Called only once GitHub has answered the comment write, so an issue whose comment
     /// failed is never made a candidate a later read would pay a node read for.
     fn remember_commented(&self, issue: &NativeId) -> Result<(), SourceError> {
+        // A comment page held for this command is no longer what the issue holds.
+        self.held_comments()?.remove(issue);
         let mut commented = self.commented()?;
         if !commented.contains(issue) {
             commented.push(issue.clone());
@@ -8509,7 +8976,29 @@ impl GitHubProjectsSource {
     ///
     /// The task answered is the item as those writes left it, built from the read and what was
     /// sent rather than read again — the same record a later read in this run answers from.
+    ///
+    /// Its `version` is the one the task holds after the writes: the change token the last
+    /// mutation's own response spells — each sent as the twin selecting the whole issue, at
+    /// the price of the plain document — or, where that mutation shows no whole issue (several
+    /// board fields written together, or `blockedBy` alone), the token one read right after
+    /// the writes spells. Never the token the item was read at before them. Against GitHub
+    /// itself that token has not settled yet (`change_token::SETTLED`), so a read gives none
+    /// until it has, and a write held to it before then is refused rather than let through;
+    /// once settled, a read gives exactly this token unless the task changed again.
     async fn targeted_update(
+        &self,
+        id: &NativeId,
+        update: &TaskUpdate,
+    ) -> Result<Option<TaskUpdateOutcome>, SourceError> {
+        Box::pin(SPELLING.scope(
+            std::ptr::from_ref(self) as usize,
+            self.composed_update(id, update),
+        ))
+        .await
+    }
+
+    /// [`Self::targeted_update`], inside the scope that has its mutations answer whole.
+    async fn composed_update(
         &self,
         id: &NativeId,
         update: &TaskUpdate,
@@ -8846,6 +9335,9 @@ impl GitHubProjectsSource {
             self.set_item_fields(board.as_str(), &item.item_id, &writes, &cleared)
                 .await?;
         }
+        // Whether anything is sent: what the version answered has to come after.
+        let sends =
+            option_selected || !board_writes.is_empty() || !clears.is_empty() || !fields.is_empty();
         let mut blocked_by_moved = false;
         if let Some((native, _)) = &edges
             && item.content_kind == ContentKind::Issue
@@ -8894,10 +9386,19 @@ impl GitHubProjectsSource {
         if let Some((_, _, projected)) = projection_move {
             item.projected = projected;
         }
-        let task = item.task()?;
+        let mut task = item.task()?;
         let mut written = update.changed(&before, &task);
         if blocked_by_moved || recorded_moves {
             written.insert(UpdatedField::DependsOn);
+        }
+        if sends || blocked_by_moved {
+            // The token the item was read at is not the one it holds now. A batch of updates
+            // holding this one's writes back reads every task it wrote once they are sent.
+            task.version = if self.holding_writes_of(id) {
+                None
+            } else {
+                self.version_after_write(id).await
+            };
         }
         self.remember_written(item, false)?;
         Ok(Some(TaskUpdateOutcome {
@@ -8905,6 +9406,26 @@ impl GitHubProjectsSource {
             written,
             delivers_before: before.delivers,
         }))
+    }
+
+    /// The change token the task `id` holds after the writes a targeted update just sent: the
+    /// one the last mutation's own response showed, or, where none showed the whole issue, the
+    /// one a read made now spells. `None` when that read cannot say — never the token the
+    /// task was read at before the writes.
+    async fn version_after_write(&self, id: &NativeId) -> Option<String> {
+        // A response that showed the issue whole answers, a token or none: a read made now
+        // would read the same parts.
+        if let Some(answered) = self.written_answer(id) {
+            return answered;
+        }
+        // An item this command created is answered from its own record, not read.
+        if self.created().ok()?.iter().any(|own| own.id == *id) {
+            return None;
+        }
+        let read = self.item_by_id(id).await.ok()??;
+        let token = read.written_version()?;
+        self.remember_written_token(&read, token.clone());
+        Some(token)
     }
 
     /// Replace one issue's visible body and its [`MetadataKey::TEMPLATE_KEY`] slot entry
@@ -8997,6 +9518,11 @@ impl GitHubProjectsSource {
         fields: &[(String, Value)],
         clears: &[&str],
     ) -> Result<(), SourceError> {
+        if !(fields.is_empty() && clears.is_empty())
+            && self.hold_fields(board, item, fields, clears)?
+        {
+            return Ok(());
+        }
         match (fields, clears) {
             ([], []) => return Ok(()),
             ([(field, value)], []) => {
@@ -11597,6 +12123,9 @@ impl GitHubProjectsSource {
             ),
             ContentKind::Issue => (graphql::UPDATE_ISSUE, "id", "/updateIssue/issue"),
         };
+        if kind == ContentKind::Issue && self.hold_issue(&fields)? {
+            return Ok(());
+        }
         if kind == ContentKind::Issue && self.hold_update(id, &fields)? {
             return Ok(());
         }
@@ -12281,6 +12810,43 @@ fn narrowing_qualifiers(query: &TaskQuery) -> Option<String> {
     Some(format!("{fields} {}", phrases.join(" ")))
 }
 
+/// Whether every status category `query` keeps reads only off an open issue or a draft: a
+/// closed issue reads `done`, `cancelled` or — closed for a reason that implies no category —
+/// `unknown`, so a status filter naming none of those three can ask every issue search it sends
+/// for open issues alone; each candidate's category is still confirmed from its own item.
+fn open_only(query: &TaskQuery) -> bool {
+    !query.statuses.is_empty()
+        && query.statuses.iter().all(|category| {
+            !matches!(
+                category,
+                StatusCategory::Done | StatusCategory::Cancelled | StatusCategory::Unknown
+            )
+        })
+}
+
+/// What a task query is narrowed by beside a board-scoped issue search's scope — its comment
+/// activity and its text and metadata, with `is:open` when [`open_only`] — or `None` for a query
+/// carrying none of those, which no narrowed search answers.
+///
+/// A narrowed search never answers a draft, which is no issue, so narrowing it to open issues
+/// too leaves out nothing such a search could have answered.
+fn search_qualifiers(query: &TaskQuery) -> Option<String> {
+    let mut qualifiers: Vec<String> = [
+        query.commented_since.map(updated_qualifier),
+        narrowing_qualifiers(query),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    if qualifiers.is_empty() {
+        return None;
+    }
+    if open_only(query) {
+        qualifiers.push(OPEN_QUALIFIER.to_owned());
+    }
+    Some(qualifiers.join(" "))
+}
+
 /// The search terms that narrow a board-scoped issue search to a project or document query's
 /// text, or `None` when it has none or a blank one: the phrase, in the fields, a task query
 /// carrying that text alone is sent as by [`narrowing_qualifiers`].
@@ -12685,20 +13251,31 @@ impl Resolved {
     /// reached it did not carry all six of its parts, which a draft never does, did not say
     /// when GitHub served it, or found it changed too recently to have settled.
     fn version(&self) -> Option<String> {
+        let parts = self.token_parts()?;
+        change_token::settled(parts.issue, parts.item, self.served_at?)
+            .then(|| change_token::spell(&parts))
+    }
+
+    /// The change token this item, read just after a write of it, holds now — whether or not it
+    /// has settled: what a written task's `version` answers (see
+    /// [`GitHubProjectsSource::written_tokens`]), spelled from the parts a later read spells its
+    /// token from.
+    fn written_version(&self) -> Option<String> {
+        self.token_parts().map(|parts| change_token::spell(&parts))
+    }
+
+    /// Every part of this item's change token, or `None` when the read that reached it did not
+    /// carry them all — a draft never does.
+    fn token_parts(&self) -> Option<change_token::Parts> {
         match self.content_kind {
-            ContentKind::Issue => {
-                let (issue, item) = (self.updated_at?, self.item_updated_at?);
-                let parts = change_token::Parts {
-                    issue,
-                    item,
-                    comments: self.comment_count?,
-                    relationships: self.relationship_events?,
-                    facets: self.facets.clone()?,
-                    repository: self.own_repository.clone()?,
-                };
-                change_token::settled(issue, item, self.served_at?)
-                    .then(|| change_token::spell(&parts))
-            }
+            ContentKind::Issue => Some(change_token::Parts {
+                issue: self.updated_at?,
+                item: self.item_updated_at?,
+                comments: self.comment_count?,
+                relationships: self.relationship_events?,
+                facets: self.facets.clone()?,
+                repository: self.own_repository.clone()?,
+            }),
             ContentKind::DraftIssue => None,
         }
     }
@@ -13742,7 +14319,7 @@ impl TaskSource for GitHubProjectsSource {
                     .cloned()
             })?;
         let mut task = held.task().ok()?;
-        task.version = None;
+        task.version = self.written_token(id);
         Some(task)
     }
 
@@ -13857,6 +14434,25 @@ impl TaskSource for GitHubProjectsSource {
             .filter(|item| item.kind == BoardKind::Work(ItemKind::Project))
             .map(|item| item.project()))
     }
+    /// Every narrowed search and origin lookup asked, a page at a time, as aliased fields of one
+    /// [`graphql::SEARCH_BATCH`] request a round — a search's issue search in an `s<n>` field,
+    /// an origin's board filter in an `o<n>` field beside its issue search — and every other
+    /// query by [`Self::query_tasks`] on its own: one narrowed by a project or by comment
+    /// activity, one carrying no narrowing, one resumed from a cursor that read handed out, and
+    /// every query of a process that has written this board, whose own writes complete a
+    /// narrowed answer. A lone search is its own read too, which costs a batch's point at a
+    /// page of its own size.
+    ///
+    /// Each search's first page asks [`SEARCH_BATCH_FIRST_PAGE`] rows and each later page
+    /// [`SEARCH_PAGE_SIZE`]. GitHub answers an error about one aliased field at that field's
+    /// path, beside the others' answers, so a refused page fails that query's answer alone; a
+    /// request it refuses whole is every query of that request's answer.
+    async fn query_tasks_batch(
+        &self,
+        asks: &[(TaskQuery, PageRequest)],
+    ) -> Vec<Result<Page<Task>, SourceError>> {
+        self.search_batched(asks).await
+    }
     async fn query_tasks(
         &self,
         query: &TaskQuery,
@@ -13868,29 +14464,12 @@ impl TaskSource for GitHubProjectsSource {
         // category — `unknown`; every other category reads only off an open issue or a draft. So
         // a status filter naming none of those three asks every issue search it sends for open
         // issues alone; each candidate's category is still confirmed from its own item below.
-        let open_only = !query.statuses.is_empty()
-            && query.statuses.iter().all(|category| {
-                !matches!(
-                    category,
-                    StatusCategory::Done | StatusCategory::Cancelled | StatusCategory::Unknown
-                )
-            });
-        if query.origin.is_none() && !matches!(query.project, ProjectFilter::Is(_)) {
-            let mut qualifiers: Vec<String> = [
-                query.commented_since.map(updated_qualifier),
-                narrowing_qualifiers(query),
-            ]
-            .into_iter()
-            .flatten()
-            .collect();
-            // A narrowed search never answers a draft, which is no issue, so narrowing it to
-            // open issues too leaves out nothing such a search could have answered.
-            if !qualifiers.is_empty() {
-                if open_only {
-                    qualifiers.push(OPEN_QUALIFIER.to_owned());
-                }
-                return self.search_tasks(query, page, &qualifiers.join(" ")).await;
-            }
+        let open_only = open_only(query);
+        if query.origin.is_none()
+            && !matches!(query.project, ProjectFilter::Is(_))
+            && let Some(also) = search_qualifiers(query)
+        {
+            return self.search_tasks(query, page, &also).await;
         }
 
         // A read narrowed to one project asks that project for its own tasks, so nothing
@@ -13931,6 +14510,9 @@ impl TaskSource for GitHubProjectsSource {
                 }
             }
         };
+        // Every candidate this read confirms by its comments is read together.
+        let candidates = self.comment_candidates(held.iter(), query, membership)?;
+        self.hold_comment_pages(&candidates).await?;
         // Filtered before paged: a page of a filtered result is a page of the survivors,
         // never the survivors of a page.
         let mut tasks = Vec::new();
@@ -14624,6 +15206,27 @@ impl TaskSource for GitHubProjectsSource {
         self.targeted_update(id, update).await
     }
 
+    /// Every task read together — [`DETAIL_BATCH`] to a [`graphql::ISSUE_DETAILS`] request —
+    /// and each update's hold and guard decided on that read; then each update the read lets
+    /// through composed exactly as [`Self::update_task`] composes one, its board field writes
+    /// and its issue update held back and sent in [`graphql::WRITE_TASKS`] requests: every
+    /// field write first, then the issue update of every task whose field writes all landed.
+    ///
+    /// **Where GitHub would refuse the batch as a whole, each item is read on its own:** a
+    /// batched node read naming an id that resolves to nothing is refused whole, so each id of
+    /// that batch is read by itself, the missing one answered missing and the rest as
+    /// themselves. A batch of one, an update of a board draft, one naming dependencies and one
+    /// of an item whose body this process has not read are each made on their own, as
+    /// [`Self::update_task`] makes them, because each sends writes of its own in an order the
+    /// batch does not hold. A field write GitHub refuses fails that task's update alone and
+    /// sends nothing of its body.
+    async fn update_tasks(
+        &self,
+        updates: &[onetaskgraph_plugin_api::BatchUpdate],
+    ) -> Vec<Result<onetaskgraph_plugin_api::BatchAnswer<TaskUpdateOutcome>, SourceError>> {
+        self.updates_batched(updates).await
+    }
+
     /// Replace one task's `delivered_by` with a single body update that changes the
     /// metadata slot and nothing outside it.
     async fn set_delivered_by(
@@ -14741,6 +15344,14 @@ impl TaskSource for GitHubProjectsSource {
             if item.content_kind == ContentKind::DraftIssue {
                 return Err(self.draft_has_no_comments(task));
             }
+        }
+        // The first page a comment-activity read just read of this task, at the size asked, is
+        // that read's answer: taken, so it answers once.
+        if page.cursor.is_none()
+            && page.limit >= MAX_PAGE_SIZE
+            && let Some(held) = self.held_comments()?.remove(task)
+        {
+            return Ok(Some(held));
         }
         match self.issue_detail(task, page).await? {
             Some(TaskDetailRead {
@@ -15053,6 +15664,23 @@ impl TaskSource for GitHubProjectsSource {
         Ok(Some(added))
     }
 
+    /// Every task commented on read together — [`DETAIL_BATCH`] to a
+    /// [`graphql::ISSUE_DETAILS`] request — and each comment's hold decided on that read; then
+    /// every comment it lets through added by aliased `addComment`s of one
+    /// [`graphql::ADD_COMMENTS`] request per [`COMMENT_BATCH`]. GitHub answers a refusal of one
+    /// alias at that alias's path, so it fails that comment alone.
+    ///
+    /// **Where GitHub would refuse the batch as a whole, each item is read on its own:** a
+    /// batched node read naming an id that resolves to nothing is refused whole, so each id of
+    /// that batch is read by itself, the missing one answered missing. A batch of one is the
+    /// comment alone, as [`Self::add_comment`] adds it.
+    async fn add_comments(
+        &self,
+        comments: &[onetaskgraph_plugin_api::BatchComment],
+    ) -> Vec<Result<onetaskgraph_plugin_api::BatchAnswer<Comment>, SourceError>> {
+        self.comments_batched(comments).await
+    }
+
     async fn edit_comment(
         &self,
         task: &NativeId,
@@ -15100,6 +15728,7 @@ impl TaskSource for GitHubProjectsSource {
         if !self.comment_is_on(&issue, comment).await? {
             return Ok(None);
         }
+        self.held_comments()?.remove(&issue);
         let data = self
             .graphql(graphql::DELETE_COMMENT, json!({"input":{"id":comment.0}}))
             .await?;
@@ -15159,6 +15788,9 @@ impl TaskSource for GitHubProjectsSource {
         clear(&self.task_children);
         clear(&self.written);
         clear(&self.fields_cache);
+        clear(&self.held_comments);
+        clear(&self.task_writes);
+        clear(&self.written_tokens);
         self.expected.end_command();
         Ok(())
     }

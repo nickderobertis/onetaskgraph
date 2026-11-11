@@ -38,9 +38,19 @@ pub(crate) async fn update_task(
         ));
     }
     let engine = expecting(loaded, &id, &args.expect)?;
-    let updated = crate::held(&engine, &id, &args.held, engine.update_task(&id, &update))
-        .await
-        .map_err(|error| write_failed(&engine, &error))?;
+    let updated = if args.when_priority.is_empty() {
+        crate::held(&engine, &id, &args.held, engine.update_task(&id, &update)).await
+    } else {
+        let when: Vec<_> = args
+            .when_priority
+            .iter()
+            .map(|priority| priority.priority())
+            .collect();
+        engine
+            .update_task_when(&id, &update, &when, args.held.if_version.as_deref())
+            .await
+    }
+    .map_err(|error| write_failed(&engine, &error))?;
     let rendered = rendering(loaded, &updated, render::task_updated, "the update")?;
     emit(out, rendered.trim_end(), "the update")?;
     Ok(delivery_exit(&updated.delivered))

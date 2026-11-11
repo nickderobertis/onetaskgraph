@@ -15,6 +15,7 @@
 #![deny(missing_docs)]
 
 mod asset;
+mod batch;
 mod cache;
 mod capability;
 mod clock;
@@ -40,6 +41,7 @@ pub use asset::{
     AssetsWritten, asset_references, asset_sha256, assetless, body_digest, is_sha256,
     rewrite_asset_references, serve_asset_references,
 };
+pub use batch::{BatchAnswer, BatchComment, BatchUpdate, decided_on, version_at};
 pub use cache::{
     Coverage, DocumentVersionCoverage, JournalEntry, PartOutcome, ProjectVersionCoverage,
     RequestKind, Shown, VersionCoverage, WholeTask, WriteJournal,

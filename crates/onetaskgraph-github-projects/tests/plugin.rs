@@ -1762,6 +1762,62 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
     }
     let unpriced = query.replacen("rateLimit{cost} ", "", 1);
     let query = unpriced.as_str();
+    // A mutation's twin selecting the issue it wrote — whole, or its token's parts: answered as
+    // the plain mutation, with that issue shown as a read of it by its id shows it — as GitHub
+    // answers the twin.
+    if let Some(plain) = onetaskgraph_github_projects::graphql::DOCUMENTS
+        .iter()
+        .map(|(document, _)| *document)
+        .find(|plain| {
+            onetaskgraph_github_projects::graphql::whole_twin(plain) == Some(query)
+                || onetaskgraph_github_projects::graphql::token_twin(plain) == Some(query)
+        })
+    {
+        let mut answered = answer(state, plain, variables);
+        let input = &variables["input"];
+        let (at, issue) = match input.get("itemId").and_then(Value::as_str) {
+            Some(item) => {
+                let issue = state
+                    .lock()
+                    .unwrap()
+                    .items
+                    .iter()
+                    .find(|held| held.item_id == item)
+                    .map(|held| held.content_id.clone());
+                let root = if plain == onetaskgraph_github_projects::graphql::CLEAR_FIELD {
+                    "/clearProjectV2ItemFieldValue/projectV2Item"
+                } else {
+                    "/updateProjectV2ItemFieldValue/projectV2Item"
+                };
+                (root, issue)
+            }
+            None if plain == onetaskgraph_github_projects::graphql::UPDATE_ISSUE => {
+                ("/updateIssue", input["id"].as_str().map(str::to_owned))
+            }
+            None => return answered,
+        };
+        if let Some(issue) = issue {
+            let read = answer(
+                state,
+                onetaskgraph_github_projects::graphql::ISSUE,
+                &json!({"id": issue,
+                        "first": variables.get("first").cloned().unwrap_or(json!(100)),
+                        "nestedFirst": variables["nestedFirst"],
+                        "boardItems": variables["boardItems"], "duplicates": true}),
+            );
+            let (key, node) = if at == "/updateIssue" {
+                ("issue", read["node"].clone())
+            } else {
+                ("content", read["node"].clone())
+            };
+            if let Some(slot) = answered.pointer_mut(at)
+                && node.is_object()
+            {
+                slot[key] = node;
+            }
+        }
+        return answered;
+    }
     // The batched origin lookup with a page of a project's members beside it: the lookup as on
     // its own, and the members as GitHub lists a project's sub-issues, trimmed to what the read
     // selects — or as a journey bends them.
@@ -2299,13 +2355,19 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
     }
     if query == onetaskgraph_github_projects::graphql::ISSUE_DETAILS {
         // Each alias is the one-item detail read of the id its own variable names, and the
-        // comments ride along only when the batch asked for them.
+        // comments ride along only when the batch asked for them. A slot a short batch binds to
+        // an id an earlier slot named reads that issue again, which is one issue read.
         let mut answered = serde_json::Map::new();
+        let mut read: Vec<(String, Value)> = Vec::new();
         for slot in 0..onetaskgraph_github_projects::DETAIL_BATCH {
             let id = variables[format!("id{slot}")]
                 .as_str()
                 .expect("every slot of a batch names an id")
                 .to_owned();
+            if let Some((_, node)) = read.iter().find(|(earlier, _)| *earlier == id) {
+                answered.insert(format!("i{slot}"), node.clone());
+                continue;
+            }
             let node = detail_node(
                 &mut state,
                 &id,
@@ -2314,6 +2376,7 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
                 variables["comments"] == json!(true),
                 asked,
             );
+            read.push((id, node.clone()));
             answered.insert(format!("i{slot}"), node);
         }
         return Value::Object(answered);

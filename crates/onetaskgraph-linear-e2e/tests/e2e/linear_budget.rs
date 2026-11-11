@@ -92,7 +92,7 @@ const TASK_WRITE: [&str; 7] = [
 
 /// The fixture's credential, and nothing of the host's: the variable the Linear source names,
 /// in an environment of its own.
-fn secrets() -> onetaskgraph_core::Secrets {
+pub(crate) fn secrets() -> onetaskgraph_core::Secrets {
     onetaskgraph_core::Secrets::load(onetaskgraph_core::Environment::from_pairs([(
         "LINEAR_API_KEY",
         "fixture-key",
@@ -521,7 +521,7 @@ fn status_write_warm(total: usize) -> (usize, String) {
         &["project", "copy", "plan:big", "--to", LINEAR],
     );
     let writes = per_write(
-        &copied,
+        &crate::fixtures::linear_per_item(&copied),
         &[&PROJECT_WRITE[..], &TASK_WRITE[..]].concat(),
         &[
             onetaskgraph_linear::graphql::PROJECT_CREATE,
@@ -1041,15 +1041,17 @@ fn task_and_project_reads_status_listings_and_copy_discovery_cost_no_more_than_o
         LINEAR: {"plugin": "linear", "config": config.clone()},
         "plan": markdown(&plan),
     })));
-    let big = counted(
+    let big = crate::fixtures::linear_per_item(&counted(
         &sandbox,
         &workspace,
         &["project", "copy", "plan:big", "--to", LINEAR],
-    );
+    ));
+    // A copy creating several issues reads none of their ids first — the keyed create's own
+    // conflict finds an earlier copy's issue — so the project is the one item read by its id.
     assert_eq!(
         key_reads(&big),
-        6,
-        "one read by id before each of its six creates"
+        1,
+        "one read by id, before the project's create"
     );
     // llmlint: ignore[tests_hold_no_nonfunctional_thresholds] The comparison against the request counts the c9e75a8 binary measured is this module's stated regression check of wire behaviour, not a budget (see `BASE`); this change only separates out the one read by id before each create, which it counts exactly rather than bounding.
     assert!(

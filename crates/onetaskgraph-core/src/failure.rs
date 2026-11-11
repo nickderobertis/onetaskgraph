@@ -241,6 +241,8 @@ fn cause(error: &EngineError) -> (String, Option<SourceName>, Option<&SourceErro
         EngineError::IfVersionOneTask => ("if-version-one-task".to_owned(), None, None),
         EngineError::RepeatedPage { .. } => ("repeated-page".to_owned(), None, None),
         EngineError::ItemOutsideSource { .. } => ("item-outside-source".to_owned(), None, None),
+        EngineError::BatchDocument { .. } => ("invalid-batch".to_owned(), None, None),
+        EngineError::UnnarrowedQuery { .. } => ("unnarrowed-query".to_owned(), None, None),
         EngineError::VersionMoved { .. } => ("version-moved".to_owned(), None, None),
         EngineError::PlanMember { error, .. } => cause(error),
         EngineError::NoComments { name, .. } | EngineError::CommentlessDestination { name, .. } => {

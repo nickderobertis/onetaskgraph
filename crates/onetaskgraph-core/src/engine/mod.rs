@@ -18,6 +18,7 @@
 mod all_pages;
 mod assets;
 mod attestation;
+pub(crate) mod batch;
 pub mod boundary;
 mod cached;
 mod closure;
@@ -79,6 +80,11 @@ use resume::{Resume, StreamKind};
 
 pub use assets::{HeldAsset, TaskAssetNames, TaskAssetsError};
 pub use attestation::AttestRequest;
+pub use batch::{
+    AddedComment, BATCH_SCHEMA_VERSION, BatchOutcome, CommentAddResult, CommentBatch,
+    CommentBatchItem, CommentsAdded, FindAnswer, FindIn, FindQuery, FindRequest, FoundTasks,
+    TasksUpdated, UpdateBatch, UpdateBatchItem, UpdateResult,
+};
 pub use closure::{
     CompleteAction, IssueCompleted, IssuesCompleted, ReconcileOutcome, StatusReconciled,
     StatusesReconciled,
@@ -860,6 +866,33 @@ pub enum EngineError {
          next: copy that one task by its id with --expect, and the others without it"
     )]
     ExpectOneTask,
+
+    /// A batch document — a `task find` request, a comment batch or an update batch — this
+    /// release cannot read, refused whole before anything is read or written.
+    #[error(
+        "{what} cannot be read: {why}, so nothing was read or written\n\
+         next: fix it and run the command again; `onetaskgraph schema` describes every batch \
+         document"
+    )]
+    BatchDocument {
+        /// Which document, or which part of it.
+        what: String,
+        /// What is wrong with it.
+        why: String,
+    },
+
+    /// A `task find` query narrowed by none of `text`, `metadata` and `origin`, which would
+    /// answer every task of its source.
+    #[error(
+        "query {key:?} is narrowed by none of text, metadata and origin, so it would answer \
+         every task of the source; nothing was read\n\
+         next: give it a text, a metadata value or an origin, or list the source with \
+         `onetaskgraph task list --all`"
+    )]
+    UnnarrowedQuery {
+        /// The query's key.
+        key: String,
+    },
 
     /// `task comments --item` named a task of a source other than the one listed.
     #[error(

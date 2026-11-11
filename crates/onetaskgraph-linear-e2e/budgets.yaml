@@ -187,23 +187,18 @@ budgets:
     unit: points
     direction: max
     threshold: 675000
-  # llmlint: ignore-block[budget_descriptions_durable_and_terse] The manager's ruling of 2026-11-08 raised this threshold from 20 to 27 and requires its description to name the read by id each create now costs and why neither a batched nor a filtered read can replace it.
   - id: linear-requests-per-plan-copy
     description: >-
       The requests one first copy of a realistic plan — 1 project, 5 tasks and 1 design document
       with 2 new images — sends an empty Linear that rewrites every long form, end to end through
       the binary. It protects headroom on the production Linear key every manager of a host
-      shares. Seven are key reads, one read by id before each create, since a lookup through
-      Linear's filtered reads can miss a record written moments before; no batched read replaces
-      them, as Linear refuses operation batching and an id naming nothing fails a whole aliased
-      query, and an `id: {in: …}` filter is itself a filtered read.
+      shares.
     labels: [linear]
     measure: reported
     command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-linear-e2e"]
     unit: requests
     direction: max
     threshold: 27
-    # llmlint: ignore-end[budget_descriptions_durable_and_terse]
   - id: linear-live-documents-created-per-ordinary-pass
     description: >-
       Successful documentCreate operations recorded by both live lanes during one ordinary
@@ -226,3 +221,32 @@ budgets:
     unit: documents/pass
     direction: max
     threshold: 4
+  # llmlint: ignore[budgets_track_product_owner_outcomes] The task registering it fixes it: one private plan's whole road — first copy with its documents, unchanged re-copy, design approval and four settlements — is what one orchestrator plan costs the production Linear key, a figure no per-operation bound states.
+  - id: linear-requests-per-private-plan-road
+    description: >-
+      The requests one private plan's whole road sends its Linear team through the store — the
+      first copy with its design document and image, an unchanged re-copy, the design-approval
+      attestation, and one settlement of a status and a metadata key per node, each node's
+      version read first — counted at the loopback Linear. It protects headroom on the
+      production Linear key every manager of a host shares.
+    measure: reported
+    # llmlint: ignore[budget_commands_measure_directly] As every budget of this file: the runner entry the task names reads only the telemetry `plan_road.rs` recorded and hands it to onebudgetspec, which alone judges it.
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_private_plan_road", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-linear-e2e"]
+    unit: requests
+    direction: max
+    threshold: 28
+  # llmlint: ignore[budgets_track_product_owner_outcomes] The task registering it fixes it: one follow-up cycle of batched store calls is what an orchestrator's follow-ups cost the production Linear key, and its repeated passes hold that a retry re-spends almost nothing on settled work.
+  - id: linear-requests-per-follow-up-cycle
+    description: >-
+      The requests one follow-up cycle of batched store calls sends a Linear team holding 400
+      other open items, every call a fresh process — a batch of a 20-query find, a comments read,
+      a 16-ticket copy, 4 comments and 4 held updates; the batch again as a retry; a comment pass
+      over 20 proposals with 40 new comments; and that pass's three calls again — counted at the loopback
+      Linear, the 40 reply writes left out. It protects headroom on the production Linear key
+      every manager of a host shares.
+    measure: reported
+    # llmlint: ignore[budget_commands_measure_directly] As above: the runner entry the task names reads only the telemetry `follow_up_cycle.rs` recorded and hands it to onebudgetspec, which alone judges it.
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_follow_up_cycle", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-linear-e2e"]
+    unit: requests
+    direction: max
+    threshold: 24

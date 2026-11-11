@@ -886,6 +886,61 @@ impl CachedSource {
         Ok(answered)
     }
 
+    /// Whether this cache answers a copy's read of `id` with no request: a task or a project
+    /// only when it holds its forward edges too, which a copy reads of it next — where the token
+    /// does not cover them, or the entry holds none, its edge reads would each be a request of
+    /// their own, and reading it ahead carries them in the one request instead.
+    fn answers_ahead(&self, id: &NativeId) -> bool {
+        let task = self.servable(id, false).is_ok() && self.held_edges(id).is_some();
+        let project = self.servable_project(id).is_some()
+            && self.cache.project_coverage.forward_edges.reason().is_none()
+            && self.held_project_edges(id).is_some();
+        task || project || self.servable_document(id).is_some()
+    }
+
+    /// A batched write of `items`, each answered on its own: every item's entries — those of
+    /// the task `id_of` names — retired before it is sent, and invalidated after, whatever it
+    /// came to. An item whose entries cannot be retired is answered with that refusal and not
+    /// sent; `write` sends the rest together.
+    async fn retiring_each<I: Clone, T, F>(
+        &self,
+        items: &[I],
+        id_of: impl Fn(&I) -> &NativeId,
+        write: impl FnOnce(Vec<I>) -> F,
+    ) -> Vec<Result<T, SourceError>>
+    where
+        F: Future<Output = Vec<Result<T, SourceError>>>,
+    {
+        let mut answers: Vec<Option<Result<T, SourceError>>> = items.iter().map(|_| None).collect();
+        let mut sent: Vec<usize> = Vec::with_capacity(items.len());
+        for (at, item) in items.iter().enumerate() {
+            match self.cache.retire_before_write(id_of(item)) {
+                Ok(()) => sent.push(at),
+                Err(error) => answers[at] = Some(Err(error)),
+            }
+        }
+        if sent.len() == items.len() {
+            // Every item sent: the answers go back as the source gave them, for the engine to
+            // hold to one per item.
+            let written = write(items.to_vec()).await;
+            for item in items {
+                self.cache.invalidate(id_of(item));
+            }
+            return written;
+        }
+        if !sent.is_empty() {
+            let written = write(sent.iter().map(|at| items[*at].clone()).collect()).await;
+            // Spliced back by position, so held to one answer per item sent first — the
+            // engine's own rule for a batched answer.
+            let written = crate::engine::batch::one_each(&self.inner.kind(), sent.len(), written);
+            for (at, answer) in sent.iter().zip(written) {
+                answers[*at] = Some(answer);
+                self.cache.invalidate(id_of(&items[*at]));
+            }
+        }
+        answers.into_iter().flatten().collect()
+    }
+
     /// Run one write naming `id`, every entry naming it taken out of service before anything is
     /// sent — the write refused, sending nothing, when that cannot be done — and left
     /// unserveable after it.
@@ -1106,16 +1161,23 @@ impl TaskSource for CachedSource {
     /// it next: where the token does not cover them, or the entry holds none, its edge reads
     /// would each be a request of their own, and reading it ahead carries them in the one
     /// request instead.
+    async fn read_ahead_records_for_copy(
+        &self,
+        records: &[(MetadataRecord, NativeId)],
+    ) -> Result<(), SourceError> {
+        let unserved: Vec<(MetadataRecord, NativeId)> = records
+            .iter()
+            .filter(|(_, id)| !self.answers_ahead(id))
+            .cloned()
+            .collect();
+        // Handed on even when the cache answers every id, as `read_ahead_for_copy` hands it on.
+        self.inner.read_ahead_records_for_copy(&unserved).await
+    }
+
     async fn read_ahead_for_copy(&self, ids: &[NativeId]) -> Result<(), SourceError> {
         let unserved: Vec<NativeId> = ids
             .iter()
-            .filter(|id| {
-                let task = self.servable(id, false).is_ok() && self.held_edges(id).is_some();
-                let project = self.servable_project(id).is_some()
-                    && self.cache.project_coverage.forward_edges.reason().is_none()
-                    && self.held_project_edges(id).is_some();
-                !(task || project || self.servable_document(id).is_some())
-            })
+            .filter(|id| !self.answers_ahead(id))
             .cloned()
             .collect();
         // Handed on even when the cache answers every id: what the source holds back for the
@@ -1140,6 +1202,10 @@ impl TaskSource for CachedSource {
         SourceError,
     > {
         self.inner.member_classifications(project).await
+    }
+
+    fn records_created_together(&self) -> bool {
+        self.inner.records_created_together()
     }
 
     fn create_batch_limit(&self) -> usize {
@@ -1242,6 +1308,21 @@ impl TaskSource for CachedSource {
         }
         drop(command);
         Ok(listed)
+    }
+
+    async fn query_tasks_batch(
+        &self,
+        asks: &[(TaskQuery, PageRequest)],
+    ) -> Vec<Result<Page<Task>, SourceError>> {
+        let answers = self.inner.query_tasks_batch(asks).await;
+        let mut command = self.cache.command();
+        for task in answers.iter().flatten().flat_map(|page| &page.items) {
+            if let Some(version) = &task.version {
+                command.listed.insert(task.id.clone(), version.clone());
+            }
+        }
+        drop(command);
+        answers
     }
 
     async fn query_projects(
@@ -1711,6 +1792,30 @@ impl TaskSource for CachedSource {
         self.write(Some(task), || {
             Box::pin(self.inner.add_comment(task, comment))
         })
+        .await
+    }
+
+    async fn add_comments(
+        &self,
+        comments: &[onetaskgraph_plugin_api::BatchComment],
+    ) -> Vec<Result<onetaskgraph_plugin_api::BatchAnswer<Comment>, SourceError>> {
+        self.retiring_each(
+            comments,
+            |each| &each.task,
+            |sent| async move { self.inner.add_comments(&sent).await },
+        )
+        .await
+    }
+
+    async fn update_tasks(
+        &self,
+        updates: &[onetaskgraph_plugin_api::BatchUpdate],
+    ) -> Vec<Result<onetaskgraph_plugin_api::BatchAnswer<TaskUpdateOutcome>, SourceError>> {
+        self.retiring_each(
+            updates,
+            |each| &each.id,
+            |sent| async move { self.inner.update_tasks(&sent).await },
+        )
         .await
     }
 
@@ -3280,5 +3385,149 @@ mod tests {
             source.health().await.expect("answering");
         }
         assert_eq!(probe.lock().expect("the probe").healths, 2);
+    }
+
+    /// A source answering every batch of comments with one answer more than it was given. Only
+    /// the test that withholds a directory's write permission uses it, which is unix-only.
+    #[cfg(unix)]
+    struct Overanswering {
+        inner: InMemorySource,
+    }
+
+    #[cfg(unix)]
+    #[async_trait::async_trait]
+    impl TaskSource for Overanswering {
+        fn kind(&self) -> &'static str {
+            self.inner.kind()
+        }
+        fn capabilities(&self) -> Capabilities {
+            self.inner.capabilities()
+        }
+        async fn health(&self) -> Result<Health, SourceError> {
+            self.inner.health().await
+        }
+        async fn get_task(&self, id: &NativeId) -> Result<Option<Task>, SourceError> {
+            self.inner.get_task(id).await
+        }
+        async fn get_project(&self, id: &NativeId) -> Result<Option<Project>, SourceError> {
+            self.inner.get_project(id).await
+        }
+        async fn query_tasks(
+            &self,
+            query: &TaskQuery,
+            page: &PageRequest,
+        ) -> Result<Page<Task>, SourceError> {
+            self.inner.query_tasks(query, page).await
+        }
+        async fn query_projects(
+            &self,
+            query: &ProjectQuery,
+            page: &PageRequest,
+        ) -> Result<Page<Project>, SourceError> {
+            self.inner.query_projects(query, page).await
+        }
+        async fn labels(&self, page: &PageRequest) -> Result<Page<Label>, SourceError> {
+            self.inner.labels(page).await
+        }
+        async fn task_dependencies(
+            &self,
+            id: &NativeId,
+            direction: Direction,
+            page: &PageRequest,
+        ) -> Result<Page<DependencyEdge>, SourceError> {
+            self.inner.task_dependencies(id, direction, page).await
+        }
+        async fn project_dependencies(
+            &self,
+            id: &NativeId,
+            direction: Direction,
+            page: &PageRequest,
+        ) -> Result<Page<DependencyEdge>, SourceError> {
+            self.inner.project_dependencies(id, direction, page).await
+        }
+        async fn add_comments(
+            &self,
+            comments: &[onetaskgraph_plugin_api::BatchComment],
+        ) -> Vec<Result<onetaskgraph_plugin_api::BatchAnswer<Comment>, SourceError>> {
+            (0..=comments.len())
+                .map(|_| Ok(onetaskgraph_plugin_api::BatchAnswer::Missing))
+                .collect()
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_batch_answered_with_a_surplus_is_never_cut_to_look_whole() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().expect("a directory");
+        let cache = SourceCache::new(
+            CacheLocation {
+                dir: dir.path().to_path_buf(),
+                remote: "remote".to_owned(),
+            },
+            VersionCoverage::whole(),
+            ProjectVersionCoverage::whole(),
+            DocumentVersionCoverage::whole(),
+        );
+        let source = CachedSource::over(
+            Box::new(Overanswering {
+                inner: InMemorySource::new(InMemoryConfig::default()).expect("an empty source"),
+            }),
+            cache.clone(),
+        );
+        let comment = |task: &str| onetaskgraph_plugin_api::BatchComment {
+            task: id(task),
+            comment: onetaskgraph_plugin_api::NewComment {
+                body: CommentBody::new("A note.".to_owned()).expect("a body"),
+                author: None,
+            },
+            if_version: None,
+        };
+        let batch = [comment("T-1"), comment("T-2"), comment("T-3")];
+
+        // Every item sent: the source's answer goes back as it gave it, surplus and all, for
+        // the engine to hold to one per item.
+        let answered = source.add_comments(&batch).await;
+        assert_eq!(answered.len(), 4, "the surplus is passed on");
+
+        // T-2's entry cannot be retired, so it alone is refused; the other two are sent, and
+        // their surplus answer is held to one per item — each malformed, none silently dropped.
+        cache.write(&Entry {
+            schema: ENTRY_SCHEMA,
+            remote: "remote".to_owned(),
+            task: task("T-2", "v1"),
+            comments: None,
+            assets: None,
+            edges: None,
+            context: None,
+        });
+        let path = cache.task_path(&id("T-2"));
+        let tasks = path.parent().expect("the entries' directory").to_path_buf();
+        let held = tasks.join("held-elsewhere");
+        std::fs::rename(&path, &held).expect("moved aside");
+        std::os::unix::fs::symlink(&held, &path).expect("a symlink");
+        std::fs::set_permissions(&tasks, std::fs::Permissions::from_mode(0o555))
+            .expect("read-only");
+        if std::fs::remove_file(&path).is_ok() {
+            // Running as a user no directory mode stops — nothing to prove here.
+            return;
+        }
+        let answered = source.add_comments(&batch).await;
+        std::fs::set_permissions(&tasks, std::fs::Permissions::from_mode(0o755)).expect("writable");
+        assert_eq!(answered.len(), 3, "one answer per item");
+        assert!(
+            matches!(&answered[1], Err(SourceError::Config { message })
+                if message.contains("the write was not sent")),
+            "{:?}",
+            answered[1]
+        );
+        for at in [0, 2] {
+            assert!(
+                matches!(&answered[at], Err(SourceError::Malformed { message })
+                    if message.contains("answered 3 answers to the 2 items")),
+                "{:?}",
+                answered[at]
+            );
+        }
     }
 }

@@ -322,3 +322,110 @@ fn a_plan_copies_into_a_named_linear_team_of_a_store_configured_by_configuration
         assert!(titles.contains(&format!("Step {n}").as_str()), "{titles:?}");
     }
 }
+
+/// The batched store calls against a named team of the store configured by configuration alone:
+/// one `task find` of the copied plan's steps, a comment on each, and a held update of each — each
+/// outcome read back through the binary, and no other team asked anything.
+#[test]
+fn the_batched_calls_reach_a_named_team_of_a_store_configured_by_configuration_alone() {
+    let store = Store::new();
+    store.author();
+    store.ok(&[
+        "project",
+        "copy",
+        "authoring:plan",
+        "--documents",
+        "--to",
+        TEAM,
+        "--json",
+    ]);
+    let batches = store.sandbox.subdirectory("batches");
+    let write = |name: &str, document: &Value| {
+        let path = batches.join(name);
+        std::fs::write(&path, document.to_string()).expect("a batch");
+        path.to_str().expect("a UTF-8 path").to_owned()
+    };
+    let queries = write(
+        "find.json",
+        &json!({"schema_version": 1, "queries": [
+            {"key": "steps", "text": "Step", "in": "title"},
+            {"key": "none", "text": "no step holds this"},
+        ]}),
+    );
+    let found: Value =
+        serde_json::from_str(&store.ok(&["task", "find", TEAM, "--queries", &queries, "--json"]))
+            .expect("the answers");
+    let steps = &found["answers"][0];
+    assert_eq!(steps["key"], "steps");
+    assert_eq!(steps["complete"], true, "{steps}");
+    let items: Vec<(String, String)> = steps["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .map(|item| {
+            (
+                item["id"].as_str().expect("an id").to_owned(),
+                item["item"]["version"]
+                    .as_str()
+                    .expect("a version")
+                    .to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(items.len(), 3, "{found}");
+    assert_eq!(found["answers"][1]["items"], json!([]));
+
+    let comments = write(
+        "comments.json",
+        &json!({"schema_version": 1, "comments": items.iter().map(|(id, _)| json!({
+            "item": id, "body": "Picked up by the team."})).collect::<Vec<_>>()}),
+    );
+    let added: Value = serde_json::from_str(&store.ok(&[
+        "task", "comment", "add-many", TEAM, "--input", &comments, "--json",
+    ]))
+    .expect("the results");
+    for result in added["results"].as_array().expect("results") {
+        assert_eq!(result["outcome"], "written", "{result}");
+    }
+    let updates = write(
+        "updates.json",
+        &json!({"schema_version": 1, "updates": items.iter().map(|(id, version)| json!({
+            "item": id, "if_version": version, "status": "in-progress",
+            "metadata": {"adoption.picked": true}})).collect::<Vec<_>>()}),
+    );
+    let updated: Value = serde_json::from_str(&store.ok(&[
+        "task",
+        "update-many",
+        TEAM,
+        "--input",
+        &updates,
+        "--json",
+    ]))
+    .expect("the results");
+    for result in updated["results"].as_array().expect("results") {
+        assert_eq!(result["outcome"], "written", "{result}");
+    }
+    for (id, _) in &items {
+        let shown: Value =
+            serde_json::from_str(&store.ok(&["task", "show", id, "--json"])).expect("a task");
+        let task = &shown["items"][0]["item"];
+        assert_eq!(task["status"]["category"], "in-progress", "{task}");
+        assert_eq!(task["metadata"]["adoption.picked"], true, "{task}");
+        let comments = shown["items"][0]["comments"]
+            .as_array()
+            .or_else(|| shown["comments"].as_array())
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            comments
+                .iter()
+                .any(|comment| comment["body"] == "Picked up by the team."),
+            "{shown}"
+        );
+    }
+    for (team, workspace) in &store.teams {
+        if *team != TEAM {
+            assert!(workspace.served().is_empty(), "{team} was asked nothing");
+        }
+    }
+}
