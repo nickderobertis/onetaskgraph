@@ -961,7 +961,15 @@ impl Engine {
             let written = one_each(&name, sent.len(), source.source().update_tasks(&sent).await);
             for ((id, _), answer) in writes.into_iter().zip(written) {
                 let answer = match answer {
-                    Ok(BatchAnswer::Written(outcome)) => Ok(outcome.task.version),
+                    // Written only when the answer is about the task this end sent.
+                    Ok(BatchAnswer::Written(outcome)) if outcome.task.id == id.native => {
+                        Ok(outcome.task.version)
+                    }
+                    Ok(BatchAnswer::Written(outcome)) => Err(format!(
+                        "{name} answered the write of {id} with the task {}, so whether its end \
+                         was written is unknown",
+                        outcome.task.id
+                    )),
                     Ok(BatchAnswer::VersionMoved { found }) => Err(format!(
                         "{id} moved to version {} after it was read, so its end was not written",
                         found.unwrap_or_else(|| "unknown".to_owned())

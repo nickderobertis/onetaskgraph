@@ -9,9 +9,10 @@ use onetaskgraph_core::{
     ResolvedSource,
 };
 use onetaskgraph_plugin_api::{
-    Capabilities, DependencyEdge, DependencySupport, Direction, Health, Label, NativeId, Page,
-    PageRequest, Priority, Project, ProjectQuery, Relations, SourceError, SourceName, Status,
-    StatusCategory, Support, Task, TaskQuery, TaskSource, WriteSupport,
+    BatchAnswer, BatchUpdate, Capabilities, DependencyEdge, DependencySupport, Direction, Health,
+    Label, NativeId, Page, PageRequest, Priority, Project, ProjectQuery, Relations, SourceError,
+    SourceName, Status, StatusCategory, Support, Task, TaskQuery, TaskSource, TaskUpdateOutcome,
+    WriteSupport,
 };
 
 /// How a [`Bent`] source answers a relation read.
@@ -23,6 +24,9 @@ enum Answer {
     TooMany,
     /// Each id answered with another task's relations.
     Swapped,
+    /// Every relation read answered rightly, and each endpoint write answered `Written` with
+    /// another task than the one it sent.
+    WrittenAsAnother,
 }
 
 /// A source whose relation reads are bent as [`Answer`] says, and which answers nothing else.
@@ -176,8 +180,25 @@ impl TaskSource for Bent {
             }
             Answer::TooMany => answers.push(relations("extra")),
             Answer::Swapped => answers.reverse(),
+            Answer::WrittenAsAnother => {}
         }
         Ok(answers)
+    }
+
+    async fn update_tasks(
+        &self,
+        updates: &[BatchUpdate],
+    ) -> Vec<Result<BatchAnswer<TaskUpdateOutcome>, SourceError>> {
+        updates
+            .iter()
+            .map(|update| {
+                Ok(BatchAnswer::Written(TaskUpdateOutcome {
+                    task: task(&format!("not-{}", update.id.0)),
+                    written: Default::default(),
+                    delivers_before: Vec::new(),
+                }))
+            })
+            .collect()
     }
 }
 
@@ -234,4 +255,27 @@ async fn a_link_between_tasks_a_source_answers_for_wrongly_is_written_nowhere() 
         let reason = written.results[0].reason.as_deref().unwrap_or_default();
         assert!(reason.contains("bent"), "{reason}");
     }
+}
+
+#[tokio::test]
+async fn an_endpoint_write_a_source_answers_with_another_task_is_never_answered_written() {
+    let written = engine(Answer::WrittenAsAnother)
+        .add_links(&LinkBatch {
+            schema_version: 1,
+            links: vec![LinkItem {
+                from: "bent:A".to_owned(),
+                to: "bent:B".to_owned(),
+                link_type: "caused-by".to_owned(),
+            }],
+        })
+        .await
+        .expect("the batch is answered");
+    let result = &written.results[0];
+    assert_eq!(result.outcome, LinkOutcome::Error, "{result:?}");
+    let reason = result.reason.as_deref().unwrap_or_default();
+    assert!(
+        reason.contains("answered the write of bent:A with the task not-A"),
+        "{reason}"
+    );
+    assert!(reason.contains("not-B"), "{reason}");
 }

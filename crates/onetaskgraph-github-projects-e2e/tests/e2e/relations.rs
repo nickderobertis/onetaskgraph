@@ -770,7 +770,12 @@ fn two_sources_naming_one_board_with_different_sub_issues_are_refused_naming_bot
         .clone();
     assert_ne!(output.status.code(), Some(0));
     let said = stderr(&output);
-    for named in ["plans", "symptoms", "sub_issues"] {
+    for named in [
+        "sources plans and symptoms name one GitHub board, plans with `sub_issues: project` and \
+         symptoms with `sub_issues: parent`; the two meanings",
+        "give the `sub_issues: parent` source a board of its own, or give plans and symptoms one \
+         `sub_issues`",
+    ] {
         assert!(said.contains(named), "{said}");
     }
 }
