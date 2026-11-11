@@ -203,7 +203,6 @@ test("a tree only a merged branch held, never main's own, runs Rust coverage", (
   assert.equal(coverage(merge, releaseOnMerge).rust_coverage, "skip");
 });
 
-// A project's definition, by the name its project.json gives it.
 function projectNamed(project) {
   const files = execFileSync("git", ["ls-files", "*project.json"], {
     cwd: fileURLToPath(root),
@@ -300,6 +299,37 @@ test("the release coverage switch keeps functional and SDK tasks and omits only 
           projectNamed(task.replace(/:test$/, "")).tags?.includes("test-in-coverage:crate")),
       `${task}: functional work was omitted`,
     );
+});
+
+test("a crate definition the switch cannot read stops the release job, naming the file", () => {
+  // Reading which budgets to leave out comes before any Nx call, so a tree holding only the
+  // script, the toolchain link and the crate definitions reaches it.
+  const tree = mkdtempSync(resolve(scratchRoot, "release-shortcut-definitions-"));
+  try {
+    mkdirSync(resolve(tree, "scripts"));
+    writeFileSync(resolve(tree, "scripts/ci-job.sh"), read("scripts/ci-job.sh"));
+    symlinkSync(resolve(fileURLToPath(root), "node_modules"), resolve(tree, "node_modules"), "dir");
+    const definition = (outputs) =>
+      `${JSON.stringify({ name: "recorder", targets: { budgets: {}, coverage: { outputs } } })}\n`;
+    mkdirSync(resolve(tree, "crates/recorder"), { recursive: true });
+    for (const [outputs, problem] of [
+      ["{workspaceRoot}/target/debug/telemetry/recorder/*.json", "not a list of strings"],
+      [[7], "not a list of strings"],
+    ]) {
+      writeFileSync(resolve(tree, "crates/recorder/project.json"), definition(outputs));
+      const result = spawnSync("bash", ["scripts/ci-job.sh", "test-linux", "--select-only"], {
+        cwd: tree,
+        env: { ...fixtureEnvironment(), ONETASKGRAPH_SKIP_RUST_COVERAGE: "1" },
+        encoding: "utf8",
+      });
+      assert.equal(result.status, 1, result.stdout + result.stderr);
+      assert.match(result.stderr, /ci-job: crates\/recorder\/project\.json: TypeError/);
+      assert.match(result.stderr, new RegExp(problem));
+      assert.match(result.stderr, /could not read which budgets Rust coverage records/);
+    }
+  } finally {
+    rmSync(tree, { recursive: true, force: true });
+  }
 });
 
 test("the coverage switch refuses malformed values and use on an uninstrumented OS leg", () => {

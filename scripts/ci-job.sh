@@ -171,12 +171,19 @@ coverage_telemetry_budgets() {
 import glob, json, sys
 names = []
 for path in sorted(glob.glob("crates/*/project.json")):
-    with open(path, encoding="utf-8") as handle:
-        project = json.load(handle)
-    targets = project.get("targets", {})
-    outputs = targets.get("coverage", {}).get("outputs", [])
+    try:
+        with open(path, encoding="utf-8") as handle:
+            project = json.load(handle)
+        name, targets = project["name"], project.get("targets", {})
+        outputs = targets.get("coverage", {}).get("outputs", [])
+        if not isinstance(name, str) or not name or not isinstance(targets, dict):
+            raise TypeError("name is not a non-empty string or targets is not a map")
+        if not isinstance(outputs, list) or not all(isinstance(o, str) for o in outputs):
+            raise TypeError("targets.coverage.outputs is not a list of strings")
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+        raise SystemExit(f"ci-job: {path}: {type(error).__name__}: {error}")
     if "budgets" in targets and any("/telemetry/" in output for output in outputs):
-        names.append(project["name"])
+        names.append(name)
 sys.stdout.reconfigure(newline="\n")
 print(",".join(names) or "-")
 '

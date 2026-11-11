@@ -128,7 +128,6 @@ function replayGraph(name, executable, declareOutputs) {
   return dir;
 }
 
-// Run `test` once so the cache holds it, lose what it wrote, then ask for `budgets`.
 function budgetsAfterReplay(dir) {
   const seeded = nxRun(dir, "onetaskgraph-e2e:test");
   assert.equal(seeded.status, 0, seeded.output.slice(-3000));
