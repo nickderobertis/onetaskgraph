@@ -18,6 +18,10 @@ pub const LINEAR_INVALID_PARENT: &str = "invalid parent";
 /// [`LinearWorkspace::limit_children`] sets with — a destination's own refusal of one edge.
 pub const LINEAR_CHILD_LIMIT: &str = "Issue cannot have more sub-issues";
 
+/// What this loopback answers an issue's relations read with once
+/// [`LinearWorkspace::refuse_relation_reads`] is set.
+pub const LINEAR_RELATIONS_UNREAD: &str = "Linear could not read this issue's relations";
+
 /// The page of children a relation read answers, as the plugin's document asks for it.
 const CHILDREN_PAGE: usize = 50;
 
@@ -33,6 +37,9 @@ pub(super) fn answer(
     }
     if operation == graphql::ISSUE_PARENT_UPDATE {
         return Some(write(vars, data));
+    }
+    if operation == graphql::ISSUE_RELATIONS && data["_linear_refuse_relation_reads"] == true {
+        return Some(Err(LINEAR_RELATIONS_UNREAD));
     }
     None
 }
@@ -181,6 +188,11 @@ impl LinearWorkspace {
         if let Some(refused) = data["_linear_refused_items"].as_array_mut() {
             refused.retain(|held| held != id);
         }
+    }
+
+    /// Refuse every read of an issue's relations from now on, as [`LINEAR_RELATIONS_UNREAD`].
+    pub fn refuse_relation_reads(&self) {
+        self.state.lock().unwrap()["_linear_refuse_relation_reads"] = json!(true);
     }
 
     /// The parent the issue `id` holds, as Linear would answer its `parent`.

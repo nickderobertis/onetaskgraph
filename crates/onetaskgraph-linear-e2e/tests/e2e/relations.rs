@@ -1011,3 +1011,53 @@ fn a_relation_read_linear_answers_malformed_is_refused_rather_than_read_as_no_re
         assert!(said.contains(named), "{named}: {said}");
     }
 }
+
+#[test]
+fn a_mirrored_link_whose_native_relation_cannot_be_confirmed_is_not_removed_anywhere() {
+    use onetaskgraph_e2e_support::fixtures::linear_relations::LINEAR_RELATIONS_UNREAD;
+    for case in ["unread", "another page"] {
+        let team = Team::of(2);
+        let added = team.links("add-many", &[("R-0", "R-1", "caused-by")]);
+        assert_eq!(outcomes(&added), ["written"], "{case}: {}", added.json);
+        let before: Vec<String> = ["R-0", "R-1"]
+            .iter()
+            .map(|id| team.workspace.long_form("tasks", id).expect("held"))
+            .collect();
+        let pairs = team.workspace.related_pairs();
+        let expected = match case {
+            "unread" => {
+                team.workspace.refuse_relation_reads();
+                LINEAR_RELATIONS_UNREAD.to_owned()
+            }
+            _ => {
+                // Linear answers the lookup with another page of relations still to read.
+                team.workspace.bend_answers(
+                    |query, _| query.contains("a0: issue(id:$id_0){ description relations("),
+                    1,
+                    |_, data| data["a0"]["relations"]["pageInfo"]["hasNextPage"] = json!(true),
+                );
+                "holds more relations than one page".to_owned()
+            }
+        };
+        let removed = team.links("remove-many", &[("R-0", "R-1", "caused-by")]);
+        assert_eq!(outcomes(&removed), ["error"], "{case}: {}", removed.json);
+        let reason = removed.json["results"][0]["reason"].as_str().unwrap();
+        assert!(
+            reason.contains("native `related` relation"),
+            "{case}: {reason}"
+        );
+        assert!(reason.contains(&expected), "{case}: {reason}");
+        assert_eq!(removed.count(graphql::ISSUE_RELATION_DELETE), 0, "{case}");
+        assert_eq!(removed.count(graphql::ISSUE_UPDATE_READ), 0, "{case}");
+        let after: Vec<String> = ["R-0", "R-1"]
+            .iter()
+            .map(|id| team.workspace.long_form("tasks", id).expect("held"))
+            .collect();
+        assert_eq!(after, before, "{case}: both ends' metadata and sections");
+        assert!(
+            after.iter().all(|stored| stored.contains("## Links")),
+            "{case}"
+        );
+        assert_eq!(team.workspace.related_pairs(), pairs, "{case}");
+    }
+}
