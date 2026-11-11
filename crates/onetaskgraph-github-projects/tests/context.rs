@@ -17,6 +17,8 @@ const PUBLISHED_CONTEXTS: &[(u64, u64)] = &[
     // Version 4: `Classification`'s description says a task's project never tightens it; no
     // field changed.
     (4, 0xfa56_7c6f_0060_6940),
+    // Version 5: an item carries its GitHub parent on a source reading sub-issues as children.
+    (5, 0x08b7_e912_fd98_5573),
 ];
 
 /// FNV-1a over `value`'s JSON, whose object keys serde_json keeps sorted.

@@ -1410,3 +1410,17 @@ selecting the issue's token parts (203 nodes apiece). (f) sends no mutation and 
 
 **`session-cost.txt`**: requests stay **239**; the live journey's one targeted update sends its
 `updateIssue` as the token twin, so nodes go 399,762 → **399,965**, at the same one point.
+
+## Parents and typed links, and what they moved
+
+`task relations`, `task parent set-many` and `task link add-many`/`remove-many` send five new
+documents: `ISSUE_RELATIONS`, the batched detail read with each issue's sub-issue ids in place of
+its comments; `SET_PARENTS`, `ADD_RELATES_TO` and `REMOVE_RELATES_TO`, up to 30 aliased
+`addSubIssue`/`removeSubIssue`, `addRelatesTo` and `removeRelatesTo` each; and `RELATES_TO_READS`,
+what 24 issues relate to, read only after a relation write whose answer never arrived. The live
+reconciliation probes the two query documents like every other, at their largest pages: two more
+reconciliation requests, **7,272** and **2,400** worst-case nodes, at one point each
+(`tests/point_cost.rs`). The three mutations are not probed, as no mutation is. The live journey
+sends none of the five.
+
+**`session-cost.txt`**: requests go 239 → **241**, and nodes 325,488 → **335,160**.

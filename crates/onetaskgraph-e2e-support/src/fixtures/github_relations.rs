@@ -188,7 +188,7 @@ pub(super) fn answer(
     if query == graphql::RELATES_TO_READS {
         let held = board.lock().unwrap();
         let mut answered = serde_json::Map::new();
-        for slot in 0..RELATION_BATCH {
+        for slot in 0..DETAIL_BATCH {
             let id = variables[format!("id{slot}")].as_str().expect("an id");
             let related = held.relations.related(id);
             answered.insert(

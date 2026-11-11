@@ -469,9 +469,9 @@ impl GitHubProjectsSource {
         ids: &[NativeId],
     ) -> Result<BTreeMap<NativeId, Vec<NativeId>>, SourceError> {
         let mut related = BTreeMap::new();
-        for batch in ids.chunks(RELATION_BATCH) {
+        for batch in ids.chunks(DETAIL_BATCH) {
             let mut variables = Map::new();
-            for slot in 0..RELATION_BATCH {
+            for slot in 0..DETAIL_BATCH {
                 let id = batch.get(slot).or(batch.last()).map(|id| id.0.clone());
                 variables.insert(format!("id{slot}"), json!(id));
             }

@@ -2385,11 +2385,11 @@ pub mod graphql {
         };
     }
 
-    /// What [`RELATION_BATCH`](super::RELATION_BATCH) issues relate to, one alias each: read
+    /// What [`DETAIL_BATCH`](super::DETAIL_BATCH) issues relate to, one alias each: read
     /// after a relation write whose answer never arrived, so each relation is answered from what
     /// GitHub holds rather than sent again blindly.
     pub const RELATES_TO_READS: &str = concat!(
-        r#"query($id0:ID!,$id1:ID!,$id2:ID!,$id3:ID!,$id4:ID!,$id5:ID!,$id6:ID!,$id7:ID!,$id8:ID!,$id9:ID!,$id10:ID!,$id11:ID!,$id12:ID!,$id13:ID!,$id14:ID!,$id15:ID!,$id16:ID!,$id17:ID!,$id18:ID!,$id19:ID!,$id20:ID!,$id21:ID!,$id22:ID!,$id23:ID!,$id24:ID!,$id25:ID!,$id26:ID!,$id27:ID!,$id28:ID!,$id29:ID!,$first:Int!){"#,
+        r#"query($id0:ID!,$id1:ID!,$id2:ID!,$id3:ID!,$id4:ID!,$id5:ID!,$id6:ID!,$id7:ID!,$id8:ID!,$id9:ID!,$id10:ID!,$id11:ID!,$id12:ID!,$id13:ID!,$id14:ID!,$id15:ID!,$id16:ID!,$id17:ID!,$id18:ID!,$id19:ID!,$id20:ID!,$id21:ID!,$id22:ID!,$id23:ID!,$first:Int!){"#,
         relates_to_alias!(0),
         relates_to_alias!(1),
         relates_to_alias!(2),
@@ -2414,12 +2414,6 @@ pub mod graphql {
         relates_to_alias!(21),
         relates_to_alias!(22),
         relates_to_alias!(23),
-        relates_to_alias!(24),
-        relates_to_alias!(25),
-        relates_to_alias!(26),
-        relates_to_alias!(27),
-        relates_to_alias!(28),
-        relates_to_alias!(29),
         "\n    }"
     );
 
