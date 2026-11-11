@@ -349,6 +349,73 @@ fn the_links_section_is_in_the_file_and_never_in_the_content_a_read_answers() {
 }
 
 #[test]
+fn the_same_link_twice_in_one_call_is_written_once_and_both_answer_that_write() {
+    let store = Store::new();
+    let twice = json!([
+        {"from": "work:t1", "to": "work:t2", "type": "relates"},
+        {"from": "work:t1", "to": "work:t2", "type": "relates"},
+    ]);
+    let added = store.links("add-many", &twice, 0);
+    assert_eq!(outcomes(&added), ["written", "written"], "{added}");
+    let results = added["results"].as_array().expect("results");
+    assert_eq!(results[0]["from_version"], results[1]["from_version"]);
+    assert_eq!(results[0]["to_version"], results[1]["to_version"]);
+    let items = store.relations(&["work:t1", "work:t2"]);
+    assert_eq!(
+        links_of(&items[0]),
+        [link("relates", "out", "work:t2", "present")]
+    );
+    assert_eq!(
+        links_of(&items[1]),
+        [link("relates", "in", "work:t1", "present")]
+    );
+    // Once written, the pair again in one call is two `exists`.
+    let again = store.links("add-many", &twice, 0);
+    assert_eq!(outcomes(&again), ["exists", "exists"], "{again}");
+}
+
+/// Two copies of one link in one call whose `to` cannot be written both answer `partial`,
+/// naming the end that landed, and the same call repeated completes it once.
+#[cfg(unix)]
+#[test]
+fn the_same_link_twice_in_one_call_shares_its_failed_end_and_a_repeat_completes_it() {
+    use std::os::unix::fs::PermissionsExt;
+    let store = Store::new();
+    let twice = json!([
+        {"from": "work:t3", "to": "other:o1", "type": "relates"},
+        {"from": "work:t3", "to": "other:o1", "type": "relates"},
+    ]);
+    let folder = store.other.join("tasks");
+    let before = store.file(&store.other, "o1");
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o555)).expect("chmod");
+    let added = store.links("add-many", &twice, 4);
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    assert_eq!(outcomes(&added), ["partial", "partial"], "{added}");
+    for result in added["results"].as_array().expect("results") {
+        let reason = result["reason"].as_str().unwrap_or_default();
+        assert!(reason.starts_with("work:t3 landed"), "{reason}");
+    }
+    assert_eq!(store.file(&store.other, "o1"), before, "o1 is as it was");
+    let items = store.relations(&["work:t3", "other:o1"]);
+    assert_eq!(
+        links_of(&items[0]),
+        [link("relates", "out", "other:o1", "missing")]
+    );
+
+    let repeated = store.links("add-many", &twice, 0);
+    assert_eq!(outcomes(&repeated), ["written", "written"], "{repeated}");
+    let items = store.relations(&["work:t3", "other:o1"]);
+    assert_eq!(
+        links_of(&items[0]),
+        [link("relates", "out", "other:o1", "present")]
+    );
+    assert_eq!(
+        links_of(&items[1]),
+        [link("relates", "in", "work:t3", "present")]
+    );
+}
+
+#[test]
 fn a_link_across_two_sources_is_recorded_at_both() {
     let store = Store::new();
     let added = store.links(
