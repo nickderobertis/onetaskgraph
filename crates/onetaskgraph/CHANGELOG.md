@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.11](https://github.com/nickderobertis/onetaskgraph/compare/v0.14.10...v0.14.11) - 2026-11-10
+
+### Added
+
+- attest item content, validate template answers against schemas and create plan graphs from templates ([#3972](https://github.com/nickderobertis/onetaskgraph/pull/3972))
+
 ## [0.14.10](https://github.com/nickderobertis/onetaskgraph/compare/v0.14.9...v0.14.10) - 2026-11-10
 
 ### Added
