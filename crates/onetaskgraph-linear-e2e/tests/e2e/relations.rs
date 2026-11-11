@@ -1376,3 +1376,73 @@ fn an_issue_named_by_its_identifier_is_that_items_refusal_alone_and_every_other_
     assert_eq!(outcomes(&added), ["written"], "{}", added.json);
     assert_eq!(team.workspace.related_pairs().len(), 1);
 }
+
+#[test]
+fn a_parent_read_answered_malformed_or_refused_fails_that_edge_alone() {
+    use onetaskgraph_e2e_support::fixtures::linear_relations::LINEAR_RELATIONS_UNREAD;
+    // R-1's read answered about another issue, R-3's refused at its own alias: each fails its
+    // own edge, and R-2's edge in the same call is read, decided and written.
+    let team = Team::configured(4, &json!({}));
+    team.workspace.bend_answers(
+        |query, vars| query.contains("children(first:") && vars["id_0"] == "R-1",
+        5,
+        |_, data| data["a0"]["id"] = json!("R-2"),
+    );
+    team.workspace.refuse_parent_reads_of("R-3");
+    let set = team.parents(&[
+        ("R-1", Some("R-0")),
+        ("R-2", Some("R-0")),
+        ("R-3", Some("R-0")),
+    ]);
+    assert_eq!(
+        outcomes(&set),
+        ["error", "written", "error"],
+        "{}",
+        set.json
+    );
+    let reason = |at: usize| {
+        set.json["results"][at]["reason"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned()
+    };
+    assert!(
+        reason(0).contains("answered the alias asking for R-1 with R-2"),
+        "{}",
+        reason(0)
+    );
+    assert!(reason(2).contains(LINEAR_RELATIONS_UNREAD), "{}", reason(2));
+    assert_eq!(set.count(graphql::ISSUE_PARENT_UPDATE), 1, "{:?}", set.sent);
+    assert_eq!(team.workspace.parent_of("R-1"), None);
+    assert_eq!(team.workspace.parent_of("R-2"), Some("R-0".to_owned()));
+    assert_eq!(team.workspace.parent_of("R-3"), None);
+}
+
+#[test]
+fn a_native_relation_lookup_refused_for_one_link_leaves_the_others_removed() {
+    use onetaskgraph_e2e_support::fixtures::linear_relations::LINEAR_RELATIONS_UNREAD;
+    let team = Team::of(4);
+    let added = team.links(
+        "add-many",
+        &[("R-0", "R-1", "caused-by"), ("R-2", "R-3", "caused-by")],
+    );
+    assert_eq!(outcomes(&added), ["written", "written"], "{}", added.json);
+    assert_eq!(team.workspace.related_pairs().len(), 2);
+    // The lookup of R-0's native relations is refused at its own alias; R-2's is read again
+    // on its own and its relation deleted.
+    team.workspace.refuse_relation_reads_of("R-0");
+    let removed = team.links(
+        "remove-many",
+        &[("R-0", "R-1", "caused-by"), ("R-2", "R-3", "caused-by")],
+    );
+    assert_eq!(outcomes(&removed), ["error", "written"], "{}", removed.json);
+    let reason = removed.json["results"][0]["reason"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(reason.contains(LINEAR_RELATIONS_UNREAD), "{reason}");
+    assert_eq!(removed.count(graphql::ISSUE_RELATION_DELETE), 1);
+    assert_eq!(team.workspace.related_pairs().len(), 1);
+    let items = team.relations(&["R-0", "R-2", "R-3"]);
+    assert_eq!(links_of(&items[0]).len(), 1, "{items:?}");
+    assert!(links_of(&items[1]).is_empty() && links_of(&items[2]).is_empty());
+}

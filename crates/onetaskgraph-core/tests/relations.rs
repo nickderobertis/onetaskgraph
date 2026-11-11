@@ -24,6 +24,9 @@ enum Answer {
     TooMany,
     /// Each id answered with another task's relations.
     Swapped,
+    /// `A` answered with another task's relations, every other id rightly, and each endpoint
+    /// write answered with the task it sent.
+    OneAnother,
     /// Every relation read answered rightly, and each endpoint write answered `Written` with
     /// another task than the one it sent.
     WrittenAsAnother,
@@ -181,6 +184,11 @@ impl TaskSource for Bent {
             }
             Answer::TooMany => answers.push(Ok(relations("extra"))),
             Answer::Swapped => answers.reverse(),
+            Answer::OneAnother => {
+                if let Some(at) = ids.iter().position(|id| id.0 == "A") {
+                    answers[at] = Ok(relations("elsewhere"));
+                }
+            }
             Answer::WrittenAsAnother => {}
         }
         answers
@@ -193,8 +201,12 @@ impl TaskSource for Bent {
         updates
             .iter()
             .map(|update| {
+                let answered = match self.0 {
+                    Answer::OneAnother => update.id.0.clone(),
+                    _ => format!("not-{}", update.id.0),
+                };
                 Ok(BatchAnswer::Written(TaskUpdateOutcome {
-                    task: task(&format!("not-{}", update.id.0)),
+                    task: task(&answered),
                     written: Default::default(),
                     delivers_before: Vec::new(),
                 }))
@@ -279,4 +291,38 @@ async fn an_endpoint_write_a_source_answers_with_another_task_is_never_answered_
         "{reason}"
     );
     assert!(reason.contains("not-B"), "{reason}");
+}
+
+#[tokio::test]
+async fn a_relation_read_answering_one_id_with_another_task_fails_that_link_alone() {
+    let written = engine(Answer::OneAnother)
+        .add_links(&LinkBatch {
+            schema_version: 1,
+            links: vec![
+                LinkItem {
+                    from: "bent:A".to_owned(),
+                    to: "bent:B".to_owned(),
+                    link_type: "caused-by".to_owned(),
+                },
+                LinkItem {
+                    from: "bent:C".to_owned(),
+                    to: "bent:D".to_owned(),
+                    link_type: "caused-by".to_owned(),
+                },
+            ],
+        })
+        .await
+        .expect("the batch is answered");
+    assert_eq!(written.results[0].outcome, LinkOutcome::Error);
+    let reason = written.results[0].reason.as_deref().unwrap_or_default();
+    assert!(
+        reason.contains("asked for the relations of A, it answered with those of elsewhere"),
+        "{reason}"
+    );
+    assert_eq!(
+        written.results[1].outcome,
+        LinkOutcome::Written,
+        "{:?}",
+        written.results[1]
+    );
 }

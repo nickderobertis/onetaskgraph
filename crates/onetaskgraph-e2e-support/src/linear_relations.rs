@@ -32,13 +32,24 @@ pub(super) fn answer(
     vars: &Value,
     data: &mut Value,
 ) -> Option<Result<Value, &'static str>> {
+    let refused_for = |key: &str| {
+        data[key]
+            .as_array()
+            .is_some_and(|ids| ids.contains(&vars["id"]))
+    };
     if operation == graphql::ISSUE_PARENT_READ {
+        if refused_for("_linear_refuse_parent_reads_of") {
+            return Some(Err(LINEAR_RELATIONS_UNREAD));
+        }
         return Some(read(vars, data));
     }
     if operation == graphql::ISSUE_PARENT_UPDATE {
         return Some(write(vars, data));
     }
-    if operation == graphql::ISSUE_RELATIONS && data["_linear_refuse_relation_reads"] == true {
+    if operation == graphql::ISSUE_RELATIONS
+        && (data["_linear_refuse_relation_reads"] == true
+            || refused_for("_linear_refuse_relation_reads_of"))
+    {
         return Some(Err(LINEAR_RELATIONS_UNREAD));
     }
     None
@@ -193,6 +204,32 @@ impl LinearWorkspace {
     /// Refuse every read of an issue's relations from now on, as [`LINEAR_RELATIONS_UNREAD`].
     pub fn refuse_relation_reads(&self) {
         self.state.lock().unwrap()["_linear_refuse_relation_reads"] = json!(true);
+    }
+
+    /// Refuse every read of the issue `id`'s parent and children from now on, as
+    /// [`LINEAR_RELATIONS_UNREAD`] — at its own alias when it is read beside others.
+    pub fn refuse_parent_reads_of(&self, id: &str) {
+        Self::refusing(
+            &mut self.state.lock().unwrap(),
+            "_linear_refuse_parent_reads_of",
+            id,
+        );
+    }
+
+    /// Refuse every read of the issue `id`'s issue relations from now on, as
+    /// [`LINEAR_RELATIONS_UNREAD`] — at its own alias when it is read beside others.
+    pub fn refuse_relation_reads_of(&self, id: &str) {
+        Self::refusing(
+            &mut self.state.lock().unwrap(),
+            "_linear_refuse_relation_reads_of",
+            id,
+        );
+    }
+
+    fn refusing(data: &mut Value, key: &str, id: &str) {
+        let mut ids = data[key].as_array().cloned().unwrap_or_default();
+        ids.push(json!(id));
+        data[key] = Value::Array(ids);
     }
 
     /// The parent the issue `id` holds, as Linear would answer its `parent`.

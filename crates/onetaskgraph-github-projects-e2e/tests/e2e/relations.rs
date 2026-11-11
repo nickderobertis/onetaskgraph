@@ -1698,3 +1698,93 @@ fn an_id_github_cannot_resolve_is_that_items_answer_alone_and_every_other_item_i
     assert_eq!(read[0]["children"], json!(["board:B-2"]));
     assert!(links_of(&read[1]).is_empty() && links_of(&read[2]).is_empty());
 }
+
+#[test]
+fn a_batch_recovered_an_id_at_a_time_answers_an_id_failing_otherwise_alone_and_reads_on() {
+    // Twenty-five issues and an id that resolves to no node, read in two batches: the first
+    // GitHub refuses whole for that id, so it is read again an id at a time — one of which GitHub
+    // fails for another reason — and the second batch is read as it would be anyway.
+    let ids: Vec<String> = (0..25).map(|at| format!("T-{at:02}")).collect();
+    let mut extra = mirrored();
+    extra["sub_issues"] = json!("parent");
+    let board = Board::of(ids.iter().map(|id| issue(id, None)).collect(), &extra);
+    board
+        .board
+        .answer_unresolvable_relation_reads_as_github_does();
+    // The first id-at-a-time read with an issue at its first alias: `0-NOPE`'s own read has
+    // none, so this is T-00's.
+    board
+        .board
+        .error_beside_alias_once("i0", "Something went wrong while executing your query");
+    // Every one of the twenty-six ids named: `0-NOPE` and T-00 to T-22 the first batch of
+    // twenty-four, T-23 and T-24 the second.
+    let mut links: Vec<(String, String)> = vec![
+        ("T-01".into(), "0-NOPE".into()),
+        ("T-00".into(), "T-02".into()),
+        ("T-01".into(), "T-03".into()),
+    ];
+    links.extend(
+        (4..24)
+            .step_by(2)
+            .map(|at| (ids[at].clone(), ids[at + 1].clone())),
+    );
+    links.push(("T-24".into(), "T-04".into()));
+    let named: Vec<(&str, &str, &str)> = links
+        .iter()
+        .map(|(from, to)| (from.as_str(), to.as_str(), "caused-by"))
+        .collect();
+    let (added, served) = board.links("add-many", &named);
+    let mut expected = vec!["error", "error"];
+    expected.extend(std::iter::repeat_n("written", links.len() - 2));
+    assert_eq!(outcomes(&added), expected, "{:#}", added.json);
+    let reason = |at: usize| {
+        added.json["results"][at]["reason"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned()
+    };
+    assert!(reason(0).contains("board:0-NOPE"), "{}", reason(0));
+    assert!(
+        reason(1).contains("Something went wrong while executing your query"),
+        "{}",
+        reason(1)
+    );
+    // The first batch, its twenty-four ids again one at a time, and the second batch.
+    assert_eq!(sent(&served, graphql::ISSUE_RELATIONS), 1 + 24 + 1);
+    assert_eq!(board.board.relates_to("T-01"), ["T-03"]);
+    assert_eq!(board.board.relates_to("T-22"), ["T-23"]);
+    assert_eq!(board.board.relates_to("T-24"), ["T-04"]);
+    assert!(board.board.relates_to("T-00").is_empty());
+}
+
+#[test]
+fn an_issue_a_relations_read_answers_malformed_is_that_items_error_alone() {
+    let mut extra = mirrored();
+    extra["sub_issues"] = json!("parent");
+    let board = Board::of(
+        ["A-1", "B-2", "C-3"]
+            .iter()
+            .map(|id| issue(id, None))
+            .collect(),
+        &extra,
+    );
+    board
+        .board
+        .answer_next_relations_of_without_sub_issues("A-1");
+    let (added, served) = board.links(
+        "add-many",
+        &[("A-1", "B-2", "caused-by"), ("B-2", "C-3", "caused-by")],
+    );
+    assert_eq!(outcomes(&added), ["error", "written"], "{:#}", added.json);
+    let reason = added.json["results"][0]["reason"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(reason.contains("missing subIssues"), "{reason}");
+    assert_eq!(sent(&served, graphql::ISSUE_RELATIONS), 1);
+    assert_eq!(fields_sent(&served, graphql::ADD_RELATES_TO), [1]);
+    assert_eq!(board.board.relates_to("B-2"), ["C-3"]);
+    assert!(board.board.relates_to("A-1").is_empty());
+    // Answered rightly, the same link is written.
+    let (added, _) = board.links("add-many", &[("A-1", "B-2", "caused-by")]);
+    assert_eq!(outcomes(&added), ["written"], "{:#}", added.json);
+}

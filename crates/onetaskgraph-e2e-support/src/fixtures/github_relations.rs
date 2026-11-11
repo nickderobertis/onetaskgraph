@@ -43,6 +43,8 @@ pub(super) struct Relations {
     /// its alias beside a `NOT_FOUND` error naming the id, which GitHub sends for the whole
     /// document.
     unresolvable_named: bool,
+    /// Answer the next relations read of this issue without its `subIssues`, once.
+    malformed_once: Option<String>,
 }
 
 impl Relations {
@@ -167,6 +169,13 @@ impl GitHubBoardFields {
         self.board.lock().unwrap().relations.unresolvable_named = true;
     }
 
+    /// Answer the next relations read naming `id` with that issue's slot missing its
+    /// `subIssues` — an answer no correct GitHub gives — once, every other slot answered
+    /// rightly.
+    pub fn answer_next_relations_of_without_sub_issues(&self, id: &str) {
+        self.board.lock().unwrap().relations.malformed_once = Some(id.to_owned());
+    }
+
     /// The parent issue of `id`, by its sub-issue link.
     #[must_use]
     pub fn sub_issue_parent(&self, id: &str) -> Option<String> {
@@ -211,6 +220,20 @@ pub(super) fn answer(
                 });
             }
             answered.insert(format!("i{slot}"), node);
+        }
+        if let Some(bent) = held.relations.malformed_once.take() {
+            let mut found = false;
+            for node in answered.values_mut() {
+                if node["id"] == json!(bent) {
+                    found = true;
+                    if let Some(node) = node.as_object_mut() {
+                        node.remove("subIssues");
+                    }
+                }
+            }
+            if !found {
+                held.relations.malformed_once = Some(bent);
+            }
         }
         return Some(Value::Object(answered));
     }
