@@ -1952,7 +1952,9 @@ reads unavailable until the re-copy of create-repo's fix, which falls back to th
 - **A release tree skips only Rust instrumentation already measured on main.**
   `.github/release-shortcut.mjs` requires a passed main tree plus only release-owned
   version and changelog edits. Its versioned `rust_coverage` decision controls only
-  Linux's Rust coverage phase and the three budgets that consume its profiles.
+  Linux's Rust coverage phase and every budget whose telemetry a crate's `coverage` target
+  declares among its outputs — `scripts/ci-job.sh` reads which from the project files, because
+  a list kept by hand missed `onetaskgraph-e2e`'s and turned the v0.14.12 release red.
   Functional tests, SDK coverage, distribution checks and workflow budgets still run.
   An unreadable comparison runs Rust coverage; macOS and Windows never consult this
   decision. Raw Rust profiles and objects remain uncached because they cannot prove

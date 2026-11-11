@@ -203,6 +203,25 @@ test("a tree only a merged branch held, never main's own, runs Rust coverage", (
   assert.equal(coverage(merge, releaseOnMerge).rust_coverage, "skip");
 });
 
+// A project's definition, by the name its project.json gives it.
+function projectNamed(project) {
+  const files = execFileSync("git", ["ls-files", "*project.json"], {
+    cwd: fileURLToPath(root),
+    encoding: "utf8",
+  })
+    .split("\n")
+    .filter(Boolean);
+  const definition = files
+    .map((file) => JSON.parse(read(file)))
+    .find((candidate) => candidate.name === project);
+  assert.ok(definition, `${project}: a project.json names it`);
+  return definition;
+}
+const recordsTelemetryUnderCoverage = (project) =>
+  (projectNamed(project).targets?.coverage?.outputs ?? []).some((output) =>
+    output.includes("/target/debug/telemetry/"),
+  );
+
 test("the release coverage switch keeps functional and SDK tasks and omits only Rust coverage telemetry consumers", () => {
   const select = (skip) => {
     const result = spawnSync("bash", ["scripts/ci-job.sh", "test-linux", "--select-only"], {
@@ -231,6 +250,7 @@ test("the release coverage switch keeps functional and SDK tasks and omits only 
   const normal = select("0");
   const release = select("1");
   const budgets = [
+    "onetaskgraph-e2e:budgets",
     "onetaskgraph-github-projects-e2e:budgets",
     "onetaskgraph-linear-e2e:budgets",
     "onetaskgraph-live-janitor:budgets",
@@ -252,11 +272,32 @@ test("the release coverage switch keeps functional and SDK tasks and omits only 
     "scripts:distribution-check",
   ])
     assert.ok(release.includes(task), `${task}: still selected on release`);
+  // test-linux runs budgets without their dependencies, so a budget whose telemetry its
+  // project's `coverage` records has nothing to read unless that coverage runs beside it. A
+  // release tree went red once such a budget was added and the switch still selected it.
+  for (const [mode, selected] of [
+    ["normal", normal],
+    ["release", release],
+  ])
+    for (const task of selected.filter((name) => name.endsWith(":budgets"))) {
+      const project = task.slice(0, -":budgets".length);
+      if (recordsTelemetryUnderCoverage(project))
+        assert.ok(
+          selected.includes(`${project}:coverage`),
+          `${task}: selected on ${mode} without ${project}:coverage, which records its telemetry`,
+        );
+    }
   const omitted = normal.filter((task) => !release.includes(task));
   assert.ok(omitted.length > budgets.length);
   for (const task of omitted)
     assert.ok(
-      budgets.includes(task) || /:(coverage|coverage-build|test-uncovered)$/.test(task),
+      budgets.includes(task) ||
+        /:(coverage|coverage-build|test-uncovered)$/.test(task) ||
+        // A test-in-coverage crate's `test` is in the plan only as its budget's dependency,
+        // which test-linux never runs, so it goes with that budget.
+        (task.endsWith(":test") &&
+          budgets.includes(task.replace(/:test$/, ":budgets")) &&
+          projectNamed(task.replace(/:test$/, "")).tags?.includes("test-in-coverage:crate")),
       `${task}: functional work was omitted`,
     );
 });

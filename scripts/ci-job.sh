@@ -107,15 +107,13 @@ case "$JOB" in
 1 affected test *,!onetaskgraph-linear,!onetaskgraph-linear-e2e
 1 affected coverage *,!tag:layer:sdk
 1 run scripts:distribution-check -"
-    if "$skip_rust_coverage"; then
-      coverage_budget_exclusions="onetaskgraph-github-projects-e2e,onetaskgraph-linear-e2e,onetaskgraph-live-janitor"
-    else
+    # Without Rust coverage, a budget whose telemetry only a `coverage` target records has
+    # nothing to read, so it is left out; which ones those are is read below, from each
+    # project's declared outputs, rather than listed here.
+    if ! "$skip_rust_coverage"; then
       phases="$phases
 1 affected test-uncovered,coverage tag:layer:sdk,tag:coverage:uninstrumented"
-      coverage_budget_exclusions="-"
     fi
-    phases="$phases
-2 affected budgets $coverage_budget_exclusions --excludeTaskDependencies,--skipNxCache"
     ;;
   test-macos)
     # Every suite once, uninstrumented: coverage is Linux's. `budgets` reads what `test`
@@ -165,6 +163,35 @@ case "$PYTHON" in
   /*) ;;
   *) PYTHON="$(cd "$(dirname "$PYTHON")" && pwd)/$(basename "$PYTHON")" ;;
 esac
+
+# The projects with a `budgets` target whose `coverage` target declares the telemetry those
+# budgets read among its outputs, comma-separated, or `-` for none.
+coverage_telemetry_budgets() {
+  "$PYTHON" -c '
+import glob, json, sys
+names = []
+for path in sorted(glob.glob("crates/*/project.json")):
+    with open(path, encoding="utf-8") as handle:
+        project = json.load(handle)
+    targets = project.get("targets", {})
+    outputs = targets.get("coverage", {}).get("outputs", [])
+    if "budgets" in targets and any("/telemetry/" in output for output in outputs):
+        names.append(project["name"])
+sys.stdout.reconfigure(newline="\n")
+print(",".join(names) or "-")
+'
+}
+if [ "$JOB" = test-linux ]; then
+  coverage_budget_exclusions="-"
+  if "$skip_rust_coverage"; then
+    coverage_budget_exclusions="$(coverage_telemetry_budgets)" || {
+      echo "ci-job: could not read which budgets Rust coverage records; fix what is reported above, then re-run." >&2
+      exit 1
+    }
+  fi
+  phases="$phases
+2 affected budgets $coverage_budget_exclusions --excludeTaskDependencies,--skipNxCache"
+fi
 
 scratch="$(mktemp -d)"
 trap 'rm -rf "$scratch"' EXIT
