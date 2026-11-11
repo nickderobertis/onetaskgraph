@@ -1002,6 +1002,7 @@ async fn run_inner(
                     .map(|priority| priority.priority())
                     .collect(),
                 versions: std::collections::HashMap::new(),
+                assignees: None,
             };
             let held = copy_versions(&request, &args.if_version)?;
             if let CopyHeld::Each(versions) = &held {

@@ -226,6 +226,31 @@ pub struct UpdateBatchItem {
     /// Its repositories, replaced whole; an empty list clears them.
     #[serde(default)]
     pub repositories: Option<Vec<Repository>>,
+    /// The one person it is assigned to, replacing every person it holds — `null` unassigns
+    /// it, and leaving the member out leaves its assignees as they are. Only for a source that
+    /// opted in with `config.assignees: true`.
+    // llmlint: ignore[invalid_states_unrepresentable] The contract states this member literally as `"<person>" | null` beside absent, three states a caller writes by hand; `Option<Option<String>>` is that wire shape and nothing wider, read by `present` so `null` is not mistaken for absent.
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schemars(with = "Option<String>", extend("x-null-unsets" = true))]
+    pub assignee: Option<Option<String>>,
+    /// Write only while the task is assigned to exactly these people, whatever their order —
+    /// `[]` only while it is unassigned. Otherwise nothing of the update is written and it
+    /// answers `held`. Left out, it sets no guard.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when_assignees: Option<Vec<String>>,
+}
+
+/// A member that may be `null`, read so that `null` is present: `Some(None)`, where a member
+/// left out is `None`.
+fn present<'de, D>(deserializer: D) -> Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer).map(Some)
 }
 
 /// What `task update-many` answers: one result per update, in the order given.
@@ -266,8 +291,8 @@ pub struct UpdateResult {
 pub enum BatchOutcome {
     /// It was written.
     Written,
-    /// Its priority guard declined: the task held a priority the guard does not name, and
-    /// nothing of it was written.
+    /// Its guard declined: the task held a priority `when_priority` does not name, or not
+    /// exactly the people `when_assignees` names, and nothing of it was written.
     Held,
     /// The task was at another version than the one it was held to, and nothing was written.
     VersionMoved,
@@ -830,17 +855,24 @@ impl Engine {
             delivers: None,
             depends_on: None,
             repositories: each.repositories.clone(),
-            assignees: None,
+            assignees: each
+                .assignee
+                .as_ref()
+                .map(|person| person.iter().cloned().collect()),
         };
         if update.is_empty() {
             return Err(named(
                 "it names no field to write; name at least one of title, body, status, \
-                 priority, metadata, remove_metadata or repositories"
+                 priority, metadata, remove_metadata, repositories or assignee"
                     .to_owned(),
             ));
         }
         for guarded in &each.when_priority {
             super::narrow::holds_priority(resolved, &id.to_string(), *guarded)
+                .map_err(|error| named(error.to_string()))?;
+        }
+        if each.when_assignees.is_some() {
+            super::assignees::holds_assignees(resolved, &id.to_string())
                 .map_err(|error| named(error.to_string()))?;
         }
         let update = self
@@ -854,7 +886,7 @@ impl Engine {
                 update,
                 if_version: each.if_version.clone(),
                 when_priority: each.when_priority.clone(),
-                when_assignees: None,
+                when_assignees: each.when_assignees.clone(),
             },
         ))
     }

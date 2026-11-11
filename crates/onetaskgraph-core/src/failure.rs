@@ -278,6 +278,10 @@ fn cause(error: &EngineError) -> (String, Option<SourceName>, Option<&SourceErro
         ),
         EngineError::CommentsNotDocuments => ("comments-not-documents".to_owned(), None, None),
         EngineError::NoPriority { name, .. } => ("no-priority".to_owned(), configured(name), None),
+        EngineError::NoAssignees { name, .. } => {
+            ("no-assignees".to_owned(), configured(name), None)
+        }
+        EngineError::SeveralAssignees { .. } => ("several-assignees".to_owned(), None, None),
         EngineError::CommentsNotWritable { name, .. }
         | EngineError::StatusNotWritable { name, .. }
         | EngineError::MetadataNotWritable { name, .. }

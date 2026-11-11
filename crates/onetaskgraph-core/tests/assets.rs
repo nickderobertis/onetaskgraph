@@ -59,6 +59,7 @@ async fn create(engine: &Engine, title: &str, bytes: &[u8]) -> GlobalId {
             metadata: Default::default(),
             assets: vec![AssetPayload::of(name("shot.png"), bytes.to_vec())],
             classification: Default::default(),
+            assignee: None,
         })
         .await
         .expect("the task is created")
@@ -254,6 +255,7 @@ async fn plain(engine: &Engine, title: &str) -> (GlobalId, GlobalId) {
             metadata: Default::default(),
             assets: Vec::new(),
             classification: Default::default(),
+            assignee: None,
         })
         .await
         .expect("the task is created")
@@ -755,6 +757,7 @@ async fn holding(engine: &Engine, title: &str, assets: &[(&str, &[u8])]) -> Glob
                 .map(|(file, bytes)| AssetPayload::of(name(file), bytes.to_vec()))
                 .collect(),
             classification: Default::default(),
+            assignee: None,
         })
         .await
         .expect("the task is created")

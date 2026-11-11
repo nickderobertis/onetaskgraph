@@ -136,6 +136,10 @@ impl Engine {
         if let Some(priority) = update.priority {
             holds_priority(source, &id.to_string(), priority)?;
         }
+        if let Some(people) = &update.assignees {
+            super::assignees::holds_assignees(source, &id.to_string())?;
+            super::assignees::one_person(&id.to_string(), people)?;
+        }
         let depends_on = match &update.depends_on {
             Some(edges) => Some(
                 self.publicly_named(

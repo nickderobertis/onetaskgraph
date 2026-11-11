@@ -105,6 +105,7 @@ impl Fixture {
                 )]),
                 assets: Vec::new(),
                 classification: Default::default(),
+                assignee: None,
             })
             .await
             .expect("the task is created");
@@ -377,6 +378,7 @@ async fn a_regenerate_needs_a_template_it_can_read_and_never_turns_a_reference_i
             metadata: BTreeMap::new(),
             assets: Vec::new(),
             classification: Default::default(),
+            assignee: None,
         })
         .await
         .unwrap()
@@ -649,6 +651,7 @@ async fn an_in_memory_task_and_document_take_a_rendering_and_keep_no_answers() {
             metadata: BTreeMap::new(),
             assets: Vec::new(),
             classification: Default::default(),
+            assignee: None,
         })
         .await
         .unwrap()

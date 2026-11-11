@@ -184,6 +184,7 @@ impl Engine {
                 metadata: member.metadata.clone(),
                 assets: Vec::new(),
                 classification: onetaskgraph_plugin_api::Classification::default(),
+                assignee: None,
             };
             let task = match self.create_task_as(&request, Some(&member.id)).await {
                 Ok(task) => task,

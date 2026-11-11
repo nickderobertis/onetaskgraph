@@ -841,6 +841,7 @@ async fn a_task_the_source_wrote_with_steps_takes_an_update_of_another_key_byte_
             ]),
             assets: Vec::new(),
             classification: Default::default(),
+            assignee: None,
         })
         .await
         .expect("the task is created")

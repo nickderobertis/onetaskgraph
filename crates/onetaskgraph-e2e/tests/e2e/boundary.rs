@@ -2296,6 +2296,7 @@ fn task_on_site(text: &str, repositories: &[&str]) -> onetaskgraph_core::TaskCre
         metadata: BTreeMap::new(),
         assets: Vec::new(),
         classification: onetaskgraph_plugin_api::Classification::Public,
+        assignee: None,
     }
 }
 

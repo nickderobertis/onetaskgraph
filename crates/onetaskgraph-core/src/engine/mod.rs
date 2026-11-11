@@ -17,6 +17,7 @@
 
 mod all_pages;
 mod assets;
+pub(crate) mod assignees;
 mod attestation;
 pub(crate) mod batch;
 pub mod boundary;
@@ -80,6 +81,7 @@ pub(crate) use resume::{Owed, Resumption, StreamState};
 use resume::{Resume, StreamKind};
 
 pub use assets::{HeldAsset, TaskAssetNames, TaskAssetsError};
+pub use assignees::{AssigneeCondition, TaskAssigneeSet};
 pub use attestation::AttestRequest;
 pub use batch::{
     AddedComment, BATCH_SCHEMA_VERSION, BatchOutcome, CommentAddResult, CommentBatch,
@@ -1296,6 +1298,39 @@ pub enum EngineError {
         id: String,
         /// The provenance `template` it records.
         reference: String,
+    },
+
+    /// An assignee was to be written — by `task create --assignee`, `task assignee set`, an
+    /// update-many item or a guarded copy — to a source that has not opted in to assignees.
+    ///
+    /// Refused before that source is asked anything.
+    #[error(
+        "source {name} does not hold assignees, so {task}'s assignee cannot be written to it: \
+         its {kind} configuration does not set assignees\n\
+         next: set `assignees: true` under `sources.{name}.config` to opt that source in, or \
+         leave the assignee out of the write."
+    )]
+    NoAssignees {
+        /// The configured name of the source that has not opted in.
+        name: String,
+        /// The plugin behind it.
+        kind: String,
+        /// The qualified id of the task the write names.
+        task: String,
+    },
+
+    /// A write would assign an item to more than one person, which no write does: a task copied
+    /// while its source holds several assignees, or a library caller's update naming several.
+    #[error(
+        "{item} holds {count} assignees, and a write assigns one person or none\n\
+         next: leave {item} assigned to one person, or copy it over an existing item without \
+         --when-destination-assignees so that item keeps its own."
+    )]
+    SeveralAssignees {
+        /// The item whose assignees could not be written.
+        item: String,
+        /// How many people it holds.
+        count: usize,
     },
 
     /// A priority other than `none` was to be written — by `task priority set` or by a copy —
