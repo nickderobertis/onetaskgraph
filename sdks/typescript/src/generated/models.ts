@@ -17677,8 +17677,8 @@ item: string
  */
 outcome: ("written" | "held" | "version-moved" | "error")
 /**
- * The task's version after the write — present when `outcome` is `written` and the source
- * reports versions.
+ * The task's version after the write — present when `outcome` is `written` and the
+ * write's own answers determine it, as `task update`'s `result.version` is.
  */
 version?: (string | null)
 /**

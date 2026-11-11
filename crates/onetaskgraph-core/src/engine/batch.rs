@@ -241,8 +241,8 @@ pub struct UpdateResult {
     pub item: String,
     /// What became of it.
     pub outcome: BatchOutcome,
-    /// The task's version after the write — present when `outcome` is `written` and the source
-    /// reports versions.
+    /// The task's version after the write — present when `outcome` is `written` and the
+    /// write's own answers determine it, as `task update`'s `result.version` is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     /// The version the task is at — present when `outcome` is `version-moved`.
@@ -297,22 +297,36 @@ impl FindAnswer {
 }
 
 /// `answers`, a source's answer to a batched call of `asked` items, as exactly one answer per
-/// item: one left unanswered is that item's malformed answer, and an answer past the last item
-/// is dropped, both named.
+/// item. Fewer answers than items leave each item past the last answer unanswered, its answer
+/// malformed; more answers than items say nothing of which answer is whose, so every item's
+/// answer is malformed, naming both counts — each item was sent, so each may have been written.
 fn one_each<T>(
     source: &SourceName,
     asked: usize,
     answers: Vec<Result<T, onetaskgraph_plugin_api::SourceError>>,
 ) -> Vec<Result<T, onetaskgraph_plugin_api::SourceError>> {
     let answered = answers.len();
-    let mut answers: Vec<_> = answers.into_iter().take(asked).collect();
-    while answers.len() < asked {
-        answers.push(Err(onetaskgraph_plugin_api::SourceError::Malformed {
+    let malformed = |why: &str| {
+        Err(onetaskgraph_plugin_api::SourceError::Malformed {
             message: format!(
-                "{source} answered {answered} of the {asked} items of one batched call, \
-                 leaving this one unanswered"
+                "{source} answered {answered} answers to the {asked} items of one batched call, \
+                 {why}"
             ),
-        }));
+        })
+    };
+    if answered > asked {
+        return (0..asked)
+            .map(|_| {
+                malformed(
+                    "so which answer is this item's cannot be told; it was sent and may have \
+                     been written, so read it before sending it again",
+                )
+            })
+            .collect();
+    }
+    let mut answers = answers;
+    while answers.len() < asked {
+        answers.push(malformed("leaving this one unanswered"));
     }
     answers
 }
@@ -685,7 +699,10 @@ impl Engine {
                         Ok(updated) => UpdateResult {
                             item,
                             outcome: BatchOutcome::Written,
-                            version: updated.task.version,
+                            // What the write's own answers determine, as `task update`'s
+                            // `result` says it: a source whose mutation answers cannot vouch for
+                            // a version answers none rather than the one it read before.
+                            version: updated.result.and_then(|result| result.version),
                             current_version: None,
                             reason: None,
                         },

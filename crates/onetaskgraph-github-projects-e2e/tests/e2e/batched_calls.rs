@@ -751,3 +751,40 @@ fn an_unchanged_recopy_of_five_decides_every_item_from_one_batched_read() {
         "{served:#?}"
     );
 }
+
+#[test]
+fn two_updates_of_one_ticket_are_each_written_on_what_the_one_before_left() {
+    let board = ticket_board();
+    let batch = json!({"schema_version": 1, "updates": [
+        {"item": "board:U-0", "body": "U-0 first"},
+        {"item": "board:U-0", "status": "in-progress",
+         "metadata": {"orchestrator.seen": true}},
+        triage("U-1", None),
+    ]});
+    let answered = board.run(
+        &["task", "update-many", "board", "--input", "-", "--json"],
+        &batch.to_string(),
+    );
+    assert_eq!(answered.code, Some(0), "{}", answered.stderr);
+    let results = answered.json["results"].as_array().expect("results");
+    for result in results {
+        assert_eq!(result["outcome"], "written", "{result:#}");
+    }
+    // The second update of U-0 kept the body the first wrote, and added its own fields.
+    let body = board.board.body("U-0");
+    let body = body.as_str().expect("a body");
+    assert!(body.starts_with("U-0 first"), "{body}");
+    assert!(body.contains("orchestrator.seen"), "{body}");
+    assert_eq!(board.board.status("U-0").as_deref(), Some("Doing"));
+    // A mutation's answer cannot vouch for the version GitHub settles the ticket at, so no
+    // written update claims one — least of all the one it was read at before the write.
+    for result in results {
+        assert!(result.get("version").is_none(), "{result:#}");
+    }
+    let body = board.board.body("U-1");
+    assert!(
+        body.as_str()
+            .is_some_and(|body| body.starts_with("U-1 triaged")),
+        "{body}"
+    );
+}

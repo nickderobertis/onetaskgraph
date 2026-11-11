@@ -30996,7 +30996,7 @@ export const runtimeSchemas = {
             "$ref": "#/$defs/BatchOutcome"
           },
           "version": {
-            "description": "The task's version after the write — present when `outcome` is `written` and the source\nreports versions.",
+            "description": "The task's version after the write — present when `outcome` is `written` and the\nwrite's own answers determine it, as `task update`'s `result.version` is.",
             "type": [
               "string",
               "null"

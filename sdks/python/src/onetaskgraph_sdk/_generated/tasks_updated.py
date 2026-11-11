@@ -33,7 +33,7 @@ class UpdateResult(BaseModel):
     version: Annotated[
         str | None,
         Field(
-            description="The task's version after the write — present when `outcome` is `written` and the source\nreports versions."
+            description="The task's version after the write — present when `outcome` is `written` and the\nwrite's own answers determine it, as `task update`'s `result.version` is."
         ),
     ] = None
     current_version: Annotated[

@@ -171,21 +171,22 @@ def _document(method: str, model: type[BaseModel], document: object) -> str:
     refused before the binary is started, naming the member; written by its wire names,
     leaving out every member that is `None`, which the binary reads as absent.
     """
-    if isinstance(document, model):
-        checked = document
-    elif isinstance(document, Mapping):
-        try:
-            checked = model.model_validate(dict(document))
-        except ValidationError as error:
-            message = f"{method}: the request is not a {model.__name__}: {error}"
-            raise TypeError(message) from error
-    else:
-        kind = type(document).__name__
-        message = (
-            f"{method}: the request is a {kind}; next: pass a {model.__name__} or a "
-            "mapping of its members"
-        )
-        raise TypeError(message)
+    match document:
+        case BaseModel() if isinstance(document, model):
+            checked = document
+        case Mapping():
+            try:
+                checked = model.model_validate(dict(document))
+            except ValidationError as error:
+                message = f"{method}: the request is not a {model.__name__}: {error}"
+                raise TypeError(message) from error
+        case _:
+            kind = type(document).__name__
+            message = (
+                f"{method}: the request is a {kind}; next: pass a {model.__name__} or "
+                "a mapping of its members"
+            )
+            raise TypeError(message)
     return checked.model_dump_json(by_alias=True, exclude_none=True)
 
 

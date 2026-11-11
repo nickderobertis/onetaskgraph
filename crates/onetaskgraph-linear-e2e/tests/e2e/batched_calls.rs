@@ -281,6 +281,32 @@ fn a_refused_later_page_ends_that_search_alone() {
     }
 }
 
+#[test]
+fn a_search_answering_a_cursor_it_already_followed_is_stopped_there_alone() {
+    let team = Team::holding(searches(), false);
+    // Every later page of the metadata search answers the cursor it was asked from.
+    team.workspace.stall_later_pages_of("alpha");
+    let queries = team.batch("find.json", &five_queries());
+    let ran = team.run(&["task", "find", "team", "--queries", &queries]);
+    assert_eq!(ran.code, Some(4), "{}", ran.json);
+    for answer in ran.json["answers"].as_array().expect("answers") {
+        if answer["key"] == "by-metadata" {
+            assert_eq!(answer["complete"], false, "{answer}");
+            assert!(
+                answer["reason"].as_str().is_some_and(
+                    |reason| reason.contains("page 2") && reason.contains("already followed")
+                ),
+                "the reason names the page and its repeated cursor: {answer}"
+            );
+            // Both pages' rows stand: the second's own rows were read, and only its cursor
+            // was not followed.
+            assert_eq!(found(answer).len(), 3, "both pages' rows stand: {answer}");
+        } else {
+            assert_eq!(answer["complete"], true, "{answer}");
+        }
+    }
+}
+
 fn writable() -> Vec<Value> {
     (1..=4)
         .map(|at| {

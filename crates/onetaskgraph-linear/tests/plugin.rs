@@ -7726,3 +7726,21 @@ fn a_documents_body_is_sized_with_its_image_at_the_url_it_is_or_will_be_served_a
 fn uuid_nil() -> &'static str {
     "00000000-0000-0000-0000-000000000000"
 }
+
+#[test]
+fn a_kept_context_is_taken_as_a_write_s_read_only_for_the_issue_it_reads_as() {
+    // Nothing is sent: a context is taken or refused from what it holds alone.
+    let source = source("http://127.0.0.1:9/graphql");
+    let recorded: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/issues.json")).unwrap();
+    let issue = &recorded["data"]["issues"]["nodes"][0];
+    assert_eq!(issue["id"], "i1");
+    assert!(
+        !source.prime_write(&NativeId::from("i2"), issue, None),
+        "another issue's context is never taken as this one's read"
+    );
+    assert!(source.prime_write(&NativeId::from("i1"), issue, None));
+    let mut unreadable = issue.clone();
+    unreadable.as_object_mut().unwrap().remove("description");
+    assert!(!source.prime_write(&NativeId::from("i1"), &unreadable, None));
+}

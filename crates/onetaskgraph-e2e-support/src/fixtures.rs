@@ -1211,6 +1211,7 @@ struct GitHubBoard {
     /// Whether the board's own items read answers every page after the first with the cursor it
     /// was asked from: [`GitHubBoardFields::stall_the_items_cursor`].
     items_cursor_stalls: bool,
+    search_cursor_stalls: bool,
     /// Errors this board answers beside the data of the next request carrying each operation,
     /// once — an error GitHub reports about one part of a read it otherwise answered.
     erring_beside: Vec<(&'static str, String)>,
@@ -1643,6 +1644,12 @@ impl GitHubBoardFields {
     /// it was asked from, saying there is more — a listing that never ends if walked blindly.
     pub fn stall_the_items_cursor(&self) {
         self.board.lock().unwrap().items_cursor_stalls = true;
+    }
+
+    /// Have every issue search answer each page after its first with the very cursor it was
+    /// asked from, saying there is more — a search that never ends if walked blindly.
+    pub fn stall_the_search_cursor(&self) {
+        self.board.lock().unwrap().search_cursor_stalls = true;
     }
 
     /// Answer the next request carrying `operation` with `message` as an error beside its data,
@@ -3935,6 +3942,7 @@ fn github_projects_board_at(
         closed_filter_leaks: false,
         closed_cursor_stalls: false,
         items_cursor_stalls: false,
+        search_cursor_stalls: false,
         erring_beside: Vec::new(),
         reference_fault: None,
         variables: Vec::new(),
@@ -5788,8 +5796,13 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
                 node
             })
             .collect::<Vec<_>>();
+        let (more, cursor) = if board.search_cursor_stalls && offset > 0 {
+            (true, offset.to_string())
+        } else {
+            (end < matched.len(), end.to_string())
+        };
         return json!({"search":{"nodes":nodes,
-            "pageInfo":{"hasNextPage":end < matched.len(),"endCursor":end.to_string()}}});
+            "pageInfo":{"hasNextPage":more,"endCursor":cursor}}});
     }
     if query.contains("subIssues(first:$memberFirst") {
         let id = variables["id"].as_str().expect("a node id").to_owned();
@@ -7164,7 +7177,7 @@ impl LinearWorkspace {
 
     /// Refuse every mutation naming the item `id` — an issue update by its id, a comment create
     /// on it — from now on, as Linear refuses an input it rejects: alone it is answered refused,
-    /// and in an aliased batch it nulls the whole answer after the writes aliased before it.
+    /// and in an aliased batch it nulls the whole answer and no write of the batch lands.
     // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback Linear's own answers, which only its server loop here answers, beside `refuse_create`; the batched journeys of the Linear suite drive it.
     pub fn refuse_writes_of(&self, id: &str) {
         let mut data = self.state.lock().unwrap();
@@ -7187,6 +7200,20 @@ impl LinearWorkspace {
             .unwrap_or_default();
         refused.push(json!(needle));
         data["_linear_refused_pages"] = Value::Array(refused);
+    }
+
+    /// Answer every page after the first of an issue search whose filter, as sent, holds
+    /// `needle` with the very cursor it was asked from, saying there is more, from now on — a
+    /// search that never ends if walked blindly.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] As `refuse_writes_of`.
+    pub fn stall_later_pages_of(&self, needle: &str) {
+        let mut data = self.state.lock().unwrap();
+        let mut stalled = data["_linear_stalled_pages"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        stalled.push(json!(needle));
+        data["_linear_stalled_pages"] = Value::Array(stalled);
     }
 
     /// Refuse every create of a workflow state or project status named `name`, from now on,
@@ -8565,7 +8592,21 @@ fn linear_response(
             .filter(|v| v.get("_trashed").is_none_or(Value::is_null))
             .map(|v| linear_task(v, data))
             .collect();
-        return Ok(json!({"issues":linear_connection(std::mem::take(&mut rows),&vars)}));
+        let mut connection = linear_connection(std::mem::take(&mut rows), &vars);
+        let filter = vars["filter"].to_string();
+        let stalled = !vars["after"].is_null()
+            && data["_linear_stalled_pages"]
+                .as_array()
+                .is_some_and(|stalled| {
+                    stalled
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .any(|needle| filter.contains(needle))
+                });
+        if stalled {
+            connection["pageInfo"] = json!({"hasNextPage": true, "endCursor": vars["after"]});
+        }
+        return Ok(json!({"issues":connection}));
     }
     if operation == graphql::PROJECTS {
         let rows = data["projects"]

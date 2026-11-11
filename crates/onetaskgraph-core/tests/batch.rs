@@ -566,3 +566,271 @@ async fn a_guarded_update_writes_every_field_only_while_its_guard_holds() {
     }
     assert_eq!(task(&engine, "plan:b").await.priority, Priority::High);
 }
+
+/// How a [`Miscounted`] source gets the count of its batched answers wrong.
+#[derive(Clone, Copy, Debug)]
+enum Miscount {
+    /// The last item's answer left out.
+    Short,
+    /// The first item's answer given twice.
+    Long,
+}
+
+/// A real folder of Markdown whose batched writes are made as the folder makes them and then
+/// answered with one answer too few or too many — a plugin defect only an in-process source can
+/// have, since a hosted one is always answered by the trait's defaults.
+struct Miscounted {
+    inner: Box<dyn onetaskgraph_plugin_api::TaskSource>,
+    miscount: Miscount,
+}
+
+impl Miscounted {
+    fn miscounted<T: Clone>(&self, mut answers: Vec<T>) -> Vec<T> {
+        match self.miscount {
+            Miscount::Short => {
+                answers.pop();
+            }
+            Miscount::Long => answers.push(answers[0].clone()),
+        }
+        answers
+    }
+}
+
+#[async_trait::async_trait]
+impl onetaskgraph_plugin_api::TaskSource for Miscounted {
+    fn kind(&self) -> &'static str {
+        self.inner.kind()
+    }
+    fn capabilities(&self) -> onetaskgraph_plugin_api::Capabilities {
+        self.inner.capabilities()
+    }
+    fn writes(&self) -> onetaskgraph_plugin_api::WriteSupport {
+        self.inner.writes()
+    }
+    async fn health(
+        &self,
+    ) -> Result<onetaskgraph_plugin_api::Health, onetaskgraph_plugin_api::SourceError> {
+        self.inner.health().await
+    }
+    async fn get_task(
+        &self,
+        id: &onetaskgraph_plugin_api::NativeId,
+    ) -> Result<Option<Task>, onetaskgraph_plugin_api::SourceError> {
+        self.inner.get_task(id).await
+    }
+    async fn get_project(
+        &self,
+        id: &onetaskgraph_plugin_api::NativeId,
+    ) -> Result<Option<onetaskgraph_plugin_api::Project>, onetaskgraph_plugin_api::SourceError>
+    {
+        self.inner.get_project(id).await
+    }
+    async fn query_tasks(
+        &self,
+        query: &onetaskgraph_plugin_api::TaskQuery,
+        page: &onetaskgraph_plugin_api::PageRequest,
+    ) -> Result<onetaskgraph_plugin_api::Page<Task>, onetaskgraph_plugin_api::SourceError> {
+        self.inner.query_tasks(query, page).await
+    }
+    async fn query_projects(
+        &self,
+        query: &onetaskgraph_plugin_api::ProjectQuery,
+        page: &onetaskgraph_plugin_api::PageRequest,
+    ) -> Result<
+        onetaskgraph_plugin_api::Page<onetaskgraph_plugin_api::Project>,
+        onetaskgraph_plugin_api::SourceError,
+    > {
+        self.inner.query_projects(query, page).await
+    }
+    async fn labels(
+        &self,
+        page: &onetaskgraph_plugin_api::PageRequest,
+    ) -> Result<
+        onetaskgraph_plugin_api::Page<onetaskgraph_plugin_api::Label>,
+        onetaskgraph_plugin_api::SourceError,
+    > {
+        self.inner.labels(page).await
+    }
+    async fn task_dependencies(
+        &self,
+        id: &onetaskgraph_plugin_api::NativeId,
+        direction: onetaskgraph_plugin_api::Direction,
+        page: &onetaskgraph_plugin_api::PageRequest,
+    ) -> Result<
+        onetaskgraph_plugin_api::Page<onetaskgraph_plugin_api::DependencyEdge>,
+        onetaskgraph_plugin_api::SourceError,
+    > {
+        self.inner.task_dependencies(id, direction, page).await
+    }
+    async fn project_dependencies(
+        &self,
+        id: &onetaskgraph_plugin_api::NativeId,
+        direction: onetaskgraph_plugin_api::Direction,
+        page: &onetaskgraph_plugin_api::PageRequest,
+    ) -> Result<
+        onetaskgraph_plugin_api::Page<onetaskgraph_plugin_api::DependencyEdge>,
+        onetaskgraph_plugin_api::SourceError,
+    > {
+        self.inner.project_dependencies(id, direction, page).await
+    }
+    async fn task_comments(
+        &self,
+        task: &onetaskgraph_plugin_api::NativeId,
+        page: &onetaskgraph_plugin_api::PageRequest,
+    ) -> Result<
+        Option<onetaskgraph_plugin_api::Page<onetaskgraph_plugin_api::Comment>>,
+        onetaskgraph_plugin_api::SourceError,
+    > {
+        self.inner.task_comments(task, page).await
+    }
+    async fn add_comments(
+        &self,
+        comments: &[onetaskgraph_plugin_api::BatchComment],
+    ) -> Vec<
+        Result<
+            onetaskgraph_plugin_api::BatchAnswer<onetaskgraph_plugin_api::Comment>,
+            onetaskgraph_plugin_api::SourceError,
+        >,
+    > {
+        self.miscounted(self.inner.add_comments(comments).await)
+    }
+    async fn update_tasks(
+        &self,
+        updates: &[onetaskgraph_plugin_api::BatchUpdate],
+    ) -> Vec<
+        Result<
+            onetaskgraph_plugin_api::BatchAnswer<onetaskgraph_plugin_api::TaskUpdateOutcome>,
+            onetaskgraph_plugin_api::SourceError,
+        >,
+    > {
+        self.miscounted(self.inner.update_tasks(updates).await)
+    }
+    async fn metering(
+        &self,
+    ) -> Result<Option<onetaskgraph_plugin_api::Metering>, onetaskgraph_plugin_api::SourceError>
+    {
+        self.inner.metering().await
+    }
+}
+
+/// The `plan` folder of [`folders`] behind a [`Miscounted`] source.
+fn miscounted(root: &Path, miscount: Miscount) -> Engine {
+    use onetaskgraph_plugin_api::SourcePlugin as _;
+    drop(folders(root));
+    let plan = name("plan");
+    let inner = onetaskgraph_local_md::Plugin
+        .build(&plan, &json!({"root": root.join("plan")}), &NoSecrets)
+        .expect("the local-md plugin builds");
+    let source = onetaskgraph_core::ResolvedSource::adopt(
+        plan.clone(),
+        Box::new(Miscounted { inner, miscount }),
+    );
+    Engine::new(
+        vec![onetaskgraph_core::ConfiguredSource::Ready(source)],
+        vec![plan],
+    )
+}
+
+#[tokio::test]
+async fn a_source_answering_too_few_batched_answers_leaves_the_last_item_an_error_naming_both_counts()
+ {
+    let root = tempfile::tempdir().expect("a folder");
+    let engine = miscounted(root.path(), Miscount::Short);
+    let comment = |item: &str| CommentBatchItem {
+        item: item.to_owned(),
+        body: "Counted.".to_owned(),
+        if_version: None,
+    };
+    let added = engine
+        .add_comments(
+            &name("plan"),
+            &CommentBatch {
+                schema_version: BATCH_SCHEMA_VERSION,
+                comments: vec![comment("plan:a"), comment("plan:c"), comment("plan:e")],
+            },
+        )
+        .await
+        .expect("answered");
+    let outcomes: Vec<BatchOutcome> = added.results.iter().map(|result| result.outcome).collect();
+    assert_eq!(
+        outcomes,
+        [
+            BatchOutcome::Written,
+            BatchOutcome::Written,
+            BatchOutcome::Error
+        ]
+    );
+    let reason = added.results[2].reason.as_deref().unwrap_or_default();
+    assert!(
+        reason.contains("answered 2 answers to the 3 items") && reason.contains("unanswered"),
+        "{reason}"
+    );
+
+    let updated = engine
+        .update_tasks(
+            &name("plan"),
+            &UpdateBatch {
+                schema_version: BATCH_SCHEMA_VERSION,
+                updates: vec![
+                    UpdateBatchItem {
+                        item: "plan:a".to_owned(),
+                        title: Some("Alpha, counted".to_owned()),
+                        ..UpdateBatchItem::default()
+                    },
+                    UpdateBatchItem {
+                        item: "plan:c".to_owned(),
+                        title: Some("Charlie, counted".to_owned()),
+                        ..UpdateBatchItem::default()
+                    },
+                ],
+            },
+        )
+        .await
+        .expect("answered");
+    let outcomes: Vec<BatchOutcome> = updated
+        .results
+        .iter()
+        .map(|result| result.outcome)
+        .collect();
+    assert_eq!(outcomes, [BatchOutcome::Written, BatchOutcome::Error]);
+    assert_eq!(task(&engine, "plan:a").await.title, "Alpha, counted");
+}
+
+#[tokio::test]
+async fn a_source_answering_too_many_batched_answers_leaves_every_item_an_error_to_read_again() {
+    let root = tempfile::tempdir().expect("a folder");
+    let engine = miscounted(root.path(), Miscount::Long);
+    let updated = engine
+        .update_tasks(
+            &name("plan"),
+            &UpdateBatch {
+                schema_version: BATCH_SCHEMA_VERSION,
+                updates: vec![
+                    UpdateBatchItem {
+                        item: "plan:a".to_owned(),
+                        title: Some("Alpha, overcounted".to_owned()),
+                        ..UpdateBatchItem::default()
+                    },
+                    UpdateBatchItem {
+                        item: "plan:c".to_owned(),
+                        title: Some("Charlie, overcounted".to_owned()),
+                        ..UpdateBatchItem::default()
+                    },
+                ],
+            },
+        )
+        .await
+        .expect("answered");
+    for result in &updated.results {
+        assert_eq!(result.outcome, BatchOutcome::Error, "{result:?}");
+        let reason = result.reason.as_deref().unwrap_or_default();
+        assert!(
+            reason.contains("answered 3 answers to the 2 items")
+                && reason.contains("read it before sending it again"),
+            "{reason}"
+        );
+    }
+    // Each update was sent, and the folder made it: the error says so rather than claiming
+    // nothing landed.
+    assert_eq!(task(&engine, "plan:a").await.title, "Alpha, overcounted");
+}

@@ -956,8 +956,9 @@ pub mod graphql {
     /// What batches many reads, or many writes, into one request. Linear executes each aliased
     /// field as it would the document alone, and answers it under its alias; a field it refuses
     /// is answered with an error whose `path` starts at that alias, and — every root this source
-    /// batches being non-null — with no `data` at all, after applying every mutation aliased
-    /// before it and none after.
+    /// batches being non-null — with no `data` at all. A document of mutations is applied whole
+    /// or not at all: one refused alias leaves every other unapplied, as measured against a
+    /// sandbox team on 2026-11-11.
     #[must_use]
     pub fn composed(singles: &[&str]) -> String {
         let mut kind = "query";
@@ -5417,9 +5418,10 @@ impl TaskSource for LinearSource {
     }
     /// The issue the cache kept at the version a write expects, taken as that write's read of it,
     /// so a write of what differs sends its `issueUpdate` and nothing before it. A context that
-    /// does not read as an issue is not taken.
+    /// does not read as this issue — another issue's included — is not taken.
     fn prime_write(&self, id: &NativeId, context: &Value, _board: Option<&Value>) -> bool {
-        let reads = map_task(context, &self.name, &self.statuses, self.spelling()).is_ok()
+        let reads = map_task(context, &self.name, &self.statuses, self.spelling())
+            .is_ok_and(|task| task.id == *id)
             && context.get("description").is_some();
         if reads {
             self.written

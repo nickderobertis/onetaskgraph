@@ -404,7 +404,8 @@ from standard input with `-`.
 - `task update-many <SOURCE> --input FILE` applies `{"schema_version": 1, "updates": [{"item",
   "if_version", "title", "body", "status", "priority", "when_priority", "metadata",
   "remove_metadata", "repositories"}]}` — every member but `item` optional — each update one
-  held write of every field it names: `written` with the version after it, `held` when its
+  held write of every field it names: `written` with the version after it where the write's
+  own answers determine one (a GitHub board's never do, so it answers none), `held` when its
   priority guard declined, `version-moved` with the version its task is at, or `error`.
 
 No item's failure writes or refuses another, and a batch exits `4` when any item is
