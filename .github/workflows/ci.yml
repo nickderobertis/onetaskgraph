@@ -443,13 +443,9 @@ jobs:
           ONETASKGRAPH_LIVE_REQUIRED: ${{ github.event.pull_request.head.repo.fork && '0' || '1' }}
         # llmlint: ignore[external_service_suite_stays_out_of_the_affected_tier] These suites run only when their own plugin changed, which is the edge; AGENTS.md records why an edge of their own was removed.
         run: just ci-test-linux
-      # The release pull request alone: the pass-time budget of the pool maintenance
-      # onevcs.toml declares, after this job's tests, so the target directory it prunes and builds
-      # twice is idle. test-linux owns this additional policy budget on Linux, already bootstrapped
-      # with the pinned pruner, and the upload below carries its results with the targets'. Not in
-      # lint: beside the distribution journey there it runs that job past its timeout. Kept: it
-      # adds this budget's run to a release and skips no test elsewhere, so result replay has
-      # nothing here to take over.
+      # The release pull request alone: after this job's tests, because the pool maintenance
+      # prunes and rebuilds the target directory they use, and not in lint, where beside the
+      # distribution journey it ran that job past its timeout.
       - name: Pool-maintenance pass-time budget on the release pull request
         if: startsWith(github.head_ref, 'release-plz-')
         run: just pool-maintenance-budget

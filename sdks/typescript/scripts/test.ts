@@ -167,7 +167,7 @@ test("a delayed subprocess succeeds", async () => {
     const expectedPass = [{ name: "a delayed subprocess succeeds", failure: null }];
     if (JSON.stringify(passed.cases) !== JSON.stringify(expectedPass)) {
       throw new Error(
-        `delayed subprocess did not pass: the runner reported ${JSON.stringify(passed.cases)}; a TimeoutError means the shared timeout (${HANG_TIMEOUT_MS} ms) no longer covers a 5.2 s subprocess, anything else is in the output below\n${passed.output}`,
+        `delayed subprocess did not pass: the runner reported ${JSON.stringify(passed.cases)}; on a TimeoutError check that \`--timeout=${HANG_TIMEOUT_MS}\` still reaches \`bun test\` in run(), otherwise fix the failure the output below names, then re-run \`bun scripts/test.ts\` from sdks/typescript\n${passed.output}`,
       );
     }
 
