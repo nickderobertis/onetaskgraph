@@ -250,6 +250,28 @@ impl LinearSource {
             .collect())
     }
 
+    /// One held comment of a batch made on its own after the rest: the issue read as it now
+    /// stands, the hold decided on that read, and the comment added as `add_comment` adds it.
+    async fn comment_after(
+        &self,
+        each: &BatchComment,
+    ) -> Result<BatchAnswer<Comment>, SourceError> {
+        use onetaskgraph_plugin_api::TaskSource as _;
+        let now = self.issue_held(&each.task, Read::Load).await?;
+        if let Some(answer) = decided_on(
+            self,
+            now.as_ref().map(|(task, _)| task),
+            each.if_version.as_deref(),
+            &[],
+        ) {
+            return Ok(answer);
+        }
+        Ok(self
+            .add_comment(&each.task, &each.comment)
+            .await?
+            .map_or(BatchAnswer::Missing, BatchAnswer::Written))
+    }
+
     /// One update of a batch made on its own after the rest: the issue read as it now stands,
     /// the update decided on that read, and written as `update_task` writes it.
     async fn update_after(
@@ -467,14 +489,26 @@ impl LinearSource {
                 }));
             }
         }
-        let wanted: Vec<usize> = (0..comments.len())
-            .filter(|at| answers[*at].is_none())
-            .collect();
+        // A held comment on an issue an earlier comment of this batch names is decided only
+        // once that one is answered: a comment moves its issue's version.
+        let mut wanted: Vec<usize> = Vec::new();
+        let mut later: Vec<usize> = Vec::new();
+        for at in (0..comments.len()).filter(|at| answers[*at].is_none()) {
+            if comments[at].if_version.is_some()
+                && wanted
+                    .iter()
+                    .any(|earlier| comments[*earlier].task == comments[at].task)
+            {
+                later.push(at);
+            } else {
+                wanted.push(at);
+            }
+        }
         let ids: Vec<NativeId> = wanted.iter().map(|at| comments[*at].task.clone()).collect();
         let read = match self.issues_held(&ids).await {
             Ok(read) => read,
             Err(error) => {
-                for at in &wanted {
+                for at in wanted.iter().chain(&later) {
                     answers[*at] = Some(Err(error.clone()));
                 }
                 return answers.into_iter().flatten().collect();
@@ -554,6 +588,19 @@ impl LinearSource {
                     }
                 }
             }
+        }
+        for at in later {
+            let each = &comments[at];
+            let moved = (0..at).any(|earlier| {
+                comments[earlier].task == each.task
+                    && matches!(answers[earlier], Some(Ok(BatchAnswer::Written(_))))
+            });
+            answers[at] = Some(if moved {
+                // The earlier comment moved the issue past the version this one is held to.
+                Ok(BatchAnswer::VersionMoved { found: None })
+            } else {
+                self.comment_after(each).await
+            });
         }
         answers
             .into_iter()

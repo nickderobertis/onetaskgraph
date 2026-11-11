@@ -997,3 +997,104 @@ fn a_batched_priority_clear_lands_and_one_answered_missing_fails_that_ticket_alo
         .unwrap_or_default();
     assert!(reason.contains("clear1"), "{reason}");
 }
+
+#[test]
+fn a_second_comment_held_to_the_version_the_first_moved_is_refused() {
+    let board = ticket_board();
+    let version = board.versions(&["U-0"]).remove(0);
+    let batch = json!({"schema_version": 1, "comments": [
+        {"item": "board:U-0", "body": "First.", "if_version": version},
+        {"item": "board:U-0", "body": "Second.", "if_version": version},
+        {"item": "board:U-1", "body": "Beside them."},
+    ]});
+    let answered = board.run(
+        &[
+            "task", "comment", "add-many", "board", "--input", "-", "--json",
+        ],
+        &batch.to_string(),
+    );
+    assert_eq!(answered.code, Some(4), "{}", answered.stderr);
+    let outcomes: Vec<&str> = answered.json["results"]
+        .as_array()
+        .expect("results")
+        .iter()
+        .map(|result| result["outcome"].as_str().expect("an outcome"))
+        .collect();
+    assert_eq!(
+        outcomes,
+        ["written", "version-moved", "written"],
+        "{:#}",
+        answered.json
+    );
+    let listed = board.run(&["task", "comment", "list", "board:U-0", "--json"], "");
+    let bodies: Vec<&str> = listed.json["comments"]
+        .as_array()
+        .expect("comments")
+        .iter()
+        .filter_map(|comment| comment["body"].as_str())
+        .collect();
+    assert_eq!(bodies, ["First."]);
+}
+
+#[test]
+fn a_find_wider_than_one_request_is_split_across_requests_answering_every_query() {
+    let board = searched_board();
+    // Sixteen searches and six origin lookups: twenty-two search slots and six origin slots,
+    // more of each than one request carries.
+    let mut queries: Vec<Value> = (0..16)
+        .map(|n| json!({"key": format!("deploy-{n}"), "text": "deploy"}))
+        .collect();
+    let origins = [
+        "notes:o1",
+        "notes:o10",
+        "notes:x1",
+        "notes:x2",
+        "notes:x3",
+        "notes:x4",
+    ];
+    queries.extend(
+        origins
+            .iter()
+            .map(|origin| json!({"key": format!("from-{origin}"), "origin": origin})),
+    );
+    let (answered, served) = board.measured(
+        &["task", "find", "board", "--queries", "-", "--json"],
+        &json!({"schema_version": 1, "queries": queries}).to_string(),
+    );
+    assert_eq!(answered.code, Some(0), "{}", answered.stderr);
+    let answer = &answered.json;
+    for n in 0..16 {
+        assert_eq!(
+            found(answer, &format!("deploy-{n}")),
+            set((0..7).map(|n| format!("D-{n}"))),
+            "deploy-{n}"
+        );
+    }
+    assert_eq!(
+        found(answer, "from-notes:o1"),
+        set((0..5).map(|n| format!("O-{n}")))
+    );
+    assert_eq!(found(answer, "from-notes:o10"), set(["O-5".to_owned()]));
+    for origin in &origins[2..] {
+        assert_eq!(found(answer, &format!("from-{origin}")), BTreeSet::new());
+    }
+    for each in answer["answers"].as_array().expect("answers") {
+        assert_eq!(each["complete"], true, "{each}");
+    }
+    let batches: Vec<&Value> = served
+        .iter()
+        .filter(|(query, _)| query == graphql::SEARCH_BATCH)
+        .map(|(_, variables)| variables)
+        .collect();
+    assert!(batches.len() >= 2, "split across requests: {served:#?}");
+    for variables in batches {
+        let searches = (0..onetaskgraph_github_projects::SEARCH_BATCH)
+            .filter(|slot| variables[format!("ask{slot}")] == true)
+            .count();
+        let lookups = (0..onetaskgraph_github_projects::SEARCH_BATCH_ORIGINS)
+            .filter(|slot| variables[format!("origin{slot}")] == true)
+            .count();
+        assert!(searches <= onetaskgraph_github_projects::SEARCH_BATCH);
+        assert!(lookups <= onetaskgraph_github_projects::SEARCH_BATCH_ORIGINS);
+    }
+}

@@ -1132,3 +1132,39 @@ fn a_batched_write_answered_without_an_alias_fails_that_item_alone_saying_it_may
         listed.json
     );
 }
+
+#[test]
+fn a_second_comment_held_to_the_version_the_first_moved_is_refused() {
+    let team = Team::holding(writable(), false);
+    let version = team.version("team:U-1");
+    let comments = team.batch(
+        "comments.json",
+        &json!({"schema_version": 1, "comments": [
+            {"item": "team:U-1", "body": "First.", "if_version": version},
+            {"item": "team:U-1", "body": "Second.", "if_version": version},
+            {"item": "team:U-2", "body": "Beside them."},
+        ]}),
+    );
+    let ran = team.run(&["task", "comment", "add-many", "team", "--input", &comments]);
+    assert_eq!(ran.code, Some(4), "{}", ran.json);
+    let outcomes: Vec<&str> = ran.json["results"]
+        .as_array()
+        .expect("results")
+        .iter()
+        .map(|result| result["outcome"].as_str().expect("an outcome"))
+        .collect();
+    assert_eq!(
+        outcomes,
+        ["written", "version-moved", "written"],
+        "{}",
+        ran.json
+    );
+    let listed = team.ok(&["task", "comment", "list", "team:U-1"]);
+    let bodies: Vec<&str> = listed.json["comments"]
+        .as_array()
+        .expect("comments")
+        .iter()
+        .filter_map(|comment| comment["body"].as_str())
+        .collect();
+    assert_eq!(bodies, ["First."]);
+}

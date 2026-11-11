@@ -748,8 +748,19 @@ impl GitHubProjectsSource {
                 .and_then(|at| read[at].clone())
         };
         let mut sending: Vec<(usize, NativeId, String)> = Vec::new();
+        // A held comment on a task an earlier comment of this batch is sent to is decided only
+        // once that one is answered: a comment moves its task's version.
+        let mut later: Vec<usize> = Vec::new();
         for (at, each) in comments.iter().enumerate() {
             if answers[at].is_some() {
+                continue;
+            }
+            if each.if_version.is_some()
+                && sending
+                    .iter()
+                    .any(|(earlier, _, _)| comments[*earlier].task == each.task)
+            {
+                later.push(at);
                 continue;
             }
             let item =
@@ -778,6 +789,20 @@ impl GitHubProjectsSource {
             for (at, answer) in self.comment_round(chunk).await {
                 answers[at] = Some(answer);
             }
+        }
+        for at in later {
+            let each = &comments[at];
+            let moved = (0..at).any(|earlier| {
+                comments[earlier].task == each.task
+                    && matches!(answers[earlier], Some(Ok(BatchAnswer::Written(_))))
+            });
+            answers[at] = Some(if moved {
+                // The earlier comment moved the task past the version this one is held to, to
+                // one no write's answer settles.
+                Ok(BatchAnswer::VersionMoved { found: None })
+            } else {
+                self.comment_alone(each).await
+            });
         }
         answers
             .into_iter()
