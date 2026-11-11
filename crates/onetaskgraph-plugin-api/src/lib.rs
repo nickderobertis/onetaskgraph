@@ -68,8 +68,8 @@ pub use query::{
     ProjectQuery, TaskQuery, TextFields, TextQuery,
 };
 pub use relation::{
-    LINKS_HEADING, LinkDirection, LinkTypeConfig, LinkTypes, NativeLink, ParentAnswer, ParentWrite,
-    Relations, TaskLink, arrow, link_line, read_content, relationless, relinked,
+    LINKS_HEADING, LinkDirection, LinkTypeConfig, LinkTypes, NativeLink, NativeWord, ParentAnswer,
+    ParentWrite, Relations, TaskLink, arrow, link_line, read_content, relationless, relinked,
     strip_links_section, with_links_section,
 };
 pub use section::{BodyMarkup, SharedBodyMarkup, StoredHeading};

@@ -25,6 +25,28 @@ use super::{LinearSource, MAX_PAGE_SIZE, graphql, map_task, metadata_description
 /// Linear's word for the one issue relation a link is mirrored as.
 pub const MIRRORED: &str = "related";
 
+/// Why a `link_types` word Linear could mean is never a native mirror here: blocking is what a
+/// task's `depends_on` already writes as Linear's `blocks` relation, and a native `duplicate`
+/// moves the issue it marks to `Duplicate`.
+pub(crate) const REFUSED_WORDS: &[(&str, &str)] = &[
+    (
+        "blocks",
+        "blocking is what a task's `depends_on` already means, written as Linear's `blocks` relation, so no link type is mirrored as it",
+    ),
+    (
+        "blocked-by",
+        "blocking is what a task's `depends_on` already means, written as Linear's `blocks` relation, so no link type is mirrored as it",
+    ),
+    (
+        "duplicate",
+        "a native duplicate moves the issue to `Duplicate` on Linear, so a duplicate link stays in the store's metadata alone",
+    ),
+    (
+        "similar",
+        "Linear's `similar` is not offered as a mirror; a duplicate or similar link stays in the store's metadata alone",
+    ),
+];
+
 /// One issue as a relation read answers it.
 struct Read {
     relations: Relations,

@@ -212,7 +212,7 @@ impl InMemorySource {
         config
             .validate()
             .map_err(|message| SourceError::Config { message })?;
-        LinkTypes::checked(KIND, &config.link_types, &[])?;
+        LinkTypes::checked(KIND, &config.link_types, &[], &[])?;
         Ok(Self {
             capabilities: config.capabilities,
             held: Mutex::new(Held {
@@ -1692,11 +1692,6 @@ fn rooted(depends_on: &[DependencyEdge], near: &NativeId, kind: ItemKind) -> Vec
         .collect()
 }
 
-/// Replace every forward edge at `near` with `edges`.
-///
-/// A write says what an item depends on now, so an edge the copy no longer carries is one
-/// the source no longer has — leaving it would make a second copy of an item whose
-/// dependency was removed keep depending on it.
 impl Held {
     /// One parent write, decided and made on what this source holds.
     fn set_parent(&mut self, write: &ParentWrite) -> ParentAnswer {
@@ -1764,6 +1759,11 @@ fn cycle(
     None
 }
 
+/// Replace every forward edge at `near` with `edges`.
+///
+/// A write says what an item depends on now, so an edge the copy no longer carries is one
+/// the source no longer has — leaving it would make a second copy of an item whose
+/// dependency was removed keep depending on it.
 fn replace_edges(held: &mut Vec<DependencyEdge>, near: &NativeId, edges: Vec<DependencyEdge>) {
     held.retain(|edge| &edge.from != near);
     held.extend(edges);

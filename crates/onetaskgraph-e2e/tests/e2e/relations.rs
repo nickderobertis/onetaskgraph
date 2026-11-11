@@ -897,3 +897,35 @@ fn a_render_of_a_linked_task_keeps_its_links_section() {
     );
     assert_eq!(store.file(&store.work, native), file, "{again:#}");
 }
+
+#[test]
+fn a_parent_held_to_a_version_the_child_moved_past_answers_version_moved_writing_nothing() {
+    let store = Store::new();
+    let read = store.shown("work:t2")["version"]
+        .as_str()
+        .expect("a version")
+        .to_owned();
+    // Another writer moves t2 after it was read.
+    store.exited(
+        &["task", "update", "work:t2", "--title", "Symptom, moved"],
+        None,
+        0,
+    );
+    let moved = store.file(&store.work, "t2");
+    let now = store.shown("work:t2")["version"].clone();
+    let answer = store.parents(
+        &json!([
+            {"child": "work:t2", "parent": "work:t1", "if_version": read},
+            {"child": "work:t3", "parent": "work:t1", "if_version": store.shown("work:t3")["version"]},
+        ]),
+        4,
+    );
+    assert_eq!(outcomes(&answer), ["version-moved", "written"]);
+    assert_eq!(answer["results"][0]["version"], now, "{answer:#}");
+    assert_eq!(
+        store.file(&store.work, "t2"),
+        moved,
+        "nothing was written to t2"
+    );
+    assert_eq!(store.relations(&["work:t2"])[0]["parent"], Value::Null);
+}

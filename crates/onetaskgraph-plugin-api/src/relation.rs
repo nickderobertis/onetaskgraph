@@ -137,13 +137,32 @@ pub struct NativeLink {
     /// The link's `to`.
     pub to: NativeId,
     /// The destination's own word for the relation, as [`LinkTypes`] names it.
-    pub native: String,
+    pub native: NativeWord,
+}
+
+/// A native relation word a source's `link_types` was checked to mirror as: only
+/// [`LinkTypes::checked`] makes one, so no [`NativeLink`] carries a word its plugin refused.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct NativeWord(String);
+
+impl NativeWord {
+    /// The word as the configuration spelled it.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Display for NativeWord {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
 }
 
 /// A source's `link_types` configuration: each link type a source mirrors natively, with the
 /// destination's word for it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct LinkTypes(BTreeMap<String, String>);
+pub struct LinkTypes(BTreeMap<String, NativeWord>);
 
 /// One entry of a source's `link_types` configuration, as written.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -156,8 +175,8 @@ pub struct LinkTypeConfig {
 
 impl LinkTypes {
     /// `configured` checked against `words`, the native relations the `kind` plugin can mirror
-    /// a link as — refusing any other word, naming the type and the word, and why for the words
-    /// the store already gives a meaning or that change an item's state.
+    /// a link as — refusing any other word, naming the type and the word, and, for a word
+    /// `reasons` names, the plugin's own reason it is never one.
     ///
     /// # Errors
     ///
@@ -167,6 +186,7 @@ impl LinkTypes {
         kind: &str,
         configured: &BTreeMap<String, LinkTypeConfig>,
         words: &[&str],
+        reasons: &[(&str, &str)],
     ) -> Result<Self, SourceError> {
         let mut mirrored = BTreeMap::new();
         for (name, entry) in configured {
@@ -180,20 +200,10 @@ impl LinkTypes {
                 continue;
             };
             if !words.contains(&word.as_str()) {
-                let why = match word.as_str() {
-                    "blocks" | "blocked-by" | "blocked_by" | "blocking" => {
-                        " — blocking is what a task's `depends_on` already means, so no link type \
-                         is mirrored as it"
-                            .to_owned()
-                    }
-                    "duplicate" | "similar" => {
-                        " — a native duplicate closes the issue on GitHub and moves it to \
-                         `Duplicate` on Linear, so a duplicate link stays in the store's metadata \
-                         alone"
-                            .to_owned()
-                    }
-                    _ => String::new(),
-                };
+                let why = reasons
+                    .iter()
+                    .find(|(refused, _)| refused == word)
+                    .map_or_else(String::new, |(_, why)| format!(" — {why}"));
                 let allowed = if words.is_empty() {
                     format!("the {kind} plugin mirrors no link natively; remove `native`")
                 } else {
@@ -213,20 +223,20 @@ impl LinkTypes {
                     ),
                 });
             }
-            mirrored.insert(name.clone(), word.clone());
+            mirrored.insert(name.clone(), NativeWord(word.clone()));
         }
         Ok(Self(mirrored))
     }
 
     /// The native word `link_type` is mirrored as, or `None` for a type kept in metadata alone.
     #[must_use]
-    pub fn native(&self, link_type: &str) -> Option<&str> {
-        self.0.get(link_type).map(String::as_str)
+    pub fn native(&self, link_type: &str) -> Option<&NativeWord> {
+        self.0.get(link_type)
     }
 
     /// Every mirrored type and its word.
     #[must_use]
-    pub fn mirrored(&self) -> &BTreeMap<String, String> {
+    pub fn mirrored(&self) -> &BTreeMap<String, NativeWord> {
         &self.0
     }
 }
@@ -444,13 +454,14 @@ mod tests {
             LinkTypes::checked(
                 "github-projects",
                 &configured("relates-to"),
-                &["relates-to"]
+                &["relates-to"],
+                &[("blocks", "blocking is `depends_on`")]
             )
             .is_ok()
         );
         for word in ["blocks", "blocked-by", "duplicate", "similar", "frobs"] {
             let Err(SourceError::Config { message }) =
-                LinkTypes::checked("github-projects", &configured(word), &["relates-to"])
+                LinkTypes::checked("github-projects", &configured(word), &["relates-to"], &[])
             else {
                 panic!("{word} was accepted");
             };
@@ -458,7 +469,7 @@ mod tests {
             assert!(message.contains(&format!("`{word}`")), "{message}");
         }
         let Err(SourceError::Config { message }) =
-            LinkTypes::checked("local-md", &configured("related"), &[])
+            LinkTypes::checked("local-md", &configured("related"), &[], &[])
         else {
             panic!("a native word was accepted on a plugin with none");
         };

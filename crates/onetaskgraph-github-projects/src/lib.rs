@@ -5734,6 +5734,7 @@ impl GitHubProjectsSource {
                 KIND,
                 &config.link_types,
                 &[relations::RELATES_TO],
+                relations::REFUSED_WORDS,
             )
             .map_err(|error| match error {
                 SourceError::Config { message } => SourceError::Config {

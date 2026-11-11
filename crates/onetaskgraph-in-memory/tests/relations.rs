@@ -115,3 +115,41 @@ async fn a_parent_write_answers_each_edge_on_its_own() {
     let (root, linked) = (read[0].as_ref().unwrap(), read[1].as_ref().unwrap());
     assert!(root.children.is_empty() && linked.parent.is_none());
 }
+
+#[tokio::test]
+async fn a_parent_write_names_a_missing_task_a_moved_version_and_an_unchanged_parent() {
+    let source = source();
+    let version = read(&source, &NativeId("linked".into())).await.version;
+    let write = |child: &str, parent: Option<&str>, if_version: Option<String>| ParentWrite {
+        child: NativeId(child.into()),
+        parent: parent.map(|parent| NativeId(parent.into())),
+        if_version,
+    };
+    let answers = source
+        .set_parents(&[
+            write("ghost", Some("root"), None),
+            write("linked", Some("ghost"), None),
+            write("linked", Some("root"), Some("mem1|stale".to_owned())),
+            write("linked", Some("root"), version.clone()),
+        ])
+        .await;
+    assert_eq!(
+        answers[0],
+        Ok(ParentAnswer::Missing {
+            what: NativeId("ghost".into())
+        })
+    );
+    assert_eq!(
+        answers[1],
+        Ok(ParentAnswer::Missing {
+            what: NativeId("ghost".into())
+        })
+    );
+    assert_eq!(
+        answers[2],
+        Ok(ParentAnswer::VersionMoved {
+            found: version.clone()
+        })
+    );
+    assert_eq!(answers[3], Ok(ParentAnswer::Unchanged { version }));
+}

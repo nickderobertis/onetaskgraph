@@ -26,6 +26,28 @@ use onetaskgraph_plugin_api::ItemKind;
 /// The one native word a link type may be mirrored as on a GitHub board.
 pub(crate) const RELATES_TO: &str = "relates-to";
 
+/// Why a `link_types` word this board could mean is never a native mirror here: blocking is
+/// what a task's `depends_on` already writes as `blockedBy`, and a native duplicate closes the
+/// issue it marks.
+pub(crate) const REFUSED_WORDS: &[(&str, &str)] = &[
+    (
+        "blocks",
+        "blocking is what a task's `depends_on` already means, written as GitHub's `blockedBy`, so no link type is mirrored as it",
+    ),
+    (
+        "blocked-by",
+        "blocking is what a task's `depends_on` already means, written as GitHub's `blockedBy`, so no link type is mirrored as it",
+    ),
+    (
+        "duplicate",
+        "GitHub marks a duplicate only by closing the issue, so a duplicate link stays in the store's metadata alone",
+    ),
+    (
+        "similar",
+        "GitHub has no similar relation; a duplicate or similar link stays in the store's metadata alone",
+    ),
+];
+
 /// Which way a native `relates-to` write goes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum NativeWrite {
@@ -424,7 +446,7 @@ impl GitHubProjectsSource {
         let Some(first) = chunk.first() else {
             return Vec::new();
         };
-        if let Some(link) = chunk.iter().find(|link| link.native != RELATES_TO) {
+        if let Some(link) = chunk.iter().find(|link| link.native.as_str() != RELATES_TO) {
             let refused = SourceError::Refused {
                 message: format!(
                     "source {} mirrors a link only as `{RELATES_TO}`, and was asked for `{}`",

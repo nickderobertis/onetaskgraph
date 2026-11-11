@@ -297,7 +297,7 @@ fn qualified(text: &str, what: &str) -> Result<GlobalId, String> {
 type Pair = (GlobalId, GlobalId);
 
 /// The native word a pair is mirrored as, and the links of a call that need it.
-type Mirrored = (String, Vec<usize>);
+type Mirrored = (onetaskgraph_plugin_api::NativeWord, Vec<usize>);
 
 /// What one read of endpoints answered for one id.
 type Read = Result<Relations, String>;
@@ -800,7 +800,7 @@ impl Engine {
                 .entry(link.from.source.clone())
                 .or_default()
                 .entry(pair)
-                .or_insert_with(|| (word.to_owned(), Vec::new()))
+                .or_insert_with(|| (word.clone(), Vec::new()))
                 .1
                 .push(*at);
         }

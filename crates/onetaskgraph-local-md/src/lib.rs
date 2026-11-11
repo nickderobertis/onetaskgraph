@@ -541,7 +541,7 @@ impl LocalMdSource {
                 message: format!("root {} is not a directory", root.display()),
             });
         }
-        onetaskgraph_plugin_api::LinkTypes::checked(KIND, &config.link_types, &[])?;
+        onetaskgraph_plugin_api::LinkTypes::checked(KIND, &config.link_types, &[], &[])?;
         Ok(Self {
             root,
             name: None,

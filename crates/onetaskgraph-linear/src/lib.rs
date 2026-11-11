@@ -1902,6 +1902,7 @@ impl LinearSource {
             KIND,
             &config.link_types,
             &[relations::MIRRORED],
+            relations::REFUSED_WORDS,
         )
         .map_err(|error| match error {
             SourceError::Config { message } => SourceError::Config {

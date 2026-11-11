@@ -337,13 +337,8 @@ budgets:
     threshold: 34
   - id: github-points-per-relation-batch
     description: >-
-      GitHub points one relation batch costs — the GraphQL rate-limit points one batch of
-      relation calls over 20 tickets costs, every call a fresh process: one `task relations` over
-      the 20, one `task parent set-many` of 12 edges, one `task link add-many` of 30 typed links
-      every type of which is mirrored natively, then the same three calls repeated with nothing
-      changed — each read at the cost the loopback GitHub reports and each mutation document at 1
-      point, across the first pass and its unchanged repeat, the detail giving each call's points.
-      It protects the GitHub allowance every manager on a host shares.
+      GitHub GraphQL points one relation batch costs over 20 tickets, first pass and unchanged
+      repeat, protecting the GitHub allowance every manager on a host shares.
     measure: reported
     # llmlint: ignore[budget_commands_measure_directly] Every budget of this file selects its own report-only entry in `budget_runner`, the harness-runner convention this crate's budgets landed with; this one reads only the telemetry `relation_batch.rs` recorded during the crate's test run, refuses a recording of another workload or a figure that is not its calls' points added up, and hands the figure to onebudgetspec, which alone judges it.
     command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_relation_batch_points", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-github-projects-e2e"]
