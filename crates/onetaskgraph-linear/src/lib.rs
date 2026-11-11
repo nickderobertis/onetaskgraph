@@ -5520,8 +5520,8 @@ impl TaskSource for LinearSource {
     ) -> Result<Option<TaskUpdateOutcome>, SourceError> {
         self.targeted_update(id, update).await
     }
-    /// Every issue read in one aliased read and every update that changes something sent in
-    /// one aliased `issueUpdate` document — see the `batch` module for where one is sent alone.
+
+    /// Each issue's parent, children and links, in one aliased relation read.
     async fn read_relations(
         &self,
         ids: &[NativeId],
@@ -5554,6 +5554,8 @@ impl TaskSource for LinearSource {
         self.native_links_removed(links).await
     }
 
+    /// Every issue read in one aliased read and every update that changes something sent in
+    /// one aliased `issueUpdate` document — see the `batch` module for where one is sent alone.
     async fn update_tasks(
         &self,
         updates: &[onetaskgraph_plugin_api::BatchUpdate],

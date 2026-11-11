@@ -1719,11 +1719,6 @@ impl TaskSource for LocalMdSource {
         self.set_status(WorkKind::Project, id, category)
     }
 
-    /// Rewrite the one `priority:` entry of the task's front matter, and nothing else —
-    /// removing it for `none`, which is what an absent key reads as.
-    ///
-    /// A task already holding `priority` is left byte for byte as it is, an explicit
-    /// `priority: none` included. The file is replaced exactly as a status write replaces it.
     /// Every task's relations, read off one scan of `tasks/`: its `parent:` front-matter entry,
     /// every task whose `parent:` names it, and its links in its metadata.
     async fn read_relations(
@@ -1772,6 +1767,11 @@ impl TaskSource for LocalMdSource {
         answers
     }
 
+    /// Rewrite the one `priority:` entry of the task's front matter, and nothing else —
+    /// removing it for `none`, which is what an absent key reads as.
+    ///
+    /// A task already holding `priority` is left byte for byte as it is, an explicit
+    /// `priority: none` included. The file is replaced exactly as a status write replaces it.
     async fn set_task_priority(
         &self,
         id: &NativeId,

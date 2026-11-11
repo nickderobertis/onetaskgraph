@@ -356,6 +356,66 @@ fn a_project_write_to_a_parent_source_is_refused_naming_the_setting() {
 }
 
 #[test]
+fn every_project_write_to_a_parent_source_is_refused_naming_the_setting_and_sends_no_mutation() {
+    let board = Board::of(
+        vec![issue("A-1", None), issue("B-2", Some("A-1"))],
+        &parent_source(),
+    );
+    let notes = board.sandbox.subdirectory("notes");
+    std::fs::create_dir_all(notes.join("projects")).expect("the projects folder");
+    std::fs::write(
+        notes.join("projects").join("plan.md"),
+        "---\ntitle: A plan\nstatus: todo\n---\nThe plan.\n",
+    )
+    .expect("a project");
+    let template = board.sandbox.subdirectory("templates").join("plan.md");
+    std::fs::write(&template, "A rendered plan.\n").expect("a template");
+    let template = template.to_str().expect("a UTF-8 path");
+    let verbs: [&[&str]; 5] = [
+        &[
+            "task",
+            "create",
+            "board",
+            "--title",
+            "T",
+            "--project",
+            "board:A-1",
+        ],
+        &["project", "create", "board", "--id", "P-9", "--title", "P"],
+        &[
+            "project",
+            "metadata",
+            "set",
+            "board:A-1",
+            "caller.key",
+            r#""x""#,
+        ],
+        &["project", "render", "board:A-1", "--template", template],
+        &["project", "copy", "notes:plan", "--to", "board"],
+    ];
+    for verb in verbs {
+        let mut arguments = verb.to_vec();
+        arguments.push("--json");
+        let (refused, served) = board.measured(&arguments, "");
+        let said = format!("{}{}", refused.json, refused.stderr);
+        assert_ne!(refused.code, Some(0), "`{}`: {said}", verb.join(" "));
+        // A render reads the project first, and a source with no projects has none to render.
+        let named = if verb[1] == "render" {
+            "no project with the id board:A-1"
+        } else {
+            "sub_issues: parent"
+        };
+        assert!(said.contains(named), "`{}`: {said}", verb.join(" "));
+        assert!(
+            served.iter().all(|(sent, _)| !sent.starts_with("mutation")),
+            "`{}` wrote nothing",
+            verb.join(" ")
+        );
+    }
+    assert_eq!(board.board.sub_issue_parent("B-2").as_deref(), Some("A-1"));
+}
+
+#[test]
 fn a_default_source_keeps_its_projects_and_reports_a_member_as_no_parent_relation() {
     let board = Board::of(
         vec![issue("P-4", None), issue("T-5", Some("P-4"))],

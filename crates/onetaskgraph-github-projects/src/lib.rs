@@ -15473,20 +15473,7 @@ impl TaskSource for GitHubProjectsSource {
         self.targeted_update(id, update).await
     }
 
-    /// Every task read together — [`DETAIL_BATCH`] to a [`graphql::ISSUE_DETAILS`] request —
-    /// and each update's hold and guard decided on that read; then each update the read lets
-    /// through composed exactly as [`Self::update_task`] composes one, its board field writes
-    /// and its issue update held back and sent in [`graphql::WRITE_TASKS`] requests: every
-    /// field write first, then the issue update of every task whose field writes all landed.
-    ///
-    /// **Where GitHub would refuse the batch as a whole, each item is read on its own:** a
-    /// batched node read naming an id that resolves to nothing is refused whole, so each id of
-    /// that batch is read by itself, the missing one answered missing and the rest as
-    /// themselves. A batch of one, an update of a board draft, one naming dependencies and one
-    /// of an item whose body this process has not read are each made on their own, as
-    /// [`Self::update_task`] makes them, because each sends writes of its own in an order the
-    /// batch does not hold. A field write GitHub refuses fails that task's update alone and
-    /// sends nothing of its body.
+    /// Each issue's sub-issue parent and children and its links, read in batches.
     async fn read_relations(
         &self,
         ids: &[NativeId],
@@ -15520,6 +15507,20 @@ impl TaskSource for GitHubProjectsSource {
             .await
     }
 
+    /// Every task read together — [`DETAIL_BATCH`] to a [`graphql::ISSUE_DETAILS`] request —
+    /// and each update's hold and guard decided on that read; then each update the read lets
+    /// through composed exactly as [`Self::update_task`] composes one, its board field writes
+    /// and its issue update held back and sent in [`graphql::WRITE_TASKS`] requests: every
+    /// field write first, then the issue update of every task whose field writes all landed.
+    ///
+    /// **Where GitHub would refuse the batch as a whole, each item is read on its own:** a
+    /// batched node read naming an id that resolves to nothing is refused whole, so each id of
+    /// that batch is read by itself, the missing one answered missing and the rest as
+    /// themselves. A batch of one, an update of a board draft, one naming dependencies and one
+    /// of an item whose body this process has not read are each made on their own, as
+    /// [`Self::update_task`] makes them, because each sends writes of its own in an order the
+    /// batch does not hold. A field write GitHub refuses fails that task's update alone and
+    /// sends nothing of its body.
     async fn update_tasks(
         &self,
         updates: &[onetaskgraph_plugin_api::BatchUpdate],

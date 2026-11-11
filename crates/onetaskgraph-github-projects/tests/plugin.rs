@@ -23729,3 +23729,45 @@ async fn listed_comment_pages_authorize_writes_only_when_the_page_is_complete() 
         );
     }
 }
+
+/// A source reading sub-issues as children holds no project, so every write that names or
+/// takes back a project — a task filed under one, alone or in a batch, and a project's own
+/// removal — is refused naming the setting before anything is sent, even where no command a
+/// user types reaches it because no project is ever there to name.
+#[tokio::test]
+async fn a_parent_source_refuses_every_project_write_naming_the_setting_before_sending_anything() {
+    let fixture = board(Vec::new());
+    let source = configured(&fixture.endpoint, json!({"sub_issues": "parent"}));
+    let mut filed = task("T-1", "Filed", status(StatusCategory::Todo, "Todo"));
+    filed.project = Some(NativeId("P-1".to_owned()));
+    let write = ItemWrite {
+        target: None,
+        item: filed,
+        depends_on: Vec::new(),
+    };
+    let refusals = [
+        source
+            .write_task(&write)
+            .await
+            .expect_err("a task filed under a project"),
+        source
+            .write_tasks(std::slice::from_ref(&write))
+            .await
+            .expect_err("a batch filing a task under a project"),
+        source
+            .delete_project(&NativeId("P-1".to_owned()))
+            .await
+            .expect_err("a project taken back"),
+    ];
+    for refused in refusals {
+        assert!(
+            matches!(refused, SourceError::Refused { .. }),
+            "{refused:?}"
+        );
+        assert!(
+            refused.to_string().contains("sub_issues: parent"),
+            "{refused}"
+        );
+    }
+    assert!(fixture.seen().is_empty(), "nothing was written");
+}
