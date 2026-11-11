@@ -683,6 +683,16 @@ impl onetaskgraph_plugin_api::TaskSource for Miscounted {
     > {
         self.inner.task_comments(task, page).await
     }
+    async fn query_tasks_batch(
+        &self,
+        asks: &[(
+            onetaskgraph_plugin_api::TaskQuery,
+            onetaskgraph_plugin_api::PageRequest,
+        )],
+    ) -> Vec<Result<onetaskgraph_plugin_api::Page<Task>, onetaskgraph_plugin_api::SourceError>>
+    {
+        self.miscounted(self.inner.query_tasks_batch(asks).await)
+    }
     async fn add_comments(
         &self,
         comments: &[onetaskgraph_plugin_api::BatchComment],
@@ -833,4 +843,62 @@ async fn a_source_answering_too_many_batched_answers_leaves_every_item_an_error_
     // Each update was sent, and the folder made it: the error says so rather than claiming
     // nothing landed.
     assert_eq!(task(&engine, "plan:a").await.title, "Alpha, overcounted");
+}
+
+/// Two searches of `plan`, each matching titles alone: `batch` (four tasks) and `Delta` (one).
+fn two_searches() -> FindRequest {
+    let titled = |key: &str, text: &str| FindQuery {
+        text: Some(text.to_owned()),
+        fields: FindIn::Title,
+        ..query(key)
+    };
+    FindRequest {
+        schema_version: BATCH_SCHEMA_VERSION,
+        queries: vec![titled("batch", "batch"), titled("delta", "Delta")],
+    }
+}
+
+#[tokio::test]
+async fn a_source_answering_too_few_searches_leaves_the_last_one_incomplete_and_the_first_whole() {
+    let root = tempfile::tempdir().expect("a folder");
+    let engine = miscounted(root.path(), Miscount::Short);
+    let found = engine
+        .find_tasks(
+            &name("plan"),
+            &two_searches(),
+            NonZeroU32::new(10).expect("a page"),
+        )
+        .await
+        .expect("answered");
+    assert!(found.answers[0].complete, "{:?}", found.answers[0]);
+    assert_eq!(found.answers[0].items.len(), 4);
+    assert!(!found.answers[1].complete, "{:?}", found.answers[1]);
+    let reason = found.answers[1].reason.as_deref().unwrap_or_default();
+    assert!(
+        reason.contains("answered 1 answers to the 2 items"),
+        "{reason}"
+    );
+}
+
+#[tokio::test]
+async fn a_source_answering_too_many_searches_leaves_every_one_incomplete() {
+    let root = tempfile::tempdir().expect("a folder");
+    let engine = miscounted(root.path(), Miscount::Long);
+    let found = engine
+        .find_tasks(
+            &name("plan"),
+            &two_searches(),
+            NonZeroU32::new(10).expect("a page"),
+        )
+        .await
+        .expect("answered");
+    for answer in &found.answers {
+        assert!(!answer.complete, "{answer:?}");
+        assert!(answer.items.is_empty(), "{answer:?}");
+        let reason = answer.reason.as_deref().unwrap_or_default();
+        assert!(
+            reason.contains("answered 3 answers to the 2 items"),
+            "{reason}"
+        );
+    }
 }

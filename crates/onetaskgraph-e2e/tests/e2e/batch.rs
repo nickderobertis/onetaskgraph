@@ -960,3 +960,34 @@ fn an_update_of_a_batch_keeps_the_tasks_it_delivers_in_step_and_says_when_it_cou
     );
     assert_eq!(store.shown("plan:c")["status"]["category"], "done");
 }
+
+#[test]
+fn a_find_in_content_matches_bodies_and_never_titles() {
+    let store = Store::new();
+    for source in ["plan", "memory"] {
+        let queries = json!({"schema_version": 1, "queries": [
+            // "Charlie" is in c's title and in no body.
+            {"key": "title-word", "text": "Charlie", "in": "content"},
+            // "The c body." is c's body alone.
+            {"key": "body-word", "text": "c body", "in": "content"},
+            {"key": "title-word-in-titles", "text": "Charlie", "in": "title"},
+        ]})
+        .to_string();
+        let found = store.exited(
+            &["task", "find", source, "--queries", "-"],
+            Some(&queries),
+            0,
+        );
+        let ids = |at: usize| -> Vec<String> {
+            found["answers"][at]["items"]
+                .as_array()
+                .expect("items")
+                .iter()
+                .map(|item| item["id"].as_str().expect("an id").to_owned())
+                .collect()
+        };
+        assert_eq!(ids(0), Vec::<String>::new(), "{source}: {found:#}");
+        assert_eq!(ids(1), [format!("{source}:c")], "{source}: {found:#}");
+        assert_eq!(ids(2), [format!("{source}:c")], "{source}: {found:#}");
+    }
+}

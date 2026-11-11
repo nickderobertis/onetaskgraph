@@ -105,12 +105,13 @@ pub struct FindAnswer {
     pub key: String,
     /// Every task it matched, across every page, each as `task list` reports it.
     pub items: Vec<Qualified<Task>>,
+    // llmlint: ignore-block[invalid_states_unrepresentable] The answer's shape is the contract this task states literally — `complete` and `reason` side by side, `reason` null when complete — which other nodes build against; `FindAnswer::complete_with` and `FindAnswer::cut_short` are the only constructors, and they set the pair together.
     /// Whether `items` is every match: `false` when a page of this search could not be read,
     /// and `items` holds what the pages before it answered.
     pub complete: bool,
     /// Why the answer is incomplete, naming the page refused — `null` when it is complete.
-    // llmlint: ignore[invalid_states_unrepresentable] The answer's shape is the contract this task states literally — `complete` and `reason` side by side, `reason` null when complete — which other nodes build against; `FindAnswer::complete_with` and `FindAnswer::cut_short` are the only constructors, and they set the pair together.
     pub reason: Option<String>,
+    // llmlint: ignore-end[invalid_states_unrepresentable]
 }
 
 /// What `task comment add-many` reads: many comments, each on one task of one source.
