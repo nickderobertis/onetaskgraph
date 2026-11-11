@@ -92,7 +92,7 @@ const TASK_WRITE: [&str; 7] = [
 
 /// The fixture's credential, and nothing of the host's: the variable the Linear source names,
 /// in an environment of its own.
-fn secrets() -> onetaskgraph_core::Secrets {
+pub(crate) fn secrets() -> onetaskgraph_core::Secrets {
     onetaskgraph_core::Secrets::load(onetaskgraph_core::Environment::from_pairs([(
         "LINEAR_API_KEY",
         "fixture-key",

@@ -14,6 +14,7 @@ use onetaskgraph_e2e_support::{common, fixtures, linear_vocabulary};
 
 // A plan copied into a named Linear team by a store configured by configuration alone.
 mod adoption;
+mod batched_calls;
 mod budget_commands;
 mod budget_runner;
 mod cache;

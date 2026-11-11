@@ -862,10 +862,10 @@ impl LinearSource {
     }
 
     /// [`TaskSource::query_tasks_batch`](onetaskgraph_plugin_api::TaskSource::query_tasks_batch):
-    /// every query that narrows by no origin as one aliased `issues` read per round — a query by
-    /// origin reads as `query_tasks` reads it, beside the copy's own lookups — each query's page
-    /// confirmed as `query_tasks` confirms it, and a query whose page Linear refuses answered
-    /// that refusal alone.
+    /// every query as one aliased `issues` read per round, each query's page confirmed as
+    /// `query_tasks` confirms it, and a query whose page Linear refuses answered that refusal
+    /// alone. A search is not a copy's lookup, so a query by origin listing nothing reads no id
+    /// its origin's key derives.
     pub(crate) async fn query_batched(
         &self,
         asks: &[(TaskQuery, PageRequest)],
@@ -874,7 +874,7 @@ impl LinearSource {
             asks.iter().map(|_| None).collect();
         let mut pending = Vec::new();
         for (at, (query, page)) in asks.iter().enumerate() {
-            if query.origin.is_some() || !self.batches(graphql::ISSUES) {
+            if !self.batches(graphql::ISSUES) {
                 answers[at] = Some(
                     <Self as onetaskgraph_plugin_api::TaskSource>::query_tasks(self, query, page)
                         .await,

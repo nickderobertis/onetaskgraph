@@ -1811,6 +1811,10 @@ struct LinearSource {
     /// moment later answers (spike `spike-linear-stored-content`), so a follow-up write that
     /// keeps the metadata slot byte for byte reads nothing after the write before it.
     written: std::sync::Mutex<std::collections::HashMap<(MetadataRecord, NativeId), Value>>,
+    /// Each issue as the last read or write of it in this process answered it, whole: what
+    /// `write_context` hands the store's cache to keep beside its entry, so a write it expects at
+    /// that version takes it back instead of reading the issue again.
+    contexts: std::sync::Mutex<std::collections::HashMap<NativeId, Value>>,
     /// Whether `write_tasks` is gathering the creates it sends together: each `write_task` it
     /// makes is queued rather than sent.
     deferring_creates: std::sync::atomic::AtomicBool,
@@ -1890,6 +1894,7 @@ impl LinearSource {
             edges_versions: std::sync::Mutex::new(std::collections::HashMap::new()),
             stored: std::sync::Mutex::new(std::collections::HashMap::new()),
             written: std::sync::Mutex::new(std::collections::HashMap::new()),
+            contexts: std::sync::Mutex::new(std::collections::HashMap::new()),
             deferring_creates: std::sync::atomic::AtomicBool::new(false),
             queued_creates: std::sync::Mutex::new(Vec::new()),
             created_inputs: std::sync::Mutex::new(std::collections::HashMap::new()),
@@ -3436,6 +3441,7 @@ impl LinearSource {
         if optional_str(issue, "identifier")? != Some(asked.0.as_str()) {
             written_is(issue, asked)?;
         }
+        self.remember_context(asked, issue);
         let task = optional(&json!({ "issue": issue }), "issue", |v| {
             map_task(v, &self.name, &self.statuses, self.spelling())
         })?;
@@ -5400,6 +5406,33 @@ impl TaskSource for LinearSource {
     ) -> Vec<Result<onetaskgraph_plugin_api::BatchAnswer<Comment>, SourceError>> {
         self.comment_batched(comments).await
     }
+    /// The issue as this process last read or wrote it, whole, for the store's cache to keep
+    /// beside its entry.
+    fn write_context(&self, id: &NativeId) -> Option<Value> {
+        self.contexts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(id)
+            .cloned()
+    }
+    /// The issue the cache kept at the version a write expects, taken as that write's read of it,
+    /// so a write of what differs sends its `issueUpdate` and nothing before it. A context that
+    /// does not read as an issue is not taken.
+    fn prime_write(&self, id: &NativeId, context: &Value, _board: Option<&Value>) -> bool {
+        let reads = map_task(context, &self.name, &self.statuses, self.spelling()).is_ok()
+            && context.get("description").is_some();
+        if reads {
+            self.written
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert((MetadataRecord::Task, id.clone()), context.clone());
+        }
+        reads
+    }
+    /// Let go of a context `prime_write` took, its write not made.
+    fn unprime(&self, id: &NativeId) {
+        self.take_written(MetadataRecord::Task, id);
+    }
     /// As many as one aliased `issueCreate` document carries — see the `batch` module.
     fn create_batch_limit(&self) -> usize {
         batch::CREATE_BATCH
@@ -5961,6 +5994,9 @@ impl LinearSource {
         else {
             return Ok(None);
         };
+        if let Some(issue) = data.get("issue").filter(|issue| !issue.is_null()) {
+            self.remember_context(id, issue);
+        }
         Ok(optional(&data, "issue", |v| {
             Ok((
                 map_task(v, &self.name, &self.statuses, self.spelling())?,
@@ -5968,6 +6004,16 @@ impl LinearSource {
             ))
         })?
         .filter(|(task, _)| self.in_scope(task.project.as_ref())))
+    }
+
+    /// Keep `issue`, as a read or a write of `id` answered it whole, for `write_context`.
+    fn remember_context(&self, id: &NativeId, issue: &Value) {
+        if issue.get("description").is_some() && issue.get("state").is_some() {
+            self.contexts
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert(id.clone(), issue.clone());
+        }
     }
 
     /// [`Self::issue_held`] for a write, with the resolution a status write needs read in the
@@ -5992,6 +6038,9 @@ impl LinearSource {
             return Ok(None);
         };
         let read = std::sync::Arc::new(Vocabulary::read(&data, &self.name, &team.0)?);
+        if let Some(key) = self.shared_key() {
+            shared::vocabularies().insert(key, read.clone());
+        }
         *self
             .vocabulary
             .lock()
