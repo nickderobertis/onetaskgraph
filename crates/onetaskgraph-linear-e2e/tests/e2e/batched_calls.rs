@@ -1074,3 +1074,61 @@ fn an_issue_a_batch_reads_back_malformed_fails_alone_and_the_rest_are_written() 
     }
     assert_eq!(team.task("team:U-2")["title"], "Update 2");
 }
+
+#[test]
+fn a_batched_write_answered_without_an_alias_fails_that_item_alone_saying_it_may_be_done() {
+    let team = Team::holding(writable(), false);
+    for (single, file, document) in [
+        (
+            onetaskgraph_linear::graphql::ISSUE_UPDATE_READ,
+            "updates.json",
+            json!({"schema_version": 1, "updates": (1..=3).map(|at| json!({
+                "item": format!("team:U-{at}"), "title": format!("Retitled {at}")
+            })).collect::<Vec<_>>()}),
+        ),
+        (
+            onetaskgraph_linear::graphql::COMMENT_CREATE,
+            "comments.json",
+            json!({"schema_version": 1, "comments": (1..=3).map(|at| json!({
+                "item": format!("team:U-{at}"), "body": format!("A note on {at}.")
+            })).collect::<Vec<_>>()}),
+        ),
+    ] {
+        let writes: &'static str =
+            Box::leak(onetaskgraph_linear::graphql::aliased(single, 3).into_boxed_str());
+        team.workspace.bend_answers(
+            move |operation, _| operation == writes,
+            1,
+            |_, data| {
+                data.as_object_mut().expect("data").remove("a1");
+            },
+        );
+        let input = team.batch(file, &document);
+        let verb: &[&str] = if file == "updates.json" {
+            &["task", "update-many", "team", "--input"]
+        } else {
+            &["task", "comment", "add-many", "team", "--input"]
+        };
+        let mut arguments = verb.to_vec();
+        arguments.push(&input);
+        let ran = team.run(&arguments);
+        assert_eq!(ran.code, Some(4), "{}", ran.json);
+        let results = ran.json["results"].as_array().expect("results");
+        let outcomes: Vec<&str> = results
+            .iter()
+            .map(|result| result["outcome"].as_str().expect("an outcome"))
+            .collect();
+        assert_eq!(outcomes, ["written", "error", "written"], "{}", ran.json);
+        let reason = results[1]["reason"].as_str().unwrap_or_default();
+        assert!(reason.contains("may have been done"), "{reason}");
+    }
+    // Linear applied each document whole: the write its answer left out landed too.
+    assert_eq!(team.task("team:U-2")["title"], "Retitled 2");
+    let listed = team.ok(&["task", "comment", "list", "team:U-2"]);
+    assert_eq!(
+        listed.json["comments"].as_array().map(Vec::len),
+        Some(1),
+        "{}",
+        listed.json
+    );
+}

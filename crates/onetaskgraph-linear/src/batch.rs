@@ -59,6 +59,14 @@ fn of_asked(value: Value, id: &NativeId, doing: &str) -> Result<Value, SourceErr
     }
 }
 
+/// What Linear answered an aliased document with, each alias on its own.
+pub(crate) enum AliasedEach {
+    /// Every alias's root value, in order — one the answer left out its own malformed answer.
+    Answered(Vec<Result<Value, SourceError>>),
+    /// The alias at this index was refused, with this refusal; nothing was answered.
+    Refused(usize, Refusal),
+}
+
 /// The most creates one aliased `issueCreate` document carries.
 pub(crate) const CREATE_BATCH: usize = 25;
 
@@ -98,9 +106,26 @@ impl LinearSource {
         each: &[Value],
     ) -> Result<Aliased, SourceError> {
         Ok(match self.send_composed_each(singles, each).await? {
-            Ok(values) => Aliased::Answered(values.into_iter().collect::<Result<Vec<_>, _>>()?),
-            Err((at, refusal)) => Aliased::Refused(at, refusal),
+            AliasedEach::Answered(values) => {
+                Aliased::Answered(values.into_iter().collect::<Result<Vec<_>, _>>()?)
+            }
+            AliasedEach::Refused(at, refusal) => Aliased::Refused(at, refusal),
         })
+    }
+
+    /// [`Self::send_aliased`], each alias answered on its own, as
+    /// [`Self::send_composed_each`] answers it.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::send_aliased`].
+    async fn send_aliased_each(
+        &self,
+        single: &str,
+        each: &[Value],
+    ) -> Result<AliasedEach, SourceError> {
+        self.send_composed_each(&vec![single; each.len()], each)
+            .await
     }
 
     /// [`Self::send_composed_of`], each alias answered on its own: one the answer leaves out is
@@ -114,7 +139,7 @@ impl LinearSource {
         &self,
         singles: &[&str],
         each: &[Value],
-    ) -> Result<Result<Vec<Result<Value, SourceError>>, (usize, Refusal)>, SourceError> {
+    ) -> Result<AliasedEach, SourceError> {
         let document = graphql::composed(singles);
         match self
             .answer_with(
@@ -124,20 +149,24 @@ impl LinearSource {
             )
             .await?
         {
-            Ok(data) => Ok(Ok((0..each.len())
-                .map(|at| {
-                    data.get(format!("a{at}"))
-                        .cloned()
-                        .ok_or_else(|| SourceError::Malformed {
-                            message: format!(
-                                "Linear answered a batch of {} without alias a{at}",
-                                each.len()
-                            ),
-                        })
-                })
-                .collect())),
+            Ok(data) => Ok(AliasedEach::Answered(
+                (0..each.len())
+                    .map(|at| {
+                        data.get(format!("a{at}"))
+                            .cloned()
+                            .ok_or_else(|| SourceError::Malformed {
+                                message: format!(
+                                    "Linear answered a batch of {} without alias a{at}; what that \
+                                 alias asked may have been done, so read it before sending it \
+                                 again",
+                                    each.len()
+                                ),
+                            })
+                    })
+                    .collect(),
+            )),
             Err(refusal) => match refusal.alias() {
-                Some(at) if at < each.len() => Ok(Err((at, refusal))),
+                Some(at) if at < each.len() => Ok(AliasedEach::Refused(at, refusal)),
                 _ => Err(refusal.into_error()),
             },
         }
@@ -173,12 +202,15 @@ impl LinearSource {
         let mut pending: Vec<usize> = (0..ids.len()).collect();
         while !pending.is_empty() {
             let each: Vec<Value> = pending.iter().map(|at| json!({"id": ids[*at].0})).collect();
-            match self.send_aliased(graphql::ISSUE, &each).await? {
-                Aliased::Answered(values) => {
+            match self.send_aliased_each(graphql::ISSUE, &each).await? {
+                AliasedEach::Answered(values) => {
                     for (at, value) in pending.iter().zip(values) {
                         read[*at] = Some(
-                            of_asked(value, &ids[*at], "reading issues together").and_then(
-                                |value| {
+                            value
+                                .and_then(|value| {
+                                    of_asked(value, &ids[*at], "reading issues together")
+                                })
+                                .and_then(|value| {
                                     Ok(optional(&json!({"issue": value}), "issue", |v| {
                                         Ok((
                                             map_task(
@@ -191,13 +223,12 @@ impl LinearSource {
                                         ))
                                     })?
                                     .filter(|(task, _)| self.in_scope(task.project.as_ref())))
-                                },
-                            ),
+                                }),
                         );
                     }
                     pending.clear();
                 }
-                Aliased::Refused(refused, refusal) => {
+                AliasedEach::Refused(refused, refusal) => {
                     let at = pending.remove(refused);
                     read[at] = Some(if refusal.entity_missing() {
                         Ok(None)
@@ -344,16 +375,20 @@ impl LinearSource {
                 // One update alone is sent as `update_task` sends it.
                 self.send(graphql::ISSUE_UPDATE_READ, each[0].clone())
                     .await
-                    .map(|data| Aliased::Answered(vec![data["issueUpdate"].clone()]))
+                    .map(|data| AliasedEach::Answered(vec![Ok(data["issueUpdate"].clone())]))
             } else {
-                self.send_aliased(graphql::ISSUE_UPDATE_READ, &each).await
+                self.send_aliased_each(graphql::ISSUE_UPDATE_READ, &each)
+                    .await
             };
             match answered {
-                Ok(Aliased::Answered(values)) => {
+                Ok(AliasedEach::Answered(values)) => {
                     for ((at, composed), value) in sending.drain(..).zip(values) {
                         let id = composed.before.id.clone();
                         answers[at] = Some(
-                            self.updated_issue(&json!({"issueUpdate": value}), &id)
+                            value
+                                .and_then(|value| {
+                                    self.updated_issue(&json!({"issueUpdate": value}), &id)
+                                })
                                 .and_then(|task| {
                                     task.ok_or_else(|| SourceError::Malformed {
                                         message: format!(
@@ -373,7 +408,7 @@ impl LinearSource {
                         );
                     }
                 }
-                Ok(Aliased::Refused(refused, _)) => {
+                Ok(AliasedEach::Refused(refused, _)) => {
                     // That one alone, for its own answer; the rest together again.
                     let (at, composed) = sending.remove(refused);
                     let id = updates[at].id.clone();
@@ -479,23 +514,26 @@ impl LinearSource {
             let answered = if each.len() == 1 {
                 self.send(graphql::COMMENT_CREATE, each[0].clone())
                     .await
-                    .map(|data| Aliased::Answered(vec![data["commentCreate"].clone()]))
+                    .map(|data| AliasedEach::Answered(vec![Ok(data["commentCreate"].clone())]))
             } else {
-                self.send_aliased(graphql::COMMENT_CREATE, &each).await
+                self.send_aliased_each(graphql::COMMENT_CREATE, &each).await
             };
             match answered {
-                Ok(Aliased::Answered(values)) => {
+                Ok(AliasedEach::Answered(values)) => {
                     for ((at, _), value) in sending.drain(..).zip(values) {
                         answers[at] = Some(
-                            written_comment(
-                                &json!({"commentCreate": value}),
-                                MutationRoot::CommentCreate,
-                            )
-                            .map(BatchAnswer::Written),
+                            value
+                                .and_then(|value| {
+                                    written_comment(
+                                        &json!({"commentCreate": value}),
+                                        MutationRoot::CommentCreate,
+                                    )
+                                })
+                                .map(BatchAnswer::Written),
                         );
                     }
                 }
-                Ok(Aliased::Refused(refused, _)) => {
+                Ok(AliasedEach::Refused(refused, _)) => {
                     // Nothing of the document landed: that one alone, for its own answer, and
                     // the rest together again.
                     let (at, issue) = sending.remove(refused);
@@ -677,7 +715,7 @@ impl LinearSource {
                 .collect();
             let singles = vec![graphql::ISSUE_CREATE; each.len()];
             match self.send_composed_each(&singles, &each).await? {
-                Ok(values) => {
+                AliasedEach::Answered(values) => {
                     // Linear applied the whole document, so every create in it that its answer
                     // names is recorded to be taken back before any answer is refused as
                     // malformed — one malformed answer leaves the others nameable.
@@ -742,7 +780,7 @@ impl LinearSource {
                         .await?;
                     }
                 }
-                Err((refused, _)) => {
+                AliasedEach::Refused(refused, _) => {
                     // Nothing of the document landed: that one on its own, the rest together.
                     let (at, alone) = queued.remove(refused);
                     created[at] = Some(
