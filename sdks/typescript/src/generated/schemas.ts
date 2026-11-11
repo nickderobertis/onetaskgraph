@@ -11579,6 +11579,14 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
           }
         ],
         "default": null
+      },
+      "link_types": {
+        "description": "The link types this source mirrors as Linear's own `related` issue relation, each as\n`<type>: {\"native\": \"related\"}` — the one word a Linear source mirrors a link as. A type\nnot named here is kept in the store's metadata alone.",
+        "type": "object",
+        "additionalProperties": {
+          "$ref": "#/$defs/LinkTypeConfig"
+        },
+        "default": {}
       }
     },
     "additionalProperties": false,
@@ -11708,6 +11716,21 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
         "description": "The id of one Linear project, which a scoped source holds alone.",
         "type": "string",
         "minLength": 1
+      },
+      "LinkTypeConfig": {
+        "description": "One entry of a source's `link_types` configuration, as written.",
+        "type": "object",
+        "properties": {
+          "native": {
+            "description": "The destination's own relation this type is mirrored as.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          }
+        },
+        "additionalProperties": false
       }
     }
   },

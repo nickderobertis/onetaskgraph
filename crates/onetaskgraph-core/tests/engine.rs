@@ -4049,15 +4049,15 @@ const FORTY_SIXTH_BUNDLE_BESIDE: [(&str, u64); 8] = [
     ("plugin_config/subprocess", 0x9be55eaf44b8f5aa),
 ];
 
-/// Version 62 adds the relation calls' roots, and `parents` and `link_types` to the plugin
-/// configurations.
+/// Version 62 adds the relation calls' roots; `parents` to the in-memory configuration, `link_types`
+/// to every plugin's but the subprocess one, and `sub_issues` to the GitHub Projects one.
 const SIXTY_SECOND_BUNDLE_BESIDE: [(&str, u64); 8] = [
     ("binary/FieldsReport", 0x29439ba93e5e343a),
     ("binary/StatusNamesReport", 0x2fffbb3b0308719d),
     ("binary/StatusOptionsReport", 0x31ab0209e340bd4d),
-    ("plugin_config/github-projects", 0xd9bd4c386373682b),
+    ("plugin_config/github-projects", 0x7ff53910913b737b),
     ("plugin_config/in-memory", 0x4ab5920fedbe1f2b),
-    ("plugin_config/linear", 0x10a5b658053e0912),
+    ("plugin_config/linear", 0xc05e8560dad3ebe3),
     ("plugin_config/local-md", 0xe5feef62f2a6b8b5),
     ("plugin_config/subprocess", 0x9be55eaf44b8f5aa),
 ];
@@ -7249,7 +7249,7 @@ const SIXTY_SECOND_BUNDLE_SHAPE: [(&str, u64); 170] = [
     ("ItemKind", 0x75db1aa08ed04b2f),
     ("ItemType", 0x417523fd8e62d46a),
     ("Label", 0x07555503d77a90c7),
-    ("LinearConfig", 0x10a5b658053e0912),
+    ("LinearConfig", 0xc05e8560dad3ebe3),
     ("LinkBatch", 0x933fb9720d646e2b),
     ("LinkOutcome", 0x76ff5273439a22db),
     ("LinksWritten", 0x19f286ec8acf4cfa),
