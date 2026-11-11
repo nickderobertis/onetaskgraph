@@ -100,6 +100,11 @@ const PRICES: &[(&str, u64)] = &[
     (graphql::ADD_COMMENT, 1),
     (graphql::UPDATE_COMMENT, 1),
     (graphql::DELETE_COMMENT, 1),
+    // llmlint: ignore-block[tests_hold_no_nonfunctional_thresholds] As at `SUB_ISSUES` above: the price is the instrument, not a threshold. These are the batched documents `task find`, `task comment add-many` and `task update-many` send, and the sweep below refuses any document in `graphql::DOCUMENTS` without a recorded price; what a follow-up cycle spends is the `github-points-per-follow-up-cycle` budget's, judged by onebudgetspec. The batched search is priced here at every slot's largest page; it is sent at three rows a slot on a first page, which `follow_up_cycle.rs` prices as sent.
+    (graphql::SEARCH_BATCH, 22),
+    (graphql::ADD_COMMENTS, 1),
+    (graphql::WRITE_TASKS, 1),
+    // llmlint: ignore-end[tests_hold_no_nonfunctional_thresholds]
     // The whole-issue twins an expected write sends in place of the document beside each, so
     // the store's cache can take what their responses show: each selects what `ISSUE_DETAIL`
     // does, and costs the one point it does.

@@ -1328,6 +1328,12 @@ struct GitHubBoard {
     omitting: Vec<&'static str>,
     /// Connections of the issue, by pointer, a whole-issue document's answer says go on.
     truncating: Vec<&'static str>,
+    /// Aliased searches of a batched search this board refuses at their own path: each a
+    /// fragment of the search's query and how many of its pages are answered first.
+    refusing_search_pages: Vec<(String, usize)>,
+    /// Items an aliased mutation naming them is refused for at its own path, once — each by its
+    /// own id and its board item's.
+    rejecting: Vec<(String, String)>,
 }
 
 /// Whether one request — its document and its variables — is one a [`BoardHook`] counts.
@@ -1714,6 +1720,32 @@ impl GitHubBoardFields {
         self.board.lock().unwrap().project_visibility_error = Some(message.to_owned());
     }
     // llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
+
+    /// Answer the first `answered` pages of an aliased search of a batched search whose query
+    /// holds `fragment`, then refuse its next page at that alias's path, once — as GitHub
+    /// refuses one field of a request with an error naming its path and answers the others.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board's own answer to a batched search, which only its request loop here answers: that state is private to the loopback, so a suite can set it only through this handle, beside `refuse_after`.
+    pub fn refuse_search_page(&self, fragment: &str, answered: usize) {
+        self.board
+            .lock()
+            .unwrap()
+            .refusing_search_pages
+            .push((fragment.to_owned(), answered));
+    }
+
+    /// Refuse every aliased mutation of the next batched write naming the item `id` — a
+    /// comment on it, a field of its card, an update of its issue — at that alias's path,
+    /// applying none of them, as GitHub refuses one field of a mutation request with an error
+    /// naming its path and runs the others.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board's own answer to a batched write, which only its request loop here answers: that state is private to the loopback, so a suite can set it only through this handle, beside `fail_field_alias`.
+    pub fn reject_mutation_of(&self, id: &str) {
+        let mut board = self.board.lock().unwrap();
+        let card = board.find(&json!(id))["item"]
+            .as_str()
+            .expect("the item's card")
+            .to_owned();
+        board.rejecting.push((id.to_owned(), card));
+    }
 
     /// Refuse the next request carrying `operation`, once, from here on.
     pub fn refuse_once(&self, operation: &'static str) {
@@ -2511,6 +2543,18 @@ impl GitHubBoardFields {
         for _ in 0..seconds {
             board.tick();
         }
+    }
+
+    /// The instant this board's clock stands at — the time of its latest change — as GitHub
+    /// spells one: what a journey asking for what changed from here on gives `--since`.
+    #[must_use]
+    pub fn now(&self) -> String {
+        let board = self.board.lock().unwrap();
+        let epoch: chrono::DateTime<chrono::Utc> =
+            GITHUB_BOARD_EPOCH.parse().expect("the board's epoch");
+        let seconds = board.held_second.unwrap_or(board.comment_ticks);
+        (epoch + chrono::Duration::seconds(i64::try_from(seconds).expect("board seconds fit i64")))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
     }
 
     /// Seed an issue's comments together before a journey starts. Each comment and the
@@ -3962,6 +4006,8 @@ fn github_projects_board_at(
         refusing_stale: Vec::new(),
         omitting: Vec::new(),
         truncating: Vec::new(),
+        refusing_search_pages: Vec::new(),
+        rejecting: Vec::new(),
     }));
     let mut owed_failures: Vec<&'static str> = fail_first.to_vec();
     let watched = Arc::clone(&board);
@@ -4592,6 +4638,69 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
     // aliases, so the board ends exactly as it would after those sent one at a time.
     {
         use onetaskgraph_github_projects::graphql as documents;
+        // A batched search: each search slot answered exactly as the one search it aliases, and
+        // each origin slot as an origin lookup's board half.
+        if query == documents::SEARCH_BATCH {
+            let mut result = serde_json::Map::new();
+            for slot in 0..onetaskgraph_github_projects::SEARCH_BATCH {
+                if variables[format!("ask{slot}")] != true {
+                    continue;
+                }
+                let alias = format!("s{slot}");
+                let search = variables[format!("search{slot}")].clone();
+                let refused = {
+                    let mut held = board.lock().unwrap();
+                    let wanted = search.as_str().expect("a search query");
+                    let due = held
+                        .refusing_search_pages
+                        .iter()
+                        .position(|(fragment, _)| wanted.contains(fragment.as_str()));
+                    match due {
+                        Some(at) if held.refusing_search_pages[at].1 == 0 => {
+                            held.refusing_search_pages.remove(at);
+                            held.owed_error_objects.push(json!({
+                                "type": "SERVICE_UNAVAILABLE", "path": [alias],
+                                "locations": [], "message": format!(
+                                    "Something went wrong while executing your query: {alias}")}));
+                            true
+                        }
+                        Some(at) => {
+                            held.refusing_search_pages[at].1 -= 1;
+                            false
+                        }
+                        None => false,
+                    }
+                };
+                if refused {
+                    result.insert(alias, Value::Null);
+                    continue;
+                }
+                let one = json!({"search": search, "type": variables["type"],
+                    "first": variables[format!("first{slot}")],
+                    "after": variables[format!("after{slot}")],
+                    "nestedFirst": variables["nestedFirst"],
+                    "boardItems": variables["boardItems"],
+                    "duplicates": variables["duplicates"]});
+                let answer = github_answer(board, documents::SEARCH_ISSUES, &one);
+                result.insert(alias, answer["search"].clone());
+            }
+            for slot in 0..onetaskgraph_github_projects::SEARCH_BATCH_ORIGINS {
+                if variables[format!("origin{slot}")] != true {
+                    continue;
+                }
+                assert_eq!(variables["owner"], "fixture-owner");
+                assert_eq!(variables["number"], 7);
+                let one = json!({"type": variables["type"],
+                    "filter": variables[format!("filter{slot}")],
+                    "search": "project:fixture-owner/7 is:issue",
+                    "originFirst": variables[format!("itemsFirst{slot}")],
+                    "itemsAfter": variables[format!("itemsAfter{slot}")],
+                    "searchAfter": null});
+                let answer = board.lock().unwrap().origin_lookup(&one);
+                result.insert(format!("o{slot}"), answer["originItems"].clone());
+            }
+            return Value::Object(result);
+        }
         if query == documents::ORIGIN_LOOKUPS {
             let mut result = serde_json::Map::new();
             {
@@ -4667,7 +4776,27 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         let update: Kind = ("update", "send", documents::UPDATE_ISSUE, "updateIssue");
         let block: Kind = ("block", "send", documents::ADD_BLOCKED_BY, "addBlockedBy");
         let delete: Kind = ("delete", "send", documents::DELETE_ISSUE, "deleteIssue");
-        let batches: [(&str, Vec<Kind>, usize); 7] = [
+        let comment: Kind = ("comment", "send", documents::ADD_COMMENT, "addComment");
+        let batches: [(&str, Vec<Kind>, usize); 9] = [
+            (
+                documents::ADD_COMMENTS,
+                vec![comment],
+                onetaskgraph_github_projects::COMMENT_BATCH,
+            ),
+            (
+                documents::WRITE_TASKS,
+                vec![
+                    ("field", "sendField", field.2, field.3),
+                    (
+                        "clear",
+                        "sendClear",
+                        documents::CLEAR_FIELD,
+                        "clearProjectV2ItemFieldValue",
+                    ),
+                    ("update", "sendUpdate", update.2, update.3),
+                ],
+                onetaskgraph_github_projects::TASK_FIELD_BATCH,
+            ),
             (documents::CREATE_ISSUES, vec![create], MUTATION_BATCH),
             (documents::WRITE_FIELD_VALUES, vec![field], WRITE_BATCH),
             (documents::CLOSE_ISSUES, vec![close], MUTATION_BATCH),
@@ -4686,12 +4815,40 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         ];
         if let Some((_, kinds, slots)) = batches.iter().find(|(batched, ..)| *batched == query) {
             let mut result = serde_json::Map::new();
+            // The items this request's aliases are refused for, retired once it is answered.
+            let mut rejected: Vec<String> = Vec::new();
             for &(prefix, send, single, root) in kinds {
                 for slot in 0..*slots {
                     if variables[format!("{send}{slot}")] != true {
                         continue;
                     }
                     let alias = format!("{prefix}{slot}");
+                    let refused = {
+                        let mut held = board.lock().unwrap();
+                        let input = &variables[&alias];
+                        let names = ["subjectId", "itemId", "id"]
+                            .iter()
+                            .filter_map(|key| input[*key].as_str())
+                            .collect::<Vec<_>>();
+                        let refused = held
+                            .rejecting
+                            .iter()
+                            .find(|(id, card)| {
+                                names.contains(&id.as_str()) || names.contains(&card.as_str())
+                            })
+                            .map(|(id, _)| id.clone());
+                        if let Some(id) = &refused {
+                            held.owed_error_objects.push(json!({
+                                "type": "UNPROCESSABLE", "path": [alias], "locations": [],
+                                "message": format!("{alias} could not be written to {id}")}));
+                            rejected.push(id.clone());
+                        }
+                        refused.is_some()
+                    };
+                    if refused {
+                        result.insert(alias, Value::Null);
+                        continue;
+                    }
                     let failing = {
                         let mut held = board.lock().unwrap();
                         let field = variables[&alias]["fieldId"].as_str();
@@ -4713,7 +4870,7 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
                         continue;
                     }
                     let mut one = json!({"input": variables[&alias]});
-                    if single == documents::UPDATE_FIELD {
+                    if single == documents::UPDATE_FIELD || single == documents::CLEAR_FIELD {
                         one["readPriority"] = json!(false);
                         one["priorityName"] = json!("Priority");
                     }
@@ -4750,6 +4907,11 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
                     result.insert(alias, answered);
                 }
             }
+            board
+                .lock()
+                .unwrap()
+                .rejecting
+                .retain(|(id, _)| !rejected.contains(id));
             return Value::Object(result);
         }
     }

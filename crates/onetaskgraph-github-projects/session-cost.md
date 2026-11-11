@@ -1370,3 +1370,22 @@ The session record includes those dependency connections: 5,000 additional worst
 nodes in that reconciliation call (100 tasks with 50 dependency nodes each), raising
 the document from 20,150 to 25,150 nodes and the session total from 295,892 to 300,892.
 The session still sends 241 requests; this updates its measured record, not a budget.
+
+## Batched searches, comments and updates, and what they moved
+
+`task find`, `task comment add-many` and `task update-many` send three new documents —
+`SEARCH_BATCH`, twenty board-scoped searches and five origin lookups' board halves as aliased
+fields of one request; `ADD_COMMENTS`; and `WRITE_TASKS`, many tasks' field writes and issue
+updates. The live reconciliation probes `SEARCH_BATCH` like every other read document, at its
+largest page in every slot: one more reconciliation request in place of nothing, **91,700**
+worst-case nodes, priced at **22** points (`tests/point_cost.rs`). A first round of a find sends
+three rows a slot, which GitHub prices at three points; the twenty-two is what the probe spends,
+once a session. The two mutations are not probed, as no mutation is.
+
+A comment-activity read now confirms its candidates by one batched detail read of their first
+comment pages rather than one comment read each, and that page answers the comment listing that
+follows. The journey's one comment-activity read had three candidates: two `reading a task's
+comments` requests (200 nodes) become one more `reading a batch of issues with their comments`
+(7,272 nodes).
+
+**`session-cost.txt`**: requests stay **239**, and nodes go 300,990 → **399,762**.
