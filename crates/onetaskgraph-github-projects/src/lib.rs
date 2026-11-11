@@ -15754,6 +15754,7 @@ impl TaskSource for GitHubProjectsSource {
         clear(&self.fields_cache);
         clear(&self.held_comments);
         clear(&self.task_writes);
+        clear(&self.written_tokens);
         self.expected.end_command();
         Ok(())
     }

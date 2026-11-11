@@ -1272,3 +1272,70 @@ fn a_batched_comment_handed_an_author_is_refused_alone_and_its_neighbour_lands()
         .collect();
     assert_eq!(bodies, ["Plain."]);
 }
+
+/// The version a written update answers is the command's own, as every record of a write this
+/// source holds is: `written_task` answers it until the command ends and nothing after, and the
+/// next command's write answers the version that write left, which a settled read then gives.
+#[test]
+fn a_written_version_is_answered_for_the_command_that_wrote_it_and_no_longer() {
+    use onetaskgraph_plugin_api::{NativeId, SourceName, SourcePlugin as _, TaskUpdate};
+    let board = ticket_board();
+    let source = onetaskgraph_github_projects::Plugin
+        .build(
+            &SourceName::new("board").unwrap(),
+            &board.config,
+            &FixtureToken,
+        )
+        .expect("the plugin builds");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a runtime");
+    let id = NativeId("U-0".to_owned());
+    let retitled = |title: &str| {
+        let update = TaskUpdate {
+            title: Some(title.to_owned()),
+            ..TaskUpdate::default()
+        };
+        runtime
+            .block_on(source.update_task(&id, &update))
+            .expect("the update lands")
+            .expect("a task of this board")
+    };
+    let read = board.versions(&["U-0"]).remove(0);
+
+    let first = retitled("First");
+    let written = first
+        .task
+        .version
+        .clone()
+        .expect("the version the write left");
+    assert_ne!(written, read, "never the version read before the write");
+    let answered = runtime
+        .block_on(source.written_task(&id))
+        .expect("the write's own record");
+    assert_eq!(answered.version.as_deref(), Some(written.as_str()));
+
+    runtime
+        .block_on(source.end_command())
+        .expect("the command ends");
+    assert_eq!(
+        runtime.block_on(source.written_task(&id)),
+        None,
+        "nothing of the last command's write is answered in the next"
+    );
+
+    board.board.pass_time(120);
+    let second = retitled("Second");
+    let again = second
+        .task
+        .version
+        .clone()
+        .expect("the version the write left");
+    assert_ne!(
+        again, written,
+        "the next command's write answers its own version"
+    );
+    board.board.pass_time(120);
+    assert_eq!(board.versions(&["U-0"]), [again]);
+}
