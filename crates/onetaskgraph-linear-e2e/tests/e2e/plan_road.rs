@@ -2,8 +2,9 @@
 //! at the loopback Linear's endpoint: the plan graph created in a folder of Markdown from a plan
 //! template, its first copy with its design document and that document's image, an unchanged
 //! re-copy, the design-approval attestation on the copied document, and one settlement — a
-//! status and one metadata key, held to the version the copy reported — of each of its four
-//! nodes, sent as one `task update-many`.
+//! status and one metadata key, held to the version a `task show` of the node reads first,
+//! since a Linear create's answer vouches for none — of each of its four nodes, sent as one
+//! `task update-many`, those four reads counted with it.
 //!
 //! The plan is private: its three tasks name a private repository, and the team source is
 //! declared private, so the public boundary is active over every write. Every phase is asserted
