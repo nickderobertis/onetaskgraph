@@ -272,7 +272,13 @@ async fn an_updating_copy_keeps_every_key_only_the_destination_holds() {
         ("into:T-1", many(&["from:T-1"], CopyScope::Tasks)),
         (
             "into:P-1",
-            many(&["from:P-1"], CopyScope::Projects { tasks: false }),
+            many(
+                &["from:P-1"],
+                CopyScope::Projects {
+                    tasks: false,
+                    documents: false,
+                },
+            ),
         ),
         ("into:D-1", many(&["from:D-1"], CopyScope::Documents)),
     ];
@@ -681,14 +687,26 @@ async fn a_rust_caller_asking_what_only_a_task_copy_can_do_of_another_is_refused
         (
             CopyRequest {
                 items: CopyItems::matching(everything),
-                ..many(&["from:P-1"], CopyScope::Projects { tasks: true })
+                ..many(
+                    &["from:P-1"],
+                    CopyScope::Projects {
+                        tasks: true,
+                        documents: false,
+                    },
+                )
             },
             "only when it copies tasks",
         ),
         (
             CopyRequest {
                 statuses: vec![StatusCategory::Todo],
-                ..many(&["from:P-1"], CopyScope::Projects { tasks: true })
+                ..many(
+                    &["from:P-1"],
+                    CopyScope::Projects {
+                        tasks: true,
+                        documents: false,
+                    },
+                )
             },
             "at a status only when it copies tasks",
         ),
@@ -875,7 +893,13 @@ async fn copying_a_project_carries_its_tasks_and_reports_one_the_source_no_longe
         "into": {"plugin": "in-memory", "config": {}},
     }));
 
-    let project = many(&["from:P-1"], CopyScope::Projects { tasks: true });
+    let project = many(
+        &["from:P-1"],
+        CopyScope::Projects {
+            tasks: true,
+            documents: false,
+        },
+    );
     let copied = engine.copy(&project).await.expect("the copy runs");
     assert_eq!(
         copied
@@ -906,7 +930,13 @@ async fn copying_a_project_carries_its_tasks_and_reports_one_the_source_no_longe
 
     // `--no-tasks` copies the project alone.
     let alone = engine
-        .copy(&many(&["from:P-1"], CopyScope::Projects { tasks: false }))
+        .copy(&many(
+            &["from:P-1"],
+            CopyScope::Projects {
+                tasks: false,
+                documents: false,
+            },
+        ))
         .await
         .expect("the copy runs");
     assert_eq!(alone.items.len(), 1);
@@ -942,7 +972,13 @@ async fn a_destination_item_the_source_no_longer_holds_is_left_alone_and_reporte
     }));
 
     let report = engine
-        .copy(&many(&["from:P-1"], CopyScope::Projects { tasks: true }))
+        .copy(&many(
+            &["from:P-1"],
+            CopyScope::Projects {
+                tasks: true,
+                documents: false,
+            },
+        ))
         .await
         .expect("the copy runs");
     let orphan = report
@@ -1139,7 +1175,13 @@ fn plan_with_a_linked(home: Value) -> Engine {
 /// nothing at the destination to look for and is believed.
 #[tokio::test]
 async fn a_rust_caller_s_project_copy_takes_over_the_plan_s_member_unless_it_asks_to_create() {
-    let request = many(&["from:P-1"], CopyScope::Projects { tasks: false });
+    let request = many(
+        &["from:P-1"],
+        CopyScope::Projects {
+            tasks: false,
+            documents: false,
+        },
+    );
     let engine = plan_with_a_member();
     let copied = engine.copy(&request).await.expect("the copy runs");
     assert_eq!(
@@ -1194,7 +1236,13 @@ async fn a_linked_project_that_is_not_the_plan_s_home_lends_no_member_to_take_ov
     ] {
         let engine = plan_with_a_linked(home.clone());
         let copied = engine
-            .copy(&many(&["from:P-1"], CopyScope::Projects { tasks: false }))
+            .copy(&many(
+                &["from:P-1"],
+                CopyScope::Projects {
+                    tasks: false,
+                    documents: false,
+                },
+            ))
             .await
             .expect("the copy runs");
         let (destination, action) = landed(&copied.items[0]);
@@ -1228,7 +1276,13 @@ async fn a_project_origin_that_still_names_something_updates_that_project_direct
     }));
 
     let copied = engine
-        .copy(&many(&["from:P-1"], CopyScope::Projects { tasks: false }))
+        .copy(&many(
+            &["from:P-1"],
+            CopyScope::Projects {
+                tasks: false,
+                documents: false,
+            },
+        ))
         .await
         .expect("the copy runs");
     assert_eq!(
@@ -1380,7 +1434,10 @@ async fn a_copy_resolves_a_dependency_on_an_item_it_created_in_the_same_run() {
     let report = engine
         .copy(&many(
             &["from:P-1", "from:P-2"],
-            CopyScope::Projects { tasks: true },
+            CopyScope::Projects {
+                tasks: true,
+                documents: false,
+            },
         ))
         .await
         .expect("the copy runs");
@@ -1436,7 +1493,13 @@ async fn a_copy_that_cannot_finish_leaves_the_destination_as_it_found_it() {
     }));
 
     let Err(refused) = engine
-        .copy(&many(&["from:P-1"], CopyScope::Projects { tasks: true }))
+        .copy(&many(
+            &["from:P-1"],
+            CopyScope::Projects {
+                tasks: true,
+                documents: false,
+            },
+        ))
         .await
     else {
         panic!("a destination that will not create an item must refuse the copy");
@@ -1483,7 +1546,13 @@ async fn a_copy_that_cannot_be_undone_names_what_it_left_behind() {
     }));
 
     let Err(refused) = engine
-        .copy(&many(&["from:P-1"], CopyScope::Projects { tasks: true }))
+        .copy(&many(
+            &["from:P-1"],
+            CopyScope::Projects {
+                tasks: true,
+                documents: false,
+            },
+        ))
         .await
     else {
         panic!("the copy must refuse");
@@ -1605,7 +1674,10 @@ async fn a_second_copy_updates_every_counterpart_and_repairs_the_edges_among_the
     let report = engine
         .copy(&many(
             &["from:P-1", "from:P-2"],
-            CopyScope::Projects { tasks: true },
+            CopyScope::Projects {
+                tasks: true,
+                documents: false,
+            },
         ))
         .await
         .expect("the copy runs");
@@ -2099,7 +2171,10 @@ async fn a_copy_that_cannot_finish_puts_back_the_items_it_overwrote() {
     let Err(refused) = engine
         .copy(&many(
             &["from:P-1", "from:P-2"],
-            CopyScope::Projects { tasks: true },
+            CopyScope::Projects {
+                tasks: true,
+                documents: false,
+            },
         ))
         .await
     else {
@@ -2173,7 +2248,13 @@ async fn an_undo_tells_a_task_from_a_project_sharing_one_destination_id() {
     );
 
     let Err(refused) = engine
-        .copy(&many(&["from:P-1"], CopyScope::Projects { tasks: true }))
+        .copy(&many(
+            &["from:P-1"],
+            CopyScope::Projects {
+                tasks: true,
+                documents: false,
+            },
+        ))
         .await
     else {
         panic!("a destination that will not create an item must refuse the copy");
@@ -2232,7 +2313,13 @@ async fn an_item_created_under_one_kind_does_not_hold_back_the_others_restore() 
     assert_eq!(before, vec!["into:SHARED the project as it was".to_owned()]);
 
     let Err(refused) = engine
-        .copy(&many(&["from:P-1"], CopyScope::Projects { tasks: true }))
+        .copy(&many(
+            &["from:P-1"],
+            CopyScope::Projects {
+                tasks: true,
+                documents: false,
+            },
+        ))
         .await
     else {
         panic!("a destination that will not create an item must refuse the copy");
@@ -2279,7 +2366,13 @@ async fn a_copy_that_stops_part_way_through_an_update_puts_that_item_back_too() 
     );
 
     let Err(refused) = engine
-        .copy(&many(&["from:P-1"], CopyScope::Projects { tasks: true }))
+        .copy(&many(
+            &["from:P-1"],
+            CopyScope::Projects {
+                tasks: true,
+                documents: false,
+            },
+        ))
         .await
     else {
         panic!("a destination that stops part way through a write must refuse the copy");
@@ -2323,7 +2416,10 @@ async fn a_restore_the_destination_refuses_names_the_item_left_holding_this_copy
     let Err(refused) = engine
         .copy(&many(
             &["from:P-1", "from:P-2"],
-            CopyScope::Projects { tasks: true },
+            CopyScope::Projects {
+                tasks: true,
+                documents: false,
+            },
         ))
         .await
     else {
@@ -3148,7 +3244,13 @@ async fn a_destination_that_repeats_its_cursor_stops_the_walk_for_what_a_copy_le
 
     let refused = refusal(
         &engine,
-        &many(&["from:P-1"], CopyScope::Projects { tasks: true }),
+        &many(
+            &["from:P-1"],
+            CopyScope::Projects {
+                tasks: true,
+                documents: false,
+            },
+        ),
     )
     .await;
 
@@ -3174,7 +3276,13 @@ async fn a_destination_that_overruns_its_page_stops_the_walk_for_what_a_copy_lef
 
     let refused = refusal(
         &engine,
-        &many(&["from:P-1"], CopyScope::Projects { tasks: true }),
+        &many(
+            &["from:P-1"],
+            CopyScope::Projects {
+                tasks: true,
+                documents: false,
+            },
+        ),
     )
     .await;
 
@@ -3197,7 +3305,13 @@ async fn a_destination_that_overruns_its_page_stops_the_scan_for_a_project() {
 
     let refused = refusal(
         &engine,
-        &many(&["from:P-1"], CopyScope::Projects { tasks: false }),
+        &many(
+            &["from:P-1"],
+            CopyScope::Projects {
+                tasks: false,
+                documents: false,
+            },
+        ),
     )
     .await;
 
@@ -3241,7 +3355,13 @@ async fn a_source_that_repeats_its_cursor_stops_the_walk_of_a_projects_own_edges
 
     let refused = refusal(
         &engine,
-        &many(&["from:P-1"], CopyScope::Projects { tasks: false }),
+        &many(
+            &["from:P-1"],
+            CopyScope::Projects {
+                tasks: false,
+                documents: false,
+            },
+        ),
     )
     .await;
 
@@ -3268,7 +3388,13 @@ async fn a_source_whose_cursors_cycle_stops_the_walk_of_a_projects_members() {
 
     let refused = refusal(
         &engine,
-        &many(&["from:P-1"], CopyScope::Projects { tasks: true }),
+        &many(
+            &["from:P-1"],
+            CopyScope::Projects {
+                tasks: true,
+                documents: false,
+            },
+        ),
     )
     .await;
 
@@ -3325,7 +3451,13 @@ async fn a_source_that_overruns_its_page_stops_the_walk_of_a_projects_members() 
 
     let refused = refusal(
         &engine,
-        &many(&["from:P-1"], CopyScope::Projects { tasks: true }),
+        &many(
+            &["from:P-1"],
+            CopyScope::Projects {
+                tasks: true,
+                documents: false,
+            },
+        ),
     )
     .await;
 
@@ -3410,7 +3542,13 @@ async fn a_well_behaved_copy_still_walks_every_page_of_every_loop_it_has() {
     }));
 
     let report = engine
-        .copy(&many(&["from:P-1"], CopyScope::Projects { tasks: true }))
+        .copy(&many(
+            &["from:P-1"],
+            CopyScope::Projects {
+                tasks: true,
+                documents: false,
+            },
+        ))
         .await
         .expect("the copy runs");
 
@@ -5054,7 +5192,13 @@ async fn a_create_answered_malformed_reports_the_destination_uncertain_after_und
     // ids the copy knows, when the destination stores `Beta` and cannot say under which id.
     let engine = careless_engine(&json!({}), &["Beta"]);
     let Err(refused) = engine
-        .copy(&many(&["from:P-1"], CopyScope::Projects { tasks: true }))
+        .copy(&many(
+            &["from:P-1"],
+            CopyScope::Projects {
+                tasks: true,
+                documents: false,
+            },
+        ))
         .await
     else {
         panic!("a create answered malformed must fail the copy");
@@ -5099,7 +5243,13 @@ async fn an_update_answered_malformed_keeps_the_refusal_it_always_was() {
     let engine = careless_engine(&already_holding(), &["Beta"]);
     let before = held(&engine, "into").await;
     let Err(refused) = engine
-        .copy(&many(&["from:P-1"], CopyScope::Projects { tasks: true }))
+        .copy(&many(
+            &["from:P-1"],
+            CopyScope::Projects {
+                tasks: true,
+                documents: false,
+            },
+        ))
         .await
     else {
         panic!("an update answered malformed must fail the copy");
@@ -5123,7 +5273,10 @@ async fn a_project_create_answered_malformed_after_another_project_landed_undoes
     let Err(refused) = engine
         .copy(&many(
             &["from:P-1", "from:P-2"],
-            CopyScope::Projects { tasks: true },
+            CopyScope::Projects {
+                tasks: true,
+                documents: false,
+            },
         ))
         .await
     else {
@@ -5157,7 +5310,13 @@ async fn a_malformed_create_whose_undo_is_refused_names_both_what_it_left_and_wh
         &["Beta"],
     );
     let Err(refused) = engine
-        .copy(&many(&["from:P-1"], CopyScope::Projects { tasks: true }))
+        .copy(&many(
+            &["from:P-1"],
+            CopyScope::Projects {
+                tasks: true,
+                documents: false,
+            },
+        ))
         .await
     else {
         panic!("a create answered malformed must fail the copy");

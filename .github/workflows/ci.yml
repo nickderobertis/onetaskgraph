@@ -129,6 +129,14 @@ jobs:
         with:
           bun-version-file: package.json
           no-cache: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
+      # Linux's distribution journey runs in this job (scripts/ci-job.sh), so its release build
+      # and its scratch copy's builds join the lint builds and test-linux's restored family on
+      # this runner's disk; the SDKs it never uses go in the background, as test-linux's do.
+      - name: Free the disk the distribution journey's builds need
+        shell: bash
+        run: |
+          df -h /
+          sudo nohup rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL >/dev/null 2>&1 &
       - uses: astral-sh/setup-uv@v7
         with:
           version: ${{ steps.pins.outputs.uv }}
@@ -211,7 +219,7 @@ jobs:
             ~/.cargo/bin/cargo-prune-superseded
             ~/.cargo/bin/cargo-prune-superseded.exe
           key: prune-superseded-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.prune-superseded }}-${{ hashFiles('rust-toolchain.toml') }}
-      - name: Format, lint and type-check the affected projects, generated code and the supply chain
+      - name: Format, lint and type-check the affected projects, generated code and the supply chain, and run the distribution journey
         run: just ci-lint
       # The release pull request alone: the pass-time budget of the pool maintenance
       # onevcs.toml declares. lint owns this additional policy budget on Linux,

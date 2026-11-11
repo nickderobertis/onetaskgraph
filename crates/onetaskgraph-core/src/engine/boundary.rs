@@ -1303,6 +1303,78 @@ impl Exposure {
         self
     }
 
+    /// The multiset union of `self` and `other`: every value either holds, each as many times
+    /// as the one of the two holding it more often holds it, `self`'s order first.
+    ///
+    /// What a batch of writes is screened as: exactly the values each write's own screening
+    /// would hold and nothing else, so two writes carrying the same text send it once. A check
+    /// decides on whether a value is there, and a rewrite maps each value it changes, so neither
+    /// reads the same value twice differently.
+    ///
+    /// Under a policy that only checks, rewriting nothing — [`PolicyMode::Checks`] — a value is
+    /// counted over each surface as the check reads it, rewritable and fixed together as one
+    /// list, so the batch's check is handed exactly the union of what each write's own would be.
+    /// A policy that rewrites keeps the two apart, so a value one write may have rewritten never
+    /// stands in for the same value another write holds where nothing rewrites it.
+    fn union(mut self, other: Self, mode: PolicyMode) -> Self {
+        let checked = mode == PolicyMode::Checks;
+        type Tally = std::collections::HashMap<String, usize>;
+        fn tally<'a>(lists: impl IntoIterator<Item = &'a [String]>) -> Tally {
+            let mut tally = Tally::new();
+            for value in lists.into_iter().flatten() {
+                *tally.entry(value.clone()).or_default() += 1;
+            }
+            tally
+        }
+        fn joined(held: &mut Vec<String>, more: Vec<String>, counted: &Tally, seen: &mut Tally) {
+            for value in more {
+                let times = seen.entry(value.clone()).or_default();
+                *times += 1;
+                if *times > counted.get(&value).copied().unwrap_or(0) {
+                    held.push(value);
+                }
+            }
+        }
+        for (held, fixed, more, fixed_more) in [
+            (
+                &mut self.text,
+                &mut self.fixed.text,
+                other.text,
+                other.fixed.text,
+            ),
+            (
+                &mut self.paths,
+                &mut self.fixed.paths,
+                other.paths,
+                other.fixed.paths,
+            ),
+            (
+                &mut self.metadata,
+                &mut self.fixed.metadata,
+                other.metadata,
+                other.fixed.metadata,
+            ),
+        ] {
+            if checked {
+                let counted = tally([held.as_slice(), fixed.as_slice()]);
+                let mut seen = Tally::new();
+                joined(held, more, &counted, &mut seen);
+                joined(fixed, fixed_more, &counted, &mut seen);
+            } else {
+                let counted = tally([held.as_slice()]);
+                joined(held, more, &counted, &mut Tally::new());
+                let counted = tally([fixed.as_slice()]);
+                joined(fixed, fixed_more, &counted, &mut Tally::new());
+            }
+        }
+        for locator in other.locators {
+            if !self.locators.contains(&locator) {
+                self.locators.push(locator);
+            }
+        }
+        self
+    }
+
     /// Paths a write names that replacement never rewrites — an image asset's name.
     pub(crate) fn paths(mut self, paths: impl IntoIterator<Item = String>) -> Self {
         self.fixed.paths.extend(paths);
@@ -2240,18 +2312,20 @@ impl Engine {
 
     /// Put every write of `writes` — each its destination, how it names its item, and what it
     /// exposes — to the caller's policy before any of them is made: one sanitisation of all of
-    /// them together, every list concatenated element by element under the one scope they
-    /// share, answering what each value is written as. A union one earlier sanitisation of this
+    /// them together — a batch, each list the multiset union of theirs (see
+    /// [`Exposure::union`]) under the one scope they share — answering what each value is
+    /// written as. A copy of one item is a batch of one. A union one earlier sanitisation of this
     /// command passed whole is not sent again.
     ///
-    /// Only a union the policy refuses is sent again write by write, so the refusal names the
-    /// write it is about — and those calls pass nothing, since a write passing alone says nothing
-    /// of the union; a union the policy cannot decide is the first write's own unavailability.
+    /// A batch the policy refuses, or cannot decide, refuses the whole copy on that one answer:
+    /// the policy is asked nothing more, so a copy starts one check however it ends, and the
+    /// refusal names the copy and its first destination as the policy screened them, never which
+    /// write or what of it the policy stopped at.
     pub(crate) async fn check_all(
         &self,
         writes: &[(&ResolvedSource, String, Exposure)],
     ) -> Result<Rewrite, EngineError> {
-        let Some((first, first_item, _)) = writes.first() else {
+        let Some((first, _, _)) = writes.first() else {
             return Ok(Rewrite::default());
         };
         if let [(destination, item, exposure)] = writes {
@@ -2259,47 +2333,26 @@ impl Engine {
         }
         let mut union = Exposure::default();
         for (destination, item, exposure) in writes {
-            union = union.and(located(destination, item, exposure.clone()));
+            union = union.union(
+                located(destination, item, exposure.clone()),
+                self.boundary.mode,
+            );
         }
         if let Some(rewrite) = self.boundary.passed(&union) {
             return Ok(rewrite);
         }
         let answer = self.screen(&union).await;
-        match &answer.verdict {
-            WriteVerdict::Pass => {
-                let rewrite = Rewrite::of(&union, &answer);
-                self.boundary.pass(&union, &rewrite);
-                Ok(rewrite)
-            }
-            WriteVerdict::Refuse { reason } => {
-                for (destination, item, exposure) in writes {
-                    let exposure = located(destination, item, exposure.clone());
-                    let alone = self.screen(&exposure).await;
-                    if alone.verdict != WriteVerdict::Pass {
-                        return Err(refusal(destination, item, &exposure, &alone));
-                    }
-                }
-                let exposure = located(first, first_item, Exposure::default());
-                Err(refusal(
-                    first,
-                    first_item,
-                    &exposure,
-                    &SanitizeVerdict {
-                        verdict: WriteVerdict::Refuse {
-                            reason: reason.clone(),
-                        },
-                        locators: Vec::new(),
-                        ..answer.clone()
-                    },
-                ))
-            }
-            WriteVerdict::Unavailable { .. } => Err(refusal(
-                first,
-                first_item,
-                &located(first, first_item, Exposure::default()),
-                &answer,
-            )),
+        if answer.verdict == WriteVerdict::Pass {
+            let rewrite = Rewrite::of(&union, &answer);
+            self.boundary.pass(&union, &rewrite);
+            return Ok(rewrite);
         }
+        Err(refusal(
+            first,
+            &format!("this copy's {} writes", writes.len()),
+            &union,
+            &answer,
+        ))
     }
 
     /// The check every write makes before its first mutation: a destination declared private

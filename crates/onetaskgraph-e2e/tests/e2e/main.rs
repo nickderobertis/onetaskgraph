@@ -44,6 +44,8 @@ mod attestations;
 // configuration's, so they cannot sit behind one plugin crate's edge, which AGENTS.md forbids
 // depending on the engine at any depth.
 mod boundary;
+// The runner every budget of `budgets.yaml` names, and the recorder its journeys write through.
+mod budget_runner;
 // The simulated clock: its coordinator driven by real client processes over loopback, and the
 // binary attaching to it. No source and no third party; nothing waits in real time but the
 // deliberate few hundred milliseconds of computing a scenario needs to prove time holds still.

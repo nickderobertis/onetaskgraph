@@ -302,6 +302,18 @@ NOT_METHODS = {
         "not carried: the paragraph after §4's method table says a source over this protocol "
         "ignores it, so the engine writes no anchor markup into its bodies"
     ),
+    "task_body_size": (
+        "not carried: the paragraph after §4's method table says a source over this protocol "
+        "answers none, so a copy into one sizes none of its items before writing"
+    ),
+    "project_body_size": (
+        "not carried: the paragraph after §4's method table says a source over this protocol "
+        "answers none, so a copy into one sizes none of its items before writing"
+    ),
+    "document_body_size": (
+        "not carried: the paragraph after §4's method table says a source over this protocol "
+        "answers none, so a copy into one sizes none of its items before writing"
+    ),
     "holds_versions": (
         "not carried: the paragraph after §4's method table says a source over this protocol "
         "answers false, so the engine reads a task before a write held to its version"

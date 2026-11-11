@@ -2402,6 +2402,14 @@ pub struct ProjectCopyArgs {
     #[arg(long = "no-tasks")]
     pub no_tasks: bool,
 
+    /// Copy the documents filed under the project too, in the same copy: each is read, put to
+    /// the write policy and sized together with the project and its tasks before anything is
+    /// written, and lands after them, filed under the project's copy. Without it the documents
+    /// are left where they are, for `document copy` to carry.
+    // llmlint: ignore[invalid_states_unrepresentable] Clap refuses it beside --member at parse, as it refuses --comments beside --no-tasks; a member copy names exactly the records it carries, and the conversion builds `CopyScope::Projects` with it only when no member is named.
+    #[arg(long, conflicts_with = "member")]
+    pub documents: bool,
+
     /// Copy the project and exactly this task of it, `<source>:<native-id>`; repeat it to
     /// name more. A task not named is not read at the destination, not written and not
     /// reported, and nothing is reported orphaned.

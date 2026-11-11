@@ -253,6 +253,11 @@ fn failed(failure: &Failure, output: OutputFormat) -> ExitCode {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .take(),
             predates_write: FAILED_PREDATES.load(std::sync::atomic::Ordering::SeqCst),
+            oversize: FAILED_OVERSIZE
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take()
+                .unwrap_or_default(),
         };
         // Best effort, and deliberately silent: the stderr line above already said why the
         // command failed, and a reader that has gone away cannot be told anything more.
@@ -982,6 +987,7 @@ async fn run_inner(
                 Some(members) => CopyScope::Members(members),
                 None => CopyScope::Projects {
                     tasks: !args.no_tasks,
+                    documents: args.documents,
                 },
             };
             let mut request =
@@ -1335,6 +1341,10 @@ static FAILED_WRITE: std::sync::Mutex<Option<ExpectedWrite>> = std::sync::Mutex:
 static FAILED_HELD: std::sync::Mutex<Option<onetaskgraph_core::WriteResult>> =
     std::sync::Mutex::new(None);
 
+/// Every item a copy refused as `oversize`, for the failure document.
+static FAILED_OVERSIZE: std::sync::Mutex<Option<Vec<onetaskgraph_core::Oversized>>> =
+    std::sync::Mutex::new(None);
+
 /// The engine a write of `id` runs on, expecting the version `expect` names when it names one.
 fn expecting(loaded: &Loaded, id: &GlobalId, expect: &ExpectArgs) -> Result<Engine, Failure> {
     let engine = engine(loaded);
@@ -1371,6 +1381,9 @@ fn write_failed(engine: &Engine, error: &onetaskgraph_core::EngineError) -> Fail
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = error.held().cloned();
     FAILED_PREDATES.store(error.predates_write(), std::sync::atomic::Ordering::SeqCst);
+    *FAILED_OVERSIZE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(error.oversize().to_vec());
     if let onetaskgraph_core::EngineError::SanitizeDryRun { would_pass, .. } = error {
         *FAILED_WOULD_PASS
             .lock()
@@ -2107,6 +2120,14 @@ fn failed_exit(report: &CopyReport) -> u8 {
                 "onetaskgraph: {} was not copied: {}",
                 outcome.source,
                 error.message()
+            );
+        }
+        if let CopyAction::Oversize { size, limit } = &outcome.action {
+            failed = true;
+            eprintln!(
+                "onetaskgraph: {} would not be copied: its body of {size} characters is larger \
+                 than the {limit} its destination holds",
+                outcome.source,
             );
         }
     }

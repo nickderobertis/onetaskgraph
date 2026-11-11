@@ -1,0 +1,18 @@
+# The write-policy processes a public plan copy starts, counted by the journey
+# `boundary::batch::a_public_plan_copy_starts_one_check_and_one_inspect_per_repository_of_the_released_onevcs`
+# while this project's `test` target runs. The command is tests/e2e/budget_runner.rs, which reports
+# what that run recorded; it names the saved telemetry it reads as its last argument, a libtest
+# filter no test matches, so a job with no build reads the row as unavailable.
+schema_version: 1
+budgets:
+  # llmlint: ignore[budgets_track_product_owner_outcomes] The task registering this budget makes it one of its own by the manager's ruling, and its figure is part of no other budget's: the `plan-copy-seconds-*` budgets time only the destination's modelled latency in simulated time, the write policy's local processes excluded, so the processes counted here are a cost of the copy nothing else holds.
+  - id: boundary-invocations-per-public-copy
+    description: >-
+      Write-policy processes — `visibility_command` and `check_command` runs — one public plan copy with its documents starts on the copying host, an inner measure of the copy because their count is what batching changes and is exact on any host. It protects the copying host from screening whose cost grows with the plan.
+    labels: [boundary]
+    measure: reported
+    # llmlint: ignore[budget_commands_measure_directly] The task registering this budget states `budget_runner::report_boundary` as its command, the report-only harness-runner convention this repository's e2e crates register their budgets with. It reads only the telemetry `boundary::batch` recorded during this crate's ordinary test run, refuses a recording of another budget or workload, and hands the figure to onebudgetspec, which alone judges it.
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_boundary", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-e2e"]
+    unit: processes
+    direction: max
+    threshold: 3

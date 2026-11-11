@@ -527,6 +527,30 @@ impl TaskSource for HeldOff {
         self.noted(self.inner.check_task_write(write).await)
     }
 
+    // Answered without a request, so nothing is held off or cached for it.
+    fn task_body_size(
+        &self,
+        write: &ItemWrite<Task>,
+        assets: Option<&AssetWrite>,
+    ) -> Option<onetaskgraph_plugin_api::BodySize> {
+        self.inner.task_body_size(write, assets)
+    }
+
+    fn project_body_size(
+        &self,
+        write: &ItemWrite<Project>,
+    ) -> Option<onetaskgraph_plugin_api::BodySize> {
+        self.inner.project_body_size(write)
+    }
+
+    fn document_body_size(
+        &self,
+        write: &ItemWrite<Document>,
+        assets: Option<&AssetWrite>,
+    ) -> Option<onetaskgraph_plugin_api::BodySize> {
+        self.inner.document_body_size(write, assets)
+    }
+
     async fn issue_holdings(&self, issues: &[IssueRef]) -> Result<Vec<IssueHolding>, SourceError> {
         self.refused()?;
         self.noted(self.inner.issue_holdings(issues).await)

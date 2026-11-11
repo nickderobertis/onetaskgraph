@@ -343,6 +343,13 @@ class CopyOutcomeCreatedOrWouldCreate(BaseModel):
             ge=0,
         ),
     ] = 0
+    body_size: Annotated[
+        int | None,
+        Field(
+            description="The size of the body the destination would store for the item, in the unit its plugin\nstates its limit in — the metadata slot the destination keeps and every asset reference\nrewritten to where it is served included. Present on a dry run's item whose destination\ncan say, and absent on every other outcome.",
+            ge=0,
+        ),
+    ] = None
     destination: Annotated[
         GlobalId | None,
         Field(
@@ -435,6 +442,13 @@ class CopyOutcomeUpdated(BaseModel):
             ge=0,
         ),
     ] = 0
+    body_size: Annotated[
+        int | None,
+        Field(
+            description="The size of the body the destination would store for the item, in the unit its plugin\nstates its limit in — the metadata slot the destination keeps and every asset reference\nrewritten to where it is served included. Present on a dry run's item whose destination\ncan say, and absent on every other outcome.",
+            ge=0,
+        ),
+    ] = None
     destination: Annotated[GlobalId, Field(description="The item that was updated.")]
     via: Annotated[CopyVia, Field(description="Which rule found it.")]
     link: Annotated[
@@ -515,6 +529,13 @@ class CopyOutcomeUnchanged(BaseModel):
             ge=0,
         ),
     ] = 0
+    body_size: Annotated[
+        int | None,
+        Field(
+            description="The size of the body the destination would store for the item, in the unit its plugin\nstates its limit in — the metadata slot the destination keeps and every asset reference\nrewritten to where it is served included. Present on a dry run's item whose destination\ncan say, and absent on every other outcome.",
+            ge=0,
+        ),
+    ] = None
     destination: Annotated[GlobalId, Field(description="The item that already said it.")]
     via: Annotated[CopyVia, Field(description="Which rule found it.")]
     link: Annotated[
@@ -601,6 +622,13 @@ class CopyOutcomeOrphaned(BaseModel):
             ge=0,
         ),
     ] = 0
+    body_size: Annotated[
+        int | None,
+        Field(
+            description="The size of the body the destination would store for the item, in the unit its plugin\nstates its limit in — the metadata slot the destination keeps and every asset reference\nrewritten to where it is served included. Present on a dry run's item whose destination\ncan say, and absent on every other outcome.",
+            ge=0,
+        ),
+    ] = None
     destination: Annotated[GlobalId, Field(description="The item that was left alone.")]
     action: Literal["orphaned"]
 
@@ -670,6 +698,13 @@ class CopyOutcomeFailed(BaseModel):
             ge=0,
         ),
     ] = 0
+    body_size: Annotated[
+        int | None,
+        Field(
+            description="The size of the body the destination would store for the item, in the unit its plugin\nstates its limit in — the metadata slot the destination keeps and every asset reference\nrewritten to where it is served included. Present on a dry run's item whose destination\ncan say, and absent on every other outcome.",
+            ge=0,
+        ),
+    ] = None
     error: Annotated[
         Failure,
         Field(description="Why, in the failure document every verb reports a failure in."),
@@ -742,11 +777,107 @@ class CopyOutcomeSkipped(BaseModel):
             ge=0,
         ),
     ] = 0
+    body_size: Annotated[
+        int | None,
+        Field(
+            description="The size of the body the destination would store for the item, in the unit its plugin\nstates its limit in — the metadata slot the destination keeps and every asset reference\nrewritten to where it is served included. Present on a dry run's item whose destination\ncan say, and absent on every other outcome.",
+            ge=0,
+        ),
+    ] = None
     reason: Annotated[
         str,
         Field(description="Why, as `status <category> is not one of <categories>`."),
     ]
     action: Literal["skipped"]
+
+
+class CopyOutcomeOversize(BaseModel):
+    source: Annotated[GlobalId, Field(description="The qualified id the item was read from.")]
+    placed: Annotated[
+        Placement | None,
+        Field(
+            description="Which source a routed copy placed it in, and the index of the route entry that\nmatched — `null` there when none did.\n\nPresent for every item a copy into a source declaring `routes` landed, a dry run's\nincluded, so a would-be create still says where it would go; absent for a copy into\na source with none, whose output is what it always was, and for an orphan, which was\nnot placed at all."
+        ),
+    ] = None
+    result: Annotated[
+        WriteResult | None,
+        Field(
+            description="What the item holds once the write is done — its version, status and priority — and,\nfor a write made with `--expect` on a source that reports its writes' parts, what each\nmutation it sent came to. Absent for a dry run and for an item nothing was written to\nor read of."
+        ),
+    ] = None
+    fallback: Annotated[
+        WriteFallback | None,
+        Field(
+            description="That the write had to read its target first, and why — absent when it sent only its\nmutations."
+        ),
+    ] = None
+    spent: Annotated[
+        Spent | None,
+        Field(
+            description="What the write spent at the sources that meter their own requests — the fallback's\nread included."
+        ),
+    ] = None
+    status_condition: Annotated[
+        StatusCondition | None,
+        Field(
+            description="What `--when-destination-status` found the counterpart's status at, and whether that\nmet it — present only when the copy was given the condition and this item was an update\nof a task, a refused one included."
+        ),
+    ] = None
+    priority_condition: Annotated[
+        PriorityCondition | None,
+        Field(
+            description="What `--when-destination-priority` found the counterpart's priority at, and whether\nthat met it — present only when the copy was given the condition and this item was an\nupdate of a task."
+        ),
+    ] = None
+    held: Annotated[
+        WriteResult | None,
+        Field(
+            description="What the counterpart held, as the copy's read of it before writing found it — present\nonly on an item the copy refused after that read, such as `destination-status`."
+        ),
+    ] = None
+    section_links_unresolved: Annotated[
+        int,
+        Field(
+            description="Section links whose fragment names no heading of the record they point at, carried\nbyte for byte rather than guessed at.",
+            ge=0,
+        ),
+    ] = 0
+    section_links_unaddressable: Annotated[
+        int,
+        Field(
+            description="Section links to a heading the destination's native form cannot address — a Linear\nrecord with no stored id for that heading. Cross-record links fall back to the\nrecord's URL alone; same-record links retain their authored fragment.",
+            ge=0,
+        ),
+    ] = 0
+    section_link_updates: Annotated[
+        int,
+        Field(
+            description="Writes the copy added to this record to finish its section links, once the records they\nname — or the record itself — had landed and their headings could be addressed.",
+            ge=0,
+        ),
+    ] = 0
+    body_size: Annotated[
+        int | None,
+        Field(
+            description="The size of the body the destination would store for the item, in the unit its plugin\nstates its limit in — the metadata slot the destination keeps and every asset reference\nrewritten to where it is served included. Present on a dry run's item whose destination\ncan say, and absent on every other outcome.",
+            ge=0,
+        ),
+    ] = None
+    size: Annotated[
+        int,
+        Field(
+            description="The size of the body the item would store, as the destination's plugin counts it —\nwhat [`CopyOutcome::body_size`] reports beside it.",
+            ge=0,
+        ),
+    ]
+    limit: Annotated[
+        int,
+        Field(
+            description="The most the destination holds in one body, as its plugin states it.",
+            ge=0,
+        ),
+    ]
+    action: Literal["oversize"]
 
 
 class CopyOutcome(
@@ -757,6 +888,7 @@ class CopyOutcome(
         | CopyOutcomeOrphaned
         | CopyOutcomeFailed
         | CopyOutcomeSkipped
+        | CopyOutcomeOversize
     ]
 ):
     root: Annotated[
@@ -765,7 +897,8 @@ class CopyOutcome(
         | CopyOutcomeUnchanged
         | CopyOutcomeOrphaned
         | CopyOutcomeFailed
-        | CopyOutcomeSkipped,
+        | CopyOutcomeSkipped
+        | CopyOutcomeOversize,
         Field(
             description="What happened to one item.\n\n`action` and `destination` are one value rather than two fields side by side: an\nupdated item without a destination id, or an orphan without one, are states this type\nmust not be able to say — the id *is* what those outcomes are about. The one outcome\nthat legitimately has none is a dry run that would create, because nothing was\ncreated and there is no id to report.",
             title="CopyOutcome",

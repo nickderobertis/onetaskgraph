@@ -94,14 +94,16 @@ LIVE_SESSION = BudgetId('github-live-session-points')
 # result, and what it reads is GitHub's cache listing.
 HEADROOM = BudgetId('onetaskgraph-cache-headroom')
 CACHE_LISTING_REFUSED = 'actions/cache/storage-limit answered HTTP'
-# ci.yml's budgets targets test-linux runs, by the file each saves. Nx caches the three whose names
+# ci.yml's budgets targets test-linux runs, by the file each saves. Nx caches the four whose names
 # hold no test of its own to re-run; the other two always execute.
 CACHED_SAVING_TARGETS = {'onetaskgraph-live-janitor:budgets': 'onetaskgraph-live-janitor-budget-results.json',
                          'onetaskgraph-linear-e2e:budgets': 'onetaskgraph-linear-e2e-budget-results.json',
+                         'onetaskgraph-e2e:budgets': 'onetaskgraph-e2e-budget-results.json',
                          'onetaskgraph-github-projects-e2e:budgets': 'onetaskgraph-github-projects-e2e-budget-results.json'}
 UNCACHED_SAVING_TARGETS = {'github-workflow-policy:budgets': 'github-workflow-policy-budget-results.json',
                            'report-job:budgets': 'report-job-budget-results.json'}
 SAVING_BUDGET_FILES = ('crates/onetaskgraph-live-janitor/budgets.yaml', 'crates/onetaskgraph-linear-e2e/budgets.yaml',
+                       'crates/onetaskgraph-e2e/budgets.yaml',
                        'crates/onetaskgraph-github-projects-e2e/budgets.yaml', 'pool-maintenance/budgets.yaml',
                        '.github/policy/budgets.yaml', '.github/reporting/budgets.yaml')
 LONGEST_JOB_SECONDS = 1234

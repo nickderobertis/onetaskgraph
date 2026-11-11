@@ -78,6 +78,12 @@ pub struct FailureDocument {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     #[schemars(!skip_serializing_if)]
     pub predates_write: bool,
+    /// Every item a copy refused as `oversize` — its source id, its destination, the size of
+    /// the body that write would store and the most that destination holds — and absent for
+    /// every other failure.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(!skip_serializing_if)]
+    pub oversize: Vec<crate::Oversized>,
 }
 
 /// Why one command failed.
@@ -345,6 +351,14 @@ fn cause(error: &EngineError) -> (String, Option<SourceName>, Option<&SourceErro
             "visibility-unreadable".to_owned(),
             configured(destination),
             Some(error),
+        ),
+        EngineError::Oversize { items } => (
+            "oversize".to_owned(),
+            match items.as_slice() {
+                [item] => Some(item.destination.clone()),
+                _ => None,
+            },
+            None,
         ),
         EngineError::BoundaryRefused { destination, .. } => {
             ("boundary-refused".to_owned(), configured(destination), None)

@@ -1777,6 +1777,97 @@ fn a_schema_check_server_whose_schema_changed_is_replaced_by_the_next_request() 
     );
 }
 
+/// A server stopping once idle whose endpoint cannot be removed says so in its log and tries
+/// again: a failure that passes — here the rendezvous directory read-only until the server has
+/// said it failed — still ends with the endpoint removed and the server exiting zero, and one
+/// that persists ends within its retry window, exiting non-zero and naming the endpoint, rather
+/// than exiting as though it had cleaned up. A read-only directory is how this forces the
+/// failure, so it runs where permissions refuse a removal; Windows' own transient refusal (a
+/// scanner holding the file) is what the retry is for.
+#[cfg(unix)]
+#[test]
+fn a_schema_check_server_retries_an_endpoint_it_cannot_remove_and_says_if_it_never_can() {
+    use std::io::{BufRead, BufReader};
+    use std::os::unix::fs::PermissionsExt;
+
+    github_schema::warm();
+    let (here, modules, _) = github_schema::locations();
+    let stop_with = |transient: bool| {
+        let scratch = tempfile::tempdir().expect("a scratch directory");
+        let directory = scratch.path();
+        let mut child = std::process::Command::new("bun")
+            .arg(here.join("validate.mjs"))
+            .arg(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/github-schema.docs.graphql"
+            ))
+            .arg("--serve")
+            .arg(directory)
+            .env("BUN_RUNTIME_TRANSPILER_CACHE_PATH", "0")
+            .env("GITHUB_SCHEMA_MODULES", &modules)
+            .env("GITHUB_SCHEMA_IDLE_MS", "500")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("bun runs the schema check");
+        let mut ready = String::new();
+        BufReader::new(child.stdout.take().expect("a piped standard output"))
+            .read_line(&mut ready)
+            .expect("the server says it is ready");
+        assert!(ready.contains("\"ready\":true"), "{ready}");
+        let endpoint = directory.join("endpoint.json");
+        assert!(endpoint.exists(), "the server wrote {}", endpoint.display());
+        let writable = |mode: u32| {
+            std::fs::set_permissions(directory, std::fs::Permissions::from_mode(mode))
+                .expect("the rendezvous directory's mode is set");
+        };
+        writable(0o555);
+        let mut log = BufReader::new(child.stderr.take().expect("a piped standard error"));
+        // The lines before it say the server's idle countdown; the first about the endpoint is
+        // the one the server writes when its removal fails.
+        let mut first = String::new();
+        while !first.contains("endpoint.json") {
+            first.clear();
+            let read = log
+                .read_line(&mut first)
+                .expect("the server says it could not remove its endpoint");
+            assert!(
+                read > 0,
+                "the server ended without saying it could not remove its endpoint"
+            );
+        }
+        if transient {
+            writable(0o755);
+        }
+        let mut rest = String::new();
+        std::io::Read::read_to_string(&mut log, &mut rest).expect("the rest of the log is read");
+        let exited = child.wait().expect("the server exits");
+        writable(0o755);
+        (first, rest, exited, endpoint.exists())
+    };
+
+    let (first, rest, exited, left) = stop_with(true);
+    assert!(
+        first.contains("could not remove") && first.contains("trying again"),
+        "{first}"
+    );
+    assert!(
+        exited.success() && !left && rest.is_empty(),
+        "a failure that passed: exited {exited}, endpoint left {left}, then said {rest:?}"
+    );
+
+    let (first, rest, exited, left) = stop_with(false);
+    assert!(first.contains("trying again"), "{first}");
+    assert!(
+        !exited.success()
+            && left
+            && rest.contains("could not remove")
+            && rest.contains("endpoint.json"),
+        "a failure that persisted: exited {exited}, endpoint left {left}, then said {rest:?}"
+    );
+}
+
 /// Connects to the server at `port` and greets it with the protocol it speaks, answering the
 /// connection and the server's first line.
 fn greeted(port: u16) -> (std::net::TcpStream, serde_json::Value) {
@@ -1805,8 +1896,12 @@ fn wait_until_stopped(endpoint: &std::path::Path, port: u16) {
     while endpoint.exists() {
         assert!(
             asked.elapsed() < std::time::Duration::from_secs(30),
-            "the server stopped and removed {}",
-            endpoint.display()
+            "the server stopped and removed {}; its server.log reads:\n{}",
+            endpoint.display(),
+            endpoint
+                .parent()
+                .and_then(|directory| std::fs::read_to_string(directory.join("server.log")).ok())
+                .unwrap_or_else(|| "(unreadable)".to_owned())
         );
         std::thread::sleep(std::time::Duration::from_millis(20));
     }

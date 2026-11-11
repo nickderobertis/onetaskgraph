@@ -77,7 +77,7 @@ silence. See the note on `Health` below for the one difference it carries delibe
   `ProjectQuery`, `DocumentQuery`, `TextQuery`, `TextFields`, `LabelFilter`,
   `MetadataMatch`, `ProjectFilter`, `PageRequest`, `Page`, `Cursor`; the capability types `Capabilities`,
   `Support`, `DependencySupport`; the write types `ItemWrite`, `WriteSupport`,
-  `MetadataKey`, `MetadataRecord` and `WriteGuard`; the targeted-update types `TaskUpdate`,
+  `MetadataKey`, `MetadataRecord`, `WriteGuard` and `BodySize`; the targeted-update types `TaskUpdate`,
   `TaskUpdateOutcome` and `UpdatedField`; the
   comment types `Comment`, `CommentBody`, `NewComment`, `CommentOrigin`, `CommentCopy`,
   `AuthorKind` and `TaskDetailRead`; the section types `StoredHeading`, `BodyMarkup` and `SharedBodyMarkup`; the
@@ -365,7 +365,8 @@ The suite is the only QA loop; realism and completeness are rules, not preferenc
   package version stays out of a unit's key unless its result depends on the value: it is kept
   only by `onetaskgraph-e2e` (`surface.rs`) and `onetaskgraph-linear-e2e` (`health.rs`), which
   compare a crate's declared version to the binary's. The units that write `budgets` telemetry
-  (`onetaskgraph-linear-e2e`, `onetaskgraph-github-projects-e2e`, `onetaskgraph-live-janitor`)
+  (`onetaskgraph-e2e`, `onetaskgraph-linear-e2e`, `onetaskgraph-github-projects-e2e`,
+  `onetaskgraph-live-janitor`)
   declare it as an output too, so a replay restores what `budgets` reads. Nothing in the
   merge's directory is read except the units' own reports, so a report left behind refuses
   the merge rather than reaching the total. The measurement is skipped on Windows with a printed notice
@@ -1559,6 +1560,23 @@ them do; this is the inventory of what is owed, not a status board.
 156. An orchestrator configured with three Linear team sources and no route, folders of its own
      named `drafts` and `authoring`, and its own personas, templates and status vocabulary drives
      every feature above through the binary against a named team.
+157. Every item a copy writes is sized before the first write: a `task copy`, a `project copy`
+     — `--documents` included — and a `document copy` dry run report each item's composed body
+     size, and answer an item over a GitHub board's 65,536 characters `oversize` with that
+     limit, one whose content fits and whose metadata slot and rewritten image links do not
+     among them; each copy itself fails `oversize`, listing every such item, with no request
+     that writes reaching the board — a valid task planned before the oversize one included —
+     and nothing written at the source.
+158. A public copy is put to the write policy as one batch: one `check_command` input whose
+     `text`, `paths` and `metadata` are the multiset union of what its writes are each screened
+     as, one `visibility_command` run per repository it names; a term planted in one task refuses
+     the whole copy without printing it, an unavailable check writes nothing, and a task copied
+     alone is a batch of one.
+159. `project copy --documents` lands a plan's project, tasks and documents in one command, each
+     document's references to the plan's tasks pointed at their copies; and a store configured
+     by configuration alone — Linear team sources with no default and no route, folders of
+     Markdown `drafts` and `authoring`, templates of its own — copies a plan to a named team,
+     its dry run sizing every item, and lands every item there and nowhere else.
 
 ## The public boundary
 
@@ -1790,7 +1808,7 @@ reads unavailable until the re-copy of create-repo's fix, which falls back to th
   merge here; `.github/governance.json` declares them, and `budgets` is added to branch protection
   only after it lands.** A pull request's last commit runs exactly those five and nothing else (`lint`
   carries the PR title, llmlint, notignored's comment, the supply chain and the visual docs
-  capture as steps), `lint` and `budgets` held to `timeout-minutes: 30` and the three test jobs to 40, by the
+  capture as steps, and Linux's distribution journey as a phase), `lint` and `budgets` held to `timeout-minutes: 30` and the three test jobs to 40, by the
   user's decision of 2026-10-31, because passing runs reached 29.8 minutes. Re-apply or verify the whole
   arrangement with the create-repo skill's `setup_github_governance.py`, which is its source
   of truth. Two values in it are load-bearing rather than conventional: **zero required
@@ -2108,9 +2126,10 @@ reads unavailable until the re-copy of create-repo's fix, which falls back to th
   scripts that need it again with a relative entry first on PATH — and refuses to run
   at all when the host cannot reproduce the defect, because a simulation that did not take
   would look exactly like a pass. The distribution journey is put to it whole on Linux alone
-  (test-linux runs it under that check); elsewhere `scripts/test-python-call-sites.sh` puts
+  (`lint` runs it under that check, beside the lint phases, because test-linux's coverage left
+  it no room inside that job's timeout); elsewhere `scripts/test-python-call-sites.sh` puts
   each Python call site the journey reaches to it through the real scripts, by the user's
-  decision of 2026-10-28, and test-linux fails when the journey started Python from a script
+  decision of 2026-10-28, and `lint` fails when the journey started Python from a script
   that targeted pass did not (`scripts/check-python-call-sites-enforced.sh` watches it fail).
 - **A loopback board keeps its connections alive, and a proxy in front of one forwards
   through `loopback::Upstream`.** Answering every request `Connection: close` cost a TCP

@@ -38,7 +38,8 @@
       "//": "Uncached: it reaches the network and writes to the shared cargo registry outside the workspace, so no input in the tree describes its result."
     },
     "check": {
-      "executor": "nx:noop"
+      "executor": "nx:noop",
+      "dependsOn": ["format-check", "lint", "typecheck", "test", "coverage", "budgets"]
     },
     "format": {
       "executor": "nx:run-commands",
@@ -72,7 +73,7 @@
         "command": "cargo test --quiet -p onetaskgraph-e2e --all-features --locked"
       },
       "dependsOn": ["onetaskgraph:build"],
-      "//": "Spawns target/debug/onetaskgraph, which onetaskgraph:build alone produces and this target depends on; it never builds the onetaskgraph package itself, so it cannot relink the file another spawner is running. scripts/check-workspace-config.sh holds the arrangement.",
+      "//": "Spawns target/debug/onetaskgraph, which onetaskgraph:build alone produces and this target depends on; it never builds the onetaskgraph package itself, so it cannot relink the file another spawner is running. scripts/check-workspace-config.sh holds the arrangement. Its output is the telemetry the boundary budget's journey records, which `budgets` reads, so a cache hit restores it.",
       "inputs": [
         "versionFreeNpm",
         "{workspaceRoot}/.tool-versions",
@@ -93,7 +94,29 @@
         {
           "runtime": "node scripts/nx-version-free-inputs.mjs --ecosystem files --keep-version"
         }
-      ]
+      ],
+      "outputs": ["{workspaceRoot}/target/debug/telemetry/onetaskgraph-e2e/*.json"]
+    },
+    "budgets": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["test"],
+      "options": {
+        "command": "bun run onebudgetspec check crates/onetaskgraph-e2e/budgets.yaml --save-results target/budget-results/onetaskgraph-e2e-budget-results.json"
+      },
+      "cache": true,
+      "inputs": [
+        "default",
+        "^default",
+        {
+          "dependentTasksOutputFiles": "**/telemetry/onetaskgraph-e2e/*.json"
+        },
+        {
+          "runtime": "node -p process.platform"
+        },
+        "versionFreeNpm",
+        "{workspaceRoot}/.tool-versions"
+      ],
+      "outputs": ["{workspaceRoot}/target/budget-results/onetaskgraph-e2e-budget-results.json"]
     },
     "coverage": {
       "executor": "nx:run-commands",
@@ -101,9 +124,12 @@
       "options": {
         "command": "bash scripts/rust-coverage.sh onetaskgraph-e2e"
       },
-      "outputs": ["{workspaceRoot}/target/coverage-units/onetaskgraph-e2e.lcov"],
+      "outputs": [
+        "{workspaceRoot}/target/coverage-units/onetaskgraph-e2e.lcov",
+        "{workspaceRoot}/target/debug/telemetry/onetaskgraph-e2e/*.json"
+      ],
       "cache": true,
-      "//": "A coverage unit: its LCOV report is cached, and workspace:coverage merges every unit's and holds the floor. scripts/check-coverage-enforced.sh reconciles the unit with that merge, and .github/nx-policy/tests/coverage-units.test.mjs holds these inputs to every file the run reads. It reaches the instrumented binary through onetaskgraph:coverage-build, never through onetaskgraph:coverage's run, so the journeys find it when that unit replays.",
+      "//": "A coverage unit: its LCOV report is cached, and workspace:coverage merges every unit's and holds the floor. scripts/check-coverage-enforced.sh reconciles the unit with that merge, and .github/nx-policy/tests/coverage-units.test.mjs holds these inputs to every file the run reads. It reaches the instrumented binary through onetaskgraph:coverage-build, never through onetaskgraph:coverage's run, so the journeys find it when that unit replays. Its outputs also carry the telemetry `budgets` reads, which its journeys write here (scripts/ci-job.sh).",
       "inputs": [
         "versionFreeNpm",
         "{projectRoot}/**/*",

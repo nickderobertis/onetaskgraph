@@ -22,7 +22,7 @@ set -euo pipefail
 unset GH_PROJECTS_TOKEN LINEAR_API_KEY ONETASKGRAPH_LIVE_REQUIRED
 # What this asserts is a property of the suite, not of the platform: the same substitution
 # reaches the same assertion everywhere, and the crate's own suite still runs on every runner.
-# test-linux runs it, through scripts:distribution-test; the others spend their time on what
+# lint runs it on Linux, through scripts:distribution-test; the others spend their time on what
 # depends on them (.github/policy/tests/inventory.test.mjs holds that).
 case "${OS:-}${OSTYPE:-}" in
   *Windows_NT* | *msys* | *cygwin* | *win32* | *darwin*)

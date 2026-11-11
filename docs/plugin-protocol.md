@@ -528,6 +528,12 @@ source to write before each heading — is ignored as the default ignores it. A 
 destination kind with no section form, so a copy into one carries each section link's fragment
 unchanged after the counterpart's location, and writes no markup into its bodies.
 
+The body-size methods are not carried either. `task_body_size`, `project_body_size` and
+`document_body_size` — how large the body a write would store is, and the most the backend
+holds — are answered as the trait's default does, with none, so a copy into a stdio plugin sizes
+none of its items before writing and refuses none of them as `oversize`; a body too large for
+the backend is refused by the plugin's own write, which the copy then takes back whole.
+
 The follow-up methods are not carried either, and a source hosted over this protocol is
 answered as the trait's defaults answer. `holds_versions` answers false, so a write held to a
 task's version (`--if-version`) is checked by the engine reading the task through the protocol

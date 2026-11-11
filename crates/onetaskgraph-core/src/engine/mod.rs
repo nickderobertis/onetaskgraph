@@ -95,8 +95,8 @@ pub use copy::{
     BudgetSpent, CommentCounts, CopyAction, CopyConditions, CopyItems, CopyLink, CopyLookup,
     CopyOutcome, CopyReport, CopyRequest, CopyScope, CopyVia, CreatesIn, LocateLookup,
     LocateReport, LocateRequest, Located, LocatedCounterpart, MatchBy, NoCounterpart, NotATask,
-    Otherwise, PriorityCondition, PublicProjection, PublicProjections, Spent, StatusCondition,
-    StatusPolicy,
+    Otherwise, Oversized, PriorityCondition, PublicProjection, PublicProjections, Spent,
+    StatusCondition, StatusPolicy,
 };
 pub(crate) use copy::{malformed_links, malformed_locations};
 pub use delivery::{Delivered, DeliveryOutcome, ProjectStatusSet, TaskStatusSet, settled};
@@ -531,6 +531,20 @@ pub enum EngineError {
         destination: String,
         /// Why the read failed.
         error: SourceError,
+    },
+
+    /// A copy would write an item whose body is larger than its destination holds, so it
+    /// wrote nothing: every item of it was sized before the first write.
+    #[error(
+        "nothing was copied: {}\n\
+         next: shorten {} — or split what it says across more items — and copy again; \
+         `--dry-run` reports every item's body size beside its destination's limit.",
+        oversized(items),
+        if items.len() == 1 { "that item" } else { "those items" }
+    )]
+    Oversize {
+        /// Every item over its destination's limit, in the order the copy planned them.
+        items: Vec<copy::Oversized>,
     },
 
     /// The caller's check refused a write to a destination not verified private.
@@ -1902,6 +1916,15 @@ impl EngineError {
         )
     }
 
+    /// Every item a copy refused as [`EngineError::Oversize`], and none for every other refusal.
+    #[must_use]
+    pub fn oversize(&self) -> &[copy::Oversized] {
+        match self {
+            Self::Oversize { items } => items,
+            _ => &[],
+        }
+    }
+
     /// What the destination item a copy refused to write held, as the copy's read of it before
     /// writing found it — for a refusal made after that read, and `None` for every other.
     #[must_use]
@@ -1912,6 +1935,20 @@ impl EngineError {
             _ => None,
         }
     }
+}
+
+/// Every item of an [`EngineError::Oversize`], as its message names them.
+fn oversized(items: &[copy::Oversized]) -> String {
+    items
+        .iter()
+        .map(|item| {
+            format!(
+                "{} would write a body of {} characters to source {}, which holds at most {}",
+                item.source, item.body_size, item.destination, item.limit
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 /// One side's `line` of a [`EngineError::StoredContentDiverged`] as its message shows it: the

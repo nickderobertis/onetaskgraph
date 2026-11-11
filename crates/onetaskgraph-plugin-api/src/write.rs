@@ -71,6 +71,32 @@ pub struct ItemWrite<T> {
     pub depends_on: Vec<DependencyEdge>,
 }
 
+/// How large the body one write of an item would store is, as its destination counts it, and
+/// the most that destination holds in one.
+///
+/// The body is the long-form field the destination stores an item's content in — an issue's
+/// body, a Linear item's description or content — composed exactly as the write would compose
+/// it: the content, the metadata slot the source keeps beside it, and every asset reference
+/// rewritten to where the destination serves it. A copy asks for it of every item before it
+/// writes any, so an item too large for its destination refuses the copy while nothing of it
+/// has been written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct BodySize {
+    /// The composed body's length, in the unit [`limit`](Self::limit) is stated in — the
+    /// characters a hosted tracker counts, never bytes unless the backend counts bytes.
+    pub size: u64,
+    /// The most one body may hold at this destination, or `None` when it states no limit.
+    pub limit: Option<u64>,
+}
+
+impl BodySize {
+    /// Whether the body is larger than the destination holds: never, where it states no limit.
+    #[must_use]
+    pub fn exceeds(&self) -> bool {
+        self.limit.is_some_and(|limit| self.size > limit)
+    }
+}
+
 /// The refusal a source with no write side answers a write with.
 ///
 /// Spelled once so every unwritten source refuses in the same words, and so a plugin's

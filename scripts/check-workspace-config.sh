@@ -150,7 +150,7 @@ SPAWNERS = {
     # check-relative-interpreter.sh's targeted pass, which runs it `--interpreter-only`.
     "scripts/test-distribution.sh": [("scripts", "distribution-test"), ("scripts", "test")],
     # check-relative-interpreter.sh runs the targeted pass in scripts:test, and after the
-    # journey in scripts:distribution-test where test-linux runs the journey under it.
+    # journey in scripts:distribution-test where lint runs the journey under it.
     "scripts/test-python-call-sites.sh": [("scripts", "test"), ("scripts", "distribution-test")],
     "scripts/check-python-call-sites-enforced.sh": [("scripts", "test")],
 }

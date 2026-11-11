@@ -127,6 +127,36 @@ budgets:
     unit: seconds
     direction: max
     threshold: 32
+  - id: plan-copy-seconds-first
+    description: >-
+      Simulated seconds a person waits for one first `project copy --documents` of the generated 10-item plan onto a loopback board modelling GitHub's latency per request kind, local processes excluded — an inner measure, because a shared host's whole wait is not a consistent one. It protects the wait for every plan filed onto a board.
+    labels: [github]
+    measure: reported
+    # llmlint: ignore[budget_commands_measure_directly] Every budget of this file selects a report-only entry in `budget_runner`, the harness-runner convention this crate's budgets landed with; the task registering this budget names this one generic entry. It reads only the telemetry `plan_copy.rs` recorded during the crate's test run, refuses a recording of another plan, board, scenario or copy command, and hands the figure to onebudgetspec, which alone judges it.
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_plan_copy", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-github-projects-e2e"]
+    unit: seconds
+    direction: max
+    threshold: 32
+  - id: plan-copy-seconds-changed
+    description: >-
+      Simulated seconds a person waits for one `project copy --documents` re-copy of the generated 10-item plan after one task changed, against the same loopback, local processes excluded — an inner measure, because a shared host's whole wait is not a consistent one. It protects the wait for every plan revision filed onto a board.
+    labels: [github]
+    measure: reported
+    # llmlint: ignore[budget_commands_measure_directly] Every budget of this file selects a report-only entry in `budget_runner`, the harness-runner convention this crate's budgets landed with; the task registering this budget names this one generic entry. It reads only the telemetry `plan_copy.rs` recorded during the crate's test run, refuses a recording of another plan, board, scenario or copy command, and hands the figure to onebudgetspec, which alone judges it.
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_plan_copy", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-github-projects-e2e"]
+    unit: seconds
+    direction: max
+    threshold: 8
+  - id: plan-copy-seconds-unchanged
+    description: >-
+      Simulated seconds a person waits for one `project copy --documents` re-copy of the unchanged generated 10-item plan, against the same loopback, local processes excluded — an inner measure, because a shared host's whole wait is not a consistent one. It protects the wait for a re-copy that changes nothing.
+    labels: [github]
+    measure: reported
+    # llmlint: ignore[budget_commands_measure_directly] Every budget of this file selects a report-only entry in `budget_runner`, the harness-runner convention this crate's budgets landed with; the task registering this budget names this one generic entry. It reads only the telemetry `plan_copy.rs` recorded during the crate's test run, refuses a recording of another plan, board, scenario or copy command, and hands the figure to onebudgetspec, which alone judges it.
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_plan_copy", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-github-projects-e2e"]
+    unit: seconds
+    direction: max
+    threshold: 7
   # Labelled `host`: wall-clock time on the machine that runs it, which the host's load moves,
   # so only the uncached `budgets-host` target checks it and no per-change target does.
   - id: github-plan-copy-real-seconds-unchanged

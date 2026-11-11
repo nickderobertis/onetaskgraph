@@ -1087,10 +1087,19 @@ export function taskCopyFlags(options: TaskCopyOptions): string[] {
 
 export function projectCopyFlags(
   options: CopyOptions &
-    StatusCopyOptions & { noTasks?: boolean; members?: string[]; membersOnly?: boolean },
+    StatusCopyOptions & {
+      noTasks?: boolean;
+      documents?: boolean;
+      members?: string[];
+      membersOnly?: boolean;
+    },
 ): string[] {
   const args = copyFlags("projectCopy", options);
   if (options.noTasks) args.push("--no-tasks");
+  if (options.documents !== undefined && typeof options.documents !== "boolean") {
+    throw new TypeError("projectCopy: documents must be a boolean");
+  }
+  if (options.documents === true) args.push("--documents");
   for (const member of options.members ?? []) args.push("--member", member);
   if (options.membersOnly !== undefined && typeof options.membersOnly !== "boolean") {
     throw new TypeError("projectCopy: membersOnly must be a boolean");
@@ -1655,7 +1664,12 @@ export class OnetaskgraphClient {
     id: string,
     to: string,
     options?: (CopyOptions &
-      StatusCopyOptions & { noTasks?: boolean; members?: string[]; membersOnly?: boolean }) & {
+      StatusCopyOptions & {
+        noTasks?: boolean;
+        documents?: boolean;
+        members?: string[];
+        membersOnly?: boolean;
+      }) & {
       sanitizeDryRun?: false;
     },
   ): Promise<CopyReport>;
@@ -1663,15 +1677,26 @@ export class OnetaskgraphClient {
     id: string,
     to: string,
     options?: CopyOptions &
-      StatusCopyOptions & { noTasks?: boolean; members?: string[]; membersOnly?: boolean },
+      StatusCopyOptions & {
+        noTasks?: boolean;
+        documents?: boolean;
+        members?: string[];
+        membersOnly?: boolean;
+      },
   ): Promise<CopyReport | SanitizeDryRun>;
   projectCopy(
     id: string,
     to: string,
     // `membersOnly` copies the named `members` into the project the destination already holds,
-    // leaving that project unread and unwritten; it is refused without a member.
+    // leaving that project unread and unwritten; it is refused without a member. `documents`
+    // copies the documents filed under the project too, in the same copy.
     options: CopyOptions &
-      StatusCopyOptions & { noTasks?: boolean; members?: string[]; membersOnly?: boolean } = {},
+      StatusCopyOptions & {
+        noTasks?: boolean;
+        documents?: boolean;
+        members?: string[];
+        membersOnly?: boolean;
+      } = {},
   ): Promise<CopyReport | SanitizeDryRun> {
     const args = [id, "--to", to, ...projectCopyFlags(options)];
     return this.run("project copy", args, undefined, options.sanitizeDryRun === true);

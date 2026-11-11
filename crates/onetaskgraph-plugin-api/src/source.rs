@@ -776,6 +776,48 @@ pub trait TaskSource: Send + Sync {
         Ok(())
     }
 
+    /// How large the body a [`write_task`](Self::write_task) of `write` would store is — or a
+    /// [`write_task_with_assets`](Self::write_task_with_assets) of it, when `assets` is given —
+    /// and the most one body here holds, answered without a request and changing nothing.
+    ///
+    /// The body is composed as the write would compose it: the content, this source's metadata
+    /// slot and every asset reference rewritten to where this source serves the asset, an asset
+    /// not uploaded yet at the length its address will have. A copy asks it of every item it
+    /// plans before its first write, refuses the whole copy when any item's body is larger than
+    /// the limit, and reports each size from a dry run. What the write itself decides from a
+    /// read — the repository an issue lands in, an edge no relationship here can name — is
+    /// taken as this source would most likely decide it, so the answer may differ from what
+    /// lands by those few characters; the write still refuses a body its backend will not take.
+    ///
+    /// Defaulted to `None`: a source that cannot say, and one whose bodies have no size worth
+    /// stating, answers nothing, and its items are copied exactly as before.
+    fn task_body_size(
+        &self,
+        write: &ItemWrite<Task>,
+        assets: Option<&crate::AssetWrite>,
+    ) -> Option<crate::BodySize> {
+        let _ = (write, assets);
+        None
+    }
+
+    /// [`task_body_size`](Self::task_body_size), for a [`write_project`](Self::write_project).
+    fn project_body_size(&self, write: &ItemWrite<Project>) -> Option<crate::BodySize> {
+        let _ = write;
+        None
+    }
+
+    /// [`task_body_size`](Self::task_body_size), for a [`write_document`](Self::write_document) —
+    /// or a [`write_document_with_assets`](Self::write_document_with_assets), when `assets` is
+    /// given.
+    fn document_body_size(
+        &self,
+        write: &ItemWrite<Document>,
+        assets: Option<&crate::AssetWrite>,
+    ) -> Option<crate::BodySize> {
+        let _ = (write, assets);
+        None
+    }
+
     /// Whether a write of an item of `kind` at `category` — over the item `target` names, or
     /// creating one when it is `None` — would have a status to write, asked before the write
     /// and changing nothing.

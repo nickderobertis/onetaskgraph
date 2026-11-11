@@ -2322,7 +2322,51 @@ test("a copy with comments carries them, and a repeat by query skips the unchang
   }
 });
 
-test("projectCopy flags agree with the binary help and validate membersOnly", () => {
+test("projectCopy carries the project's documents when asked", async () => {
+  const folders = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-documents-"));
+  try {
+    for (const directory of ["from/projects", "from/tasks", "from/documents", "into"]) {
+      mkdirSync(resolve(folders, directory), { recursive: true });
+    }
+    writeFileSync(
+      resolve(folders, "from/projects/P-1.md"),
+      "---\ntitle: Engine\nstatus: todo\n---\nthe engine\n",
+    );
+    writeFileSync(
+      resolve(folders, "from/tasks/T-1.md"),
+      "---\ntitle: Alpha engine\nstatus: todo\nproject: P-1\n---\nthe core\n",
+    );
+    writeFileSync(
+      resolve(folders, "from/documents/D-1.md"),
+      "---\ntitle: Design of the engine\nproject: P-1\n---\nwhy the core\n",
+    );
+    writeFileSync(
+      resolve(folders, "onetaskgraph.yaml"),
+      JSON.stringify({
+        sources: {
+          from: { plugin: "local-md", config: { root: resolve(folders, "from") } },
+          into: { plugin: "local-md", config: { root: resolve(folders, "into") } },
+        },
+      }),
+    );
+    const folderClient = new OnetaskgraphClient({ binaryPath: binary, cwd: folders });
+    // Without the flag a project copy reads and writes no document.
+    const alone = await folderClient.projectCopy("from:P-1", "into", { dryRun: true });
+    expect(alone.items.map((item) => item.source)).toEqual(["from:P-1", "from:T-1"]);
+    const copied = await folderClient.projectCopy("from:P-1", "into", { documents: true });
+    expect(copied.items.map((item) => [item.source, item.action])).toEqual([
+      ["from:P-1", "created"],
+      ["from:T-1", "created"],
+      ["from:D-1", "created"],
+    ]);
+    const landed = await folderClient.documentList({ sources: ["into"] });
+    expect(landed.items.map((document) => document.item.title)).toEqual(["Design of the engine"]);
+  } finally {
+    rmSync(folders, { recursive: true, force: true });
+  }
+});
+
+test("projectCopy flags agree with the binary help and validate membersOnly and documents", () => {
   const flags = (verb: string[]) => {
     const help = spawnSync(binary, [...verb, "--help"], { encoding: "utf8" });
     expect(help.status, help.stderr).toBe(0);
@@ -2343,6 +2387,7 @@ test("projectCopy flags agree with the binary help and validate membersOnly", ()
     noLink: true,
     comments: true,
     noTasks: true,
+    documents: true,
     members: ["from:T-1"],
     membersOnly: true,
     termScope: ["github.com/example/project"],
@@ -2360,6 +2405,12 @@ test("projectCopy flags agree with the binary help and validate membersOnly", ()
       membersOnly: "false" as unknown as boolean,
     }),
   ).toThrow("membersOnly must be a boolean");
+  expect(projectCopyFlags({ documents: false })).not.toContain("--documents");
+  expect(() =>
+    client.projectCopy("from:P-1", "into", {
+      documents: "true" as unknown as boolean,
+    }),
+  ).toThrow("documents must be a boolean");
 });
 
 test("taskAssets rejects a partial exit even beside valid asset names", async () => {

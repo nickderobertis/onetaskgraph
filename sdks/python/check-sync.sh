@@ -38,8 +38,12 @@ ONETASKGRAPH_SDK_WITHOUT_CLI=1 sync >"$scratch/ci.log" 2>&1 \
   || { cat "$scratch/ci.log" >&2; fail "CI's mode (ONETASKGRAPH_SDK_WITHOUT_CLI=1) failed offline" "run 'just bootstrap' so uv's cache holds the lock, then fix what uv reports above"; }
 packages="$(installed)"
 for package in onetaskgraph-sdk pydantic pytest ruff ty; do
-  printf '%s\n' "$packages" | grep -qx "$package" \
-    || fail "CI's mode left $package out of the environment" "keep the SDK's own dependencies and dev group in sdks/python/sync.sh's CI mode"
+  printf '%s\n' "$packages" | grep -qx "$package" || {
+    # What uv did and what it left are the evidence: a failure without them names no cause.
+    { echo "sdk-python check-sync: CI's mode's sync said:"; cat "$scratch/ci.log"
+      echo "sdk-python check-sync: and left these packages:"; printf '%s\n' "$packages"; } >&2
+    fail "CI's mode left $package out of the environment" "keep the SDK's own dependencies and dev group in sdks/python/sync.sh's CI mode"
+  }
 done
 ! printf '%s\n' "$packages" | grep -qx onetaskgraph-cli \
   || fail "CI's mode installed onetaskgraph-cli, the maturin build it exists to skip" "keep --no-install-package onetaskgraph-cli on sdks/python/sync.sh's CI mode"

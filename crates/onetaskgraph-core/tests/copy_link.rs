@@ -509,7 +509,10 @@ fn via(outcome: &CopyOutcome) -> Option<String> {
     });
     match &outcome.action {
         CopyAction::Created { .. } => assert_eq!(word.as_deref(), Some("created")),
-        CopyAction::Orphaned { .. } | CopyAction::Failed { .. } | CopyAction::Skipped { .. } => {
+        CopyAction::Orphaned { .. }
+        | CopyAction::Failed { .. }
+        | CopyAction::Skipped { .. }
+        | CopyAction::Oversize { .. } => {
             assert_eq!(word, None);
         }
         CopyAction::Updated { .. } | CopyAction::Unchanged { .. } => assert_eq!(word, typed),
@@ -652,7 +655,13 @@ async fn a_project_and_a_document_record_their_links_and_are_found_by_them() {
                        "project": null, "labels": []}],
     });
     let (engine, pages) = engine(&from, &json!({"capabilities": {"documents": "native"}}));
-    let project = copy_of(&["from:P-1"], CopyScope::Projects { tasks: false });
+    let project = copy_of(
+        &["from:P-1"],
+        CopyScope::Projects {
+            tasks: false,
+            documents: false,
+        },
+    );
     let document = copy_of(&["from:D-1"], CopyScope::Documents);
 
     for (request, landed_on) in [(&project, "into:P-1"), (&document, "into:D-1")] {
@@ -1016,7 +1025,13 @@ async fn a_task_copied_on_its_own_is_filed_under_its_project_by_the_projects_lin
     let (engine, pages) = engine(&a_project_and_its_task(), &json!({}));
     copied(
         &engine,
-        &copy_of(&["from:P-1"], CopyScope::Projects { tasks: true }),
+        &copy_of(
+            &["from:P-1"],
+            CopyScope::Projects {
+                tasks: true,
+                documents: false,
+            },
+        ),
     )
     .await;
 
@@ -1445,7 +1460,13 @@ async fn a_rust_caller_selects_a_verified_target_before_a_stale_link_without_sca
 #[tokio::test]
 async fn an_explicit_target_refuses_non_task_scopes_before_reading() {
     let engine = Engine::new(Vec::new(), Vec::new());
-    for scope in [CopyScope::Documents, CopyScope::Projects { tasks: false }] {
+    for scope in [
+        CopyScope::Documents,
+        CopyScope::Projects {
+            tasks: false,
+            documents: false,
+        },
+    ] {
         let mut request = copy_of(&["from:T-1"], scope);
         request.target_task = Some(id("into:second"));
         assert!(matches!(
@@ -1459,7 +1480,13 @@ async fn an_explicit_target_refuses_non_task_scopes_before_reading() {
 async fn a_destination_guard_on_a_project_or_document_copy_is_refused_before_reading() {
     // No source is configured: a guard the engine read anything for would fail on that instead.
     let engine = Engine::new(Vec::new(), Vec::new());
-    for scope in [CopyScope::Documents, CopyScope::Projects { tasks: true }] {
+    for scope in [
+        CopyScope::Documents,
+        CopyScope::Projects {
+            tasks: true,
+            documents: false,
+        },
+    ] {
         for conditions in [
             onetaskgraph_core::CopyConditions {
                 status: vec![onetaskgraph_plugin_api::StatusCategory::Todo],

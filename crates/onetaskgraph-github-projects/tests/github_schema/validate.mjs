@@ -324,26 +324,63 @@ function serve(directory) {
   const built = stamp();
   let open = 0;
   let idle;
-  const stop = () => {
-    server.close();
-    try {
-      if (JSON.parse(readFileSync(endpoint, "utf8")).pid === process.pid) rmSync(endpoint);
-    } catch {
-      // Already gone, or another server's: either way not this one's to remove.
+  // Removes the endpoint if it is still this server's, answering whether it is gone. On Windows
+  // another process — a scanner reading the file — can make the read or the removal fail for a
+  // moment, and a server that gave up there exited with its endpoint left behind, so a client
+  // waited on a server that was gone. So a failure other than the file being absent is said on
+  // standard error, which is the rendezvous's `server.log`, and tried again for up to two
+  // seconds; one that persists is said again and the server exits non-zero.
+  const release = () => {
+    const pause = new Int32Array(new SharedArrayBuffer(4));
+    let failure;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      try {
+        if (JSON.parse(readFileSync(endpoint, "utf8")).pid === process.pid) rmSync(endpoint);
+        return true;
+      } catch (error) {
+        // Already gone, or another server's half-written file: not this one's to remove.
+        if (error?.code === "ENOENT" || error instanceof SyntaxError) return true;
+        if (failure === undefined) {
+          process.stderr.write(
+            `the schema check could not remove ${endpoint} (${error}); trying again\n`,
+          );
+        }
+        failure = error;
+      }
+      Atomics.wait(pause, 0, 0, 20);
     }
-    process.exit(0);
+    process.stderr.write(`the schema check could not remove ${endpoint}: ${failure}\n`);
+    return false;
+  };
+  // A server whose idle period a test set is one that test watches stop, and a stop that never
+  // came has said nothing about why: so such a server says on standard error, its `server.log`,
+  // each connection it counts opened and closed and when it starts and ends its countdown. The
+  // shared server, whose log outlives every test, says none of it.
+  const said =
+    process.env.GITHUB_SCHEMA_IDLE_MS === undefined
+      ? () => {}
+      : (what) => process.stderr.write(`${new Date().toISOString()} ${what}\n`);
+  const stop = () => {
+    said("idle: stopping");
+    server.close();
+    process.exit(release() ? 0 : 1);
   };
   const quiet = () => {
     clearTimeout(idle);
-    if (open === 0) idle = setTimeout(stop, IDLE_MS);
+    if (open === 0) {
+      said(`no connection open: stopping in ${IDLE_MS} ms`);
+      idle = setTimeout(stop, IDLE_MS);
+    }
   };
   const server = createServer((socket) => {
     open += 1;
+    said(`connection opened: ${open} open`);
     clearTimeout(idle);
     socket.setNoDelay(true);
-    socket.on("error", () => {});
+    socket.on("error", (error) => said(`connection error: ${error}`));
     socket.on("close", () => {
       open -= 1;
+      said(`connection closed: ${open} open`);
       quiet();
     });
     let greeted = false;

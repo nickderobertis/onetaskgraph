@@ -3044,6 +3044,33 @@ export const runtimeSchemas = {
           "action",
           "reason"
         ]
+      },
+      {
+        "description": "A dry run's item whose body is larger than its destination holds: the copy itself would\nrefuse, as `oversize`, before writing anything. The command exits `4`.",
+        "type": "object",
+        "properties": {
+          "size": {
+            "description": "The size of the body the item would store, as the destination's plugin counts it —\nwhat [`CopyOutcome::body_size`] reports beside it.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "limit": {
+            "description": "The most the destination holds in one body, as its plugin states it.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "action": {
+            "type": "string",
+            "const": "oversize"
+          }
+        },
+        "required": [
+          "action",
+          "size",
+          "limit"
+        ]
       }
     ],
     "$defs": {
@@ -3358,6 +3385,15 @@ export const runtimeSchemas = {
         "format": "uint64",
         "minimum": 0,
         "default": 0
+      },
+      "body_size": {
+        "description": "The size of the body the destination would store for the item, in the unit its plugin\nstates its limit in — the metadata slot the destination keeps and every asset reference\nrewritten to where it is served included. Present on a dry run's item whose destination\ncan say, and absent on every other outcome.",
+        "type": [
+          "integer",
+          "null"
+        ],
+        "format": "uint64",
+        "minimum": 0
       }
     },
     "required": [
@@ -3562,6 +3598,33 @@ export const runtimeSchemas = {
         "required": [
           "action",
           "reason"
+        ]
+      },
+      {
+        "description": "A dry run's item whose body is larger than its destination holds: the copy itself would\nrefuse, as `oversize`, before writing anything. The command exits `4`.",
+        "type": "object",
+        "properties": {
+          "size": {
+            "description": "The size of the body the item would store, as the destination's plugin counts it —\nwhat [`CopyOutcome::body_size`] reports beside it.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "limit": {
+            "description": "The most the destination holds in one body, as its plugin states it.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "action": {
+            "type": "string",
+            "const": "oversize"
+          }
+        },
+        "required": [
+          "action",
+          "size",
+          "limit"
         ]
       }
     ],
@@ -4267,6 +4330,15 @@ export const runtimeSchemas = {
             "format": "uint64",
             "minimum": 0,
             "default": 0
+          },
+          "body_size": {
+            "description": "The size of the body the destination would store for the item, in the unit its plugin\nstates its limit in — the metadata slot the destination keeps and every asset reference\nrewritten to where it is served included. Present on a dry run's item whose destination\ncan say, and absent on every other outcome.",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint64",
+            "minimum": 0
           }
         },
         "required": [
@@ -4471,6 +4543,33 @@ export const runtimeSchemas = {
             "required": [
               "action",
               "reason"
+            ]
+          },
+          {
+            "description": "A dry run's item whose body is larger than its destination holds: the copy itself would\nrefuse, as `oversize`, before writing anything. The command exits `4`.",
+            "type": "object",
+            "properties": {
+              "size": {
+                "description": "The size of the body the item would store, as the destination's plugin counts it —\nwhat [`CopyOutcome::body_size`] reports beside it.",
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "limit": {
+                "description": "The most the destination holds in one body, as its plugin states it.",
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "action": {
+                "type": "string",
+                "const": "oversize"
+              }
+            },
+            "required": [
+              "action",
+              "size",
+              "limit"
             ]
           }
         ]
@@ -8198,6 +8297,14 @@ export const runtimeSchemas = {
         "type": "boolean",
         "default": false
       },
+      "oversize": {
+        "description": "Every item a copy refused as `oversize` — its source id, its destination, the size of\nthe body that write would store and the most that destination holds — and absent for\nevery other failure.",
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/Oversized"
+        },
+        "default": []
+      },
       "sanitization": {
         "anyOf": [
           {
@@ -8563,6 +8670,42 @@ export const runtimeSchemas = {
           "amount",
           "lower_bound"
         ]
+      },
+      "Oversized": {
+        "description": "One item a copy would write whose body is larger than its destination holds.",
+        "type": "object",
+        "properties": {
+          "source": {
+            "description": "The qualified id the item was read from.",
+            "$ref": "#/$defs/GlobalId"
+          },
+          "destination": {
+            "description": "The configured source it would have been written to.",
+            "$ref": "#/$defs/SourceName"
+          },
+          "body_size": {
+            "description": "The size of the body that write would store, as the destination's plugin counts it.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "limit": {
+            "description": "The most that destination holds in one body.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "source",
+          "destination",
+          "body_size",
+          "limit"
+        ]
+      },
+      "GlobalId": {
+        "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
+        "type": "string"
       },
       "Sanitization": {
         "description": "What the screened writes of one command replaced, and what sanitise-on-refusal changed:\nthe `sanitization` member a write's answer carries when it is not empty.",

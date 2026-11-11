@@ -938,7 +938,15 @@ async fn a_copy_that_rewrites_a_renderings_references_records_the_digest_of_what
         .unwrap()
         .unwrap();
 
-    let project = copy_into_back(&engine, "work:launch", CopyScope::Projects { tasks: true }).await;
+    let project = copy_into_back(
+        &engine,
+        "work:launch",
+        CopyScope::Projects {
+            tasks: true,
+            documents: false,
+        },
+    )
+    .await;
     let counterpart = project
         .items
         .iter()

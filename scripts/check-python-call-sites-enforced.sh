@@ -3,7 +3,7 @@
 #
 # test-macos and test-windows put the distribution journey's Python call sites to a relative
 # interpreter through scripts/test-python-call-sites.sh alone, so what keeps that pass whole
-# is the comparison test-linux makes after running the journey itself. A comparison nobody
+# is the comparison lint makes after running the journey itself. A comparison nobody
 # has watched fail is one nobody knows works, so this runs the real check, the real targeted
 # pass and the real recording in a scratch copy, over a stand-in journey that starts Python
 # from a real script the way the journey does: once as it stands, which must pass, and once

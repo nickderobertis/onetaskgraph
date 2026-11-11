@@ -64,9 +64,16 @@ esac
 # llmlint: ignore-block[work_goes_through_command_surface] Each phase is Nx's own invocation because this script reads its task graph to select, stream and summarise the phase, and runs phases side by side; the just recipes for these tasks are single `nx run` wrappers (generate-check adds only output buffering), and this script is itself the body of the ci-* recipes.
 case "$JOB" in
   lint)
+    # Linux's distribution journey runs here, beside the lint phases, rather than in
+    # test-linux: when a change selects every crate's coverage, the journey's builds and that
+    # coverage share test-linux's cores and leave the job no room inside its timeout. It still
+    # runs in full, unconditionally, on Linux, and under the relative interpreter, which
+    # check-relative-interpreter.sh compares with the targeted pass.
+    export ONETASKGRAPH_DISTRIBUTION_UNDER_RELATIVE_INTERPRETER=1
     phases="1 affected format-check,lint,typecheck -
 1 run sdk-python:generate-check -
-1 run workspace:deny -"
+1 run workspace:deny -
+1 run scripts:distribution-test -"
     ;;
   test-linux)
     # And the live e2e suites' `test` runs only their credentialed journeys, coverage running
@@ -76,9 +83,6 @@ case "$JOB" in
     export ONETASKGRAPH_TESTS_UNDER_COVERAGE=1
     # The release CD journeys name each recipe call's seconds, so a slow phase is visible here.
     export ONETASKGRAPH_CD_TIMINGS=1
-    # Exercise the relative interpreter without paying for a second distribution run.
-    # check-relative-interpreter.sh owns the call-site comparison.
-    export ONETASKGRAPH_DISTRIBUTION_UNDER_RELATIVE_INTERPRETER=1
     # Work that would queue behind a long phase gets one of its own: the two Linear crates,
     # whose credentialed journeys take one seat and so run one at a time, and the SDKs'
     # coverage, which would otherwise wait for every crate's.
@@ -87,11 +91,22 @@ case "$JOB" in
     # their telemetry are coverage's here, and scripts/rust-coverage.sh writes it where
     # `budgets` reads it. Their `test` has already run in this job, so it is not run again,
     # and the cache cannot answer for telemetry its key never saw.
-    phases="1 affected test tag:test-in-coverage:*,onetaskgraph-linear,onetaskgraph-linear-e2e
+    #
+    # The workflow suites have a phase of their own too, with a slot for each of their four
+    # journeys: their release CD journeys are the job's longest single task, and queued behind
+    # the other suites' slots they started eleven minutes in and ran the job past its timeout.
+    #
+    # So the SDKs' `test-uncovered` runs first, alone: sdk-python's syncs the lock into a
+    # scratch environment from sdks/python, and with the workflow suites starting at once their
+    # release CD journeys build that same directory (`uv build sdks/python`) beside it — run
+    # 42914613065 found the SDK missing from that environment. It takes seconds and builds
+    # nothing, so the job's other phases start that much later and no more.
+    phases="0 affected test-uncovered *,!tag:layer:sdk
+1 affected test tag:test-in-coverage:*,onetaskgraph-linear,onetaskgraph-linear-e2e,github-workflows
+1 affected test *,!github-workflows --parallel=4
 1 affected test *,!onetaskgraph-linear,!onetaskgraph-linear-e2e
-1 affected test-uncovered,coverage *,!tag:layer:sdk
-1 run scripts:distribution-check -
-1 run scripts:distribution-test -"
+1 affected coverage *,!tag:layer:sdk
+1 run scripts:distribution-check -"
     if "$skip_rust_coverage"; then
       coverage_budget_exclusions="onetaskgraph-github-projects-e2e,onetaskgraph-linear-e2e,onetaskgraph-live-janitor"
     else

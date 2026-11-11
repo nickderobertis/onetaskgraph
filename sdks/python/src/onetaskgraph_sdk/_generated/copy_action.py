@@ -18,6 +18,24 @@ class CopyActionSkipped(BaseModel):
     action: Literal["skipped"]
 
 
+class CopyActionOversize(BaseModel):
+    size: Annotated[
+        int,
+        Field(
+            description="The size of the body the item would store, as the destination's plugin counts it —\nwhat [`CopyOutcome::body_size`] reports beside it.",
+            ge=0,
+        ),
+    ]
+    limit: Annotated[
+        int,
+        Field(
+            description="The most the destination holds in one body, as its plugin states it.",
+            ge=0,
+        ),
+    ]
+    action: Literal["oversize"]
+
+
 class GlobalId(RootModel[str]):
     root: Annotated[
         str,
@@ -192,6 +210,7 @@ class CopyAction(
         | CopyActionOrphaned
         | CopyActionFailed
         | CopyActionSkipped
+        | CopyActionOversize
     ]
 ):
     root: Annotated[
@@ -200,7 +219,8 @@ class CopyAction(
         | CopyActionUnchanged
         | CopyActionOrphaned
         | CopyActionFailed
-        | CopyActionSkipped,
+        | CopyActionSkipped
+        | CopyActionOversize,
         Field(
             description="The four things a copy can do to one item, and the id each of them is about.",
             title="CopyAction",

@@ -157,7 +157,7 @@ fn a_public_copy_screens_its_writes_together_before_the_first_and_never_asks_an_
 }
 
 #[test]
-fn a_refused_union_is_checked_record_by_record_to_name_the_one_refused_and_nothing_is_written() {
+fn a_refused_union_refuses_the_whole_copy_on_its_one_check_and_nothing_is_written() {
     let (store, record, _) = screened();
     plan(&store);
     store.record(
@@ -170,9 +170,10 @@ fn a_refused_union_is_checked_record_by_record_to_name_the_one_refused_and_nothi
     let (kind, said) = store.refused(&["project", "copy", "draft:goal", "--to", "site"]);
     assert_eq!(kind, "boundary-refused", "{said}");
     assert!(
-        said.contains("draft:consumer"),
-        "it names the record refused: {said}"
+        said.contains("this copy's 4 writes"),
+        "it names the copy, not a record of it: {said}"
     );
+    assert!(!said.contains("draft:consumer"), "nor which write: {said}");
     assert!(!said.contains("quietharbor"), "neutrally: {said}");
     assert!(
         tree(&store.folder("site")).is_empty(),
@@ -180,16 +181,12 @@ fn a_refused_union_is_checked_record_by_record_to_name_the_one_refused_and_nothi
     );
     let calls = record.calls();
     let checked = checks(&calls);
-    // The union first, refused; then record by record, until the one refused.
-    assert_eq!(checked[0].exit, Some(1), "{calls:?}");
-    assert!(checked.len() > 1, "{calls:?}");
-    assert_eq!(checked.last().unwrap().exit, Some(1));
-    assert!(
-        checked[1..checked.len() - 1]
-            .iter()
-            .all(|call| call.exit == Some(0)),
-        "{calls:?}"
+    assert_eq!(
+        checked.len(),
+        1,
+        "one check, refused, and no other: {calls:?}"
     );
+    assert_eq!(checked[0].exit, Some(1), "{calls:?}");
 }
 
 #[test]
@@ -417,7 +414,10 @@ fn plan_copy_request() -> onetaskgraph_core::CopyRequest {
     onetaskgraph_core::CopyRequest {
         items: onetaskgraph_core::CopyItems::new(vec!["draft:goal".parse().unwrap()])
             .expect("one item"),
-        scope: onetaskgraph_core::CopyScope::Projects { tasks: true },
+        scope: onetaskgraph_core::CopyScope::Projects {
+            tasks: true,
+            documents: false,
+        },
         destination: onetaskgraph_plugin_api::SourceName::new("site").unwrap(),
         target_task: None,
         match_by: None,
@@ -497,7 +497,10 @@ async fn copied_through(
     let request = onetaskgraph_core::CopyRequest {
         items: onetaskgraph_core::CopyItems::new(vec!["draft:goal".parse().unwrap()])
             .expect("one item"),
-        scope: onetaskgraph_core::CopyScope::Projects { tasks: true },
+        scope: onetaskgraph_core::CopyScope::Projects {
+            tasks: true,
+            documents: false,
+        },
         destination: onetaskgraph_plugin_api::SourceName::new("site").unwrap(),
         target_task: None,
         match_by: None,
@@ -518,8 +521,8 @@ async fn copied_through(
 #[tokio::test]
 async fn a_union_refused_whose_writes_each_pass_alone_is_still_refused_and_nothing_is_written() {
     // A check refusing only what the whole plan says together — every record of it at once —
-    // passes each record alone: the copy is refused all the same, named after the first record,
-    // and nothing is written.
+    // would pass each record alone: the copy is refused on that one check, named as the copy
+    // rather than any record of it, no record is put to the check again, and nothing is written.
     let (store, policy, copied) = copied_through(|input| {
         if input.metadata.iter().any(|value| value == "Goal")
             && input.metadata.iter().any(|value| value == "Rollout")
@@ -534,10 +537,13 @@ async fn a_union_refused_whose_writes_each_pass_alone_is_still_refused_and_nothi
     .await;
     let refused = copied.expect_err("the union is refused");
     assert_eq!(super::kind_of(&refused), "boundary-refused");
-    assert!(refused.to_string().contains("draft:goal"), "{refused}");
+    assert!(
+        refused.to_string().contains("this copy's 4 writes"),
+        "{refused}"
+    );
+    assert!(!refused.to_string().contains("draft:"), "{refused}");
     let checked = policy.checked.lock().unwrap().clone();
-    assert_eq!(checked[0], 4, "the union first: {checked:?}");
-    assert_eq!(checked.len(), 5, "then each record alone: {checked:?}");
+    assert_eq!(checked, [4], "the union alone: {checked:?}");
     assert!(
         tree(&store.folder("site")).is_empty(),
         "nothing was written"
@@ -545,8 +551,7 @@ async fn a_union_refused_whose_writes_each_pass_alone_is_still_refused_and_nothi
 }
 
 #[tokio::test]
-async fn a_union_the_check_cannot_decide_is_the_first_writes_unavailability_and_nothing_is_written()
-{
+async fn a_union_the_check_cannot_decide_is_the_copys_unavailability_and_nothing_is_written() {
     let (store, policy, copied) =
         copied_through(|_| onetaskgraph_core::boundary::WriteVerdict::Unavailable {
             reason: "the check could not be run".to_owned(),
@@ -554,7 +559,10 @@ async fn a_union_the_check_cannot_decide_is_the_first_writes_unavailability_and_
         .await;
     let refused = copied.expect_err("an unavailable check is never a pass");
     assert_eq!(super::kind_of(&refused), "boundary-unavailable");
-    assert!(refused.to_string().contains("draft:goal"), "{refused}");
+    assert!(
+        refused.to_string().contains("this copy's 4 writes"),
+        "{refused}"
+    );
     assert_eq!(
         policy.checked.lock().unwrap().clone(),
         [4],
@@ -674,10 +682,10 @@ fn a_dependency_on_an_item_classified_private_is_withheld_and_said_on_standard_e
 }
 
 #[tokio::test]
-async fn a_refused_union_whose_write_the_check_cannot_decide_alone_is_that_writes_unavailability() {
-    // The union is refused, and checked record by record the check cannot decide the consumer
-    // alone: the copy is refused as unavailable naming the consumer, never as having passed,
-    // and nothing is written.
+async fn a_refused_union_is_refused_whole_whatever_its_writes_would_answer_alone() {
+    // The union is refused; the check could not have decided the consumer alone, but it is
+    // never asked about the consumer alone: the copy is refused on its one check, and nothing
+    // is written.
     let (store, policy, copied) = copied_through(|input| {
         let names = |title: &str| input.metadata.iter().any(|value| value == title);
         if names("Goal") && names("Rollout") {
@@ -693,11 +701,11 @@ async fn a_refused_union_whose_write_the_check_cannot_decide_alone_is_that_write
         }
     })
     .await;
-    let refused = copied.expect_err("an undecided write is never a pass");
-    assert_eq!(super::kind_of(&refused), "boundary-unavailable");
-    assert!(refused.to_string().contains("draft:consumer"), "{refused}");
+    let refused = copied.expect_err("the union is refused");
+    assert_eq!(super::kind_of(&refused), "boundary-refused");
+    assert!(!refused.to_string().contains("draft:consumer"), "{refused}");
     let checked = policy.checked.lock().unwrap().clone();
-    assert_eq!(checked[0], 4, "the union first: {checked:?}");
+    assert_eq!(checked, [4], "the union alone: {checked:?}");
     assert!(
         tree(&store.folder("site")).is_empty(),
         "nothing was written"
@@ -766,8 +774,8 @@ async fn writes_that_passed_in_separate_checks_are_checked_together_before_they_
     assert_eq!(super::kind_of(&refused), "boundary-refused");
     assert_eq!(
         policy.checked.lock().unwrap().len(),
-        4 + 3,
-        "four alone, then the pair and each of it"
+        4 + 1,
+        "four alone, then the pair once"
     );
     assert_eq!(
         tree(&store.folder("site")),

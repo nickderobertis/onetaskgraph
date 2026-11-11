@@ -495,7 +495,10 @@ async fn a_held_copy_refuses_a_query_and_a_project_and_holds_nothing_it_creates(
     ));
     let project = copy_request(
         CopyItems::new(vec![id("work:T-1")]).expect("items"),
-        CopyScope::Projects { tasks: false },
+        CopyScope::Projects {
+            tasks: false,
+            documents: false,
+        },
     );
     assert!(matches!(
         engine.copy_held(&project, "mem1|any").await,

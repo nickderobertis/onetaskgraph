@@ -893,6 +893,15 @@ pub fn node_count(document: &str, variables: &Variables) -> Result<u64, NodeCoun
 /// the sub-issue rule, so a design issue with no sub-issues is never an empty project.
 pub const DESIGN_TITLE_PREFIX: &str = "DESIGN: ";
 
+/// The most characters GitHub stores in one issue's body: a longer one is refused as
+/// `body is too long (maximum is 65536 characters)`.
+pub const BODY_LIMIT: u64 = 65_536;
+
+/// The address a new upload's URL is spelled at, as GitHub serves a user attachment: what the
+/// size of a body is measured with before an asset of it is uploaded, a UUID long.
+const PREDICTED_ATTACHMENT_URL: &str =
+    "https://github.com/user-attachments/assets/00000000-0000-0000-0000-000000000000";
+
 /// Exact GraphQL query documents issued by this plugin.
 ///
 /// Keeping the production documents here lets the pinned-schema test validate the same
@@ -14315,6 +14324,55 @@ impl TaskSource for GitHubProjectsSource {
         .map(|written| written.id)
     }
 
+    fn task_body_size(
+        &self,
+        write: &ItemWrite<Task>,
+        assets: Option<&onetaskgraph_plugin_api::AssetWrite>,
+    ) -> Option<onetaskgraph_plugin_api::BodySize> {
+        Some(self.body_size(&self.task_incoming(write, assets).ok()?))
+    }
+
+    fn project_body_size(
+        &self,
+        write: &ItemWrite<Project>,
+    ) -> Option<onetaskgraph_plugin_api::BodySize> {
+        Some(self.body_size(&Incoming {
+            written: Written::Work(ItemKind::Project, &write.item.status),
+            title: &write.item.title,
+            content: write.item.content.as_deref(),
+            assets: None,
+            labels: &write.item.labels,
+            metadata: &write.item.metadata,
+            repositories: &write.item.repositories,
+            classification: write.item.classification,
+            parent: None,
+            delivers: &[],
+            delivered_by: &[],
+            priority: None,
+        }))
+    }
+
+    fn document_body_size(
+        &self,
+        write: &ItemWrite<Document>,
+        assets: Option<&onetaskgraph_plugin_api::AssetWrite>,
+    ) -> Option<onetaskgraph_plugin_api::BodySize> {
+        Some(self.body_size(&Incoming {
+            written: Written::Document,
+            title: &write.item.title,
+            content: write.item.content.as_deref(),
+            assets,
+            labels: &write.item.labels,
+            metadata: &write.item.metadata,
+            repositories: &write.item.repositories,
+            classification: write.item.classification,
+            parent: write.item.project.as_ref(),
+            delivers: &[],
+            delivered_by: &[],
+            priority: None,
+        }))
+    }
+
     /// Create or update one document, which is one issue titled the way this board spells
     /// a document.
     ///
@@ -16037,6 +16095,58 @@ fn offset_page<T>(mut items: Vec<T>, offset: usize, limit: usize) -> Page<T> {
 }
 
 impl GitHubProjectsSource {
+    /// The body [`Self::write_item`] would compose for `incoming`, sized in the characters
+    /// [`BODY_LIMIT`] counts, without a request: its slot as `slot_metadata` writes it, every
+    /// asset reference rewritten to its recorded URL or — for one not uploaded yet — to an
+    /// address as long as GitHub's, and the heading markup this board's bodies carry.
+    ///
+    /// What the write reads rather than knows is taken as it most often lands: the issue in
+    /// the one repository the item names, else the configured one, and every edge on the
+    /// board's own relationships rather than in the slot.
+    fn body_size(&self, incoming: &Incoming<'_>) -> onetaskgraph_plugin_api::BodySize {
+        let own = match incoming.repositories {
+            [named] => Some(named.clone()),
+            _ => self
+                .repository
+                .as_ref()
+                .and_then(|target| Repository::try_from(target.origin()).ok()),
+        };
+        let mut slot = slot_metadata(incoming, own.as_ref(), &[]);
+        let content = match incoming.assets {
+            Some(assets) => {
+                let mut uploads = onetaskgraph_plugin_api::AssetUploads::default();
+                for asset in &assets.assets {
+                    let url = assets
+                        .recorded_assets
+                        .as_ref()
+                        .and_then(|recorded| recorded.reusable(&asset.name, &asset.sha256))
+                        .unwrap_or(PREDICTED_ATTACHMENT_URL)
+                        .to_owned();
+                    uploads.0.insert(
+                        asset.name.clone(),
+                        onetaskgraph_plugin_api::AssetUpload {
+                            sha256: asset.sha256.clone(),
+                            url,
+                        },
+                    );
+                }
+                incoming.content.map(|content| {
+                    onetaskgraph_plugin_api::serve_asset_references(content, &mut slot, &uploads)
+                })
+            }
+            None => incoming.content.map(str::to_owned),
+        };
+        let marked = content.as_deref().map(|content| self.marked(content));
+        let size = compose_body(marked.as_deref(), &slot)
+            .ok()
+            .flatten()
+            .map_or(0, |body| body.chars().count());
+        onetaskgraph_plugin_api::BodySize {
+            size: u64::try_from(size).unwrap_or(u64::MAX),
+            limit: Some(BODY_LIMIT),
+        }
+    }
+
     async fn write_task_assets(
         &self,
         write: &ItemWrite<Task>,

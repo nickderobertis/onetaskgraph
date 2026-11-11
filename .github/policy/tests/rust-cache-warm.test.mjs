@@ -201,8 +201,15 @@ function problems({ warmer, ci, ciJob }) {
       found.push(
         `${name} builds ${instrumented ? "instrumented" : "uninstrumented"}, but ${leg.key} ${run.includes("coverage") ? "runs" : "does not run"} coverage`,
       );
-    if (!run.includes("distribution-test"))
-      found.push(`${name} builds the distribution journey's release, which ${leg.key} never runs`);
+    // The release build serves every job restoring this leg's family: lint restores
+    // test-linux's, and runs Linux's distribution journey.
+    const family = Object.entries(ci.jobs ?? {})
+      .filter(([, job]) => toolchain(job)?.key === leg.key)
+      .map(([id]) => id);
+    if (!family.some((id) => targets(phases(id, ciJob) ?? "").includes("distribution-test")))
+      found.push(
+        `${name} builds the distribution journey's release, which no job restoring ${leg.key} runs`,
+      );
     if (instrumented)
       for (const tool of ["cargo-llvm-cov", "cargo-nextest"])
         if (!installs(leg.job).includes(tool) || !installs(pr).includes(tool))
@@ -309,6 +316,15 @@ test("a leg differing from its job in key, toolchain or build is refused", () =>
         all.ciJob = all.ciJob.replace(
           /(\n {2}test-linux\)\n[\s\S]*?phases=")[\s\S]*?"\n/,
           (_, arm) => `${arm}1 affected test -\n1 run scripts:distribution-test -"\n`,
+        );
+      },
+    ],
+    "no job of the family runs the distribution journey": [
+      /builds the distribution journey's release, which no job restoring test-linux runs/,
+      (all) => {
+        all.ciJob = all.ciJob.replace(
+          '1 run workspace:deny -\n1 run scripts:distribution-test -"',
+          '1 run workspace:deny -"',
         );
       },
     ],

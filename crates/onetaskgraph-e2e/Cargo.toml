@@ -21,6 +21,8 @@ async-trait.workspace = true
 # A retried copy's lease is a time the journeys compare with the moment a write is answered.
 chrono.workspace = true
 jsonschema.workspace = true
+# The budgets runner hands each figure the journeys recorded to `onebudgetspec check`.
+onebudgetspec-core.workspace = true
 # The journeys that drive the engine the binary links — a long-lived caller ending a command,
 # and the schema bundle the binary emits — with every plugin kind the binary registers.
 onetaskgraph-core = { workspace = true, features = ["github-projects", "linear"] }
@@ -31,6 +33,8 @@ onetaskgraph-github-projects.workspace = true
 onetaskgraph-linear.workspace = true
 onetaskgraph-plugin-api.workspace = true
 predicates.workspace = true
+# Compiles onebudgetspec's own id pattern, which the runner holds its budget id to.
+regex.workspace = true
 serde_json.workspace = true
 # The rendering journeys hash a created item's content and answers themselves, rather than
 # asking the engine that wrote the hashes to check its own work.

@@ -7664,3 +7664,69 @@ async fn a_document_lookup_by_origin_refuses_an_overrun_page_and_a_repeated_curs
         "a walk that finds the origin reads nothing by id"
     );
 }
+
+#[test]
+fn a_documents_body_is_sized_with_its_image_at_the_url_it_is_or_will_be_served_at() {
+    // Sized without a request, so the source needs no endpoint that answers.
+    let source = writable_source("http://127.0.0.1:9/graphql");
+    let document: Document = serde_json::from_value(serde_json::json!({
+        "id": "D-1",
+        "title": "Design",
+        "content": "How a plan reaches its team:\n\n![The path](./diagram.png)\n",
+        "labels": [],
+        "metadata": {"onetaskgraph.origin": "notes:D"},
+    }))
+    .expect("a document");
+    let write = ItemWrite {
+        target: None,
+        item: document,
+        depends_on: Vec::new(),
+    };
+    let name = onetaskgraph_plugin_api::AssetName::new("diagram.png").expect("a name");
+    let payload =
+        onetaskgraph_plugin_api::AssetPayload::of(name.clone(), vec![0x89, b'P', b'N', b'G']);
+    let uploading = onetaskgraph_plugin_api::AssetWrite {
+        assets: vec![payload.clone()],
+        recorded_assets: None,
+    };
+    // A recorded upload whose URL is 20 characters longer than the one an upload is sized at.
+    let recorded_url = format!(
+        "https://uploads.linear.app/{}/{}/{}/twenty-more-charact",
+        uuid_nil(),
+        uuid_nil(),
+        uuid_nil()
+    );
+    let reusing = onetaskgraph_plugin_api::AssetWrite {
+        assets: vec![payload.clone()],
+        recorded_assets: Some(onetaskgraph_plugin_api::AssetUploads(
+            std::collections::BTreeMap::from([(
+                name,
+                onetaskgraph_plugin_api::AssetUpload {
+                    sha256: payload.sha256.clone(),
+                    url: recorded_url,
+                },
+            )]),
+        )),
+    };
+    let size = |assets| {
+        let sized = source
+            .document_body_size(&write, assets)
+            .expect("a Linear source sizes a document");
+        assert_eq!(sized.limit, None, "Linear states no limit");
+        assert!(!sized.exceeds());
+        sized.size
+    };
+    let plain = size(None);
+    let uploaded = size(Some(&uploading));
+    let reused = size(Some(&reusing));
+    // The reference grows from its relative path to an upload's URL, and the slot records it.
+    assert!(uploaded > plain, "{uploaded} against {plain}");
+    // The recorded URL is used where the upload's would be — once in the content, once in the
+    // slot's record of the asset — so the two differ by twice its 20 extra characters.
+    assert_eq!(reused, uploaded + 2 * 20);
+}
+
+/// The nil UUID, hyphenated: the length every UUID of an upload's URL has.
+fn uuid_nil() -> &'static str {
+    "00000000-0000-0000-0000-000000000000"
+}
