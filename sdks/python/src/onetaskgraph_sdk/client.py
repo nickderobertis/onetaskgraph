@@ -121,6 +121,9 @@ PARTIAL_WRITE_COMMANDS: frozenset[tuple[str, ...]] = frozenset(
         # A batch answers each item on its own, and exits 4 when any was not written.
         ("task", "comment", "add-many"),
         ("task", "update-many"),
+        ("task", "parent", "set-many"),
+        ("task", "link", "add-many"),
+        ("task", "link", "remove-many"),
         ("task", "project-human"),
         ("sources", "fields"),
         ("sources", "status-options"),
@@ -136,6 +139,7 @@ NOT_PARTIAL_WRITE_COMMANDS: frozenset[tuple[str, ...]] = frozenset(
         ("task", "list"),
         ("task", "show"),
         ("task", "show-many"),
+        ("task", "relations"),
         ("task", "deps"),
         ("task", "locate"),
         ("task", "comment", "list"),

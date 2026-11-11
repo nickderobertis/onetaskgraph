@@ -978,6 +978,58 @@ test("batched searches, updates and comments drive the real binary, each answere
   }
 });
 
+test("parents and typed links drive the real binary, each answered on its own", async () => {
+  const relationsRoot = metadataFolder();
+  try {
+    for (const id of ["T-2", "T-3"]) {
+      writeFileSync(
+        resolve(relationsRoot, `work/tasks/${id}.md`),
+        `---\ntitle: ${id}\nstatus: todo\n---\n${id} body\n`,
+      );
+    }
+    const client = new OnetaskgraphClient({ binaryPath: binary, cwd: relationsRoot });
+
+    const parents = await client.taskParentSetMany({
+      schema_version: 1,
+      edges: [
+        { child: "work:T-2", parent: "work:T-1" },
+        { child: "work:T-1", parent: "work:T-2" },
+      ],
+    });
+    expect(parents.results.map((result) => result.outcome)).toEqual(["written", "refused"]);
+    expect(parents.results[1]?.reason).toContain("cycle");
+
+    const added = await client.taskLinkAddMany({
+      schema_version: 1,
+      links: [{ from: "work:T-3", to: "work:T-1", type: "caused-by" }],
+    });
+    expect(added.results.map((result) => result.outcome)).toEqual(["written"]);
+
+    const relations = await client.taskRelations(["work:T-1", "work:T-3"], { complete: true });
+    expect(relations.items.map((item) => [item.item, item.children, item.links])).toEqual([
+      [
+        "work:T-1",
+        ["work:T-2"],
+        [{ type: "caused-by", direction: "in", other: "work:T-3", other_end: "present" }],
+      ],
+      [
+        "work:T-3",
+        [],
+        [{ type: "caused-by", direction: "out", other: "work:T-1", other_end: "present" }],
+      ],
+    ]);
+
+    const removed = await client.taskLinkRemoveMany({
+      schema_version: 1,
+      links: [{ from: "work:T-3", to: "work:T-1", type: "caused-by" }],
+    });
+    expect(removed.results.map((result) => result.outcome)).toEqual(["written"]);
+    expect(() => client.taskRelations([3 as unknown as string])).toThrow("ids");
+  } finally {
+    rmSync(relationsRoot, { recursive: true, force: true });
+  }
+});
+
 test("taskUpdate sends exactly the flags the binary's task update reports, no more and no fewer", () => {
   // The option-to-flag table is a second statement of the command line, so it is reconciled
   // against the binary's own help both ways: a flag the binary gains that no option sends, and

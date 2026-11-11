@@ -21,6 +21,8 @@ import type {
   FoundTasks,
   HumanTaskProjected,
   IssuesCompleted,
+  LinkBatch,
+  LinksWritten,
   LocateReport,
   MetadataSet,
   Attested,
@@ -28,6 +30,8 @@ import type {
   ProjectAttestationCheck,
   PlannedProject,
   NativeId,
+  ParentBatch,
+  ParentsSet,
   Priority,
   ProjectGraph,
   ProjectStatusSet,
@@ -52,6 +56,7 @@ import type {
   TaskDetail,
   TaskDetails,
   TaskPrioritySet,
+  TaskRelations,
   TaskStatusSet,
   TasksUpdated,
   TaskUpdated,
@@ -342,6 +347,11 @@ export const commandResponseRoots: Readonly<Record<string, keyof typeof runtimeS
   // Many held updates and many comments of one source, each answered on its own.
   "task update-many": "TasksUpdated",
   "task comment add-many": "CommentsAdded",
+  // Many parents and many typed links, each answered on its own, and the relations of tasks.
+  "task parent set-many": "ParentsSet",
+  "task link add-many": "LinksWritten",
+  "task link remove-many": "LinksWritten",
+  "task relations": "TaskRelations",
   "project list": "QueryResponseOfQualifiedProject",
   "project show": "QueryResponseOfQualifiedProject",
   "project deps": "QueryResponseOfQualifiedEdge",
@@ -409,8 +419,10 @@ export const commandAlternateRoots: Readonly<
 // nothing, and a graph lacking a private source it could not ask names it in `unanswered` and
 // exits 0, so it never exits 4. `task assets` reads one task from one source and
 // writes its assets whole or fails. A template verb reads no source at all. A batch —
-// `task comment add-many`, `task update-many` — answers each item on its own and exits 4 when
-// any was not written, and `task find` exits 4 when a search's pages were cut short. Of the verbs that create and regenerate from
+// `task comment add-many`, `task update-many`, `task parent set-many`, `task link add-many` and
+// `task link remove-many` — answers each item on its own and exits 4 when any was not written,
+// and `task find` exits 4 when a search's pages were cut short; `task relations` reads and
+// answers whole or fails. Of the verbs that create and regenerate from
 // one, `task create` alone keeps what it delivers in step, so it alone can exit 4.
 const partialResponseCommands = new Set(
   Object.keys(commandResponseRoots).filter(
@@ -430,6 +442,7 @@ const partialResponseCommands = new Set(
       !command.endsWith(" render") &&
       !command.endsWith(" answers") &&
       command !== "task assets" &&
+      command !== "task relations" &&
       command !== "task project-human" &&
       !command.endsWith(" attest") &&
       !command.endsWith(" attestation check") &&
@@ -2107,6 +2120,38 @@ export class OnetaskgraphClient {
       [source, "--input", "-", ...writePolicyFlags("taskCommentAddMany", options)],
       jsonDocument(batch, "taskCommentAddMany", "batch"),
     );
+  }
+  // Many parents set or removed in one call, each edge answered on its own.
+  taskParentSetMany(batch: ParentBatch): Promise<ParentsSet> {
+    return this.run(
+      "task parent set-many",
+      ["--input", "-"],
+      jsonDocument(batch, "taskParentSetMany", "batch"),
+    );
+  }
+  // Many typed links added in one call, each answered on its own.
+  taskLinkAddMany(batch: LinkBatch): Promise<LinksWritten> {
+    return this.run(
+      "task link add-many",
+      ["--input", "-"],
+      jsonDocument(batch, "taskLinkAddMany", "batch"),
+    );
+  }
+  // Many typed links removed in one call, each answered on its own.
+  taskLinkRemoveMany(batch: LinkBatch): Promise<LinksWritten> {
+    return this.run(
+      "task link remove-many",
+      ["--input", "-"],
+      jsonDocument(batch, "taskLinkRemoveMany", "batch"),
+    );
+  }
+  // The parent, children and links of each task `ids` names; `complete` refuses an answer
+  // whose children were not read whole.
+  taskRelations(ids: string[], options: { complete?: boolean } = {}): Promise<TaskRelations> {
+    return this.run("task relations", [
+      ...ids.map((id) => stringOption("taskRelations", "ids", id)),
+      ...(options.complete ? ["--complete"] : []),
+    ]);
   }
   // Project one human task from the `HumanTaskProjection` request at `input`, a file path or
   // `-` for standard input: created once by its `item_id`, and settled once at a terminal state.

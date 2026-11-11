@@ -63,6 +63,9 @@ from onetaskgraph_sdk import (
     IssuesCompleted,
     ItemType,
     LinearConfig,
+    LinkBatch,
+    LinkOutcome,
+    LinksWritten,
     Located,
     LocateReport,
     Location,
@@ -70,7 +73,11 @@ from onetaskgraph_sdk import (
     MetadataSet,
     NativeId,
     OnetaskgraphError,
+    OtherEnd,
     PageOfDocument,
+    ParentBatch,
+    ParentOutcome,
+    ParentsSet,
     PartialWriteError,
     PlannedProject,
     Priority,
@@ -110,6 +117,7 @@ from onetaskgraph_sdk import (
     TaskDetails,
     TaskPrioritySet,
     TaskRef,
+    TaskRelations,
     TaskStatusSet,
     TasksUpdated,
     TaskUpdated,
@@ -245,6 +253,15 @@ from onetaskgraph_sdk._generated.models import (
     LinearConfig as ModelsLinearConfig,
 )
 from onetaskgraph_sdk._generated.models import (
+    LinkBatch as ModelsLinkBatch,
+)
+from onetaskgraph_sdk._generated.models import (
+    LinkOutcome as ModelsLinkOutcome,
+)
+from onetaskgraph_sdk._generated.models import (
+    LinksWritten as ModelsLinksWritten,
+)
+from onetaskgraph_sdk._generated.models import (
     Located as ModelsLocated,
 )
 from onetaskgraph_sdk._generated.models import (
@@ -263,7 +280,19 @@ from onetaskgraph_sdk._generated.models import (
     NativeId as ModelsNativeId,
 )
 from onetaskgraph_sdk._generated.models import (
+    OtherEnd as ModelsOtherEnd,
+)
+from onetaskgraph_sdk._generated.models import (
     PageOfDocument as ModelsPageOfDocument,
+)
+from onetaskgraph_sdk._generated.models import (
+    ParentBatch as ModelsParentBatch,
+)
+from onetaskgraph_sdk._generated.models import (
+    ParentOutcome as ModelsParentOutcome,
+)
+from onetaskgraph_sdk._generated.models import (
+    ParentsSet as ModelsParentsSet,
 )
 from onetaskgraph_sdk._generated.models import (
     PlannedProject as ModelsPlannedProject,
@@ -378,6 +407,9 @@ from onetaskgraph_sdk._generated.models import (
 )
 from onetaskgraph_sdk._generated.models import (
     TaskRef as ModelsTaskRef,
+)
+from onetaskgraph_sdk._generated.models import (
+    TaskRelations as ModelsTaskRelations,
 )
 from onetaskgraph_sdk._generated.models import (
     TaskStatusSet as ModelsTaskStatusSet,
@@ -546,6 +578,14 @@ FROM_ROOT: dict[str, object] = {
     "VersionMovedError": VersionMovedError,
     "WritePolicyConfig": WritePolicyConfig,
     "WriteVerdict": WriteVerdict,
+    "LinkBatch": LinkBatch,
+    "LinkOutcome": LinkOutcome,
+    "LinksWritten": LinksWritten,
+    "OtherEnd": OtherEnd,
+    "ParentBatch": ParentBatch,
+    "ParentOutcome": ParentOutcome,
+    "ParentsSet": ParentsSet,
+    "TaskRelations": TaskRelations,
 }
 """Every name imported from the package root, by the name it was imported as."""
 
@@ -647,6 +687,14 @@ FROM_MODELS: dict[str, object] = {
     "VariableType": ModelsVariableType,
     "WritePolicyConfig": ModelsWritePolicyConfig,
     "WriteVerdict": ModelsWriteVerdict,
+    "LinkBatch": ModelsLinkBatch,
+    "LinkOutcome": ModelsLinkOutcome,
+    "LinksWritten": ModelsLinksWritten,
+    "OtherEnd": ModelsOtherEnd,
+    "ParentBatch": ModelsParentBatch,
+    "ParentOutcome": ModelsParentOutcome,
+    "ParentsSet": ModelsParentsSet,
+    "TaskRelations": ModelsTaskRelations,
 }
 """Every name imported from `models`, by the name it was imported as."""
 
@@ -802,6 +850,11 @@ MODEL_CLASSES: dict[str, type[BaseModel]] = {
     "TemplateVariables": TemplateVariables,
     "WritePolicyConfig": WritePolicyConfig,
     "WriteVerdict": WriteVerdict,
+    "LinkBatch": LinkBatch,
+    "LinksWritten": LinksWritten,
+    "ParentBatch": ParentBatch,
+    "ParentsSet": ParentsSet,
+    "TaskRelations": TaskRelations,
 }
 """Every export that is a pydantic model, read from the package root as a model class."""
 
@@ -889,6 +942,11 @@ MODELS_MODEL_CLASSES: dict[str, type[BaseModel]] = {
     "TemplateVariables": ModelsTemplateVariables,
     "WritePolicyConfig": ModelsWritePolicyConfig,
     "WriteVerdict": ModelsWriteVerdict,
+    "LinkBatch": ModelsLinkBatch,
+    "LinksWritten": ModelsLinksWritten,
+    "ParentBatch": ModelsParentBatch,
+    "ParentsSet": ModelsParentsSet,
+    "TaskRelations": ModelsTaskRelations,
 }
 """The same, read from `models`."""
 

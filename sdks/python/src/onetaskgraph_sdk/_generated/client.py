@@ -31,9 +31,13 @@ if TYPE_CHECKING:
         GlobalId,
         HumanTaskProjected,
         IssuesCompleted,
+        LinkBatch,
+        LinksWritten,
         LocateReport,
         MetadataSet,
         NativeId,
+        ParentBatch,
+        ParentsSet,
         PlannedProject,
         Priority,
         ProjectAttestationCheck,
@@ -61,6 +65,7 @@ if TYPE_CHECKING:
         TaskDetail,
         TaskDetails,
         TaskPrioritySet,
+        TaskRelations,
         TaskStatusSet,
         TasksUpdated,
         TaskUpdated,
@@ -113,6 +118,7 @@ POSITIONALS: dict[tuple[str, ...], tuple[str, ...]] = {
     ("task", "locate"): ("ids",),
     ("task", "metadata", "set"): ("id", "key", "value"),
     ("task", "priority", "set"): ("id", "priority"),
+    ("task", "relations"): ("ids",),
     ("task", "render"): ("id",),
     ("task", "show"): ("id",),
     ("task", "show-many"): ("ids",),
@@ -4493,6 +4499,134 @@ class GeneratedClient:
         )
 
     @overload
+    async def task_link_add_many(
+        self,
+        batch: LinkBatch | Mapping[str, JsonValue],
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> LinksWritten: ...
+
+    @overload
+    async def task_link_add_many(
+        self,
+        batch: LinkBatch | Mapping[str, JsonValue],
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> LinksWritten | SanitizeDryRun: ...
+
+    @overload
+    async def task_link_add_many(
+        self,
+        batch: LinkBatch | Mapping[str, JsonValue],
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> LinksWritten | SanitizeDryRun: ...
+
+    async def task_link_add_many(
+        self,
+        batch: LinkBatch | Mapping[str, JsonValue],
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> LinksWritten | SanitizeDryRun:
+        """Run ``onetaskgraph task link add-many``."""
+        return await self._invoke(
+            ["task", "link", "add-many"],
+            _models.LinksWritten | _models.SanitizeDryRun,
+            default_sources=default_sources,
+            page_size=page_size,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
+            set=set,
+            input="-",
+            stdin=_document("task_link_add_many", _models.LinkBatch, batch),
+        )
+
+    @overload
+    async def task_link_remove_many(
+        self,
+        batch: LinkBatch | Mapping[str, JsonValue],
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> LinksWritten: ...
+
+    @overload
+    async def task_link_remove_many(
+        self,
+        batch: LinkBatch | Mapping[str, JsonValue],
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> LinksWritten | SanitizeDryRun: ...
+
+    @overload
+    async def task_link_remove_many(
+        self,
+        batch: LinkBatch | Mapping[str, JsonValue],
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> LinksWritten | SanitizeDryRun: ...
+
+    async def task_link_remove_many(
+        self,
+        batch: LinkBatch | Mapping[str, JsonValue],
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> LinksWritten | SanitizeDryRun:
+        """Run ``onetaskgraph task link remove-many``."""
+        return await self._invoke(
+            ["task", "link", "remove-many"],
+            _models.LinksWritten | _models.SanitizeDryRun,
+            default_sources=default_sources,
+            page_size=page_size,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
+            set=set,
+            input="-",
+            stdin=_document("task_link_remove_many", _models.LinkBatch, batch),
+        )
+
+    @overload
     async def task_list(
         self,
         *,
@@ -4859,6 +4993,70 @@ class GeneratedClient:
         )
 
     @overload
+    async def task_parent_set_many(
+        self,
+        batch: ParentBatch | Mapping[str, JsonValue],
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> ParentsSet: ...
+
+    @overload
+    async def task_parent_set_many(
+        self,
+        batch: ParentBatch | Mapping[str, JsonValue],
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> ParentsSet | SanitizeDryRun: ...
+
+    @overload
+    async def task_parent_set_many(
+        self,
+        batch: ParentBatch | Mapping[str, JsonValue],
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> ParentsSet | SanitizeDryRun: ...
+
+    async def task_parent_set_many(
+        self,
+        batch: ParentBatch | Mapping[str, JsonValue],
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> ParentsSet | SanitizeDryRun:
+        """Run ``onetaskgraph task parent set-many``."""
+        return await self._invoke(
+            ["task", "parent", "set-many"],
+            _models.ParentsSet | _models.SanitizeDryRun,
+            default_sources=default_sources,
+            page_size=page_size,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
+            set=set,
+            input="-",
+            stdin=_document("task_parent_set_many", _models.ParentBatch, batch),
+        )
+
+    @overload
     async def task_priority_set(
         self,
         id: GlobalId | str,
@@ -5009,6 +5207,74 @@ class GeneratedClient:
             ["task", "project-human"],
             _models.HumanTaskProjected | _models.SanitizeDryRun,
             input=input,
+            default_sources=default_sources,
+            page_size=page_size,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
+            set=set,
+        )
+
+    @overload
+    async def task_relations(
+        self,
+        ids: list[GlobalId | str] | tuple[GlobalId | str, ...],
+        *,
+        complete: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> TaskRelations: ...
+
+    @overload
+    async def task_relations(
+        self,
+        ids: list[GlobalId | str] | tuple[GlobalId | str, ...],
+        *,
+        complete: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> TaskRelations | SanitizeDryRun: ...
+
+    @overload
+    async def task_relations(
+        self,
+        ids: list[GlobalId | str] | tuple[GlobalId | str, ...],
+        *,
+        complete: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> TaskRelations | SanitizeDryRun: ...
+
+    async def task_relations(
+        self,
+        ids: list[GlobalId | str] | tuple[GlobalId | str, ...],
+        *,
+        complete: bool | None = None,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> TaskRelations | SanitizeDryRun:
+        """Run ``onetaskgraph task relations``."""
+        return await self._invoke(
+            ["task", "relations"],
+            _models.TaskRelations | _models.SanitizeDryRun,
+            ids=ids,
+            complete=complete,
             default_sources=default_sources,
             page_size=page_size,
             reject=reject,

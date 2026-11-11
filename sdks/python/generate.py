@@ -55,6 +55,11 @@ RESPONSE_ROOTS = {
     # Many held updates and many comments of one source, each answered on its own.
     "task_update_many": "TasksUpdated",
     "task_comment_add_many": "CommentsAdded",
+    # Many parents and many typed links, each answered on its own, and the relations of tasks.
+    "task_parent_set_many": "ParentsSet",
+    "task_link_add_many": "LinksWritten",
+    "task_link_remove_many": "LinksWritten",
+    "task_relations": "TaskRelations",
     "project_list": "QueryResponseOfQualifiedProject",
     "project_show": "QueryResponseOfQualifiedProject",
     "project_deps": "QueryResponseOfQualifiedEdge",
@@ -198,6 +203,13 @@ CONTRACT_ROOTS = {
     "UpdateBatch",
     "CommentBatch",
     "BatchOutcome",
+    # The request documents `task parent set-many` and `task link add-many`/`remove-many` read,
+    # and the outcome vocabularies they and `task relations` answer in.
+    "ParentBatch",
+    "LinkBatch",
+    "ParentOutcome",
+    "LinkOutcome",
+    "OtherEnd",
 }
 # Commands that answer in more than one shape, by the plugin of the source they are asked
 # about: each command's RESPONSE_ROOTS entry is one shape, and these are the others. `sources
@@ -954,7 +966,7 @@ def operands(command: tuple[str, ...]) -> tuple[str, ...]:
             return ("text",)
         case ("sources", "status-options" | "fields" | "route" | "sanitize"):
             return ("source",)
-        case ("task" | "document", "copy") | ("task", "show-many" | "locate"):
+        case ("task" | "document", "copy") | ("task", "show-many" | "locate" | "relations"):
             return ("ids",)
         case ("task", "comment", "add" | "list"):
             return ("id",)
@@ -1071,6 +1083,15 @@ DOCUMENT_COMMANDS: dict[tuple[str, ...], DocumentCommand] = {
     ),
     ("task", "comment", "add-many"): DocumentCommand(
         option="input", parameter="batch", model="CommentBatch"
+    ),
+    ("task", "parent", "set-many"): DocumentCommand(
+        option="input", parameter="batch", model="ParentBatch"
+    ),
+    ("task", "link", "add-many"): DocumentCommand(
+        option="input", parameter="batch", model="LinkBatch"
+    ),
+    ("task", "link", "remove-many"): DocumentCommand(
+        option="input", parameter="batch", model="LinkBatch"
     ),
 }
 
@@ -1325,8 +1346,9 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
     ]
     positional_types = {
         "id": "GlobalId | str",
-        # `task copy`, `document copy`, `task show-many` and `task locate` take one or more ids,
-        # the variadic positionals the command surface has; the client passes each through.
+        # `task copy`, `document copy`, `task show-many`, `task locate` and `task relations` take
+        # one or more ids, the variadic positionals the command surface has; the client passes
+        # each through.
         "ids": "list[GlobalId | str] | tuple[GlobalId | str, ...]",
         # `task status set` takes the category it sets as its second operand, spelled as the
         # binary's status vocabulary spells it — which is exactly the generated enum's values.
