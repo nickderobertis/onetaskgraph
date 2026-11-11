@@ -1024,6 +1024,8 @@ test("parents and typed links drive the real binary, each answered on its own", 
       links: [{ from: "work:T-3", to: "work:T-1", type: "caused-by" }],
     });
     expect(removed.results.map((result) => result.outcome)).toEqual(["written"]);
+    // A JavaScript caller is not held to the types: the cast hands the method a number where an
+    // id goes, so the check it makes at runtime, before the binary is started, is what is proven.
     expect(() => client.taskRelations([3 as unknown as string])).toThrow("ids");
   } finally {
     rmSync(relationsRoot, { recursive: true, force: true });
