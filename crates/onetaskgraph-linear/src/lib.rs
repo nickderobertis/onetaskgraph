@@ -565,6 +565,7 @@ pub const LIVE_ARTIFACT_TITLE_PREFIX: &str = "onetaskgraph live cleanup ";
 /// Exact ownership grammar shared by live lanes and their cleanup.
 pub mod live_artifact;
 
+mod batch;
 mod origins;
 
 /// The plugin kind a `linear` source's `plugin:` field names.
@@ -921,6 +922,117 @@ pub mod graphql {
     pub const COMMENT_UPDATE: &str = "mutation($id:String!,$input:CommentUpdateInput!){ commentUpdate(id:$id,input:$input){success comment{id body url createdAt updatedAt user{displayName}}} }";
     /// Remove a comment.
     pub const COMMENT_DELETE: &str = "mutation($id:String!){ commentDelete(id:$id){success} }";
+
+    /// The documents this source sends batched by [`aliased`], each the single-root document it
+    /// batches.
+    pub const BATCHED: [&str; 5] = [
+        ISSUE,
+        ISSUES,
+        ISSUE_UPDATE_READ,
+        COMMENT_CREATE,
+        ISSUE_DETAIL,
+    ];
+
+    /// `single` — a document of one root field, as this source sends it alone — `count` times
+    /// in one document: the `i`th copy aliased `a<i>`, each of its variables `$<name>` renamed
+    /// `$<name>_<i>`.
+    ///
+    /// What batches many reads, or many writes, of one kind into one request. Linear executes
+    /// each aliased field as it would the document alone, and answers it under its alias; a
+    /// field it refuses is answered with an error whose `path` starts at that alias, and —
+    /// every root this source batches being non-null — with no `data` at all, after applying
+    /// every mutation aliased before it and none after.
+    #[must_use]
+    pub fn aliased(single: &str, count: usize) -> String {
+        let (head, body) = single.split_once('{').unwrap_or((single, ""));
+        let body = body.trim_end().strip_suffix('}').unwrap_or(body).trim();
+        let (kind, variables) = head
+            .split_once('(')
+            .map_or((head.trim(), ""), |(kind, rest)| {
+                (kind.trim(), rest.trim_end().trim_end_matches(')'))
+            });
+        let mut declared = Vec::with_capacity(count);
+        let mut fields = Vec::with_capacity(count);
+        for at in 0..count {
+            if !variables.is_empty() {
+                declared.push(suffixed(variables, at));
+            }
+            fields.push(format!("a{at}: {}", suffixed(body, at)));
+        }
+        if declared.is_empty() {
+            format!("{kind}{{ {} }}", fields.join(" "))
+        } else {
+            format!("{kind}({}){{ {} }}", declared.join(","), fields.join(" "))
+        }
+    }
+
+    /// Every `$name` in `text` renamed `$name_<at>`.
+    fn suffixed(text: &str, at: usize) -> String {
+        let mut renamed = String::with_capacity(text.len() + 8);
+        let mut chars = text.chars().peekable();
+        while let Some(character) = chars.next() {
+            renamed.push(character);
+            if character != '$' {
+                continue;
+            }
+            while let Some(next) = chars.peek().copied() {
+                if next.is_ascii_alphanumeric() || next == '_' {
+                    renamed.push(next);
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
+            renamed.push_str(&format!("_{at}"));
+        }
+        renamed
+    }
+
+    /// The variables of an [`aliased`] document: each item's own, each name suffixed `_<i>`.
+    #[must_use]
+    pub fn aliased_variables(each: &[serde_json::Value]) -> serde_json::Value {
+        let mut merged = serde_json::Map::new();
+        for (at, variables) in each.iter().enumerate() {
+            for (name, value) in variables.as_object().into_iter().flatten() {
+                merged.insert(format!("{name}_{at}"), value.clone());
+            }
+        }
+        serde_json::Value::Object(merged)
+    }
+
+    /// The document of [`BATCHED`] `document` batches and how many times, when it is one —
+    /// what a server answering it answers each alias as.
+    #[must_use]
+    pub fn unaliased(document: &str) -> Option<(&'static str, usize)> {
+        let count = (0..)
+            .take_while(|at| document.contains(&format!(" a{at}: ")))
+            .count();
+        if count == 0 {
+            return None;
+        }
+        BATCHED
+            .into_iter()
+            .find(|single| aliased(single, count) == document)
+            .map(|single| (single, count))
+    }
+
+    /// The variables of the `at`th item of an [`aliased`] document, as its single document
+    /// takes them.
+    #[must_use]
+    pub fn alias_variables(variables: &serde_json::Value, at: usize) -> serde_json::Value {
+        let suffix = format!("_{at}");
+        serde_json::Value::Object(
+            variables
+                .as_object()
+                .into_iter()
+                .flatten()
+                .filter_map(|(name, value)| {
+                    name.strip_suffix(&suffix)
+                        .map(|plain| (plain.to_owned(), value.clone()))
+                })
+                .collect(),
+        )
+    }
 }
 
 use graphql::{
@@ -1836,6 +1948,10 @@ struct GqlError {
     // deserialization when Linear sends extensions without one, turning a refusal this
     // source could explain into an unexplained malformed response.
     extensions: Option<Value>,
+    /// Where in the answer the error is, its first member the root field — or the alias — it
+    /// is about; absent for an error about the whole request.
+    #[serde(default)]
+    path: Option<Vec<Value>>,
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1910,6 +2026,19 @@ impl Refusal {
     /// rewording of either one alone still reads as what it is; an entity of any other kind,
     /// and anything else, is a refusal. The live capability journey sends this mutation
     /// to a nonexistent issue and requires `None`, so changed service wording fails the lane.
+    /// The index of the alias of an [`graphql::aliased`] document this refusal is about, when
+    /// its path names one.
+    fn alias(&self) -> Option<usize> {
+        self.0
+            .path
+            .as_ref()?
+            .first()?
+            .as_str()?
+            .strip_prefix('a')?
+            .parse()
+            .ok()
+    }
+
     fn entity_missing(&self) -> bool {
         self.missing(
             graphql::ISSUE_NOT_FOUND_MESSAGE,
@@ -1964,6 +2093,16 @@ impl Refusal {
 
 /// How [`LinearSource::answer_with`] reads a GraphQL error Linear sends under HTTP 400 that is no
 /// rate limit and no missing item.
+/// One targeted update composed for sending — see `LinearSource::compose_update`.
+struct Composed {
+    /// The issue as it was read before the update.
+    before: Task,
+    /// What `issueUpdate` is sent; empty when nothing differs.
+    input: serde_json::Map<String, Value>,
+    /// The relations to write after it, when the update names dependencies that differ.
+    relations: Option<Vec<DependencyEdge>>,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Under400 {
     /// As the call failing, [`SourceError::Unavailable`] naming the status — what every read and
@@ -2886,52 +3025,16 @@ impl LinearSource {
     ///
     /// Either way the task answered is the one the mutation's own selection reports, so its
     /// status is Linear's, and nothing is read after the write.
-    async fn targeted_update(
+    /// The `issueUpdate` input that applies `update` to the issue `before` holds, whose raw
+    /// description is `description` — empty when nothing differs — and the relations it is to
+    /// write after, when it names dependencies that differ. Nothing is sent but the reads of
+    /// its forward edges such an update needs.
+    async fn compose_update(
         &self,
-        id: &NativeId,
         update: &TaskUpdate,
-    ) -> Result<Option<TaskUpdateOutcome>, SourceError> {
-        update.consistent()?;
-        if let Some(delivers) = &update.delivers {
-            TaskRef::listed(
-                TaskRef::DELIVERS_KEY,
-                id,
-                Some(&self.name),
-                delivers.clone(),
-            )
-            .map_err(|message| SourceError::Refused { message })?;
-        }
-        // Before any request: a category the mapping gives a task no name for is not one
-        // Linear could answer differently for another issue.
-        if let Some(status) = &update.status {
-            self.statuses
-                .name_for(status.category, ItemKind::Task)
-                .map_err(|why| why.refusal(&self.name, status.category, ItemKind::Task))?;
-        }
-        if let Some(status) = update.status.as_ref().filter(|_| {
-            TaskUpdate {
-                status: None,
-                ..update.clone()
-            }
-            .is_empty()
-        }) {
-            let Some(task) = self.status_written(id, status.category).await? else {
-                return Ok(None);
-            };
-            return Ok(Some(TaskUpdateOutcome {
-                delivers_before: task.delivers.clone(),
-                written: std::iter::once(UpdatedField::Status).collect(),
-                task,
-            }));
-        }
-        let held = if update.status.is_some() && self.held_vocabulary().is_none() {
-            self.issue_resolving(id).await?
-        } else {
-            self.issue_held(id, Read::ForWrite).await?
-        };
-        let Some((before, description)) = held else {
-            return Ok(None);
-        };
+        before: Task,
+        description: Option<String>,
+    ) -> Result<Composed, SourceError> {
         let (visible, held) = metadata_description(description)?;
         let mut slot = held.clone();
         for (key, value) in &update.metadata_set {
@@ -3018,6 +3121,82 @@ impl LinearSource {
         {
             input.insert("priority".into(), json!(linear_priority(priority)));
         }
+        Ok(Composed {
+            before,
+            input,
+            relations,
+        })
+    }
+
+    async fn targeted_update(
+        &self,
+        id: &NativeId,
+        update: &TaskUpdate,
+    ) -> Result<Option<TaskUpdateOutcome>, SourceError> {
+        self.update_checked(id, update)?;
+        if let Some(status) = update.status.as_ref().filter(|_| {
+            TaskUpdate {
+                status: None,
+                ..update.clone()
+            }
+            .is_empty()
+        }) {
+            let Some(task) = self.status_written(id, status.category).await? else {
+                return Ok(None);
+            };
+            return Ok(Some(TaskUpdateOutcome {
+                delivers_before: task.delivers.clone(),
+                written: std::iter::once(UpdatedField::Status).collect(),
+                task,
+            }));
+        }
+        let held = if update.status.is_some() && self.held_vocabulary().is_none() {
+            self.issue_resolving(id).await?
+        } else {
+            self.issue_held(id, Read::ForWrite).await?
+        };
+        let Some((before, description)) = held else {
+            return Ok(None);
+        };
+        let composed = self.compose_update(update, before, description).await?;
+        self.send_composed(id, update, composed).await
+    }
+
+    /// Refuse, before any request, an update that contradicts itself, a `delivers` list naming
+    /// what a task cannot deliver, and a category the mapping gives a task no name for — none of
+    /// which Linear could answer differently for another issue.
+    fn update_checked(&self, id: &NativeId, update: &TaskUpdate) -> Result<(), SourceError> {
+        update.consistent()?;
+        if let Some(delivers) = &update.delivers {
+            TaskRef::listed(
+                TaskRef::DELIVERS_KEY,
+                id,
+                Some(&self.name),
+                delivers.clone(),
+            )
+            .map_err(|message| SourceError::Refused { message })?;
+        }
+        if let Some(status) = &update.status {
+            self.statuses
+                .name_for(status.category, ItemKind::Task)
+                .map_err(|why| why.refusal(&self.name, status.category, ItemKind::Task))?;
+        }
+        Ok(())
+    }
+
+    /// Send one composed update alone — its `issueUpdate` when anything differs, then the
+    /// relations it writes — and answer what `update_task` answers.
+    async fn send_composed(
+        &self,
+        id: &NativeId,
+        update: &TaskUpdate,
+        composed: Composed,
+    ) -> Result<Option<TaskUpdateOutcome>, SourceError> {
+        let Composed {
+            before,
+            input,
+            relations,
+        } = composed;
         let carries_state = input.contains_key("stateId");
         let task = if input.is_empty() {
             before.clone()
@@ -3795,6 +3974,11 @@ impl TaskSource for LinearSource {
         ids: &[NativeId],
         comments: Option<&PageRequest>,
     ) -> Vec<Result<Option<TaskDetailRead>, SourceError>> {
+        if let Some(page) = comments
+            && let Some(read) = self.details_batched(ids, page).await
+        {
+            return read;
+        }
         let mut read = Vec::with_capacity(ids.len());
         for id in ids {
             read.push(match comments {
@@ -5013,6 +5197,30 @@ impl TaskSource for LinearSource {
         update: &TaskUpdate,
     ) -> Result<Option<TaskUpdateOutcome>, SourceError> {
         self.targeted_update(id, update).await
+    }
+    /// Every issue read in one aliased read and every update that changes something sent in
+    /// one aliased `issueUpdate` document — see the `batch` module for where one is sent alone.
+    async fn update_tasks(
+        &self,
+        updates: &[onetaskgraph_plugin_api::BatchUpdate],
+    ) -> Vec<Result<onetaskgraph_plugin_api::BatchAnswer<TaskUpdateOutcome>, SourceError>> {
+        self.update_batched(updates).await
+    }
+    /// Every issue read in one aliased read and every comment created in one aliased
+    /// `commentCreate` document — see the `batch` module.
+    async fn add_comments(
+        &self,
+        comments: &[onetaskgraph_plugin_api::BatchComment],
+    ) -> Vec<Result<onetaskgraph_plugin_api::BatchAnswer<Comment>, SourceError>> {
+        self.comment_batched(comments).await
+    }
+    /// Every query not by origin as one aliased `issues` read per round — see the `batch`
+    /// module.
+    async fn query_tasks_batch(
+        &self,
+        asks: &[(TaskQuery, PageRequest)],
+    ) -> Vec<Result<Page<Task>, SourceError>> {
+        self.query_batched(asks).await
     }
 
     /// The tokens its dependency walks spelled and the items its writes were answered with, and

@@ -271,6 +271,16 @@ pub(crate) fn walk() -> Vec<(&'static str, Phase)> {
     let mut phase =
         |name: &'static str, phases: &mut Vec<(&'static str, Phase)>, mark: &mut usize| {
             let sent = workspace.served_since(*mark);
+            if std::env::var_os("ROAD_DEBUG").is_some() {
+                for (query, _) in &sent {
+                    let head: String = query
+                        .split_whitespace()
+                        .take(4)
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    eprintln!("ROOT {name}: {}", &head[..head.len().min(120)]);
+                }
+            }
             *mark = workspace.served_count();
             let mut measured = Phase::of(&sent);
             let now = transfers();

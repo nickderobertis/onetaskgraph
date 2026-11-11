@@ -7000,6 +7000,33 @@ impl LinearWorkspace {
             .unwrap_or_default()
     }
 
+    /// Refuse every mutation naming the item `id` — an issue update by its id, a comment create
+    /// on it — from now on, as Linear refuses an input it rejects: alone it is answered refused,
+    /// and in an aliased batch it nulls the whole answer after the writes aliased before it.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback Linear's own answers, which only its server loop here answers, beside `refuse_create`; the batched journeys of the Linear suite drive it.
+    pub fn refuse_writes_of(&self, id: &str) {
+        let mut data = self.state.lock().unwrap();
+        let mut refused = data["_linear_refused_items"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        refused.push(json!(id));
+        data["_linear_refused_items"] = Value::Array(refused);
+    }
+
+    /// Refuse every page after the first of an issue search whose filter, as sent, holds
+    /// `needle`, from now on — a search Linear answered once and then failed.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] As `refuse_writes_of`.
+    pub fn refuse_later_pages_of(&self, needle: &str) {
+        let mut data = self.state.lock().unwrap();
+        let mut refused = data["_linear_refused_pages"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        refused.push(json!(needle));
+        data["_linear_refused_pages"] = Value::Array(refused);
+    }
+
     /// Refuse every create of a workflow state or project status named `name`, from now on,
     /// as Linear refuses one the key may not make; [`Self::allow_create`] lifts it.
     pub fn refuse_create(&self, name: &str) {
@@ -7238,55 +7265,64 @@ fn linear_serve(
                 );
                 continue;
             }
-            let (status, response) = match linear_response(
-                &request,
-                recorded.as_ref(),
-                &mut state.lock().unwrap(),
-            ) {
-                Ok(mut body) => {
-                    let operation = request["query"].as_str().unwrap_or_default();
-                    let variables = request.get("variables").cloned().unwrap_or(Value::Null);
-                    let mut bends = workspace.bends.lock().unwrap();
-                    if let Some(bend) = bends
-                        .iter_mut()
-                        .find(|bend| bend.times > 0 && (bend.matches)(operation, &variables))
+            let aliased = onetaskgraph_linear::graphql::unaliased(
+                request["query"].as_str().unwrap_or_default(),
+            );
+            let (status, response) = if let Some((single, count)) = aliased {
+                linear_aliased(
+                    single,
+                    count,
+                    &request,
+                    recorded.as_ref(),
+                    &mut state.lock().unwrap(),
+                )
+            } else {
+                match linear_response(&request, recorded.as_ref(), &mut state.lock().unwrap()) {
+                    Ok(mut body) => {
+                        let operation = request["query"].as_str().unwrap_or_default();
+                        let variables = request.get("variables").cloned().unwrap_or(Value::Null);
+                        let mut bends = workspace.bends.lock().unwrap();
+                        if let Some(bend) = bends
+                            .iter_mut()
+                            .find(|bend| bend.times > 0 && (bend.matches)(operation, &variables))
+                        {
+                            bend.times -= 1;
+                            (bend.bend)(&variables, &mut body);
+                        }
+                        let mut lost = workspace.lost.lock().unwrap();
+                        if let Some(at) = lost.iter().position(|lost| *lost == operation) {
+                            lost.remove(at);
+                            (
+                                "502 Bad Gateway",
+                                json!({"errors":[{"message":"the answer was lost"}]}),
+                            )
+                        } else {
+                            ("200 OK", json!({"data":body}))
+                        }
+                    }
+                    // A create under an id a record already holds is answered under HTTP 200, as
+                    // Linear answers it, naming the id in its presentable sentence.
+                    Err(message)
+                        if let Some(record) = LINEAR_ID_CONFLICTS.into_iter().find(|record| {
+                            onetaskgraph_linear::graphql::id_conflict_message(*record) == message
+                        }) =>
                     {
-                        bend.times -= 1;
-                        (bend.bend)(&variables, &mut body);
-                    }
-                    let mut lost = workspace.lost.lock().unwrap();
-                    if let Some(at) = lost.iter().position(|lost| *lost == operation) {
-                        lost.remove(at);
+                        let id = request["variables"]["input"]["id"]
+                            .as_str()
+                            .unwrap_or_default();
                         (
-                            "502 Bad Gateway",
-                            json!({"errors":[{"message":"the answer was lost"}]}),
-                        )
-                    } else {
-                        ("200 OK", json!({"data":body}))
-                    }
-                }
-                // A create under an id a record already holds is answered under HTTP 200, as
-                // Linear answers it, naming the id in its presentable sentence.
-                Err(message)
-                    if let Some(record) = LINEAR_ID_CONFLICTS.into_iter().find(|record| {
-                        onetaskgraph_linear::graphql::id_conflict_message(*record) == message
-                    }) =>
-                {
-                    let id = request["variables"]["input"]["id"]
-                        .as_str()
-                        .unwrap_or_default();
-                    (
-                        "200 OK",
-                        json!({"data": null, "errors": [{
+                            "200 OK",
+                            json!({"data": null, "errors": [{
                                 "message": message,
                                 "path": [request["query"].as_str().and_then(linear_create_root)],
                                 "extensions": {"code": "INPUT_ERROR", "statusCode": 400,
                                     "type": "invalid input", "userError": true,
                                     "userPresentableMessage":
                                         onetaskgraph_linear::graphql::id_conflict_presentable(record, id)}}]}),
-                    )
+                        )
+                    }
+                    Err(message) => ("400 Bad Request", json!({"errors":[{"message":message}]})),
                 }
-                Err(message) => ("400 Bad Request", json!({"errors":[{"message":message}]})),
             };
             answers.lock().unwrap().push(response.clone());
             // Answered, and not yet sent: a change made here is one the next request sees and
@@ -7323,6 +7359,42 @@ fn linear_serve(
         }
     });
     json!({"endpoint":endpoint,"team":"FIX","status_mapping":linear_default_mapping()})
+}
+
+/// An aliased document — `count` copies of `single` — answered as Linear answers one: each alias
+/// as `single` alone answers it, in order; the first one refused ends the answer there with no
+/// `data` and an error at that alias's path, every mutation before it applied and none after,
+/// because each root this plugin batches is non-null.
+fn linear_aliased(
+    single: &str,
+    count: usize,
+    request: &Value,
+    recorded: Option<&Value>,
+    data: &mut Value,
+) -> (&'static str, Value) {
+    let variables = request.get("variables").cloned().unwrap_or(Value::Null);
+    let mut answered = serde_json::Map::new();
+    for at in 0..count {
+        let alias = format!("a{at}");
+        let one = json!({"query": single,
+            "variables": onetaskgraph_linear::graphql::alias_variables(&variables, at)});
+        match linear_response(&one, recorded, data) {
+            Ok(body) => {
+                let value = body
+                    .as_object()
+                    .and_then(|roots| roots.values().next().cloned())
+                    .unwrap_or(Value::Null);
+                answered.insert(alias, value);
+            }
+            Err(message) => {
+                return (
+                    "200 OK",
+                    json!({"data": null, "errors": [{"message": message, "path": [alias]}]}),
+                );
+            }
+        }
+    }
+    ("200 OK", json!({"data": answered}))
 }
 
 /// The priority write v0.12.13 and every release before it sent, selecting the priority alone:
@@ -7927,6 +7999,29 @@ fn linear_response(
         return Err("unknown GraphQL operation");
     }
     let vars = Value::Object(request.variables);
+    if operation.trim_start().starts_with("mutation") {
+        let named = [&vars["id"], &vars["input"]["issueId"]];
+        let refused = data["_linear_refused_items"]
+            .as_array()
+            .is_some_and(|refused| refused.iter().any(|id| named.contains(&id)));
+        if refused {
+            return Err(LINEAR_REFUSED_WRITE);
+        }
+    }
+    if operation == graphql::ISSUES && !vars["after"].is_null() {
+        let filter = vars["filter"].to_string();
+        let refused = data["_linear_refused_pages"]
+            .as_array()
+            .is_some_and(|refused| {
+                refused
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .any(|needle| filter.contains(needle))
+            });
+        if refused {
+            return Err("Linear refused this page of the search");
+        }
+    }
     // The workspace's own id, which a fixture names under `organization` — two fixtures naming
     // one are two loopback servers over the same workspace.
     if operation == graphql::ORGANIZATION {

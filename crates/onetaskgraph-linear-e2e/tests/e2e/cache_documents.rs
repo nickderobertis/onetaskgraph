@@ -286,7 +286,10 @@ fn sent(cached: &Cached) -> BTreeSet<String> {
         .workspace
         .served()
         .into_iter()
-        .map(|(document, _)| document)
+        // A batch of one item's document is that document, aliased once per item.
+        .map(|(document, _)| {
+            graphql::unaliased(&document).map_or(document, |(single, _)| single.to_owned())
+        })
         .collect()
 }
 

@@ -114,6 +114,20 @@ pub(crate) mod price {
 /// asked — a relations read scaled linearly in that `first` through its measured `first:100`.
 pub(crate) fn complexity(document: &str, variables: &Value, answer: &Value) -> u64 {
     use onetaskgraph_linear::graphql as g;
+    // A batch of one item's document costs what each of its items costs alone.
+    if let Some((single, count)) = g::unaliased(document) {
+        let root = single
+            .split_once('{')
+            .map(|(_, body)| body.trim_start())
+            .and_then(|body| body.split(['(', '{', ' ']).next())
+            .unwrap_or_default();
+        return (0..count)
+            .map(|at| {
+                let alone = serde_json::json!({"data": {root: answer["data"][format!("a{at}")]}});
+                complexity(single, &g::alias_variables(variables, at), &alone)
+            })
+            .sum();
+    }
     let first = |name: &str| variables[name].as_u64().unwrap_or(50);
     let rows = |pointer: &str| {
         answer
