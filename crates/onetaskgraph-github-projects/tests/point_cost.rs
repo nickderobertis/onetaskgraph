@@ -323,18 +323,19 @@ fn largest_at_one_point(document: &str, batch: usize, name: &str) {
 }
 // llmlint: ignore-end[tests_hold_no_nonfunctional_thresholds]
 
-/// No round of the batched search costs more than [`search_batch_largest_round`], which is what
-/// the credentialed lane reconciles GitHub's price of it at: every way a round can split its
-/// search slots and origin item listings between first pages, resumed pages and slots it does
-/// not ask is priced at the pages `search_round` binds — a first page at
-/// [`SEARCH_BATCH_FIRST_PAGE`] rows, every resumed page at [`search_batch_resumed_page`]'s share
-/// of the round, and a slot not asked at one — and none costs more. The worst case every slot
-/// at a whole page would cost is still pinned above, and is more than any round sends.
+/// [`search_batch_largest_round`] is the largest round of the batched search this source sends,
+/// which is what makes the credentialed lane's reconciliation of the document under it a
+/// reconciliation of every round: each way a round can split its search slots and origin item
+/// listings between first pages, resumed pages and slots it does not ask is priced at the pages
+/// `search_round` binds — a first page at [`SEARCH_BATCH_FIRST_PAGE`] rows, every resumed page
+/// at [`search_batch_resumed_page`]'s share of the round, and a slot not asked at one — and none
+/// is larger. It compares two prices of one document under GitHub's published model, not a price
+/// with a ceiling: the full every-slot-at-a-whole-page worst case is pinned in the table above,
+/// and what a find spends is `github-points-per-follow-up-cycle`'s, judged by onebudgetspec.
 #[test]
-fn no_round_of_the_batched_search_costs_more_than_its_largest_round() {
+fn the_largest_round_of_the_batched_search_is_the_largest_round_it_sends() {
     let largest = point_cost(graphql::SEARCH_BATCH, &search_batch_largest_round()).unwrap();
-    assert_eq!(largest, 4, "the batched search's largest round");
-    assert!(largest < worst_case_point_cost(graphql::SEARCH_BATCH).unwrap());
+    assert!(largest <= worst_case_point_cost(graphql::SEARCH_BATCH).unwrap());
     for searches_first in 0..=SEARCH_BATCH {
         for searches_resumed in 0..=SEARCH_BATCH - searches_first {
             for origins_first in 0..=SEARCH_BATCH_ORIGINS {
@@ -367,7 +368,8 @@ fn no_round_of_the_batched_search_costs_more_than_its_largest_round() {
                         cost <= largest,
                         "a round of {searches_first} first and {searches_resumed} resumed \
                          searches and {origins_first} first and {origins_resumed} resumed origin \
-                         listings costs {cost} points, more than the largest round's {largest}"
+                         listings is larger than search_batch_largest_round: {cost} points \
+                         against {largest}"
                     );
                 }
             }

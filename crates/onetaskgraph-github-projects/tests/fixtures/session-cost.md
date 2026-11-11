@@ -329,3 +329,22 @@ same 239 requests. A credentialed session of both entry points then measured 300
 44, Setup 57, the rest as main's), and GitHub priced the largest round at 4 points, hypothetical
 and executed. Those 4 are the new document's real cost over main's 292, and Setup's board-copy
 polling spreads 52-57 between runs, so by the manager's ruling of 2026-11-11 the ceiling is 304.
+
+| Phase | main (#3971) | branch, whole resumed pages | branch, shared resumed rows |
+| --- | ---: | ---: | ---: |
+| Admission | 2 | 2 | 2 |
+| Schema | 13 | 13 | 13 |
+| Reconciliation | 40 | 62 | 44 |
+| Setup | 53 | 54 | 57 |
+| Capabilities | 31 | 31 | 31 |
+| CommentActivity | 17 | 17 | 16 |
+| ChangeToken | 83 | 83 | 84 |
+| Cleanup | 27 | 27 | 27 |
+| OrphanRecovery | 3 | 3 | 3 |
+| AssetSetup | 11 | 11 | 11 |
+| AssetTask | 6 | 6 | 6 |
+| AssetDocument | 6 | 6 | 6 |
+| **Total** | **292** | **315** | **300** |
+
+The first two columns are CI sessions (the second, run 43001415572); the third is a credentialed
+local session of both entry points over the template's 60 items.
