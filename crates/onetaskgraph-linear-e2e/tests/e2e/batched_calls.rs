@@ -954,3 +954,68 @@ fn two_instances_of_one_tracker_share_label_ids_until_a_refused_write_drops_them
     labels.sort();
     assert_eq!(labels, ["ops", "triage"]);
 }
+
+#[test]
+fn a_comment_linear_refuses_in_a_batch_fails_alone_and_every_other_lands_once() {
+    let team = Team::holding(writable(), false);
+    team.workspace.refuse_writes_of("U-2");
+    let comments = team.batch(
+        "comments.json",
+        &json!({"schema_version": 1, "comments": (1..=4).map(|at| json!({
+            "item": format!("team:U-{at}"), "body": format!("A note on {at}.")
+        })).collect::<Vec<_>>()}),
+    );
+    let ran = team.run(&["task", "comment", "add-many", "team", "--input", &comments]);
+    assert_eq!(ran.code, Some(4), "{}", ran.json);
+    let outcomes: Vec<&str> = ran.json["results"]
+        .as_array()
+        .expect("results")
+        .iter()
+        .map(|result| result["outcome"].as_str().expect("an outcome"))
+        .collect();
+    assert_eq!(
+        outcomes,
+        ["written", "error", "written", "written"],
+        "{}",
+        ran.json
+    );
+    for at in 1..=4 {
+        let listed = team.ok(&["task", "comment", "list", &format!("team:U-{at}")]);
+        let bodies: Vec<&str> = listed.json["comments"]
+            .as_array()
+            .expect("comments")
+            .iter()
+            .filter_map(|comment| comment["body"].as_str())
+            .collect();
+        let expected: Vec<String> = if at == 2 {
+            Vec::new()
+        } else {
+            vec![format!("A note on {at}.")]
+        };
+        assert_eq!(bodies, expected, "U-{at}");
+    }
+}
+
+#[test]
+fn a_guarded_update_is_held_to_the_version_its_guard_read_and_refused_once_it_moves() {
+    let team = Team::holding(writable(), false);
+    // Another writer retitles U-1 straight after the guard has read it.
+    team.workspace.after_request(
+        |_, variables| variables["id"] == "U-1",
+        0,
+        |workspace| workspace.retitle("tasks", "U-1", "Another writer's title"),
+    );
+    let ran = team.run(&[
+        "task",
+        "update",
+        "team:U-1",
+        "--title",
+        "Guarded title",
+        "--when-priority",
+        "low",
+    ]);
+    assert_eq!(ran.code, Some(1), "{}", ran.json);
+    assert_eq!(ran.json["failure"]["kind"], "version-moved", "{}", ran.json);
+    assert_eq!(mutations(&ran.sent), 0, "nothing was written");
+    assert_eq!(team.task("team:U-1")["title"], "Another writer's title");
+}
