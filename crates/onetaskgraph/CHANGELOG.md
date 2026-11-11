@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.12](https://github.com/nickderobertis/onetaskgraph/compare/v0.14.11...v0.14.12) - 2026-11-11
+
+### Added
+
+- batch searches, copies, comments and held updates, and send fewer Linear and GitHub requests ([#3977](https://github.com/nickderobertis/onetaskgraph/pull/3977))
+- report oversize copies before writing and screen a public copy in one batch ([#3971](https://github.com/nickderobertis/onetaskgraph/pull/3971))
+
 ## [0.14.11](https://github.com/nickderobertis/onetaskgraph/compare/v0.14.10...v0.14.11) - 2026-11-10
 
 ### Added
