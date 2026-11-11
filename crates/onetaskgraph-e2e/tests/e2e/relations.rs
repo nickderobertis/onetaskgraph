@@ -637,6 +637,21 @@ fn a_native_mirror_named_on_a_source_with_none_is_refused_naming_the_source_type
     // A type kept in metadata alone is accepted.
     store.configure(&json!({"link_types": {"caused-by": {}}}));
     store.relations(&["work:t1"]);
+
+    // A type with no name, or one its `## Links` section could not list on one line, is refused
+    // at load too, saying what to name instead.
+    for (configured, named) in [
+        (json!({"  ": {}}), "empty name"),
+        (json!({"caused\nby": {}}), "line break"),
+    ] {
+        store.configure(&json!({"link_types": configured}));
+        let output = store.run(&["task", "relations", "work:t1"], None);
+        assert_ne!(output.status.code(), Some(0));
+        let said = format!("{}{}", stdout(&output), stderr(&output));
+        for named in ["link_types", named] {
+            assert!(said.contains(named), "names {named}: {said}");
+        }
+    }
 }
 
 #[test]
@@ -919,16 +934,27 @@ fn every_malformed_input_is_refused_naming_it_and_the_rest_of_the_call_goes_on()
             {"from": "work:t1", "to": "work:nowhere", "type": "x"},
             {"from": "elsewhere:t1", "to": "work:t2", "type": "x"},
             {"from": "t1", "to": "work:t2", "type": "x"},
+            {"from": "work:t1", "to": "work:t3", "type": "caused\nby"},
             {"from": "work:t3", "to": "work:t4", "type": "x"},
         ]),
         4,
     );
     assert_eq!(
         outcomes(&links),
-        ["error", "error", "error", "error", "error", "written"]
+        [
+            "error", "error", "error", "error", "error", "error", "written"
+        ]
     );
     assert!(reason(&links, 0).contains("itself"), "{links:#}");
     assert!(reason(&links, 1).contains("names no type"), "{links:#}");
+    // A type spanning two lines could not be listed on one line of the `## Links` section.
+    assert!(reason(&links, 5).contains("line break"), "{links:#}");
+    assert!(
+        !std::fs::read_to_string(store.work.join("tasks").join("t1.md"))
+            .expect("t1")
+            .contains("caused"),
+        "nothing of the refused link is written"
+    );
     assert!(reason(&links, 2).contains("work:nowhere"), "{links:#}");
     assert!(reason(&links, 3).contains("elsewhere"), "{links:#}");
 

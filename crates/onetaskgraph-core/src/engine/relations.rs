@@ -338,14 +338,27 @@ pub enum LinkOp {
     Remove,
 }
 
-/// A link type name a call has checked: never empty, and without surrounding whitespace.
+/// A link type name a call has checked: never empty, without surrounding whitespace, and
+/// holding no line break or other control character — the `## Links` section lists each link
+/// on one line, and its reader recognises only those lines, so a name spanning two would leave
+/// part of the section in the content every read answers.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct LinkTypeName(String);
 
 impl LinkTypeName {
-    fn new(name: &str) -> Option<Self> {
+    /// `name` checked, or why it names no type a link can carry.
+    fn new(name: &str) -> Result<Self, &'static str> {
         let name = name.trim();
-        (!name.is_empty()).then(|| Self(name.to_owned()))
+        if name.is_empty() {
+            return Err("names no type");
+        }
+        if name.chars().any(char::is_control) {
+            return Err(
+                "names a type holding a line break or another control character, which its \
+                 `## Links` section cannot list on one line",
+            );
+        }
+        Ok(Self(name.to_owned()))
     }
 }
 
@@ -1057,7 +1070,14 @@ fn bullet(link: &TaskLink, other: Option<&Relations>) -> String {
     });
     let title = other.map_or_else(
         || link.other.clone(),
-        |other| other.task.title.replace(['[', ']'], ""),
+        |other| {
+            // One line, as the section's reader needs: a title's line breaks become spaces.
+            other
+                .task
+                .title
+                .replace(['[', ']'], "")
+                .replace(|c: char| c.is_control(), " ")
+        },
     );
     match address {
         Some(address) => format!(
@@ -1069,8 +1089,9 @@ fn bullet(link: &TaskLink, other: Option<&Relations>) -> String {
 }
 
 /// The links `metadata` holds, each beside its other end as a qualified id — or why they cannot
-/// be read: a value that is not a list of links, or a link whose other end is no qualified id,
-/// refused naming `id` rather than read as a link to nothing.
+/// be read: a value that is not a list of links, a link whose other end is no qualified id, or
+/// one whose type is no name a link can carry, refused naming `id` rather than read as a link
+/// to nothing.
 fn stored_links(
     id: &GlobalId,
     metadata: &BTreeMap<String, serde_json::Value>,
@@ -1079,11 +1100,10 @@ fn stored_links(
         .map_err(|why| format!("{id}: {why}"))?
         .into_iter()
         .map(|link| match link.other.parse::<GlobalId>() {
-            Ok(_) if link.link_type.trim().is_empty() => Err(format!(
-                "{id} holds a link to {} that names no type",
-                link.other
-            )),
-            Ok(other) => Ok((link, other)),
+            Ok(other) => match LinkTypeName::new(&link.link_type) {
+                Ok(_) => Ok((link, other)),
+                Err(why) => Err(format!("{id} holds a link to {} that {why}", link.other)),
+            },
             Err(error) => Err(format!(
                 "{id} holds a `{}` link whose other end {:?} is not a qualified id: {error}",
                 link.link_type, link.other
@@ -1206,9 +1226,8 @@ fn checked_edge(edge: &ParentEdge) -> Result<(SourceName, ParentWrite), (ParentO
 fn checked_link(item: &LinkItem) -> Result<Planned, String> {
     let from = qualified(&item.from, "the link's from")?;
     let to = qualified(&item.to, "the link's to")?;
-    let Some(link_type) = LinkTypeName::new(&item.link_type) else {
-        return Err(format!("the link from {from} to {to} names no type"));
-    };
+    let link_type = LinkTypeName::new(&item.link_type)
+        .map_err(|why| format!("the link from {from} to {to} {why}"))?;
     if from == to {
         return Err(format!("{from} cannot be linked to itself"));
     }

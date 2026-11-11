@@ -196,6 +196,15 @@ impl LinkTypes {
                         .to_owned(),
                 });
             }
+            if name.chars().any(char::is_control) {
+                return Err(SourceError::Config {
+                    message: format!(
+                        "link_types names the type {name:?}, which holds a line break or another \
+                         control character its `## Links` section cannot list on one line; name \
+                         it on one line"
+                    ),
+                });
+            }
             let Some(word) = &entry.native else {
                 continue;
             };

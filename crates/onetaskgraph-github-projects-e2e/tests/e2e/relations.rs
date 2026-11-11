@@ -798,6 +798,71 @@ fn a_mirror_batch_past_thirty_goes_in_documents_of_thirty_and_a_gateway_timeout_
 }
 
 #[test]
+fn a_removal_document_answered_504_after_landing_part_is_read_back_and_a_repeat_removes_the_rest() {
+    let mut items = vec![issue("A-1", None)];
+    items.extend((0..5).map(|n| issue(&format!("X-{n}"), None)));
+    let board = Board::of(items, &mirrored());
+    let others: Vec<String> = (0..5).map(|n| format!("X-{n}")).collect();
+    let all: Vec<(&str, &str, &str)> = others
+        .iter()
+        .map(|other| ("A-1", other.as_str(), "caused-by"))
+        .collect();
+    let (added, _) = board.links("add-many", &all);
+    assert_eq!(outcomes(&added), vec!["written"; 5]);
+    assert_eq!(board.board.relates_to("A-1").len(), 5);
+
+    // The removal document lands three of its five and is answered 504: each link is answered
+    // from one read-back of what A-1 relates to, a relation no longer there as removed.
+    board.board.time_out_next_relation_write_after(3);
+    let (cut, served) = board.links("remove-many", &all);
+    assert_eq!(
+        outcomes(&cut),
+        ["written", "written", "written", "error", "error"],
+        "{:#}",
+        cut.json
+    );
+    assert_eq!(cut.code, Some(4));
+    assert_eq!(fields_sent(&served, graphql::REMOVE_RELATES_TO), [5]);
+    assert_eq!(
+        sent(&served, graphql::RELATES_TO_READS),
+        1,
+        "read back once"
+    );
+    assert_eq!(board.board.relates_to("A-1"), ["X-3", "X-4"]);
+    let read = board.relations(&["A-1", "X-0", "X-3"]);
+    assert_eq!(
+        links_of(&read[0]),
+        [
+            link("caused-by", "out", "X-3", "present"),
+            link("caused-by", "out", "X-4", "unread"),
+        ]
+    );
+    assert!(links_of(&read[1]).is_empty(), "{:#}", read[1]);
+
+    // What did not come off is the only thing a repeat removes.
+    let (repeat, served) = board.links("remove-many", &all);
+    assert_eq!(
+        outcomes(&repeat),
+        ["absent", "absent", "absent", "written", "written"],
+        "{:#}",
+        repeat.json
+    );
+    let (_, variables) = served
+        .iter()
+        .find(|(sent, _)| sent == graphql::REMOVE_RELATES_TO)
+        .unwrap();
+    assert_eq!(fields_sent(&served, graphql::REMOVE_RELATES_TO), [2]);
+    assert_eq!(variables["unrelate0"]["relatedIssueId"], "X-3");
+    assert_eq!(variables["unrelate1"]["relatedIssueId"], "X-4");
+    assert!(board.board.relates_to("A-1").is_empty());
+    let read = board.relations(&["A-1", "X-3"]);
+    assert!(
+        read.iter().all(|item| item["links"] == json!([])),
+        "{read:#?}"
+    );
+}
+
+#[test]
 fn a_native_word_github_cannot_mirror_is_refused_at_load_naming_the_source_the_type_and_the_word() {
     for word in ["blocks", "blocked-by", "duplicate", "similar", "frobs"] {
         let board = Board::of(
