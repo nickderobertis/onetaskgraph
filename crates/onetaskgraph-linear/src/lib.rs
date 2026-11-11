@@ -926,6 +926,11 @@ pub mod graphql {
     /// Remove a comment.
     pub const COMMENT_DELETE: &str = "mutation($id:String!){ commentDelete(id:$id){success} }";
 
+    /// [`ISSUE_RELATIONS`] with the issue's own `id`, as a mirrored link's removal reads the
+    /// relations of its `from`: every alias's answer is held to the issue it asked for, so an
+    /// answer about another issue never names a relation to delete.
+    pub const ISSUE_LINK_RELATIONS: &str = "query($id:String!,$first:Int!,$after:String){ issue(id:$id){ id relations(first:$first,after:$after){nodes{id type relatedIssue{id}} pageInfo{hasNextPage endCursor}} inverseRelations(first:$first,after:$after){nodes{id type issue{id}} pageInfo{hasNextPage endCursor}} } }";
+
     /// One issue as a relation read reads it: the task, its parent and a first page of its
     /// children — and nothing else, because the selection is what moves a read's complexity.
     pub const ISSUE_PARENT_READ: &str = "query($id:String!){ issue(id:$id){ id identifier title description url createdAt updatedAt archivedAt state{name type} priority labels{nodes{id name color}} project{id} parent{id} children(first:50){nodes{id} pageInfo{hasNextPage}} } }";
@@ -950,7 +955,7 @@ pub mod graphql {
         DOCUMENT,
         ISSUE_PARENT_READ,
         ISSUE_PARENT_UPDATE,
-        ISSUE_RELATIONS,
+        ISSUE_LINK_RELATIONS,
         ISSUE_RELATION_DELETE,
     ];
 
@@ -3628,7 +3633,7 @@ impl LinearSource {
         let mut answered = match held {
             HeldRelations::None => None,
             HeldRelations::Page(issue) => {
-                mirrors = self.mirrored_in(issue.get("description").and_then(Value::as_str));
+                mirrors = self.mirrored_in(issue.get("description").and_then(Value::as_str))?;
                 Some(issue["relations"].clone())
             }
             HeldRelations::Unread => Some(Value::Null),
@@ -3658,7 +3663,7 @@ impl LinearSource {
                     })?;
                 if matches!(kind, WriteKind::Task) {
                     mirrors
-                        .extend(self.mirrored_in(root.get("description").and_then(Value::as_str)));
+                        .extend(self.mirrored_in(root.get("description").and_then(Value::as_str))?);
                 }
                 root.get("relations")
                     .cloned()
@@ -6783,7 +6788,8 @@ impl LinearSource {
         let mut answered = relation_page(&d, root, id, direction)?;
         // A `related` relation mirroring a link the issue holds is the link's, not a dependency.
         if matches!(root, DependencyRoot::Issue) {
-            let mirrors = self.mirrored_in(d.pointer("/issue/description").and_then(Value::as_str));
+            let mirrors =
+                self.mirrored_in(d.pointer("/issue/description").and_then(Value::as_str))?;
             if !mirrors.is_empty() {
                 answered.items.retain(|edge| {
                     let far = if direction == Direction::DependsOn {

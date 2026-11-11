@@ -8483,6 +8483,10 @@ fn linear_response(
             linear_response(&json!({"query": wide, "variables": vars}), recorded, data)?;
         if let Some(item) = answer.get_mut(root).and_then(Value::as_object_mut) {
             item.retain(|member, _| selected.iter().any(|kept| kept == member));
+            // The item's own id, where the document selects it, is the one it was asked for.
+            if selected.iter().any(|kept| kept == "id") {
+                item.insert("id".to_owned(), vars["id"].clone());
+            }
         }
         return Ok(answer);
     }
@@ -8874,9 +8878,9 @@ fn linear_uncached(operation: &str) -> Option<&'static str> {
 fn linear_narrowed(operation: &str) -> Option<(&'static str, &'static str)> {
     use onetaskgraph_linear::graphql;
     match operation {
-        graphql::ISSUE_DEPENDS_ON | graphql::ISSUE_DEPENDED_ON_BY => {
-            Some((graphql::ISSUE_RELATIONS, "issue"))
-        }
+        graphql::ISSUE_DEPENDS_ON
+        | graphql::ISSUE_DEPENDED_ON_BY
+        | graphql::ISSUE_LINK_RELATIONS => Some((graphql::ISSUE_RELATIONS, "issue")),
         graphql::PROJECT_DEPENDS_ON | graphql::PROJECT_DEPENDED_ON_BY => {
             Some((graphql::PROJECT_RELATIONS, "project"))
         }

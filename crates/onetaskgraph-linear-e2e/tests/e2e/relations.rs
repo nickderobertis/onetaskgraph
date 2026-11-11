@@ -642,6 +642,86 @@ fn a_dependency_rewrite_of_an_end_a_whole_body_rewrite_stripped_is_repaired_by_r
     );
 }
 
+/// `value` with every string in it holding `from` holding `to` there instead.
+fn replaced_in(value: &mut Value, from: &str, to: &str) {
+    match value {
+        Value::String(text) if text.contains(from) => *text = text.replace(from, to),
+        Value::Array(items) => items
+            .iter_mut()
+            .for_each(|item| replaced_in(item, from, to)),
+        Value::Object(members) => members
+            .values_mut()
+            .for_each(|member| replaced_in(member, from, to)),
+        _ => {}
+    }
+}
+
+#[test]
+fn a_dependency_rewrite_of_an_issue_whose_stored_links_cannot_be_read_deletes_no_relation() {
+    let team = Team::configured(4, &json!({"caused-by": {"native": "related"}}));
+    let added = team.links("add-many", &[("R-0", "R-1", "caused-by")]);
+    assert_eq!(outcomes(&added), ["written"], "{}", added.json);
+    // Every answer this command reads holds R-0's link with a direction no link has, so which
+    // `related` relations mirror a link cannot be known.
+    team.workspace.bend_answers(
+        |query, _| query.contains("description"),
+        usize::MAX,
+        |_, data| {
+            replaced_in(
+                data,
+                r#""direction":"out","other":"team:R-1""#,
+                r#""direction":"sideways","other":"team:R-1""#,
+            );
+        },
+    );
+    let refused = team.run(&["task", "update", "team:R-0", "--depends-on", "team:R-3"]);
+    assert_ne!(refused.code, Some(0), "{}", refused.json);
+    assert!(
+        refused.stderr.contains("stored links cannot be read"),
+        "{}{}",
+        refused.json,
+        refused.stderr
+    );
+    assert_eq!(refused.count(graphql::ISSUE_RELATION_DELETE), 0);
+    let pairs = team.workspace.related_pairs();
+    assert_eq!(pairs, [("R-0".to_owned(), "R-1".to_owned())], "{pairs:?}");
+}
+
+#[test]
+fn a_parent_write_linear_answers_with_another_parent_or_none_it_can_read_is_an_error() {
+    for (case, bend) in [
+        ("another parent", json!({"id": "R-3"})),
+        ("no parent field", Value::Null),
+    ] {
+        let team = Team::of(4);
+        team.workspace.bend_answers(
+            |query, _| query.contains("a0: issueUpdate(") && query.contains("parent{id}"),
+            1,
+            move |_, data| {
+                if bend.is_null() {
+                    data["a0"]["issue"]
+                        .as_object_mut()
+                        .map(|issue| issue.remove("parent"));
+                } else {
+                    data["a0"]["issue"]["parent"] = bend.clone();
+                }
+            },
+        );
+        let set = team.parents(&[("R-1", Some("R-0")), ("R-2", Some("R-0"))]);
+        assert_eq!(outcomes(&set), ["error", "written"], "{case}: {}", set.json);
+        assert_eq!(set.code, Some(4), "{case}");
+        let reason = set.json["results"][0]["reason"]
+            .as_str()
+            .unwrap_or_default();
+        let named = if case == "another parent" {
+            "with the parent R-3, not R-0"
+        } else {
+            "with no parent it could read, not R-0"
+        };
+        assert!(reason.contains(named), "{case}: {reason}");
+    }
+}
+
 #[test]
 fn each_word_a_linear_source_cannot_mirror_a_link_as_is_refused_at_load() {
     for word in [
@@ -1058,7 +1138,7 @@ fn a_relation_read_linear_answers_malformed_is_refused_rather_than_read_as_no_re
 #[test]
 fn a_mirrored_link_whose_native_relation_cannot_be_confirmed_is_not_removed_anywhere() {
     use onetaskgraph_e2e_support::fixtures::linear_relations::LINEAR_RELATIONS_UNREAD;
-    for case in ["unread", "another page"] {
+    for case in ["unread", "another page", "another issue"] {
         let team = Team::of(2);
         let added = team.links("add-many", &[("R-0", "R-1", "caused-by")]);
         assert_eq!(outcomes(&added), ["written"], "{case}: {}", added.json);
@@ -1072,14 +1152,23 @@ fn a_mirrored_link_whose_native_relation_cannot_be_confirmed_is_not_removed_anyw
                 team.workspace.refuse_relation_reads();
                 LINEAR_RELATIONS_UNREAD.to_owned()
             }
-            _ => {
+            "another page" => {
                 // Linear answers the lookup with another page of relations still to read.
                 team.workspace.bend_answers(
-                    |query, _| query.contains("a0: issue(id:$id_0){ description relations("),
+                    |query, _| query.contains("a0: issue(id:$id_0){ id relations("),
                     1,
                     |_, data| data["a0"]["relations"]["pageInfo"]["hasNextPage"] = json!(true),
                 );
                 "holds more relations than one page".to_owned()
+            }
+            _ => {
+                // Linear answers the lookup for R-0 with R-1, whose relations also hold the pair.
+                team.workspace.bend_answers(
+                    |query, _| query.contains("a0: issue(id:$id_0){ id relations("),
+                    1,
+                    |_, data| data["a0"]["id"] = json!("R-1"),
+                );
+                "answered the alias asking for R-0 with R-1".to_owned()
             }
         };
         let removed = team.links("remove-many", &[("R-0", "R-1", "caused-by")]);

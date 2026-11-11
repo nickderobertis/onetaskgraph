@@ -58,21 +58,32 @@ impl LinearSource {
     /// each a `related` relation that is a link's mirror rather than a `related` dependency.
     ///
     /// Empty for an issue holding no links, so nothing about its edges changes.
-    pub(crate) fn mirrored_in(&self, description: Option<&str>) -> BTreeSet<String> {
+    ///
+    /// # Errors
+    ///
+    /// When the slot or the links in it cannot be read: which `related` relations are a link's
+    /// is then unknown, and a dependency write deciding on it could delete a link's mirror.
+    pub(crate) fn mirrored_in(
+        &self,
+        description: Option<&str>,
+    ) -> Result<BTreeSet<String>, SourceError> {
         let mirrored = self.link_types.mirrored();
         if mirrored.is_empty() {
-            return BTreeSet::new();
+            return Ok(BTreeSet::new());
         }
-        let Ok((_, metadata)) = metadata_description(description.map(str::to_owned)) else {
-            return BTreeSet::new();
-        };
+        let (_, metadata) = metadata_description(description.map(str::to_owned))?;
         let prefix = format!("{}:", self.name);
-        TaskLink::held(&metadata)
-            .unwrap_or_default()
+        let links = TaskLink::held(&metadata).map_err(|why| SourceError::Malformed {
+            message: format!(
+                "the issue's stored links cannot be read, so which `related` relations mirror \
+                 them is unknown: {why}"
+            ),
+        })?;
+        Ok(links
             .into_iter()
             .filter(|link| mirrored.contains_key(&link.link_type))
             .filter_map(|link| link.other.strip_prefix(&prefix).map(str::to_owned))
-            .collect()
+            .collect())
     }
 
     /// Every one of `ids` read as one aliased [`graphql::ISSUE_PARENT_READ`] — `None` for an
@@ -271,10 +282,9 @@ impl LinearSource {
             {
                 Ok(AliasedEach::Answered(values)) => {
                     for (at, value) in sending.drain(..).zip(values) {
-                        answers[at] =
-                            Some(value.and_then(|payload| {
-                                self.parent_answer(&payload, &writes[at].child)
-                            }));
+                        answers[at] = Some(
+                            value.and_then(|payload| self.parent_answer(&payload, &writes[at])),
+                        );
                     }
                 }
                 Ok(AliasedEach::Refused(refused, refusal)) => {
@@ -366,7 +376,7 @@ impl LinearSource {
                 let value = values.pop().ok_or_else(|| SourceError::Malformed {
                     message: "a parent write was given no answer".to_owned(),
                 })??;
-                self.parent_answer(&value, &write.child)
+                self.parent_answer(&value, write)
             }
             AliasedEach::Refused(_, refusal) if refusal.entity_missing() => {
                 Ok(ParentAnswer::Missing {
@@ -387,13 +397,39 @@ impl LinearSource {
         }
     }
 
-    /// What one `issueUpdate` of a parent answered, as the child's version after it.
+    /// What one `issueUpdate` of a parent answered, as the child's version after it — written
+    /// only when the issue it answers with holds the parent the write asked for.
     fn parent_answer(
         &self,
         payload: &Value,
-        child: &NativeId,
+        write: &ParentWrite,
     ) -> Result<ParentAnswer, SourceError> {
+        let child = &write.child;
         let task = self.updated_issue(&json!({"issueUpdate": payload}), child)?;
+        if task.is_some() {
+            let parent = payload.pointer("/issue/parent");
+            let answered = match parent {
+                Some(Value::Null) => Some(None),
+                Some(parent) => parent.get("id").and_then(Value::as_str).map(Some),
+                None => None,
+            };
+            if answered != Some(write.parent.as_ref().map(|parent| parent.0.as_str())) {
+                return Err(SourceError::Malformed {
+                    message: format!(
+                        "Linear answered the parent write of {child} with {}, not {}",
+                        match answered {
+                            Some(Some(id)) => format!("the parent {id}"),
+                            Some(None) => "no parent".to_owned(),
+                            None => "no parent it could read".to_owned(),
+                        },
+                        write
+                            .parent
+                            .as_ref()
+                            .map_or_else(|| "no parent".to_owned(), |parent| parent.to_string())
+                    ),
+                });
+            }
+        }
         Ok(match task {
             Some(task) => ParentAnswer::Written {
                 version: task.version,
@@ -452,7 +488,7 @@ impl LinearSource {
     }
 
     /// Every `related` relation between each pair of `links` deleted: the relations of each
-    /// pair's `from` read in one aliased [`graphql::ISSUE_RELATIONS`] read of its largest page —
+    /// pair's `from` read in one aliased [`graphql::ISSUE_LINK_RELATIONS`] read of its largest page —
     /// both directions, because Linear holds the one relation with whichever end created it
     /// first — and every one found deleted in one aliased [`graphql::ISSUE_RELATION_DELETE`]
     /// document. A pair with no such relation is no change; one whose `from` holds more
@@ -467,7 +503,7 @@ impl LinearSource {
             .map(|link| json!({"id": link.from.0, "first": MAX_PAGE_SIZE, "after": null}))
             .collect();
         let read = match self
-            .send_aliased_each(graphql::ISSUE_RELATIONS, &each)
+            .send_aliased_each(graphql::ISSUE_LINK_RELATIONS, &each)
             .await
         {
             Ok(AliasedEach::Answered(values)) => values,
@@ -481,8 +517,12 @@ impl LinearSource {
             links.iter().map(|_| None).collect();
         let mut deleting: Vec<(usize, String)> = Vec::new();
         for (at, (link, value)) in links.iter().zip(read).enumerate() {
-            // Positional: the relations read selects no id to check an alias's answer against.
-            match value.and_then(|issue| related_between(&issue, &link.from, &link.to)) {
+            // Each alias's answer held to the issue it asked for, so an answer about another
+            // issue never names a relation to delete.
+            match value.and_then(|issue| {
+                answered_for(&issue, &link.from)?;
+                related_between(&issue, &link.from, &link.to)
+            }) {
                 Ok(found) if found.is_empty() => answers[at] = Some(Ok(())),
                 Ok(found) => deleting.extend(found.into_iter().map(|id| (at, id))),
                 Err(error) => answers[at] = Some(Err(error)),
