@@ -2,7 +2,7 @@
 //! source: `task find`'s many searches, `task copy` holding each counterpart to its own
 //! `--if-version <ID>=<VERSION>`, `task comment add-many`, `task update-many`, and `task update
 //! --when-priority` — each answered per item, one item's failure never writing or refusing
-//! another's.
+//! another's — and each malformed batch document refused whole, naming what is wrong.
 //!
 //! On the folder the "other writer" is a second process writing the same task through the
 //! store, unheld, between the read and the batch, and every item is read back by a later
@@ -617,4 +617,189 @@ fn task_update_when_priority_writes_content_metadata_and_priority_only_while_it_
             assert_eq!(fields(&store.shown("plan:a")), landed);
         }
     }
+}
+
+impl Store {
+    /// `onetaskgraph <arguments>` in its human rendering, exiting `code`: its standard output
+    /// and standard error.
+    fn human(&self, arguments: &[&str], input: &str, code: i32) -> (String, String) {
+        let mut command = self.sandbox.command();
+        command.args(arguments);
+        command.write_stdin(input);
+        let output = command.assert().get_output().clone();
+        assert_eq!(
+            output.status.code(),
+            Some(code),
+            "`onetaskgraph {}`\nstdout:\n{}\nstderr:\n{}",
+            arguments.join(" "),
+            stdout(&output),
+            stderr(&output)
+        );
+        (stdout(&output), stderr(&output))
+    }
+
+    /// Every file of the folder, its bytes, so a refusal is proven to have written nothing.
+    fn folder(&self) -> Vec<(String, Vec<u8>)> {
+        let mut files: Vec<(String, Vec<u8>)> = std::fs::read_dir(self.plan.join("tasks"))
+            .expect("the task folder")
+            .map(|entry| {
+                let path = entry.expect("an entry").path();
+                (
+                    path.display().to_string(),
+                    std::fs::read(&path).expect("a task file"),
+                )
+            })
+            .collect();
+        files.sort();
+        files
+    }
+}
+
+#[test]
+fn a_malformed_batch_document_is_refused_whole_naming_what_is_wrong_and_writing_nothing() {
+    let store = Store::new();
+    let before = store.folder();
+    let find = ["task", "find", "plan", "--queries", "-"];
+    let comments = ["task", "comment", "add-many", "plan", "--input", "-"];
+    let updates = ["task", "update-many", "plan", "--input", "-"];
+    let refusals: [(&[&str], String, &[&str]); 9] = [
+        (
+            &find,
+            "{not json".to_owned(),
+            &["is not a FindRequest", "next:"],
+        ),
+        (
+            &find,
+            json!({"schema_version": 2, "queries": []}).to_string(),
+            &["schema_version is 2", "reads 1", "next:"],
+        ),
+        (
+            &find,
+            json!({"schema_version": 1, "queries": [{"key": "k", "colour": "red"}]}).to_string(),
+            &["unknown field `colour`", "next:"],
+        ),
+        (
+            &find,
+            json!({"schema_version": 1, "queries": [
+                {"key": "k", "text": "batch"}, {"key": "k", "text": "Delta"}]})
+            .to_string(),
+            &["the key \"k\" names two queries", "next:"],
+        ),
+        (
+            &find,
+            json!({"schema_version": 1, "queries": [
+                {"key": "wide", "status": ["todo"]}]})
+            .to_string(),
+            &["query \"wide\" is narrowed by none", "next:"],
+        ),
+        (
+            &find,
+            json!({"schema_version": 1, "queries": [
+                {"key": "deep", "metadata": {"myapp.colour//shade": "red"}}]})
+            .to_string(),
+            &["query \"deep\"", "a metadata location is", "next:"],
+        ),
+        (
+            &comments,
+            json!({"schema_version": 3, "comments": [{"item": "plan:a", "body": "One."}]})
+                .to_string(),
+            &["schema_version is 3", "next:"],
+        ),
+        (
+            &updates,
+            json!({"schema_version": 1, "updates": [{"item": "plan:a", "colour": "red"}]})
+                .to_string(),
+            &["unknown field `colour`", "next:"],
+        ),
+        (
+            &updates,
+            json!({"updates": [{"item": "plan:a", "title": "Lost"}]}).to_string(),
+            &["schema_version", "next:"],
+        ),
+    ];
+    for (arguments, input, said) in refusals {
+        let (out, err) = store.human(arguments, &input, 1);
+        assert!(out.is_empty(), "{input}: {out}");
+        for words in said {
+            assert!(err.contains(words), "{input}: {words:?} not in {err}");
+        }
+    }
+    let missing = store.sandbox.project().join("missing.json");
+    let missing = missing.to_str().expect("a path");
+    let (_, err) = store.human(&["task", "find", "plan", "--queries", missing], "", 1);
+    assert!(err.contains("could not read it"), "{err}");
+    assert!(err.contains("next: name a readable file"), "{err}");
+    assert_eq!(store.folder(), before, "no refusal wrote a byte");
+}
+
+#[test]
+fn each_batched_verb_renders_one_line_per_item_and_refuses_a_bad_item_alone() {
+    let store = Store::new();
+    let (found, _) = store.human(
+        &["task", "find", "plan", "--queries", "-"],
+        &json!({"schema_version": 1, "queries": [
+            {"key": "open", "text": "batch", "status": ["in-progress"]},
+            {"key": "nothing", "text": "no task holds this"},
+        ]})
+        .to_string(),
+        0,
+    );
+    assert_eq!(
+        found,
+        "open: 1 task(s)\n  plan:c  Charlie batch\nnothing: 0 task(s)\n"
+    );
+
+    let (added, _) = store.human(
+        &["task", "comment", "add-many", "plan", "--input", "-"],
+        &json!({"schema_version": 1, "comments": [
+            {"item": "plan:a", "body": ""},
+            {"item": "plan:a", "body": "Kept."},
+        ]})
+        .to_string(),
+        4,
+    );
+    let lines: Vec<&str> = added.lines().collect();
+    assert_eq!(lines.len(), 2, "{added}");
+    assert!(
+        lines[0].starts_with("plan:a  error  ") && lines[0].contains("cannot be empty"),
+        "{added}"
+    );
+    assert!(lines[1].starts_with("plan:a  written  comment "), "{added}");
+    let listed = store.exited(&["task", "comment", "list", "plan:a"], None, 0);
+    let bodies: Vec<&str> = listed["comments"]
+        .as_array()
+        .expect("comments")
+        .iter()
+        .map(|comment| comment["body"].as_str().expect("a body").trim_end())
+        .collect();
+    assert_eq!(bodies, ["Kept."], "the empty comment was never sent");
+
+    let (updated, _) = store.human(
+        &["task", "update-many", "plan", "--input", "-"],
+        &json!({"schema_version": 1, "updates": [
+            {"item": "plan:a"},
+            {"item": "plan:a", "metadata": {"onetaskgraph.origin": "elsewhere:X"}},
+            {"item": "plan:a", "title": "Alpha, renamed"},
+        ]})
+        .to_string(),
+        4,
+    );
+    let lines: Vec<&str> = updated.lines().collect();
+    assert_eq!(lines.len(), 3, "{updated}");
+    assert!(
+        lines[0].starts_with("plan:a  error  ") && lines[0].contains("names no field"),
+        "{updated}"
+    );
+    assert!(
+        lines[1].starts_with("plan:a  error  ") && lines[1].contains("`onetaskgraph.` namespace"),
+        "{updated}"
+    );
+    let version = store.version("plan:a");
+    assert_eq!(lines[2], format!("plan:a  written  version {version}"));
+    let task = store.shown("plan:a");
+    assert_eq!(task["title"], "Alpha, renamed");
+    assert!(
+        task["metadata"].get("onetaskgraph.origin").is_none(),
+        "the reserved key was never written: {task:#}"
+    );
 }
