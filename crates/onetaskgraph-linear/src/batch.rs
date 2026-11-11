@@ -489,14 +489,14 @@ impl LinearSource {
 
     /// Queue the create `write_task` composed — `input`, with the team and the id its key
     /// derives — for the `write_tasks` gathering it; nothing is sent.
-    pub(crate) async fn create_queued(
+    pub(crate) fn create_queued(
         &self,
         write: &onetaskgraph_plugin_api::ItemWrite<Task>,
         mut input: Value,
         team: NativeId,
         create: &super::CreateId,
         edges: Vec<onetaskgraph_plugin_api::DependencyEdge>,
-    ) -> Result<NativeId, SourceError> {
+    ) -> Result<(), SourceError> {
         input["teamId"] = Value::String(team.0);
         let sent = match create {
             super::CreateId::Unchosen => None,
@@ -517,7 +517,7 @@ impl LinearSource {
                 sent,
                 edges,
             });
-        Ok(NativeId(String::new()))
+        Ok(())
     }
 
     /// [`TaskSource::write_tasks`](onetaskgraph_plugin_api::TaskSource::write_tasks): every create
@@ -545,11 +545,21 @@ impl LinearSource {
             .store(true, std::sync::atomic::Ordering::SeqCst);
         let mut composed = Ok(());
         for write in writes {
-            if let Err(error) =
-                <Self as onetaskgraph_plugin_api::TaskSource>::write_task(self, write).await
-            {
-                composed = Err(error);
-                break;
+            match self.write_or_queue(write).await {
+                Ok(super::Landed::Queued) => {}
+                Ok(super::Landed::At(id)) => {
+                    composed = Err(SourceError::Malformed {
+                        message: format!(
+                            "the create of {} was written rather than queued as {id}",
+                            write.item.id
+                        ),
+                    });
+                    break;
+                }
+                Err(error) => {
+                    composed = Err(error);
+                    break;
+                }
             }
         }
         self.deferring_creates

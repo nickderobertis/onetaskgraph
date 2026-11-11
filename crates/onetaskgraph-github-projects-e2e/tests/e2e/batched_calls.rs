@@ -876,3 +876,55 @@ fn an_issue_update_answered_for_another_issue_fails_that_ticket_alone() {
         .unwrap_or_default();
     assert!(reason.contains("with another issue"), "{reason}");
 }
+
+#[test]
+fn a_field_write_answered_for_another_item_fails_that_ticket_alone() {
+    let (board, answered) = two_updates_with_one_answer_bent("field1", AliasAnswer::NamingAnother);
+    let reason = answered.json["results"][1]["reason"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(reason.contains("board:U-1"), "{reason}");
+    // Its issue update is sent only once its field writes landed as asked.
+    assert_eq!(board.board.body("U-1"), json!("ticket 1"));
+}
+
+#[test]
+fn a_batched_comment_answered_missing_or_about_another_issue_fails_that_comment_alone() {
+    for (answer, said) in [
+        (AliasAnswer::Missing, "comment1"),
+        (AliasAnswer::NamingAnother, "about another issue"),
+    ] {
+        let board = ticket_board();
+        board.board.bend_batch_alias("comment1", answer);
+        let batch = json!({"schema_version": 1, "comments": [
+            {"item": "board:U-0", "body": "A note on 0."},
+            {"item": "board:U-1", "body": "A note on 1."},
+            {"item": "board:U-2", "body": "A note on 2."},
+        ]});
+        let answered = board.run(
+            &[
+                "task", "comment", "add-many", "board", "--input", "-", "--json",
+            ],
+            &batch.to_string(),
+        );
+        assert_eq!(answered.code, Some(4), "{}", answered.stderr);
+        let results = answered.json["results"].as_array().expect("results");
+        let outcomes: Vec<&str> = results
+            .iter()
+            .map(|result| result["outcome"].as_str().expect("an outcome"))
+            .collect();
+        assert_eq!(outcomes, ["written", "error", "written"], "{answer:?}");
+        let reason = results[1]["reason"].as_str().unwrap_or_default();
+        assert!(reason.contains(said), "{answer:?}: {reason}");
+        for (at, id) in [(0, "board:U-0"), (2, "board:U-2")] {
+            let listed = board.run(&["task", "comment", "list", id, "--json"], "");
+            let bodies: Vec<&str> = listed.json["comments"]
+                .as_array()
+                .expect("comments")
+                .iter()
+                .filter_map(|comment| comment["body"].as_str())
+                .collect();
+            assert_eq!(bodies, [format!("A note on {at}.")], "{answer:?}");
+        }
+    }
+}

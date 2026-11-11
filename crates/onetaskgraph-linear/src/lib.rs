@@ -3864,6 +3864,156 @@ const PROJECT_EDGES_UNATTACHED: &str = "a linear project's updatedAt moved for 0
 const DOCUMENT_ASSETS_UNCOVERED: &str =
     "linear's asset reads send no request, so there is nothing for a cache to save";
 
+/// What `write_or_queue` did with one task write.
+pub(crate) enum Landed {
+    /// It was written, and the issue is held under this id.
+    At(NativeId),
+    /// It was composed and queued for the `write_tasks` gathering it; nothing was sent.
+    Queued,
+}
+
+impl LinearSource {
+    /// [`TaskSource::write_task`], or — while `write_tasks` gathers creates — the create
+    /// composed and queued for it.
+    pub(crate) async fn write_or_queue(
+        &self,
+        write: &ItemWrite<Task>,
+    ) -> Result<Landed, SourceError> {
+        // Before anything is read or written, because nothing Linear could answer changes
+        // either: neither list may name the task itself or name one task twice, a category
+        // this source has disabled is refused in the words a status write is refused with,
+        // and a project other than the one this source is scoped to is refused naming both.
+        let near = write.target.as_ref().unwrap_or(&write.item.id);
+        for (key, entries) in [
+            (TaskRef::DELIVERS_KEY, &write.item.delivers),
+            (TaskRef::DELIVERED_BY_KEY, &write.item.delivered_by),
+        ] {
+            TaskRef::listed(key, near, Some(&self.name), entries.clone())
+                .map_err(|message| SourceError::Refused { message })?;
+        }
+        let project = self.filed_in(write.item.project.as_ref(), "task")?;
+        // The status is resolved before anything else is sent: a category the mapping gives a
+        // task no name for is refused before any request, and a name the team lacks before any
+        // mutation. The mapping decides alone; the status's own name plays no part.
+        let (state, _) = self
+            .status_id(write.item.status.category, ItemKind::Task)
+            .await?;
+        let edges = self
+            .prepare_edges(&write.depends_on, WriteKind::Task)
+            .await?;
+        let team = self.team_id().await?;
+        let labels = self.label_ids(&write.item.labels, WriteKind::Task).await?;
+        // The typed lists are what land, whatever the caller's own metadata held under their
+        // keys: a key of either name travelling beside the field would be a second answer to
+        // the same question, and the field is the one the contract names.
+        let mut metadata = write.item.metadata.clone();
+        // A create's key is the issue's own id here, and stays in its slot as every source keeps
+        // it, so a later copy reads the issue as the one it wrote.
+        let create_id = self.create_id(MetadataRecord::Task, &metadata, write.target.as_ref())?;
+        set_task_list(&mut metadata, TaskRef::DELIVERS_KEY, &write.item.delivers);
+        set_task_list(
+            &mut metadata,
+            TaskRef::DELIVERED_BY_KEY,
+            &write.item.delivered_by,
+        );
+        let description = self.write_description(
+            write.item.content.as_deref(),
+            &metadata,
+            &write.item.repositories,
+            write.item.classification,
+            &edges,
+            WriteKind::Task,
+        )?;
+        // `priority` on a create and on an update alike, `0` included: an update that left
+        // it out would keep whatever the destination held, so a copy moving an issue back to
+        // no priority would report success for a priority the destination still carries.
+        let input = json!({"title":write.item.title,"description":description,"stateId":state,"priority":linear_priority(write.item.priority),"labelIds":labels,"projectId":project});
+        // The write a copy makes of an issue it has just created together with others, saying
+        // exactly what that create wrote and naming no edge, writes nothing: what Linear answered
+        // the create stands as this write's answer.
+        if let Some(id) = &write.target
+            && edges.is_empty()
+            && self.just_created_as(id, &input)?
+        {
+            return Ok(Landed::At(id.clone()));
+        }
+        let sent_input = input.clone();
+        if write.target.is_none()
+            && self
+                .deferring_creates
+                .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            self.create_queued(write, input, team, &create_id, edges)?;
+            return Ok(Landed::Queued);
+        }
+        let (query, variables, root) = match &write.target {
+            // Its relations read back in the same request, so a rewrite needs no read of them.
+            Some(id) => (
+                graphql::ISSUE_REWRITE,
+                json!({"id":id.0,"input":input,"first":MAX_PAGE_SIZE}),
+                MutationRoot::IssueUpdate,
+            ),
+            None => (
+                graphql::ISSUE_CREATE,
+                {
+                    let mut input = input;
+                    input["teamId"] = Value::String(team.0);
+                    json!({"input":input})
+                },
+                MutationRoot::IssueCreate,
+            ),
+        };
+        let (data, sent) = match self
+            .send_write(MetadataRecord::Task, query, variables, &create_id)
+            .await
+        {
+            Ok(Written::Answered { data, sent }) => (data, sent),
+            // An earlier attempt's issue, or a concurrent one's: this create's, brought in step
+            // with what this create would have written by a compared update of only the fields
+            // that differ — so what a person did to it since, a metadata key they added among
+            // them, is kept.
+            Ok(Written::Held(held)) => {
+                self.bring_in_step(
+                    &held,
+                    write,
+                    &state,
+                    &labels,
+                    description.as_deref(),
+                    &edges,
+                )
+                .await?;
+                // The write a copy makes of it next, saying what this create did, is the one
+                // this compared update already made, and writes nothing more.
+                self.created_inputs
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .insert(held.clone(), sent_input);
+                return Ok(Landed::At(held));
+            }
+            Err(error) => {
+                self.forget_vocabulary();
+                return Err(error);
+            }
+        };
+        let issue =
+            mutation_payload(&data, root)?
+                .get("issue")
+                .ok_or_else(|| SourceError::Malformed {
+                    message: format!("missing {}.issue", root.as_str()),
+                })?;
+        let id = created_as(
+            NativeId(backend_id(issue, "id")?.into()),
+            sent.as_ref(),
+            "issue",
+        )?;
+        self.hold_stored(MetadataRecord::Task, &id, issue)?;
+        let held = held_relations(write.target.as_ref(), issue)?;
+        self.write_relations(&id, &edges, WriteKind::Task, held)
+            .await?;
+        Ok(Landed::At(id))
+    }
+}
+
 #[async_trait::async_trait]
 impl TaskSource for LinearSource {
     /// Linear names no `user` for a comment an integration or a bot made, and names one for
@@ -4338,139 +4488,13 @@ impl TaskSource for LinearSource {
     }
 
     async fn write_task(&self, write: &ItemWrite<Task>) -> Result<NativeId, SourceError> {
-        // Before anything is read or written, because nothing Linear could answer changes
-        // either: neither list may name the task itself or name one task twice, a category
-        // this source has disabled is refused in the words a status write is refused with,
-        // and a project other than the one this source is scoped to is refused naming both.
-        let near = write.target.as_ref().unwrap_or(&write.item.id);
-        for (key, entries) in [
-            (TaskRef::DELIVERS_KEY, &write.item.delivers),
-            (TaskRef::DELIVERED_BY_KEY, &write.item.delivered_by),
-        ] {
-            TaskRef::listed(key, near, Some(&self.name), entries.clone())
-                .map_err(|message| SourceError::Refused { message })?;
+        match self.write_or_queue(write).await? {
+            Landed::At(id) => Ok(id),
+            // Only `write_tasks` queues, and it never hands a queued create back as one written.
+            Landed::Queued => Err(SourceError::Malformed {
+                message: "a create was queued outside write_tasks".to_owned(),
+            }),
         }
-        let project = self.filed_in(write.item.project.as_ref(), "task")?;
-        // The status is resolved before anything else is sent: a category the mapping gives a
-        // task no name for is refused before any request, and a name the team lacks before any
-        // mutation. The mapping decides alone; the status's own name plays no part.
-        let (state, _) = self
-            .status_id(write.item.status.category, ItemKind::Task)
-            .await?;
-        let edges = self
-            .prepare_edges(&write.depends_on, WriteKind::Task)
-            .await?;
-        let team = self.team_id().await?;
-        let labels = self.label_ids(&write.item.labels, WriteKind::Task).await?;
-        // The typed lists are what land, whatever the caller's own metadata held under their
-        // keys: a key of either name travelling beside the field would be a second answer to
-        // the same question, and the field is the one the contract names.
-        let mut metadata = write.item.metadata.clone();
-        // A create's key is the issue's own id here, and stays in its slot as every source keeps
-        // it, so a later copy reads the issue as the one it wrote.
-        let create_id = self.create_id(MetadataRecord::Task, &metadata, write.target.as_ref())?;
-        set_task_list(&mut metadata, TaskRef::DELIVERS_KEY, &write.item.delivers);
-        set_task_list(
-            &mut metadata,
-            TaskRef::DELIVERED_BY_KEY,
-            &write.item.delivered_by,
-        );
-        let description = self.write_description(
-            write.item.content.as_deref(),
-            &metadata,
-            &write.item.repositories,
-            write.item.classification,
-            &edges,
-            WriteKind::Task,
-        )?;
-        // `priority` on a create and on an update alike, `0` included: an update that left
-        // it out would keep whatever the destination held, so a copy moving an issue back to
-        // no priority would report success for a priority the destination still carries.
-        let input = json!({"title":write.item.title,"description":description,"stateId":state,"priority":linear_priority(write.item.priority),"labelIds":labels,"projectId":project});
-        // The write a copy makes of an issue it has just created together with others, saying
-        // exactly what that create wrote and naming no edge, writes nothing: what Linear answered
-        // the create stands as this write's answer.
-        if let Some(id) = &write.target
-            && edges.is_empty()
-            && self.just_created_as(id, &input)?
-        {
-            return Ok(id.clone());
-        }
-        let sent_input = input.clone();
-        if write.target.is_none()
-            && self
-                .deferring_creates
-                .load(std::sync::atomic::Ordering::SeqCst)
-        {
-            return self
-                .create_queued(write, input, team, &create_id, edges)
-                .await;
-        }
-        let (query, variables, root) = match &write.target {
-            // Its relations read back in the same request, so a rewrite needs no read of them.
-            Some(id) => (
-                graphql::ISSUE_REWRITE,
-                json!({"id":id.0,"input":input,"first":MAX_PAGE_SIZE}),
-                MutationRoot::IssueUpdate,
-            ),
-            None => (
-                graphql::ISSUE_CREATE,
-                {
-                    let mut input = input;
-                    input["teamId"] = Value::String(team.0);
-                    json!({"input":input})
-                },
-                MutationRoot::IssueCreate,
-            ),
-        };
-        let (data, sent) = match self
-            .send_write(MetadataRecord::Task, query, variables, &create_id)
-            .await
-        {
-            Ok(Written::Answered { data, sent }) => (data, sent),
-            // An earlier attempt's issue, or a concurrent one's: this create's, brought in step
-            // with what this create would have written by a compared update of only the fields
-            // that differ — so what a person did to it since, a metadata key they added among
-            // them, is kept.
-            Ok(Written::Held(held)) => {
-                self.bring_in_step(
-                    &held,
-                    write,
-                    &state,
-                    &labels,
-                    description.as_deref(),
-                    &edges,
-                )
-                .await?;
-                // The write a copy makes of it next, saying what this create did, is the one
-                // this compared update already made, and writes nothing more.
-                self.created_inputs
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .insert(held.clone(), sent_input);
-                return Ok(held);
-            }
-            Err(error) => {
-                self.forget_vocabulary();
-                return Err(error);
-            }
-        };
-        let issue =
-            mutation_payload(&data, root)?
-                .get("issue")
-                .ok_or_else(|| SourceError::Malformed {
-                    message: format!("missing {}.issue", root.as_str()),
-                })?;
-        let id = created_as(
-            NativeId(backend_id(issue, "id")?.into()),
-            sent.as_ref(),
-            "issue",
-        )?;
-        self.hold_stored(MetadataRecord::Task, &id, issue)?;
-        let held = held_relations(write.target.as_ref(), issue)?;
-        self.write_relations(&id, &edges, WriteKind::Task, held)
-            .await?;
-        Ok(id)
     }
     async fn write_project(&self, write: &ItemWrite<Project>) -> Result<NativeId, SourceError> {
         // Before anything is read or written, and before the item's own description

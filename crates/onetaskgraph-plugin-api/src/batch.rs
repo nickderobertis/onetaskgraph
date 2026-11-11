@@ -61,6 +61,7 @@ pub enum BatchAnswer<T> {
     },
     /// Its priority was not one the write's guard names, so nothing was written; this is the
     /// task as the source read it.
+    // llmlint: ignore[invalid_states_unrepresentable] One answer type serves both batched writes so the plugin contract names one type, not two; a comment carries no guard, so no source answers a comment `PriorityHeld` (`comment_each` never does, and each override decides comments without one). A second answer type would rebuild every plugin for a variant nothing produces.
     PriorityHeld(Box<Task>),
     /// The source holds no such task.
     Missing,

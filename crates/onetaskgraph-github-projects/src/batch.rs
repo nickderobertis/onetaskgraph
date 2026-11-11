@@ -1116,7 +1116,8 @@ impl GitHubProjectsSource {
     /// refused — answering, by task, the refusal of each that was not written whole.
     async fn send_task_writes(&self, held: TaskWrites) -> BTreeMap<NativeId, SourceError> {
         let mut refused: BTreeMap<NativeId, SourceError> = BTreeMap::new();
-        // Every write of one task goes in one request, so a task is never split across two.
+        // Every board-field write and clear of one task goes in one request — its issue update
+        // follows in a later one, sent only once those all landed.
         let mut requests: Vec<Vec<&(NativeId, HeldFields)>> = Vec::new();
         let (mut writes, mut clears) = (0, 0);
         for held in &held.fields {
