@@ -9,7 +9,7 @@
 use onetaskgraph_linear::graphql;
 use serde_json::{Value, json};
 
-use super::{LINEAR_REFUSED_WRITE, LinearWorkspace, linear_task, linear_tick};
+use crate::fixtures::{LINEAR_REFUSED_WRITE, LinearWorkspace, linear_task, linear_tick};
 
 /// What Linear answers a parent write that would close a cycle with (spike request 72).
 pub const LINEAR_INVALID_PARENT: &str = "invalid parent";

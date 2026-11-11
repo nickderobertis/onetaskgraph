@@ -15,9 +15,7 @@
 
 use std::path::PathBuf;
 
-use onetaskgraph_e2e_support::fixtures::linear_relations::{
-    LINEAR_CHILD_LIMIT, LINEAR_INVALID_PARENT,
-};
+use onetaskgraph_e2e_support::linear_relations::{LINEAR_CHILD_LIMIT, LINEAR_INVALID_PARENT};
 use onetaskgraph_linear::graphql;
 use serde_json::{Value, json};
 
@@ -1188,7 +1186,7 @@ fn a_relation_read_linear_answers_malformed_is_refused_rather_than_read_as_no_re
 
 #[test]
 fn a_mirrored_link_whose_native_relation_cannot_be_confirmed_is_not_removed_anywhere() {
-    use onetaskgraph_e2e_support::fixtures::linear_relations::LINEAR_RELATIONS_UNREAD;
+    use onetaskgraph_e2e_support::linear_relations::LINEAR_RELATIONS_UNREAD;
     for case in ["unread", "another page", "another issue"] {
         let team = Team::of(2);
         let added = team.links("add-many", &[("R-0", "R-1", "caused-by")]);
@@ -1379,7 +1377,7 @@ fn an_issue_named_by_its_identifier_is_that_items_refusal_alone_and_every_other_
 
 #[test]
 fn a_parent_read_answered_malformed_or_refused_fails_that_edge_alone() {
-    use onetaskgraph_e2e_support::fixtures::linear_relations::LINEAR_RELATIONS_UNREAD;
+    use onetaskgraph_e2e_support::linear_relations::LINEAR_RELATIONS_UNREAD;
     // R-1's read answered about another issue, R-3's refused at its own alias: each fails its
     // own edge, and R-2's edge in the same call is read, decided and written.
     let team = Team::configured(4, &json!({}));
@@ -1420,7 +1418,7 @@ fn a_parent_read_answered_malformed_or_refused_fails_that_edge_alone() {
 
 #[test]
 fn a_native_relation_lookup_refused_for_one_link_leaves_the_others_removed() {
-    use onetaskgraph_e2e_support::fixtures::linear_relations::LINEAR_RELATIONS_UNREAD;
+    use onetaskgraph_e2e_support::linear_relations::LINEAR_RELATIONS_UNREAD;
     let team = Team::of(4);
     let added = team.links(
         "add-many",

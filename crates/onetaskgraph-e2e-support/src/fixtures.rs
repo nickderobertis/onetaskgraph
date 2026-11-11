@@ -10,8 +10,7 @@
 //! knows has no row here. Every registered plugin is implemented, so every row carries a
 //! working source fixture.
 
-#[path = "linear_relations.rs"]
-pub mod linear_relations;
+use crate::linear_relations;
 use onetaskgraph_plugin_api::{Capabilities, DependencySupport, Support};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -6695,7 +6694,7 @@ pub fn linear_workspace_with(
 /// What a journey reads of one Linear workspace it configured.
 #[derive(Clone)]
 pub struct LinearWorkspace {
-    state: Arc<Mutex<Value>>,
+    pub(crate) state: Arc<Mutex<Value>>,
     ledger: Arc<Mutex<Vec<(String, Value)>>>,
     /// What this workspace answered each of those requests with, at the same index.
     answers: Arc<Mutex<Vec<Value>>>,
@@ -9439,7 +9438,7 @@ pub fn linear_states(states: &[(&str, &str, &str)]) -> Value {
 ///
 /// A counter rather than the wall clock, so two writes in the same second still read back
 /// in the order they were made, and an edit's `updatedAt` always moves.
-fn linear_tick(data: &mut Value) -> (u64, String) {
+pub(crate) fn linear_tick(data: &mut Value) -> (u64, String) {
     let tick = data["_linear_clock"].as_u64().unwrap_or(0) + 1;
     data["_linear_clock"] = json!(tick);
     let stamp = format!(
@@ -10142,7 +10141,7 @@ fn linear_narrow_issue_update(
     Ok(json!({"issueUpdate":{"success":true,"issue":issue}}))
 }
 
-fn linear_task(v: &Value, data: &Value) -> Value {
+pub(crate) fn linear_task(v: &Value, data: &Value) -> Value {
     let identifier = v
         .get("_identifier")
         .filter(|identifier| identifier.is_string())
