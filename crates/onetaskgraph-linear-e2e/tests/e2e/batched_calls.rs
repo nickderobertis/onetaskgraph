@@ -1019,3 +1019,58 @@ fn a_guarded_update_is_held_to_the_version_its_guard_read_and_refused_once_it_mo
     assert_eq!(mutations(&ran.sent), 0, "nothing was written");
     assert_eq!(team.task("team:U-1")["title"], "Another writer's title");
 }
+
+#[test]
+fn an_issue_a_batch_reads_back_malformed_fails_alone_and_the_rest_are_written() {
+    let team = Team::holding(writable(), false);
+    let reads: &'static str = Box::leak(
+        onetaskgraph_linear::graphql::aliased(onetaskgraph_linear::graphql::ISSUE, 3)
+            .into_boxed_str(),
+    );
+    // The batch's one read of its three issues answers the second without a title, twice: once
+    // for the updates and once for the comments.
+    team.workspace.bend_answers(
+        move |operation, _| operation == reads,
+        2,
+        |_, data| {
+            data["a1"]
+                .as_object_mut()
+                .expect("an issue")
+                .remove("title");
+        },
+    );
+    let updates = team.batch(
+        "updates.json",
+        &json!({"schema_version": 1, "updates": (1..=3).map(|at| json!({
+            "item": format!("team:U-{at}"), "title": format!("Retitled {at}")
+        })).collect::<Vec<_>>()}),
+    );
+    let comments = team.batch(
+        "comments.json",
+        &json!({"schema_version": 1, "comments": (1..=3).map(|at| json!({
+            "item": format!("team:U-{at}"), "body": format!("A note on {at}.")
+        })).collect::<Vec<_>>()}),
+    );
+    let batches: [&[&str]; 2] = [
+        &["task", "update-many", "team", "--input", &updates],
+        &["task", "comment", "add-many", "team", "--input", &comments],
+    ];
+    for batch in batches {
+        let ran = team.run(batch);
+        assert_eq!(ran.code, Some(4), "{}", ran.json);
+        let outcomes: Vec<&str> = ran.json["results"]
+            .as_array()
+            .expect("results")
+            .iter()
+            .map(|result| result["outcome"].as_str().expect("an outcome"))
+            .collect();
+        assert_eq!(outcomes, ["written", "error", "written"], "{}", ran.json);
+    }
+    for at in [1, 3] {
+        assert_eq!(
+            team.task(&format!("team:U-{at}"))["title"],
+            format!("Retitled {at}")
+        );
+    }
+    assert_eq!(team.task("team:U-2")["title"], "Update 2");
+}

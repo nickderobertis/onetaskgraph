@@ -258,18 +258,8 @@ pub fn schema_bundle() -> Value {
     roots.insert("UpdatedField", schema_for!(UpdatedField));
     roots.insert("TaskUpdateOutcome", schema_for!(TaskUpdateOutcome));
 
-    // The batched calls: what `task find`, `task comment add-many` and `task update-many` read,
-    // what each answers, and the outcome vocabulary a caller branches on per item.
-    roots.insert("FindRequest", schema_for!(crate::FindRequest));
-    roots.insert("FoundTasks", schema_for!(crate::FoundTasks));
-    roots.insert("CommentBatch", schema_for!(crate::CommentBatch));
-    roots.insert(
-        "CommentsAdded",
-        write_answer_schema::<crate::CommentsAdded>(),
-    );
-    roots.insert("UpdateBatch", schema_for!(crate::UpdateBatch));
-    roots.insert("TasksUpdated", write_answer_schema::<crate::TasksUpdated>());
-    roots.insert("BatchOutcome", schema_for!(crate::BatchOutcome));
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] As the projection domain's line above: every root is registered here beside the append-only version golden, and this one line takes the batched calls' own list, which that domain declares.
+    roots.extend(crate::engine::batch::schemas());
 
     // What `task`, `project` and `document metadata set` answer with.
     roots.insert("MetadataSet", write_answer_schema::<MetadataSet>());

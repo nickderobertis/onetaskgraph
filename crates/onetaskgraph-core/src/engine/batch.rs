@@ -334,6 +334,23 @@ fn one_each<T>(
     answers
 }
 
+/// The batched calls' schema roots: what `task find`, `task comment add-many` and `task
+/// update-many` read, what each answers, and the outcome vocabulary a caller branches on per
+/// item — in the order the bundle publishes them.
+pub(crate) fn schemas() -> [(&'static str, schemars::Schema); 7] {
+    use crate::schema::write_answer_schema;
+    use schemars::schema_for;
+    [
+        ("FindRequest", schema_for!(FindRequest)),
+        ("FoundTasks", schema_for!(FoundTasks)),
+        ("CommentBatch", schema_for!(CommentBatch)),
+        ("CommentsAdded", write_answer_schema::<CommentsAdded>()),
+        ("UpdateBatch", schema_for!(UpdateBatch)),
+        ("TasksUpdated", write_answer_schema::<TasksUpdated>()),
+        ("BatchOutcome", schema_for!(BatchOutcome)),
+    ]
+}
+
 /// A batch document of another schema version than this engine reads, refused whole.
 fn check_version(what: &str, found: u32) -> Result<(), EngineError> {
     if found == BATCH_SCHEMA_VERSION {

@@ -18,7 +18,7 @@
 mod all_pages;
 mod assets;
 mod attestation;
-mod batch;
+pub(crate) mod batch;
 pub mod boundary;
 mod cached;
 mod closure;

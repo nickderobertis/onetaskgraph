@@ -150,45 +150,73 @@ impl LinearSource {
     }
 
     /// Each of `ids` read as [`Self::issue_held`] reads it — the issue and its raw description,
-    /// `None` for one this source does not hold — in as few aliased reads as Linear answers.
+    /// `None` for one this source does not hold — in as few aliased reads as Linear answers,
+    /// each answered on its own: one Linear refuses, or answers malformed, fails that issue's
+    /// read alone, and the rest are read together again.
+    ///
+    /// # Errors
+    ///
+    /// What the whole request failed with, which answers no issue.
     pub(crate) async fn issues_held(
         &self,
         ids: &[NativeId],
-    ) -> Result<Vec<Option<Held>>, SourceError> {
+    ) -> Result<Vec<Result<Option<Held>, SourceError>>, SourceError> {
         if ids.len() < 2 || !self.batches(graphql::ISSUE) {
             let mut read = Vec::with_capacity(ids.len());
             for id in ids {
-                read.push(self.issue_held(id, Read::Load).await?);
+                read.push(self.issue_held(id, Read::Load).await);
             }
             return Ok(read);
         }
-        let mut read: Vec<Option<Option<Held>>> = vec![None; ids.len()];
+        let mut read: Vec<Option<Result<Option<Held>, SourceError>>> =
+            (0..ids.len()).map(|_| None).collect();
         let mut pending: Vec<usize> = (0..ids.len()).collect();
         while !pending.is_empty() {
             let each: Vec<Value> = pending.iter().map(|at| json!({"id": ids[*at].0})).collect();
             match self.send_aliased(graphql::ISSUE, &each).await? {
                 Aliased::Answered(values) => {
                     for (at, value) in pending.iter().zip(values) {
-                        let value = of_asked(value, &ids[*at], "reading issues together")?;
-                        let held = optional(&json!({"issue": value}), "issue", |v| {
-                            Ok((
-                                map_task(v, &self.name, &self.statuses, self.spelling())?,
-                                optional_string(v, "description")?,
-                            ))
-                        })?
-                        .filter(|(task, _)| self.in_scope(task.project.as_ref()));
-                        read[*at] = Some(held);
+                        read[*at] = Some(
+                            of_asked(value, &ids[*at], "reading issues together").and_then(
+                                |value| {
+                                    Ok(optional(&json!({"issue": value}), "issue", |v| {
+                                        Ok((
+                                            map_task(
+                                                v,
+                                                &self.name,
+                                                &self.statuses,
+                                                self.spelling(),
+                                            )?,
+                                            optional_string(v, "description")?,
+                                        ))
+                                    })?
+                                    .filter(|(task, _)| self.in_scope(task.project.as_ref())))
+                                },
+                            ),
+                        );
                     }
                     pending.clear();
                 }
-                Aliased::Refused(refused, refusal) if refusal.entity_missing() => {
+                Aliased::Refused(refused, refusal) => {
                     let at = pending.remove(refused);
-                    read[at] = Some(None);
+                    read[at] = Some(if refusal.entity_missing() {
+                        Ok(None)
+                    } else {
+                        Err(refusal.into_error())
+                    });
                 }
-                Aliased::Refused(_, refusal) => return Err(refusal.into_error()),
             }
         }
-        Ok(read.into_iter().map(Option::flatten).collect())
+        Ok(read
+            .into_iter()
+            .map(|held| {
+                held.unwrap_or_else(|| {
+                    Err(SourceError::Malformed {
+                        message: "an issue of the batch was given no answer".to_owned(),
+                    })
+                })
+            })
+            .collect())
     }
 
     /// One update of a batch made on its own after the rest: the issue read as it now stands,
@@ -257,6 +285,13 @@ impl LinearSource {
         let mut sending: Vec<(usize, Composed)> = Vec::new();
         for (at, held) in wanted.into_iter().zip(read) {
             let each = &updates[at];
+            let held = match held {
+                Ok(held) => held,
+                Err(error) => {
+                    answers[at] = Some(Err(error));
+                    continue;
+                }
+            };
             if let Some(answer) = decided_on(
                 self,
                 held.as_ref().map(|(task, _)| task),
@@ -413,6 +448,13 @@ impl LinearSource {
         let mut sending: Vec<(usize, NativeId)> = Vec::new();
         for (at, held) in wanted.into_iter().zip(read) {
             let each = &comments[at];
+            let held = match held {
+                Ok(held) => held,
+                Err(error) => {
+                    answers[at] = Some(Err(error));
+                    continue;
+                }
+            };
             if let Some(answer) = decided_on(
                 self,
                 held.as_ref().map(|(task, _)| task),
