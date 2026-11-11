@@ -656,6 +656,7 @@ use serde_json::{Value, json};
 
 pub mod accounting;
 mod assets;
+mod batch;
 pub mod change_token;
 mod expected;
 pub use expected::{CONTEXT_VERSION, WHOLE_MEMBERS, context_shapes};
@@ -725,6 +726,27 @@ pub const DELETE_BATCH: usize = 5;
 /// plan and the project's document, and no more, since each carries a page of the board's field
 /// filter and one of the issue search.
 pub const ORIGIN_BATCH: usize = 10;
+/// How many searches one [`graphql::SEARCH_BATCH`] request asks: what `task find` asks of a
+/// board in one call, each search an aliased `search` field of its own.
+pub const SEARCH_BATCH: usize = 20;
+/// How many origins one [`graphql::SEARCH_BATCH`] request looks up beside its searches, each by
+/// the board's own field filter in an aliased `items` field of its own and by one of the
+/// request's searches.
+pub const SEARCH_BATCH_ORIGINS: usize = 5;
+/// The rows each search of a [`graphql::SEARCH_BATCH`] request asks for on its first page.
+///
+/// A batched find asks narrowed questions that each expect a handful of answers, and every
+/// search slot is priced at its page size: three rows a slot keep a first round of
+/// [`SEARCH_BATCH`] searches at three points, where a page of [`SEARCH_PAGE_SIZE`] each would
+/// cost twenty. A search with more to answer is walked on at [`SEARCH_PAGE_SIZE`] rows a page.
+pub const SEARCH_BATCH_FIRST_PAGE: u32 = 3;
+/// How many comments one [`graphql::ADD_COMMENTS`] request adds, and how many issue updates one
+/// [`graphql::WRITE_TASKS`] request carries: [`MUTATION_BATCH`], the most aliased mutations
+/// GitHub was seen to accept in one request.
+pub const COMMENT_BATCH: usize = MUTATION_BATCH;
+/// How many board field values one [`graphql::WRITE_TASKS`] request carries, beside
+/// [`MUTATION_BATCH`] field clears: [`WRITE_BATCH`].
+pub const TASK_FIELD_BATCH: usize = WRITE_BATCH;
 
 /// The most nodes any one document this source sends may be asked to return.
 ///
@@ -814,7 +836,7 @@ pub use github_graphql_node_count::{NodeCountError, Variables};
 /// not one configuration of it, which is what makes a bound computed under it a bound on
 /// every read.
 pub fn largest_page_sizes() -> Variables {
-    Variables::from([
+    let mut sizes = Variables::from([
         ("first".to_owned(), MAX_PAGE_SIZE),
         ("commentFirst".to_owned(), MAX_PAGE_SIZE),
         ("nestedFirst".to_owned(), NESTED_PAGE_SIZE),
@@ -822,7 +844,15 @@ pub fn largest_page_sizes() -> Variables {
         ("originFirst".to_owned(), ORIGIN_PAGE_SIZE),
         ("lookupFirst".to_owned(), ORIGIN_LOOKUPS_PAGE_SIZE),
         ("memberFirst".to_owned(), MEMBER_PAGE_SIZE),
-    ])
+    ]);
+    // Each slot of the batched search pages at most what one search does.
+    for slot in 0..SEARCH_BATCH {
+        sizes.insert(format!("first{slot}"), SEARCH_PAGE_SIZE);
+    }
+    for slot in 0..SEARCH_BATCH_ORIGINS {
+        sizes.insert(format!("itemsFirst{slot}"), SEARCH_PAGE_SIZE);
+    }
+    sizes
 }
 
 /// The most nodes `document` could be asked to return, by GitHub's published rules.
@@ -862,6 +892,19 @@ pub fn worst_case_node_count(document: &str) -> Result<u64, NodeCountError> {
 /// a defect in the document rather than a number.
 pub fn worst_case_point_cost(document: &str) -> Result<u64, NodeCountError> {
     github_graphql_node_count::point_cost(document, &largest_page_sizes())
+}
+
+/// The rate-limit points one call of `document` spends under `variables`, by GitHub's published
+/// rules: [`worst_case_point_cost`] is this under [`largest_page_sizes`], and a request this
+/// source sent is priced by it under the page sizes that request really bound — what GitHub
+/// charges the request, since it charges every connection at the page size asked for.
+///
+/// # Errors
+///
+/// Returns the calculation's own [`NodeCountError`] when `document` does not parse, holds
+/// no single operation, or binds a page size `variables` does not name.
+pub fn point_cost(document: &str, variables: &Variables) -> Result<u64, NodeCountError> {
+    github_graphql_node_count::point_cost(document, variables)
 }
 
 /// The most nodes `document` could be asked to return under `variables`.
@@ -2045,6 +2088,120 @@ pub mod graphql {
     /// Removes one issue comment. Its payload carries nothing about the comment it removed.
     pub const DELETE_COMMENT: &str = r#"mutation($input:DeleteIssueCommentInput!){deleteIssueComment(input:$input){clientMutationId}}"#;
 
+    /// The variables of the search slots `<n>` of [`SEARCH_BATCH`]: its search, where it
+    /// resumes, its page size and whether it is asked.
+    macro_rules! search_batch_variables {
+        ($($n:literal)+) => {
+            concat!($(
+                ",$search", stringify!($n), ":String!,$after", stringify!($n),
+                ":String,$first", stringify!($n), ":Int!,$ask", stringify!($n), ":Boolean!",
+            )+)
+        };
+    }
+    /// The search slots `<n>` of [`SEARCH_BATCH`]: [`SEARCH_ISSUES`]'s one connection, aliased
+    /// `s<n>`, sent only while `$ask<n>` holds.
+    macro_rules! search_batch_slots {
+        ($($n:literal)+) => {
+            concat!($(
+                "\n      s", stringify!($n), ":search(query:$search", stringify!($n),
+                ",type:$type,first:$first", stringify!($n), ",after:$after", stringify!($n),
+                ") @include(if:$ask", stringify!($n),
+                "){pageInfo{hasNextPage endCursor} nodes{__typename ...BoardIssue}}",
+            )+)
+        };
+    }
+    /// The variables of the origin slots `<n>` of [`SEARCH_BATCH`]: the board's field filter
+    /// naming the origin, where its items resume, their page size and whether it is asked.
+    macro_rules! origin_batch_variables {
+        ($($n:literal)+) => {
+            concat!($(
+                ",$filter", stringify!($n), ":String!,$itemsAfter", stringify!($n),
+                ":String,$itemsFirst", stringify!($n), ":Int!,$origin", stringify!($n),
+                ":Boolean!",
+            )+)
+        };
+    }
+    /// The origin slots `<n>` of [`SEARCH_BATCH`]: [`ORIGIN_LOOKUP`]'s board half, the board's
+    /// own items through its field filter, aliased `o<n>`, sent only while `$origin<n>` holds.
+    macro_rules! origin_batch_slots {
+        ($($n:literal)+) => {
+            concat!($(
+                "\n      o", stringify!($n), ":repositoryOwner(login:$owner) @include(if:$origin",
+                stringify!($n),
+                "){... on ProjectV2Owner{projectV2(number:$number){items(first:$itemsFirst",
+                stringify!($n), ",after:$itemsAfter", stringify!($n), ",query:$filter",
+                stringify!($n), "){nodes{id updatedAt ", board_item_values!(),
+                board_item_content!(), "} pageInfo{hasNextPage endCursor}}}}}",
+            )+)
+        };
+    }
+
+    /// Up to [`SEARCH_BATCH`](super::SEARCH_BATCH) board-scoped issue searches in one request,
+    /// each [`SEARCH_ISSUES`]'s connection in an aliased `s<n>` field with its own query, page
+    /// size and cursor, and beside them up to
+    /// [`SEARCH_BATCH_ORIGINS`](super::SEARCH_BATCH_ORIGINS) origin lookups' board halves —
+    /// [`ORIGIN_LOOKUP`]'s `items` filtered by the origin field — in aliased `o<n>` fields, each
+    /// origin's issue search in a search slot of its own.
+    ///
+    /// What `task find` asks a board, every search a page at a time: one request a round,
+    /// rather than one per search. A slot not asked is left out by `@include`, its page size
+    /// bound to one; GitHub answers an error about one slot at that slot's path, and the other
+    /// slots are answered beside it.
+    pub const SEARCH_BATCH: &str = concat!(
+        r#"query($owner:String!,$number:Int!,$type:SearchType!,$nestedFirst:Int!,$boardItems:Int!,$duplicates:Boolean!"#,
+        relationship_events_variable!(),
+        search_batch_variables!(0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19),
+        origin_batch_variables!(0 1 2 3 4),
+        "){",
+        search_batch_slots!(0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19),
+        origin_batch_slots!(0 1 2 3 4),
+        "\n    }",
+        board_issue!()
+    );
+
+    /// The comment slots `<n>` of [`ADD_COMMENTS`]: [`ADD_COMMENT`]'s mutation, aliased
+    /// `comment<n>`, sent only while `$send<n>` holds.
+    macro_rules! comment_slots {
+        ($($n:literal)+) => {
+            concat!($(
+                " comment", stringify!($n), ":addComment(input:$comment", stringify!($n),
+                ") @include(if:$send", stringify!($n), "){subject{id} commentEdge{node{",
+                issue_comment!(), "}}}",
+            )+)
+        };
+    }
+
+    /// Adds up to [`COMMENT_BATCH`](super::COMMENT_BATCH) comments in one request, each as
+    /// [`ADD_COMMENT`] adds one, in order: what `task comment add-many` sends. GitHub runs each
+    /// alias on its own and answers one it refused at its own path, beside the others.
+    pub const ADD_COMMENTS: &str = concat!(
+        "mutation(",
+        wide_variables!("comment", "AddCommentInput", "send"; 0 1 2 3 4 5 6 7 8 9 10),
+        "){",
+        comment_slots!(0 1 2 3 4 5 6 7 8 9 10),
+        "}"
+    );
+
+    /// Many tasks' targeted updates, each as [`UPDATE_FIELDS`] and [`UPDATE_ISSUE`] write one:
+    /// up to [`TASK_FIELD_BATCH`](super::TASK_FIELD_BATCH) board field values in `field<n>`,
+    /// [`MUTATION_BATCH`](super::MUTATION_BATCH) field clears in `clear<n>`, and as many
+    /// `updateIssue`s in `update<n>`, each sent only while its own `send…<n>` holds.
+    ///
+    /// What `task update-many` sends, in two requests at most: every item's field values and
+    /// clears first, then every issue update of an item whose fields all landed — the order one
+    /// item's update keeps, so a refusal part way leaves an item's body as it stood.
+    pub const WRITE_TASKS: &str = concat!(
+        "mutation(",
+        wide_variables!("field", "UpdateProjectV2ItemFieldValueInput", "sendField"; 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18),
+        wide_variables!("clear", "ClearProjectV2ItemFieldValueInput", "sendClear"; 0 1 2 3 4 5 6 7 8 9 10),
+        wide_variables!("update", "UpdateIssueInput", "sendUpdate"; 0 1 2 3 4 5 6 7 8 9 10),
+        "){",
+        wide_slots!("field", "updateProjectV2ItemFieldValue", "projectV2Item{id}", "sendField"; 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18),
+        wide_slots!("clear", "clearProjectV2ItemFieldValue", "projectV2Item{id}", "sendClear"; 0 1 2 3 4 5 6 7 8 9 10),
+        wide_slots!("update", "updateIssue", "issue{id}", "sendUpdate"; 0 1 2 3 4 5 6 7 8 9 10),
+        "}"
+    );
+
     /// What a mutation of a write the store's cache expects selects of the issue it wrote:
     /// everything [`ISSUE_DETAIL`] reads of it, so its response shows the task whole — its
     /// change token's every part and the first page of its comments.
@@ -2150,7 +2307,7 @@ pub mod graphql {
     /// `documents_are_all_inventoried` reads this file back and fails naming any `pub
     /// const` here that this list omits, so the two cannot part — which is the same guard
     /// `CATEGORIES` carries, in the one shape available to a set of `&str` constants.
-    pub const DOCUMENTS: [(&str, &str); 57] = [
+    pub const DOCUMENTS: [(&str, &str); 60] = [
         (
             ISSUES_BY_CREATION,
             "listing a repository's issues newest first for a create key",
@@ -2254,6 +2411,12 @@ pub mod graphql {
         (ADD_COMMENT, "adding a comment"),
         (UPDATE_COMMENT, "editing a comment"),
         (DELETE_COMMENT, "deleting a comment"),
+        (
+            SEARCH_BATCH,
+            "searching this board's issues several ways at once",
+        ),
+        (ADD_COMMENTS, "adding several comments together"),
+        (WRITE_TASKS, "updating several tasks together"),
         (
             ADD_COMMENT_WHOLE,
             "adding a comment, answered with the whole issue",
@@ -3937,6 +4100,13 @@ pub struct GitHubProjectsSource {
     /// together by [`Self::send_held_updates`] before any other request goes out, so nothing
     /// this source sends or reads ever sees the board without them.
     held_updates: Mutex<Vec<HeldUpdate>>,
+    /// The first page of comments a comment-activity read read of each candidate it confirmed,
+    /// held for the one comment listing of that task that follows in this command — see
+    /// `batch::hold_comment_pages`.
+    held_comments: Mutex<BTreeMap<NativeId, Page<Comment>>>,
+    /// The board field writes and issue updates a batch of targeted updates is holding back,
+    /// while one runs — see `batch::TaskWrites`.
+    task_writes: Mutex<Option<batch::TaskWrites>>,
     clock: SharedClock,
     /// Whether the configuration declares this source private, as
     /// [`TaskSource::declare_visibility`] told it: what decides where a new issue whose one
@@ -5219,6 +5389,8 @@ impl GitHubProjectsSource {
             written: Mutex::new(BTreeMap::new()),
             deferred: Mutex::new(None),
             held_updates: Mutex::new(Vec::new()),
+            held_comments: Mutex::new(BTreeMap::new()),
+            task_writes: Mutex::new(None),
             clock: system_clock(),
             declared_private: std::sync::atomic::AtomicBool::new(false),
             numeric_repositories: tokio::sync::Mutex::new(BTreeMap::new()),
@@ -5664,7 +5836,14 @@ impl GitHubProjectsSource {
         }
         let answered = if query == graphql::ISSUES_BY_REFERENCE {
             self.answer_unresolved(&body)
-        } else if query == graphql::CREATE_ISSUES {
+        } else if [
+            graphql::CREATE_ISSUES,
+            graphql::SEARCH_BATCH,
+            graphql::ADD_COMMENTS,
+            graphql::WRITE_TASKS,
+        ]
+        .contains(&query)
+        {
             answer_with_errors(&body).map_or_else(|| self.answer(&body), Ok)
         } else {
             self.answer(&body)
@@ -6888,6 +7067,10 @@ impl GitHubProjectsSource {
                 }
             };
             let rows = found.len();
+            // Every candidate of the page this read confirms by its comments is read together.
+            let candidates =
+                self.comment_candidates(found.iter().skip(position.offset), query, &query.project)?;
+            self.hold_comment_pages(&candidates).await?;
             for mut item in found.into_iter().skip(position.offset) {
                 if tasks.len() == limit {
                     break;
@@ -7226,6 +7409,17 @@ impl GitHubProjectsSource {
             ..TaskQuery::default()
         };
         let mut after: Option<String> = None;
+        // A first page read beside its fellow candidates answers as this read's own would.
+        let held = self.held_comments()?.get(&item.id).cloned();
+        if let Some(first) = held {
+            if query.comments_match(&first.items) {
+                return Ok(true);
+            }
+            match first.next {
+                Some(next) => after = Some(next.0),
+                None => return Ok(false),
+            }
+        }
         loop {
             let data = self
                 .graphql(
@@ -7514,6 +7708,8 @@ impl GitHubProjectsSource {
     /// Called only once GitHub has answered the comment write, so an issue whose comment
     /// failed is never made a candidate a later read would pay a node read for.
     fn remember_commented(&self, issue: &NativeId) -> Result<(), SourceError> {
+        // A comment page held for this command is no longer what the issue holds.
+        self.held_comments()?.remove(issue);
         let mut commented = self.commented()?;
         if !commented.contains(issue) {
             commented.push(issue.clone());
@@ -8997,6 +9193,11 @@ impl GitHubProjectsSource {
         fields: &[(String, Value)],
         clears: &[&str],
     ) -> Result<(), SourceError> {
+        if !(fields.is_empty() && clears.is_empty())
+            && self.hold_fields(board, item, fields, clears)?
+        {
+            return Ok(());
+        }
         match (fields, clears) {
             ([], []) => return Ok(()),
             ([(field, value)], []) => {
@@ -11597,6 +11798,9 @@ impl GitHubProjectsSource {
             ),
             ContentKind::Issue => (graphql::UPDATE_ISSUE, "id", "/updateIssue/issue"),
         };
+        if kind == ContentKind::Issue && self.hold_issue(&fields)? {
+            return Ok(());
+        }
         if kind == ContentKind::Issue && self.hold_update(id, &fields)? {
             return Ok(());
         }
@@ -12279,6 +12483,43 @@ fn narrowing_qualifiers(query: &TaskQuery) -> Option<String> {
         .map(|phrase| quoted(&phrase))
         .collect::<Vec<_>>();
     Some(format!("{fields} {}", phrases.join(" ")))
+}
+
+/// Whether every status category `query` keeps reads only off an open issue or a draft: a
+/// closed issue reads `done`, `cancelled` or — closed for a reason that implies no category —
+/// `unknown`, so a status filter naming none of those three can ask every issue search it sends
+/// for open issues alone; each candidate's category is still confirmed from its own item.
+fn open_only(query: &TaskQuery) -> bool {
+    !query.statuses.is_empty()
+        && query.statuses.iter().all(|category| {
+            !matches!(
+                category,
+                StatusCategory::Done | StatusCategory::Cancelled | StatusCategory::Unknown
+            )
+        })
+}
+
+/// What a task query is narrowed by beside a board-scoped issue search's scope — its comment
+/// activity and its text and metadata, with `is:open` when [`open_only`] — or `None` for a query
+/// carrying none of those, which no narrowed search answers.
+///
+/// A narrowed search never answers a draft, which is no issue, so narrowing it to open issues
+/// too leaves out nothing such a search could have answered.
+fn search_qualifiers(query: &TaskQuery) -> Option<String> {
+    let mut qualifiers: Vec<String> = [
+        query.commented_since.map(updated_qualifier),
+        narrowing_qualifiers(query),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    if qualifiers.is_empty() {
+        return None;
+    }
+    if open_only(query) {
+        qualifiers.push(OPEN_QUALIFIER.to_owned());
+    }
+    Some(qualifiers.join(" "))
 }
 
 /// The search terms that narrow a board-scoped issue search to a project or document query's
@@ -13857,6 +14098,25 @@ impl TaskSource for GitHubProjectsSource {
             .filter(|item| item.kind == BoardKind::Work(ItemKind::Project))
             .map(|item| item.project()))
     }
+    /// Every narrowed search and origin lookup asked, a page at a time, as aliased fields of one
+    /// [`graphql::SEARCH_BATCH`] request a round — a search's issue search in an `s<n>` field,
+    /// an origin's board filter in an `o<n>` field beside its issue search — and every other
+    /// query by [`Self::query_tasks`] on its own: one narrowed by a project or by comment
+    /// activity, one carrying no narrowing, one resumed from a cursor that read handed out, and
+    /// every query of a process that has written this board, whose own writes complete a
+    /// narrowed answer. A lone search is its own read too, which costs a batch's point at a
+    /// page of its own size.
+    ///
+    /// Each search's first page asks [`SEARCH_BATCH_FIRST_PAGE`] rows and each later page
+    /// [`SEARCH_PAGE_SIZE`]. GitHub answers an error about one aliased field at that field's
+    /// path, beside the others' answers, so a refused page fails that query's answer alone; a
+    /// request it refuses whole is every query of that request's answer.
+    async fn query_tasks_batch(
+        &self,
+        asks: &[(TaskQuery, PageRequest)],
+    ) -> Vec<Result<Page<Task>, SourceError>> {
+        self.search_batched(asks).await
+    }
     async fn query_tasks(
         &self,
         query: &TaskQuery,
@@ -13868,29 +14128,12 @@ impl TaskSource for GitHubProjectsSource {
         // category — `unknown`; every other category reads only off an open issue or a draft. So
         // a status filter naming none of those three asks every issue search it sends for open
         // issues alone; each candidate's category is still confirmed from its own item below.
-        let open_only = !query.statuses.is_empty()
-            && query.statuses.iter().all(|category| {
-                !matches!(
-                    category,
-                    StatusCategory::Done | StatusCategory::Cancelled | StatusCategory::Unknown
-                )
-            });
-        if query.origin.is_none() && !matches!(query.project, ProjectFilter::Is(_)) {
-            let mut qualifiers: Vec<String> = [
-                query.commented_since.map(updated_qualifier),
-                narrowing_qualifiers(query),
-            ]
-            .into_iter()
-            .flatten()
-            .collect();
-            // A narrowed search never answers a draft, which is no issue, so narrowing it to
-            // open issues too leaves out nothing such a search could have answered.
-            if !qualifiers.is_empty() {
-                if open_only {
-                    qualifiers.push(OPEN_QUALIFIER.to_owned());
-                }
-                return self.search_tasks(query, page, &qualifiers.join(" ")).await;
-            }
+        let open_only = open_only(query);
+        if query.origin.is_none()
+            && !matches!(query.project, ProjectFilter::Is(_))
+            && let Some(also) = search_qualifiers(query)
+        {
+            return self.search_tasks(query, page, &also).await;
         }
 
         // A read narrowed to one project asks that project for its own tasks, so nothing
@@ -13931,6 +14174,9 @@ impl TaskSource for GitHubProjectsSource {
                 }
             }
         };
+        // Every candidate this read confirms by its comments is read together.
+        let candidates = self.comment_candidates(held.iter(), query, membership)?;
+        self.hold_comment_pages(&candidates).await?;
         // Filtered before paged: a page of a filtered result is a page of the survivors,
         // never the survivors of a page.
         let mut tasks = Vec::new();
@@ -14624,6 +14870,27 @@ impl TaskSource for GitHubProjectsSource {
         self.targeted_update(id, update).await
     }
 
+    /// Every task read together — [`DETAIL_BATCH`] to a [`graphql::ISSUE_DETAILS`] request —
+    /// and each update's hold and guard decided on that read; then each update the read lets
+    /// through composed exactly as [`Self::update_task`] composes one, its board field writes
+    /// and its issue update held back and sent in [`graphql::WRITE_TASKS`] requests: every
+    /// field write first, then the issue update of every task whose field writes all landed.
+    ///
+    /// **Where GitHub would refuse the batch as a whole, each item is read on its own:** a
+    /// batched node read naming an id that resolves to nothing is refused whole, so each id of
+    /// that batch is read by itself, the missing one answered missing and the rest as
+    /// themselves. A batch of one, an update of a board draft, one naming dependencies and one
+    /// of an item whose body this process has not read are each made on their own, as
+    /// [`Self::update_task`] makes them, because each sends writes of its own in an order the
+    /// batch does not hold. A field write GitHub refuses fails that task's update alone and
+    /// sends nothing of its body.
+    async fn update_tasks(
+        &self,
+        updates: &[onetaskgraph_plugin_api::BatchUpdate],
+    ) -> Vec<Result<onetaskgraph_plugin_api::BatchAnswer<TaskUpdateOutcome>, SourceError>> {
+        self.updates_batched(updates).await
+    }
+
     /// Replace one task's `delivered_by` with a single body update that changes the
     /// metadata slot and nothing outside it.
     async fn set_delivered_by(
@@ -14741,6 +15008,14 @@ impl TaskSource for GitHubProjectsSource {
             if item.content_kind == ContentKind::DraftIssue {
                 return Err(self.draft_has_no_comments(task));
             }
+        }
+        // The first page a comment-activity read just read of this task, at the size asked, is
+        // that read's answer: taken, so it answers once.
+        if page.cursor.is_none()
+            && page.limit >= MAX_PAGE_SIZE
+            && let Some(held) = self.held_comments()?.remove(task)
+        {
+            return Ok(Some(held));
         }
         match self.issue_detail(task, page).await? {
             Some(TaskDetailRead {
@@ -15053,6 +15328,23 @@ impl TaskSource for GitHubProjectsSource {
         Ok(Some(added))
     }
 
+    /// Every task commented on read together — [`DETAIL_BATCH`] to a
+    /// [`graphql::ISSUE_DETAILS`] request — and each comment's hold decided on that read; then
+    /// every comment it lets through added by aliased `addComment`s of one
+    /// [`graphql::ADD_COMMENTS`] request per [`COMMENT_BATCH`]. GitHub answers a refusal of one
+    /// alias at that alias's path, so it fails that comment alone.
+    ///
+    /// **Where GitHub would refuse the batch as a whole, each item is read on its own:** a
+    /// batched node read naming an id that resolves to nothing is refused whole, so each id of
+    /// that batch is read by itself, the missing one answered missing. A batch of one is the
+    /// comment alone, as [`Self::add_comment`] adds it.
+    async fn add_comments(
+        &self,
+        comments: &[onetaskgraph_plugin_api::BatchComment],
+    ) -> Vec<Result<onetaskgraph_plugin_api::BatchAnswer<Comment>, SourceError>> {
+        self.comments_batched(comments).await
+    }
+
     async fn edit_comment(
         &self,
         task: &NativeId,
@@ -15100,6 +15392,7 @@ impl TaskSource for GitHubProjectsSource {
         if !self.comment_is_on(&issue, comment).await? {
             return Ok(None);
         }
+        self.held_comments()?.remove(&issue);
         let data = self
             .graphql(graphql::DELETE_COMMENT, json!({"input":{"id":comment.0}}))
             .await?;
@@ -15159,6 +15452,8 @@ impl TaskSource for GitHubProjectsSource {
         clear(&self.task_children);
         clear(&self.written);
         clear(&self.fields_cache);
+        clear(&self.held_comments);
+        clear(&self.task_writes);
         self.expected.end_command();
         Ok(())
     }
