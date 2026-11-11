@@ -52,6 +52,7 @@ pub struct FindRequest {
 ///
 /// It must be narrowed by at least one of `text`, `metadata` and `origin`; one narrowed by none
 /// would answer the whole source, and is refused naming its key.
+// llmlint: ignore[invalid_states_unrepresentable] This is the wire document `task find` reads, its members the contract states literally; `Engine::find_tasks` turns each into the search it walks only once it is narrowed, refusing one that is not by its key before anything is read (`a_search_narrowed_by_nothing_is_refused_by_its_key_reading_nothing`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct FindQuery {

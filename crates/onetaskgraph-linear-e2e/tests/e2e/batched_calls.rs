@@ -130,7 +130,7 @@ impl Team {
     }
 }
 
-/// How many of `sent` are a write — each alias of a batched one its own.
+/// How many of `sent` are write requests — a batched one counted once, however many aliases it holds.
 fn mutations(sent: &[(String, Value)]) -> usize {
     sent.iter()
         .filter(|(query, _)| query.trim_start().starts_with("mutation"))

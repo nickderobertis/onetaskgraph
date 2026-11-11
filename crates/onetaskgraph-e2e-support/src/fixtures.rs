@@ -1215,6 +1215,8 @@ struct GitHubBoard {
     /// Errors this board answers beside the data of the next request carrying each operation,
     /// once — an error GitHub reports about one part of a read it otherwise answered.
     erring_beside: Vec<(&'static str, String)>,
+    /// An alias, and the message of an error naming it to put beside the next answer holding it.
+    erring_at_alias: Vec<(&'static str, String)>,
     /// How the next read by issue reference bends its first slot's answer, once.
     reference_fault: Option<ReferenceFault>,
     /// The variables each of those documents was sent with, at the same index.
@@ -1650,6 +1652,16 @@ impl GitHubBoardFields {
     /// asked from, saying there is more — a search that never ends if walked blindly.
     pub fn stall_the_search_cursor(&self) {
         self.board.lock().unwrap().search_cursor_stalls = true;
+    }
+
+    /// Answer the next request whose answer holds `alias` with an error naming that alias, its
+    /// message `message`, beside the alias's data, once — a field GitHub answered in part.
+    pub fn error_beside_alias_once(&self, alias: &'static str, message: &str) {
+        self.board
+            .lock()
+            .unwrap()
+            .erring_at_alias
+            .push((alias, message.to_owned()));
     }
 
     /// Answer the next request carrying `operation` with `message` as an error beside its data,
@@ -3944,6 +3956,7 @@ fn github_projects_board_at(
         items_cursor_stalls: false,
         search_cursor_stalls: false,
         erring_beside: Vec::new(),
+        erring_at_alias: Vec::new(),
         reference_fault: None,
         variables: Vec::new(),
         status_options: json!([
@@ -4168,51 +4181,59 @@ fn github_projects_board_at(
                 .position(|operation| query.contains(operation))
                 .map(|at| held.refusing_stale.remove(at))
         };
-        let body = if let Some(operation) = stale {
-            json!({"data":Value::Null,
+        let body =
+            if let Some(operation) = stale {
+                json!({"data":Value::Null,
                        "errors":[{"message":format!(
                            "Could not resolve to a node with the global id of '{operation}'")}]})
-            .to_string()
-        } else if let Some(operation) = owed {
-            // The operation is named in the message so a journey can tell *which*
-            // failure reached the caller — a copy whose write failed and whose tidy-up
-            // then failed too has two, and which one it reports is the behaviour.
-            json!({"data":Value::Null,
+                .to_string()
+            } else if let Some(operation) = owed {
+                // The operation is named in the message so a journey can tell *which*
+                // failure reached the caller — a copy whose write failed and whose tidy-up
+                // then failed too has two, and which one it reports is the behaviour.
+                json!({"data":Value::Null,
                        "errors":[{"message":format!(
                            "Something went wrong while executing your query: {operation}")}]})
-            .to_string()
-        } else {
-            // A document selecting the whole issue it writes is answered as its plain twin
-            // is, and then with that issue as a read of it by its own id shows it.
-            let plain = github_plain_of(query);
-            let data = github_answer(&board, plain.unwrap_or(query), &variables);
-            let data = match plain {
-                Some(_) => board.lock().unwrap().whole(query, data, &variables),
-                None => data,
-            };
-            {
-                let mut held = board.lock().unwrap();
-                if let Some(at) = held
-                    .erring_beside
-                    .iter()
-                    .position(|(operation, _)| query.contains(operation))
-                {
-                    let (_, message) = held.erring_beside.remove(at);
-                    held.owed_errors.push(message);
-                }
-            }
-            let owed = std::mem::take(&mut board.lock().unwrap().owed_errors);
-            let objects = std::mem::take(&mut board.lock().unwrap().owed_error_objects);
-            if owed.is_empty() && objects.is_empty() {
-                json!({ "data": data }).to_string()
+                .to_string()
             } else {
-                json!({"data": data,
+                // A document selecting the whole issue it writes is answered as its plain twin
+                // is, and then with that issue as a read of it by its own id shows it.
+                let plain = github_plain_of(query);
+                let data = github_answer(&board, plain.unwrap_or(query), &variables);
+                let data = match plain {
+                    Some(_) => board.lock().unwrap().whole(query, data, &variables),
+                    None => data,
+                };
+                {
+                    let mut held = board.lock().unwrap();
+                    if let Some(at) = held
+                        .erring_beside
+                        .iter()
+                        .position(|(operation, _)| query.contains(operation))
+                    {
+                        let (_, message) = held.erring_beside.remove(at);
+                        held.owed_errors.push(message);
+                    }
+                    if let Some(at) = held.erring_at_alias.iter().position(|(alias, _)| {
+                        data.get(*alias).is_some_and(|value| !value.is_null())
+                    }) {
+                        let (alias, message) = held.erring_at_alias.remove(at);
+                        held.owed_error_objects
+                            .push(json!({"message": message, "path": [alias, "issue"]}));
+                    }
+                }
+                let owed = std::mem::take(&mut board.lock().unwrap().owed_errors);
+                let objects = std::mem::take(&mut board.lock().unwrap().owed_error_objects);
+                if owed.is_empty() && objects.is_empty() {
+                    json!({ "data": data }).to_string()
+                } else {
+                    json!({"data": data,
                            "errors": owed.iter().map(|message| json!({"message": message}))
                                .chain(objects)
                                .collect::<Vec<_>>()})
-                .to_string()
-            }
-        };
+                    .to_string()
+                }
+            };
         // Answered, and not yet sent: a change made here is one the next request sees and
         // this one did not.
         let due: Vec<BoardHook> = {

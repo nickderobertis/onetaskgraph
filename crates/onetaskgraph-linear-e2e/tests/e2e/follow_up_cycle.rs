@@ -237,7 +237,8 @@ pub(crate) fn walk() -> Vec<(&'static str, Phase)> {
         ),
     };
     run_batch(&cycle, &batch, &mut calls, false);
-    run_batch(&cycle, &batch, &mut calls, true);
+    // The retry's copy answers each ticket's version, which the pass's changes are held to.
+    let retried = run_batch(&cycle, &batch, &mut calls, true);
 
     let listed = cycle.measured("pass: comments since", &mut calls, || {
         cycle.json(
@@ -307,23 +308,20 @@ pub(crate) fn walk() -> Vec<(&'static str, Phase)> {
         })
         .sum();
     assert_eq!(answered, 40, "every reply reads back: {verified}");
-    let tickets = cycle.json(&["task", "list", "--source", "team", "--all"], 0);
-    let copied: Vec<(String, String)> = tickets["items"]
+    let copied: Vec<(String, String)> = retried["items"]
         .as_array()
         .expect("items")
         .iter()
-        .filter(|item| {
-            item["item"]["title"]
-                .as_str()
-                .is_some_and(|title| title.starts_with("Ticket "))
-        })
         .take(10)
         .map(|item| {
             (
-                item["id"].as_str().expect("an id").to_owned(),
-                item["item"]["version"]
+                item["destination"]
                     .as_str()
-                    .expect("a version")
+                    .expect("a destination")
+                    .to_owned(),
+                item["result"]["version"]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("the retry answers the version: {item}"))
                     .to_owned(),
             )
         })
@@ -388,7 +386,12 @@ pub(crate) fn walk() -> Vec<(&'static str, Phase)> {
 }
 
 /// The batch's five calls — or, as a `retry`, the same five again, which write nothing.
-fn run_batch(cycle: &Cycle, batch: &Batch, calls: &mut Vec<(&'static str, Phase)>, retry: bool) {
+fn run_batch(
+    cycle: &Cycle,
+    batch: &Batch,
+    calls: &mut Vec<(&'static str, Phase)>,
+    retry: bool,
+) -> Value {
     let label = |name: &'static str, retried: &'static str| if retry { retried } else { name };
     if retry {
         cycle.measured("retry: find", calls, || {
@@ -453,6 +456,7 @@ fn run_batch(cycle: &Cycle, batch: &Batch, calls: &mut Vec<(&'static str, Phase)
     {
         assert_eq!(result["outcome"], outcome, "{result}");
     }
+    copied
 }
 
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] The budget's own journey, in this crate's `test` target whose telemetry the budget reads, as every `measure_*` journey here is.

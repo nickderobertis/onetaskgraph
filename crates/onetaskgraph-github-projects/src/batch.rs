@@ -186,6 +186,49 @@ fn refused_alias(data: &Value, alias: &str, doing: &str) -> SourceError {
     }
 }
 
+/// `data`'s answer for `alias`: `None` when it is absent or null. One answered beside an error
+/// naming that alias is partial — and, for a write, may still have landed — so it is malformed,
+/// never taken as the alias's whole answer.
+fn alias_answer<'a>(
+    data: &'a Value,
+    alias: &str,
+    doing: &str,
+) -> Result<Option<&'a Value>, SourceError> {
+    let Some(value) = data.get(alias).filter(|value| !value.is_null()) else {
+        return Ok(None);
+    };
+    let own: Vec<&str> = data
+        .get(ANSWER_ERRORS)
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|error| {
+            error
+                .get("path")
+                .and_then(Value::as_array)
+                .and_then(|path| path.first())
+                .and_then(Value::as_str)
+                == Some(alias)
+        })
+        .map(|error| {
+            error
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("GitHub returned a GraphQL error")
+        })
+        .collect();
+    if own.is_empty() {
+        return Ok(Some(value));
+    }
+    Err(SourceError::Malformed {
+        message: format!(
+            "GitHub answered {alias} while {doing} beside an error naming it ({}); what it \
+             asked may have been done, so read it before sending it again",
+            own.join("; ")
+        ),
+    })
+}
+
 impl GitHubProjectsSource {
     /// Whether this process has written anything of this board, which a narrowed read
     /// completes its answer with — see `with_own_writes` — and a batched one cannot.
@@ -419,7 +462,7 @@ impl GitHubProjectsSource {
     async fn answer_slots(&self, data: &Value, ask: Placed<'_>) -> Result<Page<Task>, SourceError> {
         let doing = "searching this board's issues several ways at once";
         let connection = |alias: &str, pointer: &str| -> Result<Value, SourceError> {
-            match data.get(alias).filter(|value| !value.is_null()) {
+            match alias_answer(data, alias, doing)? {
                 Some(value) => value
                     .pointer(pointer)
                     .filter(|value| !value.is_null())
@@ -796,13 +839,11 @@ impl GitHubProjectsSource {
         let mut answered = Vec::with_capacity(chunk.len());
         for (slot, (at, issue, _)) in chunk.iter().enumerate() {
             let alias = format!("comment{slot}");
-            let answer = match data.get(&alias).filter(|value| !value.is_null()) {
-                None => Err(refused_alias(
-                    &data,
-                    &alias,
-                    "adding several comments together",
-                )),
-                Some(added) => self.added_comment(added, issue),
+            let doing = "adding several comments together";
+            let answer = match alias_answer(&data, &alias, doing) {
+                Err(error) => Err(error),
+                Ok(None) => Err(refused_alias(&data, &alias, doing)),
+                Ok(Some(added)) => self.added_comment(added, issue),
             };
             answered.push((*at, answer));
         }
@@ -1225,11 +1266,15 @@ impl GitHubProjectsSource {
         };
         let mut refused = Vec::new();
         for (alias, task, item) in sent {
-            let answered = data
-                .get(&alias)
-                .filter(|value| !value.is_null())
-                .and_then(|value| value.pointer("/projectV2Item/id"))
-                .and_then(Value::as_str);
+            let answered = match alias_answer(&data, &alias, doing) {
+                Ok(answered) => answered
+                    .and_then(|value| value.pointer("/projectV2Item/id"))
+                    .and_then(Value::as_str),
+                Err(error) => {
+                    refused.push((task.clone(), error));
+                    continue;
+                }
+            };
             match answered {
                 Some(answered) if answered == item => {}
                 Some(_) => refused.push((
@@ -1278,11 +1323,15 @@ impl GitHubProjectsSource {
         let mut refused = Vec::new();
         for (slot, (task, _)) in chunk.iter().enumerate() {
             let alias = format!("update{slot}");
-            let answered = data
-                .get(&alias)
-                .filter(|value| !value.is_null())
-                .and_then(|value| value.pointer("/issue/id"))
-                .and_then(Value::as_str);
+            let answered = match alias_answer(&data, &alias, doing) {
+                Ok(answered) => answered
+                    .and_then(|value| value.pointer("/issue/id"))
+                    .and_then(Value::as_str),
+                Err(error) => {
+                    refused.push((task.clone(), error));
+                    continue;
+                }
+            };
             match answered {
                 Some(answered) if answered == task.0 => {}
                 Some(_) => refused.push((

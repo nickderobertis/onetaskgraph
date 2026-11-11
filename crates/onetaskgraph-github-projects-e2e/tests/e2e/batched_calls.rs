@@ -928,3 +928,43 @@ fn a_batched_comment_answered_missing_or_about_another_issue_fails_that_comment_
         }
     }
 }
+
+#[test]
+fn a_batched_write_answered_beside_an_error_naming_it_is_reported_as_possibly_done() {
+    let board = ticket_board();
+    board
+        .board
+        .error_beside_alias_once("update1", "Something went wrong reading the issue");
+    let updates = json!({"schema_version": 1, "updates": [
+        {"item": "board:U-0", "body": "U-0 moved"},
+        {"item": "board:U-1", "body": "U-1 moved"},
+    ]});
+    let updated = board.run(
+        &["task", "update-many", "board", "--input", "-", "--json"],
+        &updates.to_string(),
+    );
+    board
+        .board
+        .error_beside_alias_once("comment1", "Something went wrong reading the comment");
+    let comments = json!({"schema_version": 1, "comments": [
+        {"item": "board:U-2", "body": "A note on 2."},
+        {"item": "board:U-3", "body": "A note on 3."},
+    ]});
+    let commented = board.run(
+        &[
+            "task", "comment", "add-many", "board", "--input", "-", "--json",
+        ],
+        &comments.to_string(),
+    );
+    for answered in [&updated, &commented] {
+        assert_eq!(answered.code, Some(4), "{}", answered.stderr);
+        let results = answered.json["results"].as_array().expect("results");
+        assert_eq!(results[0]["outcome"], "written", "{:#}", answered.json);
+        assert_eq!(results[1]["outcome"], "error", "{:#}", answered.json);
+        let reason = results[1]["reason"].as_str().unwrap_or_default();
+        assert!(
+            reason.contains("beside an error naming it") && reason.contains("may have been done"),
+            "{reason}"
+        );
+    }
+}
