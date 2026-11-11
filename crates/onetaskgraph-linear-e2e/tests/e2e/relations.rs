@@ -718,3 +718,51 @@ fn measure_linear_requests_per_relation_batch() {
         .join("; ");
     record("linear-requests-per-relation-batch", total, &detail);
 }
+
+/// The `## Links` section of a stored description — its heading up to the metadata slot.
+fn links_section(stored: &str) -> String {
+    let start = stored.find("## Links\n").unwrap_or(stored.len());
+    let end = stored.find("<!--").unwrap_or(stored.len());
+    stored[start..end.max(start)].trim_end().to_owned()
+}
+
+#[test]
+fn every_content_write_of_a_linked_task_keeps_its_links_section() {
+    let team = Team::of(2);
+    let added = team.links("add-many", &[("R-0", "R-1", "caused-by")]);
+    assert_eq!(outcomes(&added), ["written"], "{}", added.json);
+    let stored = team.workspace.long_form("tasks", "R-0").expect("held");
+    let rendered = links_section(&stored);
+    assert!(rendered.contains("[Ticket R-1]("), "{rendered}");
+
+    let file = team.sandbox.subdirectory("bodies").join("body.md");
+    std::fs::create_dir_all(file.parent().expect("a folder")).expect("the folder");
+    for (verb, text) in [
+        ("content", "Rewritten by content set."),
+        ("update", "Rewritten by update."),
+    ] {
+        std::fs::write(&file, text).expect("a body");
+        let path = file.to_str().expect("a path");
+        match verb {
+            "content" => team.ok(&["task", "content", "set", "team:R-0", "--file", path]),
+            _ => team.ok(&["task", "update", "team:R-0", "--body-file", path]),
+        };
+        let stored = team.workspace.long_form("tasks", "R-0").expect("held");
+        assert!(
+            stored.starts_with(&format!("{text}\n\n## Links\n")),
+            "{verb}: {stored}"
+        );
+        assert_eq!(links_section(&stored), rendered, "{verb}");
+        let shown = team.ok(&["task", "show", "team:R-0"]);
+        assert_eq!(
+            shown.json["items"][0]["item"]["content"],
+            json!(text),
+            "{verb}"
+        );
+    }
+    let items = team.relations(&["R-0", "R-1"]);
+    assert_eq!(
+        links_of(&items[0]),
+        [link("caused-by", "out", "R-1", "present")]
+    );
+}

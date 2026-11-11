@@ -3296,7 +3296,13 @@ impl LinearSource {
         {
             input.insert("title".into(), json!(title));
         }
-        let content = update.content.as_deref().or(visible.as_deref());
+        // A content write keeps the task's `## Links` section, re-rendered from the links the
+        // slot holds once written.
+        let relinked = update
+            .content
+            .as_deref()
+            .map(|content| onetaskgraph_plugin_api::relinked(content, visible.as_deref(), &slot));
+        let content = relinked.as_deref().or(visible.as_deref());
         if content != visible.as_deref() || slot != held {
             let written = Self::described(content, &slot)?;
             // Checked before anything is sent: content ending in what this source reads as
@@ -3992,8 +3998,16 @@ impl LinearSource {
             TaskRef::DELIVERED_BY_KEY,
             &write.item.delivered_by,
         );
+        // A linked task keeps its `## Links` section, each line rendered from its links: the
+        // write holds no stored description to keep the other ends' titles from, and reading
+        // one would cost every write a request.
+        let content = write
+            .item
+            .content
+            .as_deref()
+            .map(|content| onetaskgraph_plugin_api::relinked(content, None, &metadata));
         let description = self.write_description(
-            write.item.content.as_deref(),
+            content.as_deref(),
             &metadata,
             &write.item.repositories,
             write.item.classification,
@@ -5169,6 +5183,9 @@ impl TaskSource for LinearSource {
             return Ok(None);
         };
         let issue = task.id;
+        // The task's `## Links` section, re-rendered from the links it holds, stays with it.
+        let (stored, held) = metadata_description(description.clone())?;
+        let content = &onetaskgraph_plugin_api::relinked(content, stored.as_deref(), &held);
         let slot = match description.as_deref() {
             Some(description) => metadata_slot(description)?.map(str::to_owned),
             None => None,
@@ -5382,8 +5399,10 @@ impl TaskSource for LinearSource {
         let Some((task, description)) = self.issue_held(id, Read::ForWrite).await? else {
             return Ok(None);
         };
-        let (_, mut slot) = metadata_description(description.clone())?;
+        let (stored, mut slot) = metadata_description(description.clone())?;
         slot.insert(MetadataKey::TEMPLATE_KEY.to_owned(), provenance.clone());
+        // A rendering keeps the task's `## Links` section, re-rendered from its links.
+        let content = &onetaskgraph_plugin_api::relinked(content, stored.as_deref(), &slot);
         // No read-back check, unlike a content write: this slot is never empty, it is written
         // after the content, and a read takes the last slot off first, so the content reads
         // back as itself whatever it ends in.
@@ -5426,12 +5445,14 @@ impl TaskSource for LinearSource {
         let Some((item, held)) = self.issue_held(id, Read::ForWrite).await? else {
             return Ok(None);
         };
-        let (_, mut metadata) = metadata_description(held)?;
+        let (stored, mut metadata) = metadata_description(held)?;
         metadata.insert(MetadataKey::TEMPLATE_KEY.to_owned(), provenance.clone());
         let uploads = self.upload_assets(assets).await?;
         let content =
             onetaskgraph_plugin_api::serve_asset_references(content, &mut metadata, &uploads);
-        let written = Self::described(Some(&content), &metadata)?;
+        // A rendering keeps the task's `## Links` section, re-rendered from its links.
+        let relinked = onetaskgraph_plugin_api::relinked(&content, stored.as_deref(), &metadata);
+        let written = Self::described(Some(&relinked), &metadata)?;
         self.write_description_alone(&item.id, written.as_deref())
             .await?;
         Ok(Some(onetaskgraph_plugin_api::AssetsWritten {
