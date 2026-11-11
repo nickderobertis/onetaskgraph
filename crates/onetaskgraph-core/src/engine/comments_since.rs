@@ -159,10 +159,17 @@ impl Engine {
                 limit: source.source().capabilities().max_page_size.max(1),
             };
             let natives: Vec<NativeId> = matched.iter().map(|id| id.native.clone()).collect();
-            source
+            let read = source
                 .source()
                 .get_task_details(&natives, Some(&page))
-                .await
+                .await;
+            // An answer of another count says nothing of which answer is whose, so every task
+            // is read on its own instead.
+            if read.len() == natives.len() {
+                read
+            } else {
+                Vec::new()
+            }
         };
         let mut comments = Vec::new();
         for (at, task) in matched.iter().enumerate() {

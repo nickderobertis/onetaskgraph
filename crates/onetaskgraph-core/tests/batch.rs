@@ -693,6 +693,18 @@ impl onetaskgraph_plugin_api::TaskSource for Miscounted {
     {
         self.miscounted(self.inner.query_tasks_batch(asks).await)
     }
+    async fn get_task_details(
+        &self,
+        ids: &[onetaskgraph_plugin_api::NativeId],
+        comments: Option<&onetaskgraph_plugin_api::PageRequest>,
+    ) -> Vec<
+        Result<
+            Option<onetaskgraph_plugin_api::TaskDetailRead>,
+            onetaskgraph_plugin_api::SourceError,
+        >,
+    > {
+        self.miscounted(self.inner.get_task_details(ids, comments).await)
+    }
     async fn add_comments(
         &self,
         comments: &[onetaskgraph_plugin_api::BatchComment],
@@ -899,6 +911,65 @@ async fn a_source_answering_too_many_searches_leaves_every_one_incomplete() {
         assert!(
             reason.contains("answered 3 answers to the 2 items"),
             "{reason}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn comments_since_over_a_source_miscounting_its_details_reads_each_task_on_its_own() {
+    for miscount in [Miscount::Short, Miscount::Long] {
+        let root = tempfile::tempdir().expect("a folder");
+        let engine = miscounted(root.path(), miscount);
+        // Another engine over the same folder writes the comments, so only the read miscounts.
+        let writer = engine_over(json!({"sources": {"plan": {
+            "plugin": "local-md", "config": {"root": root.path().join("plan")}}}}));
+        for (task, body) in [
+            ("plan:a", "On a."),
+            ("plan:c", "On c."),
+            ("plan:e", "On e."),
+        ] {
+            writer
+                .add_comment(
+                    &id(task),
+                    &onetaskgraph_plugin_api::NewComment {
+                        body: onetaskgraph_plugin_api::CommentBody::new(body.to_owned())
+                            .expect("a body"),
+                        author: None,
+                    },
+                )
+                .await
+                .expect("a comment");
+        }
+        let since = engine
+            .comments_since(&onetaskgraph_core::CommentsSinceRequest {
+                source: name("plan"),
+                since: "2000-01-01T00:00:00Z".parse().expect("an instant"),
+                metadata: Vec::new(),
+                statuses: Vec::new(),
+                items: Vec::new(),
+                page_size: NonZeroU32::new(10).expect("a page"),
+            })
+            .await
+            .expect("answered");
+        let mut found: Vec<(String, String)> = since
+            .comments
+            .iter()
+            .map(|comment| {
+                (
+                    comment.item.to_string(),
+                    comment.body.as_str().trim_end().to_owned(),
+                )
+            })
+            .collect();
+        found.sort();
+        assert_eq!(
+            found,
+            [
+                ("plan:a".to_owned(), "On a.".to_owned()),
+                ("plan:c".to_owned(), "On c.".to_owned()),
+                ("plan:e".to_owned(), "On e.".to_owned()),
+            ],
+            "{miscount:?}"
         );
     }
 }
