@@ -11666,7 +11666,7 @@ fn skips(task: &Task, held: &Prior, with_comments: bool, destination: &SourceNam
     } else {
         None
     };
-    let now = record::digest(held_task, &held.edges, comments, destination);
+    let now = record::digests_of(&held.item, &held.edges, comments, destination);
     record::skips(
         task.version.as_deref(),
         with_comments,
@@ -12197,7 +12197,7 @@ fn recorded_unchanged(
         None
     };
     let counted = held.counted_edges(edges);
-    let now = record::digest_of(&held.item, &counted, comments, destination);
+    let now = record::digests_of(&held.item, &counted, comments, destination);
     if !record::holds(
         described(&held.item).1,
         &version.to_string(),

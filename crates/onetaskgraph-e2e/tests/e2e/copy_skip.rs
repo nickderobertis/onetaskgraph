@@ -1368,3 +1368,89 @@ fn a_repeat_comments_copy_of_a_boards_projects_into_linear_writes_nothing_and_a_
         "the dependency added on the board is carried: {written:#?}"
     );
 }
+
+/// A copy out of an item records its link there — `onetaskgraph.copies` and
+/// `onetaskgraph.copy_locations` — and that leaves the record of the copy that landed the item
+/// true: a repeat of that earlier copy, into a Linear workspace that rewrites the Markdown it is
+/// sent, writes nothing.
+#[test]
+fn a_later_copy_out_of_a_copied_item_leaves_the_copy_into_it_writing_nothing_on_a_repeat() {
+    use crate::section_links::{Store, configure, ok, root_of, store};
+    use onetaskgraph_e2e_support::fixtures::LinearMarkdown;
+
+    let sandbox = Sandbox::new();
+    let (_, authored) = store(&sandbox, "local-md", "authored", None);
+    let root = root_of(&sandbox, "authored");
+    for folder in ["projects", "tasks", "documents"] {
+        std::fs::create_dir_all(root.join(folder)).expect("a folder");
+    }
+    for (path, front, body) in [
+        (
+            "projects/P.md",
+            "title: A plan\nstatus: todo",
+            "The plan.\n\n- a list\n- Linear rewrites\n",
+        ),
+        (
+            "tasks/T.md",
+            "title: A task\nstatus: todo\nproject: P",
+            "| A | B |\n| --- | --- |\n| 1 | 2 |\n",
+        ),
+        (
+            "documents/D.md",
+            "title: A design\nproject: P",
+            "- one\n- two\n",
+        ),
+    ] {
+        std::fs::write(root.join(path), format!("---\n{front}\n---\n{body}")).expect("a record");
+    }
+    let (Store::Linear(workspace), linear_config) = store(&sandbox, "linear", "linear", None)
+    else {
+        unreachable!("a workspace")
+    };
+    workspace.rewrite_markdown_on_write(LinearMarkdown::Measured);
+    let (_, last) = store(&sandbox, "local-md", "last", None);
+    configure(
+        &sandbox,
+        &[
+            ("authored", &authored),
+            ("linear", &linear_config),
+            ("last", &last),
+        ],
+    );
+    let copy = |project: &str, document: &str, to: &str| {
+        let landed = crate::section_links::outcomes(&ok(
+            &sandbox,
+            &["project", "copy", project, "--to", to, "--json"],
+        ));
+        let copied = crate::section_links::outcomes(&ok(
+            &sandbox,
+            &["document", "copy", document, "--to", to, "--json"],
+        ));
+        (
+            landed[project]["destination"]
+                .as_str()
+                .expect("landed")
+                .to_owned(),
+            copied[document]["destination"]
+                .as_str()
+                .expect("landed")
+                .to_owned(),
+        )
+    };
+    let (project, document) = copy("authored:P", "authored:D", "linear");
+    // Out of Linear: each item there now records its link to the last folder.
+    copy(&project, &document, "last");
+    let mark = workspace.served_count();
+    copy("authored:P", "authored:D", "linear");
+    let written: Vec<String> = workspace
+        .served_since(mark)
+        .into_iter()
+        .map(|(query, _)| query)
+        .filter(|query| query.trim_start().starts_with("mutation"))
+        .collect();
+    assert_eq!(
+        written,
+        Vec::<String>::new(),
+        "a repeat copy into Linear writes nothing, though a copy out of it linked its items since"
+    );
+}
