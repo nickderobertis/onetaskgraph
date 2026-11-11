@@ -1,0 +1,8 @@
+{
+  "title": "Relationless, renamed",
+  "body": "A body\n\n<a id=\"links\"></a>\n## Links\n\nwritten by a person, kept\n\n\n<!-- onetaskgraph.metadata\n{\"caller.shape\":{\"n\":1},\"onetaskgraph.item_kind\":\"task\",\"onetaskgraph.repositories\":[]}\n-->",
+  "status": "Todo",
+  "state": "OPEN",
+  "parent": "P-1",
+  "labels": []
+}

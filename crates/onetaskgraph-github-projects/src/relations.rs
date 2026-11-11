@@ -497,3 +497,23 @@ impl GitHubProjectsSource {
         Ok(related)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn each_relation_field_sent_is_one_creation() {
+        let mut variables = Map::new();
+        for slot in 0..RELATION_BATCH {
+            variables.insert(
+                format!("relate{slot}"),
+                json!({"issueId": "A", "relatedIssueId": "B"}),
+            );
+            variables.insert(format!("send{slot}"), json!(slot < 30));
+        }
+        let charge =
+            crate::pacing::Charge::graphql(graphql::ADD_RELATES_TO, &Value::Object(variables));
+        assert_eq!(charge.creations, 30);
+    }
+}

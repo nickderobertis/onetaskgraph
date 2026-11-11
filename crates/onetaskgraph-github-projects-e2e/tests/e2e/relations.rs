@@ -716,3 +716,142 @@ fn two_sources_naming_one_board_with_different_sub_issues_are_refused_naming_bot
         assert!(said.contains(named), "{said}");
     }
 }
+
+#[test]
+fn each_aliased_relation_field_is_one_content_creation_on_the_simulated_clock_s_pacing_record() {
+    use super::asset_board::{Board as Paced, creations};
+    use onetaskgraph_e2e_support::{binary, clock::SimulatedClock};
+    use std::process::Stdio;
+    // Ninety mirrored links in three documents of thirty: two leave at once, sixty creations
+    // inside GitHub's eighty a minute, and the third waits for the minute to have room for its
+    // thirty, which the binary names on the clock — and the board, counting as GitHub counts,
+    // refuses none.
+    let clock = SimulatedClock::start(1);
+    let sandbox = Sandbox::new();
+    let mut items = vec![issue("A-1", None)];
+    items.extend((0..90).map(|n| issue(&format!("X-{n}"), None)));
+    let (mut config, github) = github_projects_with_items(&sandbox, items);
+    let paced = Paced::new(config["endpoint"].as_str().unwrap(), &clock, 0, None);
+    paced.enforce_limit();
+    config["endpoint"] = json!(paced.endpoint);
+    // GitHub's own windows, which the loopback fixture otherwise turns off.
+    config["pacing"] = json!({});
+    config["link_types"] = json!({"caused-by": {"native": "relates-to"}});
+    sandbox.project_document(&document(&json!({
+        "board": {"plugin": "github-projects", "config": config},
+    })));
+    let links: Vec<Value> = (0..90)
+        .map(|n| json!({"from": "board:A-1", "to": format!("board:X-{n}"), "type": "caused-by"}))
+        .collect();
+    let lease = clock.lease(0);
+    let mut command = sandbox.subprocess(binary());
+    command
+        .args(["task", "link", "add-many", "--input", "-", "--json"])
+        .envs(clock.client_env(0))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().unwrap();
+    std::io::Write::write_all(
+        child.stdin.as_mut().unwrap(),
+        json!({"schema_version": 1, "links": links})
+            .to_string()
+            .as_bytes(),
+    )
+    .unwrap();
+    drop(child.stdin.take());
+    let output = child.wait_with_output().unwrap();
+    lease.wait_for_detach();
+    drop(lease);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let calls = paced.calls();
+    assert!(
+        calls.iter().all(|call| call.status != 403),
+        "a request was refused: {:?}",
+        calls
+            .iter()
+            .map(|call| (call.status, creations(&call.path, &call.bytes), call.at))
+            .collect::<Vec<_>>()
+    );
+    let mirrors: Vec<_> = calls
+        .iter()
+        .filter(|call| String::from_utf8_lossy(&call.bytes).contains("addRelatesTo(input:"))
+        .collect();
+    let charged: Vec<u64> = mirrors
+        .iter()
+        .map(|call| creations(&call.path, &call.bytes))
+        .collect();
+    assert_eq!(charged, [30, 30, 30]);
+    let wait = clock
+        .slept()
+        .into_iter()
+        .find(|slept| slept.cause.as_deref() == Some("content-creation-minute"))
+        .expect("the third document waited for the minute's creations");
+    assert_eq!(wait.at + wait.length, mirrors[2].at, "{wait:?}");
+    assert_eq!(github.relates_to("A-1").len(), 90);
+}
+
+/// What the board stores of the issue `id`: the members a write sets.
+fn stored(board: &GitHubBoardFields, id: &str) -> Value {
+    let item = board.item(id).expect("the issue");
+    json!({"title": item["title"], "body": item["body"], "status": item["status"],
+           "state": item["state"], "parent": item["parent"], "labels": item["labels"]})
+}
+
+#[test]
+fn an_item_with_no_relation_is_written_byte_for_byte_as_before_relations_existed() {
+    // A task created, updated and given metadata on a source configuring a mirrored link type:
+    // what the board stores of it is the committed fixture of that item's stored form, so
+    // neither setting — nor the `## Links` section a read strips — touches an item holding no
+    // relation.
+    let board = Board::of(Vec::new(), &mirrored());
+    let body = board.sandbox.subdirectory("body");
+    std::fs::create_dir_all(&body).unwrap();
+    let file = body.join("body.md");
+    std::fs::write(&file, "A body\n\n## Links\n\nwritten by a person, kept\n").unwrap();
+    let created = board.run(
+        &[
+            "task",
+            "create",
+            "board",
+            "--project",
+            "board:P-1",
+            "--title",
+            "Relationless",
+            "--metadata",
+            "caller.shape={\"n\":1}",
+            "--body-file",
+            file.to_str().unwrap(),
+            "--json",
+        ],
+        "",
+    );
+    assert_eq!(created.code, Some(0), "{}", created.stderr);
+    let id = created.json["items"][0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the created id: {:#}", created.json))
+        .trim_start_matches("board:")
+        .to_owned();
+    let updated = board.run(
+        &[
+            "task",
+            "update",
+            &format!("board:{id}"),
+            "--title",
+            "Relationless, renamed",
+            "--json",
+        ],
+        "",
+    );
+    assert_eq!(updated.code, Some(0), "{}", updated.stderr);
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/relationless-issue.json");
+    let expected: Value =
+        serde_json::from_str(&std::fs::read_to_string(&fixture).expect("the fixture")).unwrap();
+    assert_eq!(stored(&board.board, &id), expected);
+    let shown = board.run(&["task", "show", &format!("board:{id}"), "--json"], "");
+    assert_eq!(
+        shown.json["items"][0]["item"]["content"],
+        "A body\n\n## Links\n\nwritten by a person, kept\n"
+    );
+}
