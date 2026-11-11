@@ -72,10 +72,16 @@ impl Team {
     }
 
     fn configured(count: usize, link_types: &Value) -> Self {
+        Self::holding(count, link_types, &json!([]))
+    }
+
+    /// [`Team::configured`], its issues holding `dependencies` — `{from, to, kind}` — as Linear
+    /// relations already.
+    fn holding(count: usize, link_types: &Value, dependencies: &Value) -> Self {
         let sandbox = Sandbox::new();
         let tasks: Vec<Value> = (0..count).map(|at| issue(&format!("R-{at}"))).collect();
         let held = json!({"tasks": tasks, "projects": [], "documents": [], "labels": [],
-                          "task_dependencies": [], "project_dependencies": []});
+                          "task_dependencies": dependencies, "project_dependencies": []});
         let (mut config, workspace) = linear_workspace(&sandbox, held);
         config["link_types"] = link_types.clone();
         let configuration: Value = serde_json::from_str(&document(&json!({
@@ -521,6 +527,71 @@ fn a_links_section_linear_normalised_to_star_bullets_reads_back_without_the_sect
     assert_eq!(
         links_of(&items[0]),
         [link("caused-by", "out", "R-1", "present")]
+    );
+}
+
+/// The far ends of a `task deps` answer's edges, each with its kind.
+fn far_ends(ran: &Ran, near: &str) -> Vec<(String, String)> {
+    ran.json["items"]
+        .as_array()
+        .unwrap_or_else(|| panic!("edges: {}{}", ran.json, ran.stderr))
+        .iter()
+        .map(|edge| {
+            let (from, to) = (
+                edge["from"]["id"].as_str().unwrap_or_default(),
+                edge["to"]["id"].as_str().unwrap_or_default(),
+            );
+            let far = if from.ends_with(near) { to } else { from };
+            (
+                far.trim_start_matches("team:").to_owned(),
+                edge["kind"].as_str().unwrap_or_default().to_owned(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn a_mirrored_link_is_no_dependency_and_a_dependency_rewrite_leaves_its_relation_alone() {
+    // R-0 already has an ordinary `related` dependency on R-2.
+    let team = Team::holding(
+        4,
+        &json!({"caused-by": {"native": "related"}}),
+        &json!([{"from": "R-0", "to": "R-2", "kind": "related"}]),
+    );
+    let added = team.links("add-many", &[("R-0", "R-1", "caused-by")]);
+    assert_eq!(outcomes(&added), ["written"], "{}", added.json);
+    assert_eq!(team.workspace.related_pairs().len(), 2);
+
+    // The mirror is the link's: neither end's dependency read reports it, and the ordinary
+    // `related` edge still reads, both ways.
+    let forward = team.ok(&["task", "deps", "team:R-0"]);
+    assert_eq!(
+        far_ends(&forward, "R-0"),
+        [("R-2".to_owned(), "related".to_owned())]
+    );
+    assert_eq!(forward.sent.len(), 1, "one read: {:?}", forward.sent);
+    let reverse = team.ok(&["task", "deps", "team:R-1", "--direction", "depended-on-by"]);
+    assert!(far_ends(&reverse, "R-1").is_empty(), "{}", reverse.json);
+    let ordinary = team.ok(&["task", "deps", "team:R-2", "--direction", "depended-on-by"]);
+    assert_eq!(
+        far_ends(&ordinary, "R-2"),
+        [("R-0".to_owned(), "related".to_owned())]
+    );
+
+    // Rewriting R-0's dependencies removes the ordinary edge as before and keeps the mirror.
+    let rewritten = team.ok(&["task", "update", "team:R-0", "--depends-on", "team:R-3"]);
+    assert_eq!(rewritten.count(graphql::ISSUE_RELATION_DELETE), 1);
+    let pairs = team.workspace.related_pairs();
+    assert_eq!(pairs, [("R-0".to_owned(), "R-1".to_owned())], "{pairs:?}");
+    let forward = team.ok(&["task", "deps", "team:R-0"]);
+    assert_eq!(
+        far_ends(&forward, "R-0"),
+        [("R-3".to_owned(), "blocks".to_owned())]
+    );
+    let items = team.relations(&["R-0", "R-1"]);
+    assert_eq!(
+        links_of(&items[1]),
+        [link("caused-by", "in", "R-0", "present")]
     );
 }
 

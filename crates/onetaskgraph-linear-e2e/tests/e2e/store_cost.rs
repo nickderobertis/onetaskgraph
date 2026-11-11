@@ -300,9 +300,12 @@ fn cases(total: usize) -> Vec<Case> {
             [graphql::ISSUE_DEPENDED_ON_BY],
             "one request, asking for `inverseRelations` alone"
         );
+        // The long form rides along for the links it holds — what tells a `related` relation
+        // mirroring a link from a `related` dependency — never for a recorded edge, which the
+        // answer above holds none of; it costs no request.
         assert!(
-            !sent[0].contains(" relations(") && !sent[0].contains("description"),
-            "no forward connection and no long form: {}",
+            !sent[0].contains(" relations("),
+            "no forward connection: {}",
             sent[0]
         );
         cases.push(Case {

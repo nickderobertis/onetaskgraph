@@ -168,7 +168,8 @@ fn selected<'a>(document: &'a str, call: &str) -> &'a str {
 
 /// Each dependency read this build sends in place of 0.6.0's two-direction one, by the 0.6.0
 /// name it narrows, and the one selection it leaves out: the other direction's connection, and
-/// for a reverse read the long form, which only a forward read's recorded edges are read from.
+/// for a project's reverse read the long form, which only a forward read's recorded edges are
+/// read from — an issue's keeps it, for the links that tell a mirrored `related` relation apart.
 fn narrowed_reads() -> [(&'static str, &'static str, String); 4] {
     let issue_forward = "inverseRelations(first:$first,after:$after){nodes{id type issue{id}} \
                          pageInfo{hasNextPage endCursor}}";
@@ -183,7 +184,8 @@ fn narrowed_reads() -> [(&'static str, &'static str, String); 4] {
         (
             "ISSUE_RELATIONS",
             graphql::ISSUE_DEPENDED_ON_BY,
-            "description relations(first:$first,after:$after){nodes{id type relatedIssue{id}} \
+            // An issue's reverse read keeps its description, for the links it holds.
+            "relations(first:$first,after:$after){nodes{id type relatedIssue{id}} \
              pageInfo{hasNextPage endCursor}}"
                 .to_owned(),
         ),

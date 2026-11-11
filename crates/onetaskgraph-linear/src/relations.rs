@@ -12,13 +12,15 @@
 //! twice in either direction Linear answers the same relation, so the type name and the
 //! direction live in the store's metadata alone.
 
+use std::collections::BTreeSet;
+
 use onetaskgraph_plugin_api::{
-    NativeId, NativeLink, ParentAnswer, ParentWrite, Relations, SourceError, version_at,
+    NativeId, NativeLink, ParentAnswer, ParentWrite, Relations, SourceError, TaskLink, version_at,
 };
 use serde_json::{Value, json};
 
 use super::batch::AliasedEach;
-use super::{LinearSource, MAX_PAGE_SIZE, graphql, map_task, optional_str};
+use super::{LinearSource, MAX_PAGE_SIZE, graphql, map_task, metadata_description, optional_str};
 
 /// Linear's word for the one issue relation a link is mirrored as.
 pub const MIRRORED: &str = "related";
@@ -29,6 +31,28 @@ struct Read {
 }
 
 impl LinearSource {
+    /// The native ids of the issues this source holds that the links in `description`'s
+    /// metadata slot name under a type this source mirrors as Linear's `related` relation:
+    /// each a `related` relation that is a link's mirror rather than a `related` dependency.
+    ///
+    /// Empty for an issue holding no links, so nothing about its edges changes.
+    pub(crate) fn mirrored_in(&self, description: Option<&str>) -> BTreeSet<String> {
+        let mirrored = self.link_types.mirrored();
+        if mirrored.is_empty() {
+            return BTreeSet::new();
+        }
+        let Ok((_, metadata)) = metadata_description(description.map(str::to_owned)) else {
+            return BTreeSet::new();
+        };
+        let prefix = format!("{}:", self.name);
+        TaskLink::held(&metadata)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|link| mirrored.contains_key(&link.link_type))
+            .filter_map(|link| link.other.strip_prefix(&prefix).map(str::to_owned))
+            .collect()
+    }
+
     /// Every one of `ids` read as one aliased [`graphql::ISSUE_PARENT_READ`] — `None` for an
     /// issue Linear does not hold, has trashed, or that is outside this source's project.
     pub(crate) async fn relations_read(

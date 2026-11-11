@@ -715,10 +715,11 @@ pub mod graphql {
     /// along because its metadata slot is where an edge to another source is recorded, so
     /// those edges cost no second request.
     pub const ISSUE_DEPENDS_ON: &str = "query($id:String!,$first:Int!,$after:String){ issue(id:$id){ description relations(first:$first,after:$after){nodes{id type relatedIssue{id}} pageInfo{hasNextPage endCursor}} } }";
-    /// What depends on one issue: [`ISSUE_RELATIONS`] with its `inverseRelations` alone. No
-    /// `description`: the reverse of a recorded edge is derived from the far end, never
-    /// written down on the near item.
-    pub const ISSUE_DEPENDED_ON_BY: &str = "query($id:String!,$first:Int!,$after:String){ issue(id:$id){ inverseRelations(first:$first,after:$after){nodes{id type issue{id}} pageInfo{hasNextPage endCursor}} } }";
+    /// What depends on one issue: [`ISSUE_RELATIONS`] with its `inverseRelations` alone. The
+    /// `description` is read for its links alone — never for a recorded edge, whose reverse is
+    /// derived from the far end — so a `related` relation mirroring a link is told from a
+    /// `related` dependency at no request of its own.
+    pub const ISSUE_DEPENDED_ON_BY: &str = "query($id:String!,$first:Int!,$after:String){ issue(id:$id){ description inverseRelations(first:$first,after:$after){nodes{id type issue{id}} pageInfo{hasNextPage endCursor}} } }";
     /// What one project depends on, on the terms of [`ISSUE_DEPENDS_ON`].
     pub const PROJECT_DEPENDS_ON: &str = "query($id:String!,$first:Int!,$after:String){ project(id:$id){ content relations(first:$first,after:$after){nodes{id type relatedProject{id}} pageInfo{hasNextPage endCursor}} } }";
     /// What depends on one project, on the terms of [`ISSUE_DEPENDED_ON_BY`].
@@ -1964,7 +1965,8 @@ fn issue_relation_type(kind: DependencyKind) -> &'static str {
 enum HeldRelations<'a> {
     /// None: the item was just created.
     None,
-    /// The first page of them, as the rewrite's own answer reported it.
+    /// The item as the rewrite's own answer reported it, the first page of its relations and
+    /// its long form among its members.
     Page(&'a Value),
     /// Nothing yet, so they are read.
     Unread,
@@ -3613,9 +3615,15 @@ impl LinearSource {
         let deferred = matches!(held, HeldRelations::None)
             && matches!(kind, WriteKind::Task)
             && self.deferring.load(std::sync::atomic::Ordering::SeqCst);
+        // The `related` relations mirroring a link the item holds, which no dependency write
+        // takes away: read off the long form beside the relations wherever it was read.
+        let mut mirrors = std::collections::BTreeSet::new();
         let mut answered = match held {
             HeldRelations::None => None,
-            HeldRelations::Page(page) => Some(page.clone()),
+            HeldRelations::Page(issue) => {
+                mirrors = self.mirrored_in(issue.get("description").and_then(Value::as_str));
+                Some(issue["relations"].clone())
+            }
             HeldRelations::Unread => Some(Value::Null),
         };
         while let Some(page) = answered.take() {
@@ -3641,6 +3649,10 @@ impl LinearSource {
                     .ok_or_else(|| SourceError::Malformed {
                         message: "missing relation item".into(),
                     })?;
+                if matches!(kind, WriteKind::Task) {
+                    mirrors
+                        .extend(self.mirrored_in(root.get("description").and_then(Value::as_str)));
+                }
                 root.get("relations")
                     .cloned()
                     .ok_or_else(|| SourceError::Malformed {
@@ -3657,6 +3669,13 @@ impl LinearSource {
                 })?
             {
                 let id = backend_id(relation, "id")?;
+                if !mirrors.is_empty()
+                    && str_at(relation, "type")? == relations::MIRRORED
+                    && backend_id(&relation["relatedIssue"], "id")
+                        .is_ok_and(|far| mirrors.contains(far))
+                {
+                    continue;
+                }
                 if !wanted.is_empty() {
                     let far = backend_id(&relation["relatedIssue"], "id")?;
                     let relation_type = str_at(relation, "type")?;
@@ -5640,7 +5659,7 @@ fn held_relations<'a>(
     written
         .get("relations")
         .filter(|relations| !relations.is_null())
-        .map(HeldRelations::Page)
+        .map(|_| HeldRelations::Page(written))
         .ok_or_else(|| SourceError::Malformed {
             message: "a rewrite answered without the relations it was asked for".into(),
         })
@@ -6740,6 +6759,20 @@ impl LinearSource {
         };
         self.note_edges_version(root, direction, id, &d, walked);
         let mut answered = relation_page(&d, root, id, direction)?;
+        // A `related` relation mirroring a link the issue holds is the link's, not a dependency.
+        if matches!(root, DependencyRoot::Issue) {
+            let mirrors = self.mirrored_in(d.pointer("/issue/description").and_then(Value::as_str));
+            if !mirrors.is_empty() {
+                answered.items.retain(|edge| {
+                    let far = if direction == Direction::DependsOn {
+                        edge.to.id()
+                    } else {
+                        edge.from.id()
+                    };
+                    edge.kind != DependencyKind::Related || !mirrors.contains(far)
+                });
+            }
+        }
         // Only forwards: the reverse of a recorded edge is derived from the far end, never
         // written down on the near item. They ride on the last page of relations, which read
         // the long form they are recorded in, as far as the page has room — so they cost no
