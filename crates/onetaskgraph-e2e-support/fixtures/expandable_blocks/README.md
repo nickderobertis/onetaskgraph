@@ -14,5 +14,6 @@ document `design-doc-collapsible-spike-expandable-blocks-report`.
 
 `src/linear_normalizations.rs` is the one reader. The loopback Linear's `linear_markdown::stored`
 is held to every fixture there; the journeys account for a Linear hop's changes and read the
-shapes the authored expandable form does not recognise from here. Do not edit these files: a new
-observation of Linear is a new capture.
+shapes the authored expandable form does not recognise from here. Their JSON values are the
+spike's exactly; only their whitespace is the repository formatter's, which `workspace:format-check`
+holds every JSON file to. Do not edit their values: a new observation of Linear is a new capture.
