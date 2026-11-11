@@ -31,6 +31,9 @@ use onetaskgraph_e2e_support::{common, fixtures, linear_vocabulary, onevcs};
 // narrower.
 mod adoption;
 mod assets;
+// No credential and no network: every journey drives the binary against folders of Markdown
+// and in-memory sources.
+mod assignees;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No credential and no network:
 // every journey drives the binary against a folder of Markdown, the loopback board and the
 // loopback Linear workspace in seconds. Recording and checking an attestation, and its digest,
