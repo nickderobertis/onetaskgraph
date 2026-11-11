@@ -35,6 +35,7 @@ pub mod config;
 mod engine;
 
 mod environment;
+pub mod expandable_blocks;
 mod failure;
 mod global_id;
 mod plan;

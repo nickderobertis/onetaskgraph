@@ -49,7 +49,7 @@ pub const AUTOLINKED_TOP_LEVEL_DOMAINS: &[&str] = &[
 /// Applying it to its own output changes nothing.
 #[must_use]
 pub fn stored(content: &str) -> String {
-    let content = indented_code_fenced(&bold_split(&code_spans_joined(content)));
+    let content = indented_code_fenced(&bold_split(&code_spans_joined(&arrow_sections(content))));
     let content = content.as_str();
     let mut stored = String::with_capacity(content.len());
     let mut fence: Option<(char, usize)> = None;
@@ -64,6 +64,9 @@ pub fn stored(content: &str) -> String {
     // Whether the line before was a heading or a paragraph's line, which a list opening on the
     // next line is set apart from by a blank line.
     let mut after_prose = false;
+    // Whether the last unindented line holding anything was a list's item, and whether that
+    // list's items are bullets: the lines indented under it are its items' own.
+    let mut in_list: Option<bool> = None;
     for line in content.split_inclusive('\n') {
         let body = line.trim_end_matches(['\n', '\r']);
         let end = &line[body.len()..];
@@ -79,8 +82,9 @@ pub fn stored(content: &str) -> String {
             continue;
         }
         if body.trim().is_empty() {
+            // A line of whitespace alone is stored empty.
             if !blank_run {
-                stored.push_str(line);
+                stored.push_str(end);
             }
             (item, apart, after_blank, blank_run, after_prose) = (None, false, true, true, false);
             continue;
@@ -103,15 +107,39 @@ pub fn stored(content: &str) -> String {
         let bullet = rest.strip_prefix("- ").or_else(|| rest.strip_prefix("* "));
         let continued = item.filter(|_| bullet.is_none() && !image && !opens_block(rest));
         let listed = bullet.is_some() || ordered(rest).is_some();
-        // A list opening straight after a heading or a paragraph's line is set apart from it.
-        if listed && continued.is_none() && after_prose && !stored.ends_with("\n\n") {
+        let marker = listed.then_some(bullet.is_some());
+        let table_row = rest.starts_with('|') && rest.ends_with('|');
+        // An unindented item of the list the last unindented line was one of continues it.
+        let continues_list = marker.is_some() && indent.is_empty() && in_list == marker;
+        // A list indented under an item of that list is nested in the item.
+        let nested = marker.is_some() && !indent.is_empty() && in_list.is_some();
+        // A list's items set apart by a blank line are stored together, as one tight list: the
+        // blank line before an item continuing a list goes, and so does the one before a list
+        // nested in a list item, of either kind.
+        if marker.is_some()
+            && continued.is_none()
+            && (continues_list || nested)
+            && stored.ends_with("\n\n")
+        {
+            stored.pop();
+        }
+        // A list, a heading or a table opening straight after a heading or a paragraph's line is
+        // set apart from it — but for a list nested in a list item, which is not.
+        if ((listed && !continues_list && !nested) || heading(rest) || table_row)
+            && continued.is_none()
+            && after_prose
+            && !stored.ends_with("\n\n")
+        {
             stored.push('\n');
+        }
+        if indent.is_empty() && continued.is_none() {
+            in_list = marker;
         }
         after_prose = continued.is_none()
             && !listed
             && !image
             && delimiter_row(body).is_none()
-            && !(rest.starts_with('|') && rest.ends_with('|'))
+            && !table_row
             && !rest.starts_with("<!--");
         if let Some(width) = continued {
             stored.push_str(indent);
@@ -173,6 +201,43 @@ pub fn stored(content: &str) -> String {
         if item.is_none() && ends_in_table_row(&stored) {
             stored.push('\n');
         }
+    }
+    stored
+}
+
+/// The entities Linear stores as the character each stands for, outside code: spike
+/// `spike-expandable-blocks` recorded `&amp; &lt;tag&gt;` stored as `& <tag>`, in a paragraph and in
+/// a collapsible section's summary alike.
+const ENTITIES: [(&str, char); 3] = [("&amp;", '&'), ("&lt;", '<'), ("&gt;", '>')];
+
+/// Whether `text`, a line with its indentation taken off, is an ATX heading.
+fn heading(text: &str) -> bool {
+    let marks = text.chars().take_while(|c| *c == '#').count();
+    (1..=6).contains(&marks) && (text[marks..].is_empty() || text[marks..].starts_with(' '))
+}
+
+/// `content` with Linear's editor shortcut for a collapsible section, `>>> <summary>` … `>>>`,
+/// stored as its own `+++` form, outside fenced code — as spike `spike-expandable-blocks`
+/// recorded it, nesting included: a bare `>>>` closes every section open, one `+++` line each set
+/// apart by a blank line, and with none open opens one whose summary is empty; and a section the
+/// content leaves open is closed after its last line.
+fn arrow_sections(content: &str) -> String {
+    let mut open = 0_usize;
+    let mut stored = outside_fences(content, |lines, at| {
+        if let Some(summary) = lines[at].strip_prefix(">>> ") {
+            lines[at] = format!("+++ {summary}");
+            open += 1;
+        } else if lines[at] == ">>>" {
+            lines[at] = if open == 0 {
+                open = 1;
+                "+++ ".to_owned()
+            } else {
+                vec!["+++"; std::mem::take(&mut open)].join("\n\n")
+            };
+        }
+    });
+    for _ in 0..open {
+        stored.push_str("\n\n+++");
     }
     stored
 }
@@ -287,6 +352,19 @@ fn inline(text: &str) -> String {
                 stored.push_str("\\]");
                 1
             }
+            '&' => match ENTITIES
+                .iter()
+                .find(|(entity, _)| text[at..].starts_with(entity))
+            {
+                Some((entity, stands_for)) => {
+                    stored.push(*stands_for);
+                    entity.len()
+                }
+                None => {
+                    stored.push('&');
+                    1
+                }
+            },
             '~' => {
                 stored.push_str("\\~");
                 1

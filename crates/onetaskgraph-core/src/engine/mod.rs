@@ -2117,12 +2117,18 @@ fn authored_task(source: &ResolvedSource, mut task: Task) -> Task {
     task
 }
 
-/// `source`, handed the markup its kind's section form needs its bodies to carry, so a source
-/// built anywhere gets it on the way in: see
-/// [`SectionForm::markup`](crate::section_links::SectionForm::markup).
+/// `source`, handed the markup its kind's section form and expandable form need its bodies to
+/// carry, so a source built anywhere gets it on the way in: see
+/// [`SectionForm::markup`](crate::section_links::SectionForm::markup) and
+/// [`ExpandableForm::markup`](crate::expandable_blocks::ExpandableForm::markup).
 fn with_body_markup(source: ResolvedSource) -> ResolvedSource {
-    if let Some(markup) =
-        crate::section_links::SectionForm::for_kind(source.kind()).and_then(|form| form.markup())
+    // No kind needs both: `expandable_blocks`' tests hold the two entries to that.
+    if let Some(markup) = crate::expandable_blocks::ExpandableForm::for_kind(source.kind())
+        .and_then(crate::expandable_blocks::ExpandableForm::markup)
+        .or_else(|| {
+            crate::section_links::SectionForm::for_kind(source.kind())
+                .and_then(|form| form.markup())
+        })
     {
         source.source().attach_body_markup(markup);
     }
