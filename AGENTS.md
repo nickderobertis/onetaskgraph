@@ -1754,8 +1754,8 @@ however they ended, on every pull request and push to main; `.github/reporting` 
 and `report-job:test`, the journeys that drive it. **A pull request's rows are saved results.** Each
 `budgets` target `test-linux` runs passes `--save-results target/budget-results/<project>-budget-results.json`
 (the name is what `.github/nx-policy` holds a cached output to) and declares it in its Nx `outputs`
-where it is cached; `test-linux` uploads the directory as `budget-check-results-test-linux` and the
-`lint` job's release-only `just pool-maintenance-budget` as `budget-check-results-lint`. The other
+where it is cached; `test-linux` uploads the directory as `budget-check-results-test-linux`, with
+the release-only `just pool-maintenance-budget` it runs after its tests among them. The other
 platforms run the same targets and upload nothing, so each figure stays a Linux figure.
 `onetaskgraph-ci-check-time` and `onetaskgraph-ci-job-count` read the pull request's own run through
 the figures script. **A push to main runs no test job:** each row takes the merged pull request's

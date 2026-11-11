@@ -299,7 +299,7 @@ def ci_upload_step(job_name):
 
 
 def ci_upload_actions():
-    return {ci_upload_step(job_name)['uses'] for job_name in ('test-linux', 'lint')}
+    return {ci_upload_step('test-linux')['uses']}
 
 
 def recorded_jobs(longest_seconds):
@@ -1200,23 +1200,19 @@ class SavedResults(unittest.TestCase):
             self.assertEqual((tree / 'target/budget-results' / name).read_bytes(), saved_files[name], target)
         self.assertFalse(log.exists(), 'a cache hit measures nothing')
 
-        # The release pull request's lint step, through its real recipe.
+        # The release pull request's pool-maintenance step, through its real recipe, which test-linux
+        # runs after its tests, so its one upload carries this file beside the targets' restored ones.
         pool = run_in(tree, ['just', 'pool-maintenance-budget'])
         self.assertEqual(pool.returncode, 0, pool.stdout + pool.stderr)
         pool_results = (tree / 'target/budget-results/pool-maintenance-budget-results.json').read_bytes()
-        (tree / 'target/budget-results/pool-maintenance-budget-results.json').unlink()
 
-        # test-linux's upload, of the restored files alone, and then lint's.
         run_id = journey.next_run + 1
         uploaded = self.upload(journey, 'test-linux', run_id)
         self.assertEqual({name: uploaded[name] for name in saved_files}, saved_files)
-        self.assertEqual(set(uploaded), set(saved_files), 'what the targets saved and nothing else')
-        shutil.rmtree(tree / 'target/budget-results')
-        (tree / 'target/budget-results').mkdir()
-        (tree / 'target/budget-results/pool-maintenance-budget-results.json').write_bytes(pool_results)
-        uploaded_by_lint = self.upload(journey, 'lint', run_id)
-        self.assertEqual(set(uploaded_by_lint), {'pool-maintenance-budget-results.json'})
-        expected = self.artifact_figures({**uploaded, **uploaded_by_lint})
+        self.assertEqual(uploaded['pool-maintenance-budget-results.json'], pool_results)
+        self.assertEqual(set(uploaded), set(saved_files) | {'pool-maintenance-budget-results.json'},
+                         'what the targets and the pool step saved and nothing else')
+        expected = self.artifact_figures(uploaded)
         self.assertEqual({identifier: saved.actual for identifier, saved in expected.items() if identifier != OWN},
                          {identifier: figure for identifier, figure in figures.items() if identifier not in OMITTED})
         self.assertIn(OWN, expected, 'report-job:budgets saved a figure, which the row must not take')
