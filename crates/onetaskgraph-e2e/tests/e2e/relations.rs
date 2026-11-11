@@ -589,6 +589,42 @@ fn an_in_memory_source_reads_its_seeded_chain_and_links_from_either_end_and_answ
 }
 
 #[test]
+fn an_in_memory_source_declaring_no_write_side_refuses_every_parent_and_link_write() {
+    let store = Store::new();
+    let status = json!({"category": "todo", "name": "todo"});
+    let task = |id: &str| json!({"id": id, "title": id, "labels": [], "status": status});
+    store.sandbox.project_document(
+        &serde_json::to_string_pretty(&json!({"sources": {"frozen": {"plugin": "in-memory",
+            "config": {"capabilities": {"writes": "unsupported"},
+                       "tasks": [task("f1"), task("f2"), task("f3")],
+                       "parents": {"f2": "f1"}}}}}))
+        .expect("JSON"),
+    );
+    let answer = store.parents(
+        &json!([
+            {"child": "frozen:f3", "parent": "frozen:f1"},
+            {"child": "frozen:f2", "parent": null},
+        ]),
+        4,
+    );
+    assert_eq!(outcomes(&answer), ["error", "error"], "{answer}");
+    for result in answer["results"].as_array().expect("results") {
+        let reason = result["reason"].as_str().unwrap_or_default();
+        assert!(reason.contains("cannot be written"), "{reason}");
+    }
+    let linked = store.links(
+        "add-many",
+        &json!([{"from": "frozen:f1", "to": "frozen:f3", "type": "relates"}]),
+        4,
+    );
+    assert_eq!(outcomes(&linked), ["error"], "{linked}");
+    let items = store.relations(&["frozen:f1", "frozen:f2", "frozen:f3"]);
+    assert_eq!(items[0]["children"], json!(["frozen:f2"]));
+    assert_eq!(items[2]["parent"], Value::Null);
+    assert!(items.iter().all(|item| links_of(item).is_empty()));
+}
+
+#[test]
 fn a_native_mirror_named_on_a_source_with_none_is_refused_naming_the_source_type_and_word() {
     let store = Store::new();
     store.configure(&json!({"link_types": {"caused-by": {"native": "related"}}}));

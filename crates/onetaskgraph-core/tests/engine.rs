@@ -7182,9 +7182,7 @@ const SIXTIETH_BUNDLE_SHAPE: [(&str, u64); 152] = [
     ("WriteVerdict", 0xfe9f3b7541b8efb0),
 ];
 
-/// Version 61: the batched calls — `task find`, `task comment add-many` and `task update-many`
-/// read and answer their own documents, and `task update`'s answer carries the priority guard
-/// `--when-priority` came to.
+/// Version 62's roots: version 61's, and the relation calls' documents.
 const SIXTY_SECOND_BUNDLE_SHAPE: [(&str, u64); 170] = [
     ("Asset", 0x3861b2a394973652),
     ("AssetContentType", 0x045a0ea0dface7ec),
@@ -7358,6 +7356,9 @@ const SIXTY_SECOND_BUNDLE_SHAPE: [(&str, u64); 170] = [
     ("WriteVerdict", 0xfe9f3b7541b8efb0),
 ];
 
+/// Version 61: the batched calls — `task find`, `task comment add-many` and `task update-many`
+/// read and answer their own documents, and `task update`'s answer carries the priority guard
+/// `--when-priority` came to.
 const SIXTY_FIRST_BUNDLE_SHAPE: [(&str, u64); 159] = [
     ("Asset", 0x3861b2a394973652),
     ("AssetContentType", 0x045a0ea0dface7ec),

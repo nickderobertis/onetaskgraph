@@ -1235,6 +1235,10 @@ impl TaskSource for InMemorySource {
     }
 
     async fn set_parents(&self, writes: &[ParentWrite]) -> Vec<Result<ParentAnswer, SourceError>> {
+        // A source declaring no write side is held to it, as every other write here is.
+        if !self.declared().writes.is_supported() {
+            return writes.iter().map(|_| Err(unwritable(KIND))).collect();
+        }
         let mut held = match self.held() {
             Ok(held) => held,
             Err(error) => return writes.iter().map(|_| Err(error.clone())).collect(),
