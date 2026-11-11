@@ -59,6 +59,8 @@ mod plan_reads;
 mod plan_writes;
 mod private_home;
 mod project_status;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] The github-points-per-relation-batch workload must run in this crate's `test` target, whose saved telemetry its reporter reads and whose `budgets` target judges it, as every budget of this crate does (`follow_up_cycle`, `store_cost`); it is loopback-only and under a second long.
+mod relation_batch;
 mod relations;
 // `sources sanitize` against the loopback board, screened by the pinned onevcs release.
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Loopback-only and seconds long, like every journey of this crate; it drives the sweep through this plugin's own search and comment reads, so this plugin's edge is the one it belongs behind, beside the screened plan copy that already runs the same pinned onevcs.

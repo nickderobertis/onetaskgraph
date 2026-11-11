@@ -475,6 +475,124 @@ fn report_follow_up_cycle_points() {
 // llmlint: ignore-end[budget_commands_measure_directly]
 // llmlint: ignore-end[tests_assert_real_behavior]
 
+// llmlint: ignore-block[tests_assert_real_behavior] A report-only command entry point budgets.yaml selects, which reports nothing without ONEBUDGETSPEC_BUDGET_ID; `the_relation_batch_report_hands_over_the_recorded_figure_and_refuses_another_workload` below asserts what it hands over and refuses.
+// llmlint: ignore-block[budget_commands_measure_directly] Every budget of this crate selects its own report-only entry here, the harness-runner convention it landed with (report_visibility_reads, report_metadata_fields), and the task registering this one names that entry. It reads only the telemetry `relation_batch.rs` recorded during the crate's ordinary test run, refuses a recording of another workload, and hands the figure to onebudgetspec, which alone judges it.
+#[test]
+fn report_relation_batch_points() {
+    let Some(budget) = selected() else {
+        return;
+    };
+    let (value, detail) = relation_batch_figure(&budget).unwrap_or_else(|error| refuse(&error));
+    hand_over(value, &detail);
+}
+// llmlint: ignore-end[budget_commands_measure_directly]
+// llmlint: ignore-end[tests_assert_real_behavior]
+
+/// What `relation_batch.rs` recorded for `budget`, refused unless it is that journey's recording
+/// of the whole batch — its six calls in order, each a whole number of requests and of points —
+/// and its figure the points of every call added up.
+fn relation_batch_figure(budget: &str) -> Result<(f64, String), String> {
+    let value = recorded(budget)?;
+    if value["workload"].as_str() != Some(super::relation_batch::WORKLOAD) {
+        return Err("the recording is not of the relation batch's workload".into());
+    }
+    let calls = value["calls"].as_array().ok_or("missing the calls")?;
+    let named: Vec<&str> = calls
+        .iter()
+        .map(|call| call["call"].as_str().unwrap_or_default())
+        .collect();
+    if named != super::relation_batch::CALLS {
+        return Err(format!(
+            "the recording's calls are {named:?}, not the batch's {:?}",
+            super::relation_batch::CALLS
+        ));
+    }
+    let mut total = 0_u64;
+    for call in calls {
+        if call["requests"].as_u64().is_none() {
+            return Err("a call without a whole number of requests".into());
+        }
+        total += call["points"]
+            .as_u64()
+            .ok_or("a call without a whole number of points")?;
+    }
+    let figure = value["value"]
+        .as_u64()
+        .ok_or("missing whole-number figure")?;
+    if figure != total {
+        return Err(format!(
+            "the figure {figure} is not the points of every call, {total}"
+        ));
+    }
+    let detail = value["detail"].as_str().ok_or("missing detail")?.to_owned();
+    let figure = u32::try_from(figure).map_err(|_| "figure out of range")?;
+    Ok((f64::from(figure), detail))
+}
+
+#[test]
+fn the_relation_batch_report_hands_over_the_recorded_figure_and_refuses_another_workload() {
+    use onetaskgraph_e2e_support::common::Sandbox;
+    let sandbox = Sandbox::new();
+    let directory = sandbox.subdirectory("relation-batch");
+    let budget = super::relation_batch::BUDGET;
+    let run = |recorded: Option<Value>| {
+        let path = onetaskgraph_e2e_support::telemetry::file_in(&directory, budget);
+        let _ = std::fs::remove_file(&path);
+        if let Some(recorded) = recorded {
+            std::fs::create_dir_all(&directory).unwrap();
+            std::fs::write(&path, recorded.to_string()).unwrap();
+        }
+        let result = directory.join("result.json");
+        let _ = std::fs::remove_file(&result);
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "budget_runner::report_relation_batch_points",
+                "--exact",
+                "--nocapture",
+            ])
+            .env("GITHUB_ASSET_TELEMETRY_DIR", &directory)
+            .env("ONEBUDGETSPEC_BUDGET_ID", budget)
+            .env("ONEBUDGETSPEC_RESULT", &result)
+            .output()
+            .unwrap();
+        (output, std::fs::read_to_string(&result).ok())
+    };
+    let call =
+        |name: &str, points: u64| json!({"call": name, "requests": points, "points": points});
+    let valid = json!({"budget": budget, "value": 6,
+        "workload": super::relation_batch::WORKLOAD, "detail": "6 points",
+        "calls": super::relation_batch::CALLS.iter().map(|name| call(name, 1)).collect::<Vec<_>>()});
+    let (output, result) = run(Some(valid.clone()));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let handed: Value = serde_json::from_str(&result.expect("a figure")).unwrap();
+    assert_eq!(handed["value"], 6.0, "{handed}");
+    let mut other = valid.clone();
+    other["workload"] = json!("another workload");
+    let mut misadded = valid.clone();
+    misadded["value"] = json!(7);
+    let mut reordered = valid;
+    reordered["calls"].as_array_mut().unwrap().swap(0, 1);
+    for (recorded, message) in [
+        (None, "no telemetry"),
+        (Some(other), "not of the relation batch's workload"),
+        (Some(misadded), "is not the points of every call"),
+        (Some(reordered), "not the batch's"),
+    ] {
+        let (output, result) = run(recorded);
+        assert!(!output.status.success());
+        assert!(result.is_none(), "{message}: a figure was written");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(message),
+            "{message}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
 /// What `follow_up_cycle.rs` recorded for `budget`, refused unless it is that journey's recording
 /// of the whole cycle — its four phases in order, each call a whole number of requests and of
 /// points — and its figure the points of every call added up.

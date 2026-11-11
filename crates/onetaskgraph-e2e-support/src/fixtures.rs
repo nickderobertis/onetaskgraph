@@ -4632,9 +4632,6 @@ impl GitHubBoard {
 
 fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value) -> Value {
     board.lock().unwrap().settle_placements();
-    if let Some(answer) = github_relations::answer(board, query, variables) {
-        return answer;
-    }
     // One document with its project and the project's members: the document answered exactly
     // as a read of it by its id is, and its parent exactly as a listing of that project's
     // sub-issues carries it.
@@ -4708,6 +4705,9 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         return answer;
     }
     board.lock().unwrap().counted_types = TimelineEvent::counted_by(query);
+    if let Some(answer) = github_relations::answer(board, query, variables) {
+        return answer;
+    }
     if query == onetaskgraph_github_projects::graphql::PROJECT_VISIBILITY {
         let mut held = board.lock().unwrap();
         if held.project_scope_withheld {
