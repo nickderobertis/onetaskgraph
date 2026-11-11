@@ -538,7 +538,11 @@ reading the item again:
   a `--comments` copy — its comments, each copy by its origin's identity and body and each
   comment native to the destination by its id and body. The three keys themselves, the task's
   `delivered_by` and `onetaskgraph.depended_on_by` (which the store keeps in step after the
-  copy) and the destination's own id, url, location and times are left out.
+  copy) and the destination's own id, url, location and times are left out — and so, for every
+  kind, are the links a later copy *out of* the item records on it (`onetaskgraph.copies`,
+  `onetaskgraph.copy_locations`), which no copy into it writes, so a copy onward leaves the
+  record of the copy into it true. A record stamped before those links were left out is still
+  read as current.
 
   It is not the destination's own change token (`Task.version`), and cannot be: a hosted
   board's token is times the service assigns, which the write of this key itself moves, and
