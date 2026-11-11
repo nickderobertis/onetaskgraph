@@ -61,6 +61,7 @@
         "versionFreeNpm",
         "{workspaceRoot}/.tool-versions",
         "{workspaceRoot}/biome.json",
+        "{workspaceRoot}/.gitignore",
         "{workspaceRoot}/nx.json",
         "{workspaceRoot}/package.json",
         "{workspaceRoot}/.claude/**/*.{json,jsonc,js,mjs,cjs,jsx,ts,mts,cts,tsx,css,graphql,gql}",
