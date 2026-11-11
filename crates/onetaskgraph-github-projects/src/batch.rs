@@ -103,15 +103,49 @@ impl Batched {
             Self::Origin { items, .. } => usize::from(items.is_some()),
         }
     }
+
+    /// This ask, each of its parts given the next free slot of its kind.
+    fn placed(self, searches: &mut usize, origins: &mut usize) -> Slots {
+        let next = |free: &mut usize| {
+            let slot = *free;
+            *free += 1;
+            slot
+        };
+        match self {
+            Self::Search(slotted) => Slots::Search(slotted, next(searches)),
+            Self::Origin {
+                filter,
+                items,
+                search,
+                answered,
+            } => Slots::Origin {
+                filter,
+                items: items.map(|items| (items, next(origins))),
+                search: search.map(|search| (search, next(searches))),
+                answered,
+            },
+        }
+    }
 }
 
-/// The aliases one batched ask was given in a request, and the ask.
+/// A [`Batched`] ask placed in one request, each part beside the slot it was given.
+enum Slots {
+    /// A narrowed issue search, in this `s<slot>`.
+    Search(Slotted, usize),
+    /// An origin lookup: its board filter in an `o<slot>`, its body search in an `s<slot>`.
+    Origin {
+        filter: String,
+        items: Option<(Slotted, usize)>,
+        search: Option<(Slotted, usize)>,
+        answered: Vec<NativeId>,
+    },
+}
+
+/// One batched ask placed in a request: where its answer goes, its query, and its slots.
 struct Placed<'a> {
     at: usize,
     query: &'a TaskQuery,
-    batched: Batched,
-    search_slot: Option<usize>,
-    origin_slot: Option<usize>,
+    slots: Slots,
 }
 
 /// The messages of every GraphQL error a response carried beside its data whose path begins at
@@ -278,16 +312,10 @@ impl GitHubProjectsSource {
                 if searches + ask.search_slots() <= SEARCH_BATCH
                     && origins + ask.origin_slots() <= SEARCH_BATCH_ORIGINS
                 {
-                    let search_slot = (ask.search_slots() == 1).then_some(searches);
-                    let origin_slot = (ask.origin_slots() == 1).then_some(origins);
-                    searches += ask.search_slots();
-                    origins += ask.origin_slots();
                     placed.push(Placed {
                         at,
                         query: &asks[at].0,
-                        batched: ask,
-                        search_slot,
-                        origin_slot,
+                        slots: ask.placed(&mut searches, &mut origins),
                     });
                 } else {
                     rest.push((at, ask));
@@ -341,22 +369,25 @@ impl GitHubProjectsSource {
             variables.insert(format!("origin{slot}"), json!(false));
         }
         for ask in &placed {
-            let (search, items, filter) = match &ask.batched {
-                Batched::Search(slotted) => (Some(slotted), None, None),
-                Batched::Origin {
+            let (search, origin) = match &ask.slots {
+                Slots::Search(slotted, slot) => (Some((slotted, *slot)), None),
+                Slots::Origin {
                     filter,
                     items,
                     search,
                     ..
-                } => (search.as_ref(), items.as_ref(), Some(filter)),
+                } => (
+                    search.as_ref().map(|(search, slot)| (search, *slot)),
+                    items.as_ref().map(|(items, slot)| (items, *slot, filter)),
+                ),
             };
-            if let (Some(slot), Some(search)) = (ask.search_slot, search) {
+            if let Some((search, slot)) = search {
                 variables.insert(format!("search{slot}"), json!(search.search));
                 variables.insert(format!("after{slot}"), json!(search.after));
                 variables.insert(format!("first{slot}"), json!(search.first));
                 variables.insert(format!("ask{slot}"), json!(true));
             }
-            if let (Some(slot), Some(items), Some(filter)) = (ask.origin_slot, items, filter) {
+            if let Some((items, slot, filter)) = origin {
                 variables.insert(format!("filter{slot}"), json!(filter));
                 variables.insert(format!("itemsAfter{slot}"), json!(items.after));
                 variables.insert(format!("itemsFirst{slot}"), json!(items.first));
@@ -424,9 +455,9 @@ impl GitHubProjectsSource {
                 found.push(resolved);
             }
         };
-        let page = match ask.batched {
-            Batched::Search(slotted) => {
-                let alias = format!("s{}", ask.search_slot.unwrap_or_default());
+        let page = match ask.slots {
+            Slots::Search(slotted, slot) => {
+                let alias = format!("s{slot}");
                 let searched = connection(&alias, "")?;
                 for node in optional_nodes(Some(&searched), "search")?
                     .into_iter()
@@ -454,7 +485,7 @@ impl GitHubProjectsSource {
                     }),
                 }
             }
-            Batched::Origin {
+            Slots::Origin {
                 items,
                 search,
                 mut answered,
@@ -462,7 +493,7 @@ impl GitHubProjectsSource {
             } => {
                 let mut items_next = SearchConnection::Exhausted {};
                 let mut search_next = SearchConnection::Exhausted {};
-                if let (Some(slot), Some(items)) = (ask.origin_slot, &items) {
+                if let Some((items, slot)) = &items {
                     let read = connection(&format!("o{slot}"), "/projectV2/items")?;
                     for item in optional_nodes(Some(&read), "project items")?
                         .into_iter()
@@ -482,7 +513,7 @@ impl GitHubProjectsSource {
                         };
                     }
                 }
-                if let (Some(slot), Some(search)) = (ask.search_slot, &search) {
+                if let Some((search, slot)) = &search {
                     let read = connection(&format!("s{slot}"), "")?;
                     for node in optional_nodes(Some(&read), "search")?.into_iter().flatten() {
                         if let Some(resolved) = self.resolve_issue(node).await? {
@@ -927,7 +958,15 @@ impl GitHubProjectsSource {
         };
         let mut writing: Vec<usize> = Vec::new();
         let mut separately: Vec<usize> = Vec::new();
+        // An update of a task an earlier update of this batch writes, decided only once that
+        // one is written, on what it left; and each such task as this batch read it.
+        let mut later: Vec<usize> = Vec::new();
+        let mut first_read: BTreeMap<NativeId, Task> = BTreeMap::new();
         for (at, each) in updates.iter().enumerate() {
+            if first_read.contains_key(&each.id) {
+                later.push(at);
+                continue;
+            }
             let item = wanted
                 .iter()
                 .position(|id| *id == each.id)
@@ -953,6 +992,7 @@ impl GitHubProjectsSource {
                 answers[at] = Some(Ok(answer));
                 continue;
             }
+            first_read.insert(each.id.clone(), task);
             if item.content_kind == ContentKind::DraftIssue
                 || each.update.depends_on.is_some()
                 || self.is_unread(&each.id)
@@ -962,25 +1002,51 @@ impl GitHubProjectsSource {
                 writing.push(at);
             }
         }
-        // Two updates of one task are each composed on what the one before left.
+        // A task updated more than once is written one update at a time, in the batch's order,
+        // each composed on what the one before left.
         let repeated: Vec<usize> = writing
             .iter()
             .copied()
             .filter(|at| {
-                writing
+                later
                     .iter()
-                    .filter(|other| updates[**other].id == updates[*at].id)
-                    .count()
-                    > 1
+                    .any(|other| updates[*other].id == updates[*at].id)
             })
             .collect();
         writing.retain(|at| !repeated.contains(at));
         separately.extend(repeated);
+        separately.extend(later.iter().copied());
+        separately.sort_unstable();
+        // A later update is decided on what the write before it left — its version unknown, as no
+        // write's answer settles one — or, that write not made, on the task as this batch read it.
+        let mut left: BTreeMap<NativeId, Task> = BTreeMap::new();
         for at in separately {
+            let each = &updates[at];
+            if later.contains(&at) {
+                let basis = left.get(&each.id).or_else(|| first_read.get(&each.id));
+                let decided = match basis {
+                    Some(task) => decided_on(
+                        self,
+                        Some(task),
+                        each.if_version.as_deref(),
+                        &each.when_priority,
+                    ),
+                    // The task's first update in this batch found it missing or unreadable.
+                    None => Some(BatchAnswer::Missing),
+                };
+                if let Some(answer) = decided {
+                    answers[at] = Some(Ok(answer));
+                    continue;
+                }
+            }
+            let written = self.targeted_update(&each.id, &each.update).await;
+            if let Ok(Some(outcome)) = &written {
+                let mut task = outcome.task.clone();
+                task.version = None;
+                left.insert(each.id.clone(), task);
+            }
             answers[at] = Some(
-                self.targeted_update(&updates[at].id, &updates[at].update)
-                    .await
-                    .map(|written| written.map_or(BatchAnswer::Missing, BatchAnswer::Written)),
+                written.map(|written| written.map_or(BatchAnswer::Missing, BatchAnswer::Written)),
             );
         }
         if let Err(error) = self

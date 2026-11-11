@@ -803,3 +803,84 @@ fn each_batched_verb_renders_one_line_per_item_and_refuses_a_bad_item_alone() {
         "the reserved key was never written: {task:#}"
     );
 }
+
+#[test]
+fn a_copy_version_naming_no_copied_task_is_refused_before_anything_is_read() {
+    let store = Store::new();
+    let snap = store.sandbox.project().join("snap");
+    let refusals: [(&[&str], &str); 4] = [
+        (
+            &["plan:a", "plan:b", "--if-version", "plan:c=md1|x"],
+            "plan:c is not one of the ids this copy is given",
+        ),
+        (
+            &["plan:a", "--if-version", "md1|x", "--if-version", "md1|y"],
+            "names none of the ids this copy is given",
+        ),
+        (
+            &["plan:a", "plan:b", "--if-version", "md1|x"],
+            "names none of the ids this copy is given",
+        ),
+        (
+            &["--source", "plan", "--if-version", "md1|x"],
+            "names none of the ids this copy is given",
+        ),
+    ];
+    for (arguments, said) in refusals {
+        let mut copy = vec!["task", "copy"];
+        copy.extend(arguments);
+        copy.extend(["--to", "snap"]);
+        let (out, err) = store.human(&copy, "", 1);
+        assert!(out.is_empty(), "{copy:?}: {out}");
+        assert!(err.contains(said), "{copy:?}: {said:?} not in {err}");
+        assert!(err.contains("next:"), "{copy:?}: {err}");
+        assert_eq!(
+            std::fs::read_dir(&snap).expect("the folder").count(),
+            0,
+            "{copy:?} wrote nothing"
+        );
+    }
+}
+
+#[test]
+fn an_update_of_a_batch_removes_metadata_and_replaces_repositories_and_moves_nothing_else() {
+    let store = Store::new();
+    for source in ["plan", "memory"] {
+        let item = |native: &str| format!("{source}:{native}");
+        let before = store.shown(&item("a"));
+        let updates = json!({"schema_version": 1, "updates": [
+            {"item": item("a"), "remove_metadata": ["myapp.colour"],
+             "repositories": ["github.com/acme/widgets", "github.com/acme/gears"]},
+            {"item": item("c"), "repositories": []},
+            {"item": item("d"), "remove_metadata": ["no.such-key"]},
+        ]})
+        .to_string();
+        let updated = store.exited(
+            &["task", "update-many", source, "--input", "-"],
+            Some(&updates),
+            0,
+        );
+        assert_eq!(outcomes(&updated), ["written", "written", "written"]);
+        if source == "memory" {
+            // An in-memory source's work dies with its process: nothing to read back.
+            continue;
+        }
+        let after = store.shown(&item("a"));
+        assert!(after["metadata"].get("myapp.colour").is_none(), "{after:#}");
+        assert_eq!(
+            after["repositories"],
+            json!(["github.com/acme/widgets", "github.com/acme/gears"]),
+            "{after:#}"
+        );
+        for member in ["title", "content", "status", "priority"] {
+            assert_eq!(after[member], before[member], "{member} moved");
+        }
+        let cleared = store.shown(&item("c"));
+        assert!(
+            cleared["repositories"].as_array().is_none_or(Vec::is_empty),
+            "{cleared:#}"
+        );
+        assert_eq!(cleared["metadata"]["myapp.colour"], "blue");
+        assert_eq!(store.shown(&item("d"))["metadata"]["myapp.colour"], "red");
+    }
+}

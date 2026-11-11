@@ -13,12 +13,12 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use onetaskgraph_plugin_api::NativeId;
 
-use super::Vocabulary;
+use super::{Vocabulary, WriteKind};
 
 /// Every tracker's vocabulary, by its endpoint and team.
 type Vocabularies = HashMap<(String, String), Arc<Vocabulary>>;
-/// Every label id read, by its tracker's endpoint, whether it is a project label, and its name.
-type Labels = HashMap<(String, bool, String), NativeId>;
+/// Every label id read, by its tracker's endpoint, which label set it is of, and its name.
+type Labels = HashMap<(String, WriteKind, String), NativeId>;
 
 /// Every tracker's vocabulary, by its endpoint and team.
 pub(crate) fn vocabularies() -> MutexGuard<'static, Vocabularies> {
@@ -28,7 +28,7 @@ pub(crate) fn vocabularies() -> MutexGuard<'static, Vocabularies> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// Every label id read, by its tracker's endpoint, whether it is a project label, and its name.
+/// Every label id read, by its tracker's endpoint, which label set it is of, and its name.
 pub(crate) fn labels() -> MutexGuard<'static, Labels> {
     static HELD: OnceLock<Mutex<Labels>> = OnceLock::new();
     HELD.get_or_init(Mutex::default)

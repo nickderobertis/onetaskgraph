@@ -44,6 +44,21 @@ pub(crate) enum Aliased {
     Refused(usize, Refusal),
 }
 
+/// `value`, what one alias of an aliased read answered, when it is of `id` — or absent, which
+/// that read answers on its own terms. An item that names another id is not that alias's answer,
+/// so it is never taken for it.
+fn of_asked(value: Value, id: &NativeId, doing: &str) -> Result<Value, SourceError> {
+    match value.get("id").and_then(Value::as_str) {
+        Some(answered) if answered != id.0 => Err(SourceError::Malformed {
+            message: format!(
+                "Linear answered the alias asking for {id} while {doing} with another item, \
+                 {answered}"
+            ),
+        }),
+        _ => Ok(value),
+    }
+}
+
 /// The most creates one aliased `issueCreate` document carries.
 pub(crate) const CREATE_BATCH: usize = 25;
 
@@ -137,6 +152,7 @@ impl LinearSource {
             match self.send_aliased(graphql::ISSUE, &each).await? {
                 Aliased::Answered(values) => {
                     for (at, value) in pending.iter().zip(values) {
+                        let value = of_asked(value, &ids[*at], "reading issues together")?;
                         let held = optional(&json!({"issue": value}), "issue", |v| {
                             Ok((
                                 map_task(v, &self.name, &self.statuses, self.spelling())?,
@@ -158,6 +174,28 @@ impl LinearSource {
         Ok(read.into_iter().map(Option::flatten).collect())
     }
 
+    /// One update of a batch made on its own after the rest: the issue read as it now stands,
+    /// the update decided on that read, and written as `update_task` writes it.
+    async fn update_after(
+        &self,
+        each: &BatchUpdate,
+    ) -> Result<BatchAnswer<TaskUpdateOutcome>, SourceError> {
+        use onetaskgraph_plugin_api::TaskSource as _;
+        let now = self.issue_held(&each.id, Read::Load).await?;
+        if let Some(answer) = decided_on(
+            self,
+            now.as_ref().map(|(task, _)| task),
+            each.if_version.as_deref(),
+            &each.when_priority,
+        ) {
+            return Ok(answer);
+        }
+        Ok(self
+            .update_task(&each.id, &each.update)
+            .await?
+            .map_or(BatchAnswer::Missing, BatchAnswer::Written))
+    }
+
     /// [`TaskSource::update_tasks`](onetaskgraph_plugin_api::TaskSource::update_tasks): every
     /// issue read in one aliased read, each decided against its hold and its guard, and every
     /// update that changes something sent in one aliased `issueUpdate` document; see the module
@@ -174,14 +212,26 @@ impl LinearSource {
                 answers[at] = Some(Err(error));
             }
         }
-        let wanted: Vec<usize> = (0..updates.len())
-            .filter(|at| answers[*at].is_none())
-            .collect();
+        // A later update of an issue an earlier update of this batch names is made after the
+        // batch, on its own, decided on what the earlier one left: composed beside it on the
+        // same read, the later write would put back what the earlier one changed.
+        let mut wanted: Vec<usize> = Vec::new();
+        let mut later: Vec<usize> = Vec::new();
+        for at in (0..updates.len()).filter(|at| answers[*at].is_none()) {
+            if wanted
+                .iter()
+                .any(|earlier| updates[*earlier].id == updates[at].id)
+            {
+                later.push(at);
+            } else {
+                wanted.push(at);
+            }
+        }
         let ids: Vec<NativeId> = wanted.iter().map(|at| updates[*at].id.clone()).collect();
         let read = match self.issues_held(&ids).await {
             Ok(read) => read,
             Err(error) => {
-                for at in &wanted {
+                for at in wanted.iter().chain(&later) {
                     answers[*at] = Some(Err(error.clone()));
                 }
                 return answers.into_iter().flatten().collect();
@@ -292,6 +342,9 @@ impl LinearSource {
                     }
                 }
             }
+        }
+        for at in later {
+            answers[at] = Some(self.update_after(&updates[at]).await);
         }
         answers
             .into_iter()
@@ -497,10 +550,28 @@ impl LinearSource {
         let mut created: Vec<Option<NativeId>> = writes.iter().map(|_| None).collect();
         let outcome = self.send_queued(&mut queued, &mut created).await;
         if let Err(error) = outcome {
+            // The caller is never handed these ids, so one Linear will not take back is named
+            // here or by nobody — as the default `write_tasks` names it.
+            let mut left: Vec<&str> = Vec::new();
             for id in created.iter().flatten() {
-                let _ = <Self as onetaskgraph_plugin_api::TaskSource>::delete_task(self, id).await;
+                if <Self as onetaskgraph_plugin_api::TaskSource>::delete_task(self, id)
+                    .await
+                    .is_err()
+                {
+                    left.push(id.0.as_str());
+                }
             }
-            return Err(error);
+            if left.is_empty() {
+                return Err(error);
+            }
+            return Err(SourceError::Refused {
+                message: format!(
+                    "{error}; Linear then refused to take back {}, which this write created and \
+                     which it still holds; next: delete {} before writing again",
+                    left.join(", "),
+                    if left.len() == 1 { "it" } else { "them" }
+                ),
+            });
         }
         created
             .into_iter()
@@ -559,6 +630,9 @@ impl LinearSource {
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner)
                             .insert(id.clone(), sent);
+                        // Recorded before its relations are written, so a refused relation
+                        // still has the issue taken back.
+                        created[at] = Some(id.clone());
                         self.write_relations(
                             &id,
                             &create.edges,
@@ -566,7 +640,6 @@ impl LinearSource {
                             super::HeldRelations::None,
                         )
                         .await?;
-                        created[at] = Some(id);
                     }
                 }
                 Aliased::Refused(refused, _) => {
@@ -709,7 +782,10 @@ impl LinearSource {
             match self.send_aliased(graphql::ISSUE_DETAIL, &each).await {
                 Ok(Aliased::Answered(values)) => {
                     for (at, value) in pending.drain(..).zip(values) {
-                        read[at] = Some(self.detail_of(&value, page));
+                        read[at] = Some(
+                            of_asked(value, &ids[at], "reading issues with their comments")
+                                .and_then(|value| self.detail_of(&value, page)),
+                        );
                     }
                 }
                 Ok(Aliased::Refused(refused, refusal)) => {
@@ -800,6 +876,7 @@ impl LinearSource {
                         .unwrap_or_else(std::sync::PoisonError::into_inner);
                     for ((at, part), value) in owners.into_iter().zip(values) {
                         let (record, id) = pending[at];
+                        let value = of_asked(value, id, "reading a copy's records ahead")?;
                         let key = (*record, id.clone());
                         if part == 0 {
                             ahead.insert(key, value);

@@ -1910,8 +1910,10 @@ impl LinearSource {
         })
     }
 }
-#[derive(Clone, Copy)]
-enum WriteKind {
+/// Which kind of item a write is of — and so, for a label, which of Linear's two label sets
+/// it names.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum WriteKind {
     Task,
     Project,
 }
@@ -3042,14 +3044,10 @@ impl LinearSource {
         labels: &[Label],
         kind: WriteKind,
     ) -> Result<Vec<NativeId>, SourceError> {
-        let project = matches!(kind, WriteKind::Project);
-        let key = |name: &str| (self.endpoint.0.clone(), project, name.to_owned());
-        let lookup = |name: &'_ str| {
-            if project {
-                Lookup::ProjectLabel(name.to_owned())
-            } else {
-                Lookup::IssueLabel(name.to_owned())
-            }
+        let key = |name: &str| (self.endpoint.0.clone(), kind, name.to_owned());
+        let lookup = |name: &'_ str| match kind {
+            WriteKind::Project => Lookup::ProjectLabel(name.to_owned()),
+            WriteKind::Task => Lookup::IssueLabel(name.to_owned()),
         };
         let missing: Vec<&str> = {
             let held = shared::labels();

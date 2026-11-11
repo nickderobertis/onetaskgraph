@@ -1071,6 +1071,7 @@ test("taskCopy sends exactly the flags the binary's task copy reports, no more a
     "--if-version",
     "work:T-2=md1|b",
   ]);
+  // An untyped JavaScript caller can pass a number despite the declaration: bypass it on purpose.
   expect(() => taskCopyFlags({ ifVersion: [3] as unknown as string[] })).toThrow(
     "ifVersion[0] is not a string",
   );

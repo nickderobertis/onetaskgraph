@@ -358,14 +358,22 @@ struct Search {
     local: super::local::LocalTasks,
 }
 
-/// Where one search's walk stands.
+/// One search's walk: where it stands, the cursors it has followed, and what it has found.
 struct Walk {
-    cursor: Option<Cursor>,
+    stand: Stand,
     followed: BTreeSet<String>,
     pages: u32,
     items: Vec<Qualified<Task>>,
-    stopped: Option<String>,
-    done: bool,
+}
+
+/// Where one search's walk stands.
+enum Stand {
+    /// Its next page is to be asked for from this cursor — the first page from none.
+    Walking(Option<Cursor>),
+    /// Its last page has been read.
+    Complete,
+    /// It was stopped before its last page, for this reason.
+    Stopped(String),
 }
 
 impl Engine {
@@ -450,31 +458,34 @@ impl Engine {
         let mut walks: Vec<Walk> = searches
             .iter()
             .map(|_| Walk {
-                cursor: None,
+                stand: Stand::Walking(None),
                 followed: BTreeSet::new(),
                 pages: 0,
                 items: Vec::new(),
-                stopped: None,
-                done: false,
             })
             .collect();
         loop {
-            let walking: Vec<usize> = (0..walks.len()).filter(|at| !walks[*at].done).collect();
-            if walking.is_empty() {
-                break;
-            }
-            let asks: Vec<_> = walking
+            let asks: Vec<(usize, (onetaskgraph_plugin_api::TaskQuery, PageRequest))> = walks
                 .iter()
-                .map(|at| {
-                    (
-                        searches[*at].pushed.clone(),
-                        PageRequest {
-                            cursor: walks[*at].cursor.clone(),
-                            limit,
-                        },
-                    )
+                .enumerate()
+                .filter_map(|(at, walk)| match &walk.stand {
+                    Stand::Walking(cursor) => Some((
+                        at,
+                        (
+                            searches[at].pushed.clone(),
+                            PageRequest {
+                                cursor: cursor.clone(),
+                                limit,
+                            },
+                        ),
+                    )),
+                    Stand::Complete | Stand::Stopped(_) => None,
                 })
                 .collect();
+            if asks.is_empty() {
+                break;
+            }
+            let (walking, asks): (Vec<usize>, Vec<_>) = asks.into_iter().unzip();
             let answered = one_each(
                 source,
                 asks.len(),
@@ -496,25 +507,23 @@ impl Engine {
                                     )
                                 }),
                         );
-                        match page.next {
-                            None => walk.done = true,
+                        walk.stand = match page.next {
+                            None => Stand::Complete,
                             Some(next) if !walk.followed.insert(next.0.clone()) => {
-                                walk.stopped = Some(format!(
+                                Stand::Stopped(format!(
                                     "page {} of query {:?} answered the cursor {:?}, which this \
                                      search had already followed, so its walk was stopped there",
                                     walk.pages, searches[at].key, next.0
-                                ));
-                                walk.done = true;
+                                ))
                             }
-                            Some(next) => walk.cursor = Some(next),
-                        }
+                            Some(next) => Stand::Walking(Some(next)),
+                        };
                     }
                     Err(error) => {
-                        walk.stopped = Some(format!(
+                        walk.stand = Stand::Stopped(format!(
                             "page {} of query {:?} was refused by {source}: {error}",
                             walk.pages, searches[at].key
                         ));
-                        walk.done = true;
                     }
                 }
             }
@@ -522,9 +531,12 @@ impl Engine {
         let answers = searches
             .into_iter()
             .zip(walks)
-            .map(|(search, walk)| match walk.stopped {
-                None => FindAnswer::complete_with(search.key, walk.items),
-                Some(reason) => FindAnswer::cut_short(search.key, walk.items, reason),
+            .map(|(search, walk)| match walk.stand {
+                Stand::Stopped(reason) => FindAnswer::cut_short(search.key, walk.items, reason),
+                // The walk above ends only once no search is still walking.
+                Stand::Complete | Stand::Walking(_) => {
+                    FindAnswer::complete_with(search.key, walk.items)
+                }
             })
             .collect();
         Ok(FoundTasks {
@@ -870,10 +882,7 @@ impl Engine {
             if_version: held_to.clone(),
             when_priority: Vec::new(),
         }];
-        let answer = resolved
-            .source()
-            .update_tasks(&batch)
-            .await
+        let answer = one_each(&id.source, 1, resolved.source().update_tasks(&batch).await)
             .into_iter()
             .next()
             .unwrap_or(Ok(BatchAnswer::Missing))

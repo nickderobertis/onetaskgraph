@@ -241,7 +241,7 @@ budgets:
       The requests one follow-up cycle of batched store calls sends a Linear team holding 400
       other open items, every call a fresh process — a batch of a 20-query find, a comments read,
       a 16-ticket copy, 4 comments and 4 held updates; the batch again as a retry; a comment pass
-      over 20 proposals with 40 new comments; and that pass repeated — counted at the loopback
+      over 20 proposals with 40 new comments; and that pass's three calls again — counted at the loopback
       Linear, the 40 reply writes left out. It protects headroom on the production Linear key
       every manager of a host shares.
     measure: reported
@@ -249,4 +249,4 @@ budgets:
     command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_follow_up_cycle", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-linear-e2e"]
     unit: requests
     direction: max
-    threshold: 22
+    threshold: 24

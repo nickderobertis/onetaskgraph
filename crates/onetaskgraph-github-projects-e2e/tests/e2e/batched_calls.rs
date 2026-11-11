@@ -788,3 +788,42 @@ fn two_updates_of_one_ticket_are_each_written_on_what_the_one_before_left() {
         "{body}"
     );
 }
+
+#[test]
+fn a_later_update_of_one_ticket_is_held_against_what_the_earlier_one_left() {
+    let board = ticket_board();
+    let before = board.versions(&["U-0"]).remove(0);
+    let batch = json!({"schema_version": 1, "updates": [
+        {"item": "board:U-0", "if_version": before, "priority": "high"},
+        // Held to the version the earlier update of this batch moved the ticket past.
+        {"item": "board:U-0", "if_version": before, "body": "U-0 overwritten"},
+        // Guarded on the priority the earlier update replaced.
+        {"item": "board:U-0", "priority": "low", "when_priority": ["none"]},
+        // Guarded on the priority it now holds.
+        {"item": "board:U-0", "body": "U-0 settled", "when_priority": ["high"]},
+    ]});
+    let answered = board.run(
+        &["task", "update-many", "board", "--input", "-", "--json"],
+        &batch.to_string(),
+    );
+    assert_eq!(answered.code, Some(4), "{}", answered.stderr);
+    let outcomes: Vec<&str> = answered.json["results"]
+        .as_array()
+        .expect("results")
+        .iter()
+        .map(|result| result["outcome"].as_str().expect("an outcome"))
+        .collect();
+    assert_eq!(
+        outcomes,
+        ["written", "version-moved", "held", "written"],
+        "{:#}",
+        answered.json
+    );
+    assert_eq!(board.board.priority("U-0").as_deref(), Some("High"));
+    let body = board.board.body("U-0");
+    assert!(
+        body.as_str()
+            .is_some_and(|body| body.starts_with("U-0 settled")),
+        "{body}"
+    );
+}

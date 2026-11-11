@@ -7,8 +7,9 @@
 //! and one `update-many` of 4 held multi-field updates — then the same five calls again as a
 //! retry, which writes nothing; then a comment pass — the comments since an instant over 20
 //! proposals carrying 40 new comments, one read verifying the 40 replies the answering agents
-//! wrote, and one `update-many` of 10 held ticket changes — and the same pass again from its
-//! watermark, which finds nothing new. The 40 replies themselves are written outside what is
+//! wrote, and one `update-many` of 10 held ticket changes — and the same three calls again from
+//! its watermark, which finds nothing new, reads the replies back again and writes nothing, each
+//! change having moved past its hold. The 40 replies themselves are written outside what is
 //! counted: one per comment a person wrote, they are no store call this cycle makes.
 //!
 //! `measure_linear_requests_per_follow_up_cycle` records the figure for the
@@ -367,6 +368,22 @@ pub(crate) fn walk() -> Vec<(&'static str, Phase)> {
         again["comments"].as_array().map(Vec::len),
         Some(0),
         "{again}"
+    );
+    cycle.measured("repeated pass: verify replies", &mut calls, || {
+        cycle.json(&verify, 0)
+    });
+    // The changes again with the holds they were first sent with: each ticket has moved past
+    // its hold, so nothing is written twice.
+    let unchanged = cycle.measured("repeated pass: update-many", &mut calls, || {
+        cycle.json(&["task", "update-many", "team", "--input", &changes], 4)
+    });
+    assert!(
+        unchanged["results"]
+            .as_array()
+            .expect("results")
+            .iter()
+            .all(|result| result["outcome"] == "version-moved"),
+        "{unchanged}"
     );
     calls
 }

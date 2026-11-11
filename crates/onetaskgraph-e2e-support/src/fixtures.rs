@@ -7202,6 +7202,26 @@ impl LinearWorkspace {
         data["_linear_refused_pages"] = Value::Array(refused);
     }
 
+    /// Refuse every issue create titled `title`, from now on, as Linear refuses an input it
+    /// rejects: alone it is answered refused, and in an aliased batch nothing of the batch lands.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] As `refuse_writes_of`.
+    pub fn refuse_creates_titled(&self, title: &str) {
+        let mut data = self.state.lock().unwrap();
+        let mut refused = data["_linear_refused_titles"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        refused.push(json!(title));
+        data["_linear_refused_titles"] = Value::Array(refused);
+    }
+
+    /// Refuse every issue delete from now on — a workspace whose key may not delete what it
+    /// created.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] As `refuse_writes_of`.
+    pub fn refuse_issue_deletes(&self) {
+        self.state.lock().unwrap()["_linear_refuse_deletes"] = json!(true);
+    }
+
     /// Answer every page after the first of an issue search whose filter, as sent, holds
     /// `needle` with the very cursor it was asked from, saying there is more, from now on — a
     /// search that never ends if walked blindly.
@@ -8260,7 +8280,13 @@ fn linear_response(
         let refused = data["_linear_refused_items"]
             .as_array()
             .is_some_and(|refused| refused.iter().any(|id| named.contains(&id)));
-        if refused {
+        let titled = operation == graphql::ISSUE_CREATE
+            && data["_linear_refused_titles"]
+                .as_array()
+                .is_some_and(|refused| refused.contains(&vars["input"]["title"]));
+        let deleted =
+            operation == graphql::ISSUE_DELETE && data["_linear_refuse_deletes"] == json!(true);
+        if refused || titled || deleted {
             return Err(LINEAR_REFUSED_WRITE);
         }
     }

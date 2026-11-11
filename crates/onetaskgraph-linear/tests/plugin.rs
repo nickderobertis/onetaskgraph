@@ -7744,3 +7744,38 @@ fn a_kept_context_is_taken_as_a_write_s_read_only_for_the_issue_it_reads_as() {
     unreadable.as_object_mut().unwrap().remove("description");
     assert!(!source.prime_write(&NativeId::from("i1"), &unreadable, None));
 }
+
+/// Two issues read with their comments in one aliased request: an alias Linear answers with
+/// another issue than the one it asked for is that issue's malformed answer, never taken for it,
+/// and the alias answered as asked is read as it is.
+#[tokio::test]
+async fn an_aliased_read_answered_with_another_issue_is_refused_for_that_issue_alone() {
+    let page = PageRequest {
+        cursor: None,
+        limit: 50,
+    };
+    let detail = |id: &str| {
+        let mut issue = held_issue(id)["issue"].clone();
+        issue["comments"] = serde_json::json!({"nodes":[],
+            "pageInfo":{"hasPreviousPage":false,"startCursor":null}});
+        issue
+    };
+    // The second alias asked for `i2` and is answered with `i1`.
+    let (endpoint, sent) = response_server(vec![serde_json::json!({
+        "a0": detail("i1"), "a1": detail("i1"),
+    })]);
+    let read = source(&endpoint)
+        .get_task_details(&["i1".into(), "i2".into()], Some(&page))
+        .await;
+    let request = sent.recv().expect("one request");
+    assert!(request.contains("a1:"), "one aliased request: {request}");
+    assert!(
+        matches!(&read[0], Ok(Some(detail)) if detail.task.id.as_str() == "i1"),
+        "{read:?}"
+    );
+    assert!(
+        matches!(&read[1], Err(SourceError::Malformed { message })
+            if message.contains("i2") && message.contains("i1")),
+        "{read:?}"
+    );
+}

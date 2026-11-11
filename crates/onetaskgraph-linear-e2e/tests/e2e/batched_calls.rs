@@ -411,6 +411,48 @@ fn held_comments_and_updates_are_written_each_on_its_own_terms_in_one_request_ea
 }
 
 #[test]
+fn later_updates_of_one_issue_are_each_written_on_what_the_earlier_one_left() {
+    let team = Team::holding(writable(), false);
+    // U-1 is at `low` priority.
+    let before = team.version("team:U-1");
+    let updates = team.batch(
+        "updates.json",
+        &json!({"schema_version": 1, "updates": [
+            {"item": "team:U-1", "if_version": before, "priority": "high",
+             "metadata": {"team.first": true}},
+            {"item": "team:U-2", "title": "Beside them"},
+            // Held to the version the first update moved the issue past.
+            {"item": "team:U-1", "if_version": before, "body": "Overwritten.\n"},
+            // Guarded on the priority the first update replaced.
+            {"item": "team:U-1", "priority": "urgent", "when_priority": ["low"]},
+            // Guarded on the priority it now holds, and keeping the key the first one set.
+            {"item": "team:U-1", "body": "Settled.\n", "when_priority": ["high"],
+             "metadata": {"team.last": true}},
+        ]}),
+    );
+    let ran = team.run(&["task", "update-many", "team", "--input", &updates]);
+    assert_eq!(ran.code, Some(4), "{}", ran.json);
+    let outcomes: Vec<&str> = ran.json["results"]
+        .as_array()
+        .expect("results")
+        .iter()
+        .map(|result| result["outcome"].as_str().expect("an outcome"))
+        .collect();
+    assert_eq!(
+        outcomes,
+        ["written", "written", "version-moved", "held", "written"],
+        "{}",
+        ran.json
+    );
+    let task = team.task("team:U-1");
+    assert_eq!(task["content"], "Settled.\n", "{task}");
+    assert_eq!(task["priority"], "high", "{task}");
+    assert_eq!(task["metadata"]["team.first"], true, "{task}");
+    assert_eq!(task["metadata"]["team.last"], true, "{task}");
+    assert_eq!(team.task("team:U-2")["title"], "Beside them");
+}
+
+#[test]
 fn a_guarded_update_writes_all_three_only_while_the_guard_holds() {
     let team = Team::holding(writable(), false);
     let body = team.batches.join("body.md");

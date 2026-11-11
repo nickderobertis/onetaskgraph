@@ -320,7 +320,6 @@ pub(crate) fn walk() -> Vec<(&'static str, Phase)> {
             phases.push((name, measured));
         };
 
-    // The first copy, with the design document and its image.
     let copied = road.json(
         &[
             "project",
@@ -377,7 +376,6 @@ pub(crate) fn walk() -> Vec<(&'static str, Phase)> {
         "an unchanged re-copy sends no mutation"
     );
 
-    // The design approval, on the copied design document.
     let (design, _) = landed("plans:road-design");
     let attested = road.json(
         &[
@@ -396,7 +394,9 @@ pub(crate) fn walk() -> Vec<(&'static str, Phase)> {
     phase("design approval", &mut phases, &mut mark);
     assert_eq!(attested["record"]["kind"], "design-approval", "{attested}");
 
-    // Each node settled once, held to the version it was copied at.
+    // Each node settled once, held to the version `task show` reads now: a Linear create's
+    // answer vouches for none, so the settling engine holds the one it last read. Those reads
+    // are the engine's own and fall before the settlement phase's mark.
     let mut updates = Vec::new();
     for (at, node) in NODES.iter().enumerate() {
         let (id, _) = landed(&format!("plans:{node}"));
@@ -683,4 +683,81 @@ fn measure_linear_requests_per_private_plan_road() {
         total,
         &format!("{total} requests over the road: {detail}"),
     );
+}
+
+/// A batched create that cannot finish takes back what it made, and one Linear will not take
+/// back is named rather than left behind in silence: after a copy whose answer was lost, one of
+/// its three issues is deleted and its create refused, and Linear refuses every delete — so the
+/// retry, having brought the first in step, fails naming it as still held.
+#[test]
+fn a_batched_create_linear_will_not_take_back_is_named_as_still_held() {
+    let road = Road::of(PARALLEL);
+    road.author();
+    let workspace = &road.workspace.held;
+    workspace.lag_listings();
+    let creates: &'static str = Box::leak(
+        onetaskgraph_linear::graphql::aliased(onetaskgraph_linear::graphql::ISSUE_CREATE, 3)
+            .into_boxed_str(),
+    );
+    workspace.lose_answer_once(creates);
+    let copy = [
+        "project",
+        "copy",
+        "plans:road",
+        "--documents",
+        "--to",
+        "team",
+    ];
+    let before = workspace.served_count();
+    let mut failed = road.sandbox.command();
+    failed
+        .envs(road.workspace.clock.client_env(0))
+        .args(copy)
+        .arg("--json")
+        .write_stdin("");
+    assert_ne!(failed.assert().get_output().status.code(), Some(0));
+    // Each issue's id, as the lost create sent it — no listing shows them inside the lag.
+    let (_, sent) = workspace
+        .served_since(before)
+        .into_iter()
+        .find(|(query, _)| query == creates)
+        .expect("the batched create was sent");
+    let id_of = |title: &str| -> String {
+        sent.as_object()
+            .expect("variables")
+            .values()
+            .find(|input| input["title"] == title)
+            .and_then(|input| input["id"].as_str())
+            .unwrap_or_else(|| panic!("{title} was sent under an id: {sent}"))
+            .to_owned()
+    };
+    let (build, test, ship) = (
+        id_of("Build the ledger"),
+        id_of("Test the ledger"),
+        id_of("Ship the ledger"),
+    );
+    workspace.delete_issue_permanently(&ship);
+    workspace.refuse_creates_titled("Ship the ledger");
+    workspace.refuse_issue_deletes();
+
+    let mut retried = road.sandbox.command();
+    retried
+        .envs(road.workspace.clock.client_env(0))
+        .args(copy)
+        .arg("--json")
+        .write_stdin("");
+    let output = retried.assert().get_output().clone();
+    assert_ne!(output.status.code(), Some(0), "{}", stdout(&output));
+    let said = format!("{}{}", stdout(&output), crate::common::stderr(&output));
+    assert!(said.contains("refused to take back"), "{said}");
+    // Build was brought in step alone and so is this write's to take back; Ship, sent after
+    // it, was refused before Test was sent at all.
+    assert!(said.contains(build.as_str()), "{build} is named: {said}");
+    assert!(
+        !said.contains(test.as_str()),
+        "{test} was never written: {said}"
+    );
+    workspace.settle_listings();
+    assert_eq!(titled(&road, "Build the ledger"), 1, "still held, as named");
+    assert_eq!(titled(&road, "Ship the ledger"), 0);
 }
