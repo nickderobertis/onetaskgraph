@@ -723,6 +723,55 @@ fn a_parent_write_linear_answers_with_another_parent_or_none_it_can_read_is_an_e
 }
 
 #[test]
+fn a_mirrored_type_linking_across_sources_is_held_at_both_ends_with_no_native_relation() {
+    let team = Team::of(2);
+    let notes = team.sandbox.subdirectory("notes").join("tasks");
+    std::fs::write(
+        notes.join("n1.md"),
+        "---\ntitle: A note\nstatus: todo\n---\nThe note.\n",
+    )
+    .expect("a note");
+    let batch = |verb: &str| {
+        let input = team.batch(&json!({"schema_version": 1, "links": [
+            {"from": "team:R-0", "to": "notes:n1", "type": "caused-by"}]}));
+        team.run(&["task", "link", verb, "--input", &input])
+    };
+    let added = batch("add-many");
+    assert_eq!(
+        outcomes(&added),
+        ["written"],
+        "{}{}",
+        added.json,
+        added.stderr
+    );
+    assert_eq!(added.count(graphql::ISSUE_RELATION_CREATE), 0);
+    assert!(team.workspace.related_pairs().is_empty());
+    let items = team.relations(&["R-0"]);
+    assert_eq!(
+        links_of(&items[0]),
+        [(
+            "caused-by".to_owned(),
+            "out".to_owned(),
+            "notes:n1".to_owned(),
+            "unread".to_owned()
+        )]
+    );
+    let note = std::fs::read_to_string(notes.join("n1.md")).expect("the note");
+    assert!(
+        note.contains(r#"{"type":"caused-by","direction":"in","other":"team:R-0"}"#),
+        "{note}"
+    );
+
+    let removed = batch("remove-many");
+    assert_eq!(outcomes(&removed), ["written"], "{}", removed.json);
+    assert_eq!(removed.count(graphql::ISSUE_RELATION_DELETE), 0);
+    assert_eq!(removed.count(graphql::ISSUE_LINK_RELATIONS), 0);
+    assert!(links_of(&team.relations(&["R-0"])[0]).is_empty());
+    let note = std::fs::read_to_string(notes.join("n1.md")).expect("the note");
+    assert!(!note.contains("onetaskgraph.links"), "{note}");
+}
+
+#[test]
 fn each_word_a_linear_source_cannot_mirror_a_link_as_is_refused_at_load() {
     for word in [
         "blocks",
