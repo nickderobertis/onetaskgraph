@@ -265,6 +265,7 @@ pub(super) fn digest_of(
     linked_digest_of(&item, edges, comments, destination)
 }
 
+// llmlint: ignore[changed_behavior_has_e2e] A record stamped over the links can only have been written by an earlier release's binary, which no journey has to run; seeding one by hand would mean restating this digest in the journey and comparing the engine with itself. The unit test `links_a_later_copy_records_leave_a_record_current_whichever_way_it_was_stamped` holds both stamps against `holds`, and the copy-skip journey `a_later_copy_out_of_a_copied_item_leaves_the_copy_into_it_writing_nothing_on_a_repeat` drives the canonical half through the binary.
 /// Every digest a record a copy left on `item` may hold of it, as read now: [`digest_of`], and
 /// the digest over the links as well, which a record stamped before the links were left out
 /// holds — so a record an earlier release left reads as current and costs no rewrite.

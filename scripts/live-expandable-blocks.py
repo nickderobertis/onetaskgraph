@@ -42,6 +42,7 @@ from __future__ import annotations
 import argparse
 import base64
 import dataclasses
+import enum
 import json
 import os
 import pathlib
@@ -51,6 +52,7 @@ import subprocess
 import sys
 import time
 import urllib.request
+from typing import NewType
 
 PREFIX = "onetaskgraph live cleanup "
 SCRATCH = "nickderobertis/onetaskgraph-live-scratch"
@@ -86,17 +88,41 @@ def body(what: str) -> str:
     return f"The {what}.\n\n" + "\n\n".join(block(summary, n + 1) for n, summary in enumerate(SUMMARIES)) + "\n"
 
 
+class Verb(enum.StrEnum):
+    """The kind of record, as the command line names it."""
+
+    TASK = "task"
+    PROJECT = "project"
+    DOCUMENT = "document"
+
+
+QualifiedId = NewType("QualifiedId", str)
+NativeId = NewType("NativeId", str)
+GitHubToken = NewType("GitHubToken", str)
+LinearKey = NewType("LinearKey", str)
+
+
 @dataclasses.dataclass(frozen=True)
 class Record:
     """One record a copy landed: its key, the command line's verb for it, and its qualified id."""
 
     name: str
-    verb: str
-    id: str
+    verb: Verb
+    id: QualifiedId
 
     @property
-    def native(self) -> str:
-        return self.id.split(":", 1)[1]
+    def native(self) -> NativeId:
+        return NativeId(self.id.split(":", 1)[1])
+
+
+@dataclasses.dataclass(frozen=True)
+class Section:
+    """One `collapsible_section` node of a Linear editor state: its heading's text and marks, and
+    the types of the nodes inside it beside the heading."""
+
+    summary: str
+    marks: tuple[str, ...]
+    body: tuple[str, ...]
 
 
 @dataclasses.dataclass
@@ -114,7 +140,7 @@ class Run:
     github_bodies: dict[str, str] = dataclasses.field(default_factory=dict)
     linear: dict[str, str] = dataclasses.field(default_factory=dict)
     linear_bodies: dict[str, str] = dataclasses.field(default_factory=dict)
-    linear_sections: dict[str, list[dict]] = dataclasses.field(default_factory=dict)
+    linear_sections: dict[str, list[Section]] = dataclasses.field(default_factory=dict)
     read_back: dict[str, str] = dataclasses.field(default_factory=dict)
     checks: list[Check] = dataclasses.field(default_factory=list)
     cleanup_failures: list[str] = dataclasses.field(default_factory=list)
@@ -122,7 +148,7 @@ class Run:
     def check(self, what: str, held: bool, detail: str = "") -> None:
         self.checks.append(Check(what, held, "" if held else detail))
         if not held:
-            print(f"FAILED {what}: {detail}", file=sys.stderr)
+            print(f"FAILED {what}: {detail}; next: compare the stored body with README \"Expandable blocks\" and the form's entry in `expandable_blocks`, then fix whichever is wrong and run again", file=sys.stderr)
 
 
 class Failure(RuntimeError):
@@ -135,19 +161,22 @@ def request(url: str, authorization: str, payload: dict | None = None) -> dict:
         "Authorization": authorization, "Content-Type": "application/json", "User-Agent": "onetaskgraph-live-expandable-blocks"})
     with urllib.request.urlopen(sent, timeout=60) as answer:
         held = json.loads(answer.read())
-    if isinstance(held, dict) and held.get("errors"):
+    if not isinstance(held, dict):
+        raise Failure(f"{url} answered {type(held).__name__}, not an object; next: read the answer, then run again")
+    if held.get("errors"):
         raise Failure(f"{url} answered errors {held['errors']}; next: read them, then run again")
     return held
 
 
 def at(value: object, *path: str | int) -> object:
     for step in path:
-        if isinstance(step, int) and isinstance(value, list) and step < len(value):
-            value = value[step]
-        elif isinstance(step, str) and isinstance(value, dict):
-            value = value.get(step)
-        else:
-            raise Failure(f"no {step!r} in the answer; next: compare the answer with the query")
+        match step, value:
+            case int(), list() if step < len(value):
+                value = value[step]
+            case str(), dict():
+                value = value.get(step)
+            case _:
+                raise Failure(f"no {step!r} in the answer; next: compare the answer with the query")
     return value
 
 
@@ -158,12 +187,29 @@ def text_at(value: object, *path: str | int) -> str:
     return held
 
 
-def github(token: str, query: str, variables: dict) -> dict:
-    return at(request("https://api.github.com/graphql", f"bearer {token}", {"query": query, "variables": variables}), "data")
+def optional_text_at(value: object, *path: str | int) -> str:
+    """The text at `path`, or empty where the answer holds none there."""
+    held = at(value, *path)
+    if held is None:
+        return ""
+    if not isinstance(held, str):
+        raise Failure(f"{'.'.join(map(str, path))} is {held!r}, not text; next: compare the answer with the query")
+    return held
 
 
-def linear(key: str, query: str, variables: dict) -> dict:
-    return at(request("https://api.linear.app/graphql", key, {"query": query, "variables": variables}), "data")
+def object_at(value: object, *path: str | int) -> dict:
+    held = at(value, *path)
+    if not isinstance(held, dict):
+        raise Failure(f"{'.'.join(map(str, path))} is {held!r}, not an object; next: compare the answer with the query")
+    return held
+
+
+def github(token: GitHubToken, query: str, variables: dict) -> dict:
+    return object_at(request("https://api.github.com/graphql", f"bearer {token}", {"query": query, "variables": variables}), "data")
+
+
+def linear(key: LinearKey, query: str, variables: dict) -> dict:
+    return object_at(request("https://api.linear.app/graphql", key, {"query": query, "variables": variables}), "data")
 
 
 def scratch_issue(url: str) -> str:
@@ -173,28 +219,28 @@ def scratch_issue(url: str) -> str:
     return f"https://api.github.com/repos/{SCRATCH}/issues/{match.group(1)}"
 
 
-def sections_of(state: str | None) -> list[dict]:
-    """Every `collapsible_section` node of a Linear editor state: its heading's text and marks,
-    and the types of the nodes inside it beside the heading."""
+def sections_of(state: str | None) -> list[Section]:
+    """Every `collapsible_section` node of a Linear editor state."""
     import pycrdt
 
     if not state:
         return []
     doc = pycrdt.Doc()
     doc.apply_update(base64.b64decode(state))
-    found: list[dict] = []
+    found: list[Section] = []
 
     def text(node) -> tuple[str, set[str]]:
         held, marks = "", set()
-        if isinstance(node, pycrdt.XmlText):
-            for piece, attributes in node.diff():
-                held += piece
-                marks.update((attributes or {}).keys())
-        elif isinstance(node, pycrdt.XmlElement):
-            for child in node.children:
-                more, inner = text(child)
-                held += more
-                marks |= inner
+        match node:
+            case pycrdt.XmlText():
+                for piece, attributes in node.diff():
+                    held += piece
+                    marks.update((attributes or {}).keys())
+            case pycrdt.XmlElement():
+                for child in node.children:
+                    more, inner = text(child)
+                    held += more
+                    marks |= inner
         return held, marks
 
     def walk(node) -> None:
@@ -203,8 +249,8 @@ def sections_of(state: str | None) -> list[dict]:
                 children = list(node.children)
                 heading = next((child for child in children if isinstance(child, pycrdt.XmlElement) and child.tag == "collapsible_heading"), None)
                 shown, marks = text(heading) if heading is not None else ("", set())
-                found.append({"summary": shown.strip(), "marks": sorted(marks),
-                              "body": [child.tag for child in children if isinstance(child, pycrdt.XmlElement) and child is not heading]})
+                found.append(Section(shown.strip(), tuple(sorted(marks)),
+                                     tuple(child.tag for child in children if isinstance(child, pycrdt.XmlElement) and child is not heading)))
             for child in node.children:
                 walk(child)
 
@@ -252,7 +298,7 @@ def observe() -> int:
         raise Failure(f"{args.binary} is not a file; next: build the binary and name the file the build wrote")
     out = pathlib.Path(args.out).resolve()
     out.mkdir(parents=True, exist_ok=True)
-    token, owner = required("GH_PROJECTS_TOKEN"), required("GH_PROJECTS_OWNER")
+    token, owner = GitHubToken(required("GH_PROJECTS_TOKEN")), required("GH_PROJECTS_OWNER")
     if not required("GH_PROJECTS_NUMBER").isdigit() or int(required("GH_PROJECTS_NUMBER")) < 1:
         raise Failure("GH_PROJECTS_NUMBER is not a positive project number; next: nominate board #1's number")
     number = int(required("GH_PROJECTS_NUMBER"))
@@ -262,7 +308,7 @@ def observe() -> int:
         linear_env = env_file(args.linear_env)
     except OSError as error:
         raise Failure(f"{args.linear_env} cannot be read: {error}; next: name the .env holding the TES2 key") from error
-    key, team = required("LINEAR_API_KEY", linear_env), required("LINEAR_WRITE_TEAM", linear_env)
+    key, team = LinearKey(required("LINEAR_API_KEY", linear_env)), required("LINEAR_WRITE_TEAM", linear_env)
     if team != "TES2":
         raise Failure(f"LINEAR_WRITE_TEAM must be TES2, not {team}; next: use the scratch team's key")
     run = Run(stamp=f"{socket.gethostname()}-{os.getpid()}-{int(time.time() * 1e6)}")
@@ -320,10 +366,22 @@ def observe() -> int:
             done = subprocess.run([str(program), "--json", *arguments], cwd=sandbox, env=environment, capture_output=True, text=True)
             if done.returncode != 0:
                 raise Failure(f"onetaskgraph {' '.join(arguments)} exited {done.returncode}: {done.stderr}next: fix what it names, then run again")
-            return json.loads(done.stdout)
+            answer = json.loads(done.stdout)
+            if not isinstance(answer, dict) or not isinstance(answer.get("items"), list):
+                raise Failure(f"onetaskgraph {' '.join(arguments)} answered no list of items; next: read its output against its schema")
+            return answer
 
         def shown(record: Record) -> dict:
-            return at(binary(record.verb, "show", record.id), "items", 0, "item")
+            return object_at(binary(record.verb, "show", record.id), "items", 0, "item")
+
+        def reported(report: dict) -> list[tuple[QualifiedId, QualifiedId | None]]:
+            """Each item a copy reported: its source, and where it landed when it did."""
+            found = []
+            for index in range(len(at(report, "items"))):
+                item = object_at(report, "items", index)
+                destination = item.get("destination")
+                found.append((QualifiedId(text_at(item, "source")), QualifiedId(destination) if isinstance(destination, str) else None))
+            return found
 
         def copy(source: dict[str, Record], to: str) -> dict[str, Record]:
             reports = []
@@ -333,26 +391,25 @@ def observe() -> int:
             finally:
                 # Everything a copy reported landing is removed, whichever later step failed.
                 for report in reports:
-                    for item in at(report, "items") or []:
-                        destination = item.get("destination") if isinstance(item, dict) else None
-                        if not isinstance(destination, str):
+                    for origin, destination in reported(report):
+                        if destination is None:
                             continue
-                        verb = next(record.verb for record in source.values() if record.id == item.get("source"))
+                        verb = next(record.verb for record in source.values() if record.id == origin)
                         landed = Record("", verb, destination)
                         if to == "board":
                             created_issues.append(text_at(shown(landed), "location", "url"))
                         else:
                             created_linear.append(landed)
-            by_source = {item["source"]: item.get("destination") for report in reports for item in at(report, "items")}
+            by_source = dict(pair for report in reports for pair in reported(report))
             landed_at = {}
             for name, record in source.items():
                 destination = by_source.get(record.id)
-                if not isinstance(destination, str):
+                if destination is None:
                     raise Failure(f"{record.id} did not land in {to}; next: read the copy's report")
                 landed_at[name] = Record(name, record.verb, destination)
             return landed_at
 
-        source = {name: Record(name, verb, f"{authored_name}:{name}") for name, verb in (("P", "project"), ("T", "task"), ("D", "document"))}
+        source = {name: Record(name, verb, QualifiedId(f"{authored_name}:{name}")) for name, verb in (("P", Verb.PROJECT), ("T", Verb.TASK), ("D", Verb.DOCUMENT))}
         on_board = copy(source, "board")
         onward = copy(on_board, "linear")
 
@@ -368,15 +425,16 @@ def observe() -> int:
 
         # Linear: every block a collapsible section, stored as one in its editor state.
         for name, record in onward.items():
-            if record.verb == "task":
-                held = at(linear(key, "query($id:String!){ issue(id:$id){ url description descriptionState } }", {"id": record.native}), "issue")
-                stored, state = at(held, "description") or "", at(held, "descriptionState")
-            else:
-                held = at(linear(key, f"query($id:String!){{ {record.verb}(id:$id){{ url content contentState }} }}", {"id": record.native}), record.verb)
-                stored, state = at(held, "content") or "", at(held, "contentState")
+            match record.verb:
+                case Verb.TASK:
+                    held = object_at(linear(key, "query($id:String!){ issue(id:$id){ url description descriptionState } }", {"id": record.native}), "issue")
+                    stored, state = optional_text_at(held, "description"), optional_text_at(held, "descriptionState")
+                case Verb.PROJECT | Verb.DOCUMENT:
+                    held = object_at(linear(key, f"query($id:String!){{ {record.verb}(id:$id){{ url content contentState }} }}", {"id": record.native}), str(record.verb))
+                    stored, state = optional_text_at(held, "content"), optional_text_at(held, "contentState")
             run.linear[name] = re.sub(r"https://linear\.app/[^/]+/", "https://linear.app/<workspace>/", text_at(held, "url"))
             run.linear_bodies[name] = stored
-            sections = sections_of(state if isinstance(state, str) else None)
+            sections = sections_of(state or None)
             run.linear_sections[name] = sections
             lines = stored.split("\n")
             for n, summary in enumerate(SUMMARIES, start=1):
@@ -384,15 +442,15 @@ def observe() -> int:
                 run.check(f"Linear {name}: block {n} is stored as `{header}`, a blank line after it", header in lines and lines[lines.index(header) + 1] == "", stored[:400])
             run.check(f"Linear {name}: every section is closed by `+++`", lines.count("+++") == len(SUMMARIES), stored[:400])
             run.check(f"Linear {name}: no authored markup is left", not any(line.startswith(("<details", "<summary>")) or line == "</details>" for line in lines), stored[:400])
-            run.check(f"Linear {name}: its editor state holds one collapsible_section per block, its heading the summary", [section["summary"] for section in sections] == [summary.shown for summary in SUMMARIES], json.dumps(sections))
+            run.check(f"Linear {name}: its editor state holds one collapsible_section per block, its heading the summary", [section.summary for section in sections] == [summary.shown for summary in SUMMARIES], str(sections))
             for n, section in enumerate(sections, start=1):
                 for kind in ("paragraph", "heading", "code_block", "table"):
-                    run.check(f"Linear {name}: section {n} keeps a {kind} inside it", kind in section["body"], json.dumps(section))
-                run.check(f"Linear {name}: section {n} keeps its list inside it", any(kind.endswith("_list") for kind in section["body"]), json.dumps(section))
+                    run.check(f"Linear {name}: section {n} keeps a {kind} inside it", kind in section.body, str(section))
+                run.check(f"Linear {name}: section {n} keeps its list inside it", any(kind.endswith("_list") for kind in section.body), str(section))
 
         # Read back through the store: the authored blocks.
         for name, record in onward.items():
-            content = shown(record).get("content") or ""
+            content = optional_text_at(shown(record), "content")
             run.read_back[name] = content
             for n, summary in enumerate(SUMMARIES, start=1):
                 run.check(f"store read of Linear {name}: block {n} reads back in the authored form", f"<details>\n<summary>{summary.authored}</summary>\n\nParagraph of block {n}." in content and content.count("</details>") == len(SUMMARIES), content[:400])
@@ -413,7 +471,7 @@ def observe() -> int:
             except Exception as error:  # noqa: BLE001 — every cleanup failure is collected and fails the run below
                 run.cleanup_failures.append(f"board {run.board}: {error}; next: delete it by hand on GitHub")
         for record in created_linear:
-            mutation = {"task": "issueDelete", "document": "documentDelete", "project": "projectDelete"}[record.verb]
+            mutation = {Verb.TASK: "issueDelete", Verb.DOCUMENT: "documentDelete", Verb.PROJECT: "projectDelete"}[record.verb]
             try:
                 answer = linear(key, f"mutation($id:String!){{ {mutation}(id:$id){{ success }} }}", {"id": record.native})
                 if at(answer, mutation, "success") is not True:

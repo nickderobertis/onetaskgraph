@@ -33,6 +33,7 @@ use std::sync::Arc;
 
 use onetaskgraph_plugin_api::{BodyMarkup, SharedBodyMarkup};
 
+// llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] The task contract this module implements requires each destination kind's expandable form to be one entry of `ExpandableForm` in `onetaskgraph-core`, the one place that kind's form is written and read back; no plugin may depend on the engine (AGENTS.md), so a plugin cannot own a form the engine reads, and Linear's form — with what it remembers of blocks it read back as literal text, which is part of reading that form back — reaches the Linear plugin only as the `BodyMarkup` this entry hands it, as GitHub's anchors do in `section_links`.
 /// One destination kind's expandable form: the one entry each kind has.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExpandableForm {
@@ -85,7 +86,9 @@ impl ExpandableForm {
         match self {
             Self::LocalMd | Self::GithubProjects => stored.to_owned(),
             Self::Linear => rewritten(stored, &linear_regions(stored), |region| {
-                let section = region.section.as_ref()?;
+                let Shape::Section(section) = &region.shape else {
+                    return None;
+                };
                 let block = authored_block(section)?;
                 (linear_section(&block).as_ref() == Some(section))
                     .then(|| block.render(region.ending))
@@ -104,14 +107,17 @@ impl ExpandableForm {
     }
 }
 
-/// One expandable block in the authored form, as [`blocks`] finds it.
+// llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
+
+/// One expandable block in the authored form: made only by [`authored_parts`], which holds it to
+/// the form, and by [`authored_block`], which reads it out of a Linear section.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Block {
+struct Block {
     /// SUMMARY, as written between `<summary>` and `</summary>`.
-    pub summary: String,
+    summary: String,
     /// BODY: every line between the blank line after the summary and the blank line before
     /// `</details>`, joined by line breaks.
-    pub body: String,
+    body: String,
 }
 
 impl Block {
@@ -124,14 +130,14 @@ impl Block {
     }
 }
 
-/// Every block of `content` in the authored form, in order. A block-like shape that is not the
+/// How many blocks of `content` are in the authored form. A block-like shape that is not the
 /// form — see the module documentation — is not one, and nor is anything inside it.
 #[must_use]
-pub fn blocks(content: &str) -> Vec<Block> {
+pub fn blocks(content: &str) -> usize {
     authored_regions(content)
-        .into_iter()
-        .filter_map(|region| region.block)
-        .collect()
+        .iter()
+        .filter(|region| matches!(region.shape, Shape::Block(_)))
+        .count()
 }
 
 /// A Linear collapsible section: its summary as Linear stores it, and its body.
@@ -155,10 +161,18 @@ struct Region {
     lines: (usize, usize),
     /// The last line's own line break.
     ending: &'static str,
-    /// The block they are, in the authored form.
-    block: Option<Block>,
-    /// The section they are, in Linear's form.
-    section: Option<Section>,
+    /// What they are.
+    shape: Shape,
+}
+
+/// What the lines of one [`Region`] are.
+enum Shape {
+    /// Exactly one block in the authored form.
+    Block(Block),
+    /// Exactly one section in Linear's form.
+    Section(Section),
+    /// Neither: a shape that is not a form, carried as it stands.
+    Other,
 }
 
 /// One line of a body: its text without its line break, and the break.
@@ -260,8 +274,7 @@ fn authored_regions(content: &str) -> Vec<Region> {
         regions.push(Region {
             lines: (index, close),
             ending: lines[close].ending,
-            block,
-            section: None,
+            shape: block.map_or(Shape::Other, Shape::Block),
         });
         index = close + 1;
     }
@@ -358,8 +371,7 @@ fn linear_regions(stored: &str) -> Vec<Region> {
         regions.push(Region {
             lines: (index, close),
             ending: lines[close].ending,
-            block: None,
-            section,
+            shape: section.map_or(Shape::Other, Shape::Section),
         });
         index = close + 1;
     }
@@ -520,7 +532,10 @@ fn section_parts(section: &Section) -> Option<Section> {
     linear_regions(&section.render(""))
         .into_iter()
         .next()
-        .and_then(|region| region.section)
+        .and_then(|region| match region.shape {
+            Shape::Section(section) => Some(section),
+            Shape::Block(_) | Shape::Other => None,
+        })
 }
 
 /// The authored block a Linear section reads back as: its summary's backtick spans as `<code>`,
@@ -559,7 +574,9 @@ fn authored_block(section: &Section) -> Option<Block> {
 fn linear_written(authored: &str, literal: &std::collections::HashSet<String>) -> String {
     let lines = lines(authored);
     rewritten(authored, &authored_regions(authored), |region| {
-        let block = region.block.as_ref()?;
+        let Shape::Block(block) = &region.shape else {
+            return None;
+        };
         if literal.contains(&region_text(&lines, region)) {
             return None;
         }
@@ -574,6 +591,7 @@ fn region_text(lines: &[Line<'_>], region: &Region) -> String {
     joined(&lines[region.lines.0..=region.lines.1])
 }
 
+// llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] The task contract this module implements requires each destination kind's expandable form to be one entry of `ExpandableForm` in `onetaskgraph-core`, the one place that kind's form is written and read back; no plugin may depend on the engine (AGENTS.md), so a plugin cannot own a form the engine reads, and Linear's form — with what it remembers of blocks it read back as literal text, which is part of reading that form back — reaches the Linear plugin only as the `BodyMarkup` this entry hands it, as GitHub's anchors do in `section_links`.
 /// Linear's collapsible sections, as the Linear source applies them to every body it sends and
 /// receives.
 ///
@@ -604,7 +622,7 @@ impl BodyMarkup for LinearSections {
         let lines = lines(content);
         let held: Vec<String> = authored_regions(content)
             .iter()
-            .filter(|region| region.block.is_some())
+            .filter(|region| matches!(region.shape, Shape::Block(_)))
             .map(|region| region_text(&lines, region))
             .collect();
         if !held.is_empty() {
@@ -616,6 +634,7 @@ impl BodyMarkup for LinearSections {
         ExpandableForm::Linear.read(content)
     }
 }
+// llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 
 #[cfg(test)]
 mod tests {
@@ -635,7 +654,7 @@ mod tests {
             assert_eq!(kind.written(AUTHORED), AUTHORED);
             assert_eq!(kind.read(LINEAR), LINEAR);
         }
-        assert_eq!(blocks(AUTHORED).len(), 1);
+        assert_eq!(blocks(AUTHORED), 1);
     }
 
     #[test]

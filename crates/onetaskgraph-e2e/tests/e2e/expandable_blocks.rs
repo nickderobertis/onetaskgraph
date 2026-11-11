@@ -385,10 +385,10 @@ fn records(
 ///
 /// The first repeat leaves every body `landed` names byte for byte as it was, changes none of
 /// their metadata but `onetaskgraph.copied_version`, and moves that on exactly the records
-/// `restamped` names: the one write a repeat still makes, a pre-existing re-stamp of the copy
-/// record the manager ruled the one exception to a repeat writing nothing — the GitHub source
-/// answering a link write with the token from before it, and a `--comments` task copy, each a
-/// follow-up of its own. The second repeat writes nothing at all.
+/// `restamped` names: a re-stamp of the copy record, because the source version that record
+/// names is one the source has since moved past — a GitHub source answers a link write with the
+/// change token from before it, and a `--comments` task copy's source moves after the copy read
+/// it. The second repeat writes nothing at all.
 fn repeats_settling(
     sandbox: &Sandbox,
     what: &str,
@@ -578,14 +578,17 @@ fn shapes() -> Vec<Shape> {
         authored: probe_region(&authored.sent, probe),
         recorded: Some(probe_region(&authored.stored, probe)),
     };
-    let unrecorded = |what, key, summary: &str| Shape {
+    let unrecorded = |what, key, authored: String| Shape {
         what,
         verb: "task",
         key,
-        authored: format!(
-            "<details>\n<summary>{summary}</summary>\n\nA paragraph of its body.\n\n</details>\n"
-        ),
+        authored,
         recorded: None,
+    };
+    let summarised = |summary: &str| {
+        format!(
+            "<details>\n<summary>{summary}</summary>\n\nA paragraph of its body.\n\n</details>\n"
+        )
     };
     vec![
         whole("<details open>", "task", "OPEN", "issue-details-open"),
@@ -637,9 +640,25 @@ fn shapes() -> Vec<Shape> {
         unrecorded(
             "a summary holding another tag",
             "TAG",
-            "Uses <em>emphasis</em> here",
+            summarised("Uses <em>emphasis</em> here"),
         ),
-        unrecorded("a summary holding a raw &", "AMP", "Questions & answers"),
+        unrecorded(
+            "a summary holding a raw &",
+            "AMP",
+            summarised("Questions & answers"),
+        ),
+        unrecorded("an empty summary", "EMPTY", summarised("")),
+        unrecorded(
+            "no blank line before </details>",
+            "LAST",
+            "<details>\n<summary>Ends tight</summary>\n\nA paragraph of its body.\n</details>\n"
+                .to_owned(),
+        ),
+        unrecorded(
+            "an empty body",
+            "BARE",
+            "<details>\n<summary>Holds nothing</summary>\n\n</details>\n".to_owned(),
+        ),
     ]
 }
 
@@ -1011,7 +1030,8 @@ Linear stores them decoded, and reading one back escapes them again.
 </details>
 ";
 
-/// A task body and a project description holding blocks with lists and code.
+/// A task body holding a block with a list and code — the code holding a `+++` line and a
+/// `</details>` line, which close no block inside a fence, on Linear or in the authored form.
 const TASK: &str = "Build the form.
 
 <details>
@@ -1022,6 +1042,7 @@ const TASK: &str = "Build the form.
 
 ```text
 +++ summary
+</details>
 ```
 
 </details>

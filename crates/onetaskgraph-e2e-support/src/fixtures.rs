@@ -4224,7 +4224,8 @@ fn github_projects_board_at(
             let mut held = attached.lock().unwrap();
             held.documents.push(line.clone());
             held.variables.push(Value::Null);
-            held.tokens.push(sent.header("authorization").unwrap_or_default().to_owned());
+            held.tokens
+                .push(sent.header("authorization").unwrap_or_default().to_owned());
             held.arrivals.push(std::time::Instant::now());
             let path = format!("/user-attachments/assets/{}", held.attachments.len() + 1);
             held.attachments.insert(path.clone(), sent.body().to_vec());
@@ -6803,7 +6804,6 @@ impl LinearWorkspace {
         id
     }
 
-    /// Replace one comment's body, as its author editing it in Linear would.
     /// Every comment this workspace holds on `issue`, each its id and its body as stored.
     #[must_use]
     pub fn comments_on(&self, issue: &str) -> Vec<Value> {
@@ -6818,6 +6818,7 @@ impl LinearWorkspace {
             .unwrap_or_default()
     }
 
+    /// Replace one comment's body, as its author editing it in Linear would.
     pub fn edit_comment(&self, comment: &str, body: &str) {
         let mut data = self.state.lock().unwrap();
         let (_, stamp) = linear_tick(&mut data);
