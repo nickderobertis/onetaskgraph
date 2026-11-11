@@ -302,7 +302,11 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
     let bundle: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("schema output is valid JSON");
 
-    assert_eq!(bundle["version"], 61);
+    assert_eq!(bundle["version"], 62);
+    // Version 62: the relation calls' documents and outcomes.
+    for root in ["ParentBatch", "ParentsSet", "LinkBatch", "LinksWritten", "TaskRelations"] {
+        assert!(bundle["roots"][root].is_object(), "{root} is a root");
+    }
     assert!(bundle["roots"]["HumanTaskProjection"].is_object());
     assert!(bundle["roots"]["HumanTaskProjected"].is_object());
     assert!(bundle["roots"]["LocateReport"].is_object());

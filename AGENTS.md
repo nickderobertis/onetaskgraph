@@ -1585,6 +1585,33 @@ them do; this is the inventory of what is owed, not a status board.
      every item but one another writer moved, answered `version-moved` with its version, one a
      priority guard `held` and one naming no task `error`, each update's fields landing all or
      none; and `task update --when-priority` writes every field only while the guard holds.
+161. Over folders of Markdown and an in-memory source, `task parent set-many` writes a two-level
+     chain `task relations` reads back from either end, re-parents and removes one edge alone,
+     and refuses a cycle and a parent in another source for that edge while the rest is written;
+     `task link add-many` and `remove-many` record a link at both ends — across two sources too —
+     read with its type and direction, `exists` on a repeated add and `absent` on a second
+     removal, its `## Links` section in the file and never in the content a read answers, a lost
+     end read `missing` and restored by repeating the add; a copy of a linked child carries
+     neither; and a task holding no relation is stored as before relations existed.
+162. On a GitHub board under `sub_issues: parent` an issue with sub-issues is a task whose child
+     `task relations` reports, written through `addSubIssue`, eight levels and a hundred children
+     accepted and the next refused alone; a project write there is refused naming the setting,
+     and a default board's plan and members read as before, members with no parent; two sources
+     on one board with different `sub_issues` are refused at load naming both.
+163. On a GitHub board and in Linear a mirrored link type is written as `addRelatesTo` or a
+     `related` `issueRelationCreate` beside its metadata and removed from both, the native
+     relation kept until the last mirrored link between a pair goes; an unmirrored type sends no
+     native mutation; a three-level chain and both kinds of link read from either end in a fresh
+     process; a version moved answers `version-moved`, an end made to fail `partial`, completed by
+     repeating; a native word that is not the destination's — `blocks`, `blocked-by`,
+     `duplicate`, `similar` or unknown — is refused at load naming the source, type and word; and
+     a task holding no relation is written byte for byte as before.
+164. On a GitHub board a mirror batch of more than 30 links goes in documents of at most 30
+     aliases, each aliased field charged to the pacing record, and a document answered 504 after
+     landing part of its links answers each from a read-back, a repeat writing only what had not
+     landed; on Linear a stored `## Links` section with `*` bullets and extra blank lines reads
+     back without it. Both record one relation batch's cost as telemetry
+     (`github-points-per-relation-batch`, `linear-requests-per-relation-batch`).
 
 ## The public boundary
 
