@@ -147,14 +147,14 @@ fn mutation(document: &str) -> bool {
     document.trim_start().starts_with("mutation")
 }
 
-/// The board ids every answer of a `task find` holds under `key`.
+/// The board ids every answer of a `task find` holds under `key`, each answered once.
 fn found(answer: &Value, key: &str) -> BTreeSet<String> {
     let answers = answer["answers"].as_array().expect("the answers");
     let one = answers
         .iter()
         .find(|answer| answer["key"] == key)
         .unwrap_or_else(|| panic!("no answer under {key}: {answer:#}"));
-    one["items"]
+    let ids: Vec<String> = one["items"]
         .as_array()
         .expect("the items")
         .iter()
@@ -165,7 +165,14 @@ fn found(answer: &Value, key: &str) -> BTreeSet<String> {
                 .trim_start_matches("board:")
                 .to_owned()
         })
-        .collect()
+        .collect();
+    let unique: BTreeSet<String> = ids.iter().cloned().collect();
+    assert_eq!(
+        unique.len(),
+        ids.len(),
+        "{key} answered a task twice: {ids:?}"
+    );
+    unique
 }
 
 fn set(ids: impl IntoIterator<Item = String>) -> BTreeSet<String> {
@@ -174,7 +181,8 @@ fn set(ids: impl IntoIterator<Item = String>) -> BTreeSet<String> {
 
 /// A board holding, beside the shared dataset, more than one page of each of two searches:
 /// 25 release checklists, 7 deploy steps — 4 of them in progress — two follow-ups of proposal
-/// p42, two tickets copied from `notes:o1` and one copied from `notes:o10`.
+/// p42, five tickets copied from `notes:o1` — more than a first page of its lookup — and one
+/// copied from `notes:o10`.
 fn searched_board() -> Board {
     let mut items: Vec<Value> = (0..25)
         .map(|n| {
@@ -198,7 +206,10 @@ fn searched_board() -> Board {
     for (id, origin) in [
         ("O-0", "notes:o1"),
         ("O-1", "notes:o1"),
-        ("O-2", "notes:o10"),
+        ("O-2", "notes:o1"),
+        ("O-3", "notes:o1"),
+        ("O-4", "notes:o1"),
+        ("O-5", "notes:o10"),
     ] {
         let mut copied = issue(id, "A copied ticket", "copied", "Todo");
         copied["origin"] = json!(origin);
@@ -248,7 +259,8 @@ fn a_find_answers_each_query_under_its_key_across_pages_in_one_request_a_round()
     );
     assert_eq!(
         found(answer, "copies"),
-        set(["O-0".to_owned(), "O-1".to_owned()])
+        set((0..5).map(|n| format!("O-{n}"))),
+        "every carrier of the origin, and not the one of another it begins"
     );
     assert_eq!(
         found(answer, "deploying"),
@@ -259,7 +271,7 @@ fn a_find_answers_each_query_under_its_key_across_pages_in_one_request_a_round()
         assert_eq!(each["complete"], true, "{each}");
         assert_eq!(each["reason"], Value::Null, "{each}");
     }
-    // One request a round: the five together, then the two with more than a first page
+    // One request a round: the five together, then the three with more than a first page
     // together, then the last page of the one with more still — one search request per
     // result page, never one per query.
     assert_eq!(
@@ -288,6 +300,10 @@ fn a_find_answers_each_query_under_its_key_across_pages_in_one_request_a_round()
         .filter(|slot| second[format!("ask{slot}")] == true)
         .count();
     assert_eq!(continuing, 2, "{second:#}");
+    assert_eq!(
+        second["origin0"], true,
+        "the origin's board half goes on: {second:#}"
+    );
 }
 
 #[test]
