@@ -44,6 +44,9 @@ pub(crate) const WORKLOAD: &str = "a board of 400 other open items, 20 proposals
     new comments: comments since, show-many of 20 verifying 40 replies, update-many of 10 held; \
     the pass again from its watermark";
 
+/// The cycle's phases, in the order it runs them, as the recording names them.
+pub(crate) const PHASES: [&str; 4] = ["batch", "retry", "pass", "repeated pass"];
+
 /// The other open items on the board.
 const OTHERS: usize = 400;
 /// The proposals the comment pass reads.
@@ -492,11 +495,12 @@ impl Cycle {
         let (_, change) = self.update_many(&changes, 4);
         let repeated = vec![comments_read, verify, change];
 
+        let [batched, retried, passed, repeated_pass] = PHASES;
         vec![
-            ("batch", batch),
-            ("retry", retry),
-            ("pass", pass),
-            ("repeated pass", repeated),
+            (batched, batch),
+            (retried, retry),
+            (passed, pass),
+            (repeated_pass, repeated),
         ]
     }
 }
