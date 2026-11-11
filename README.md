@@ -1768,7 +1768,7 @@ own normalization:
 - a summary holding any other tag;
 - a block whose Linear form would not read back as itself: a summary whose text holds a literal
   backtick or `*`, which Linear would read as a code or strong mark, a raw `&`, `<` or `>`, or a
-  space at either end.
+  space at either end; and a block written with carriage returns, which Linear does not keep.
 
 Linear stores each such block as literal paragraphs with its body expanded, as it stores every
 `<details>` block. Its own rewrite can give such a block the blank line it lacked, so that it reads

@@ -648,6 +648,22 @@ fn shapes() -> Vec<Shape> {
             summarised("Questions & answers"),
         ),
         unrecorded("an empty summary", "EMPTY", summarised("")),
+        unrecorded("an empty code span", "SPAN", summarised("Empty <code></code> span")),
+        unrecorded(
+            "a strong span nested in a code span",
+            "INNER",
+            summarised("<code>a <strong>b</strong></code>"),
+        ),
+        unrecorded("an unclosed code span", "UNCLOSED", summarised("Open <code>span")),
+        unrecorded("a code span holding a *", "MARK", summarised("<code>a*b</code>")),
+        unrecorded("a summary opening with a space", "LEAD", summarised(" Padded")),
+        unrecorded("a summary ending with a space", "TRAIL", summarised("Padded ")),
+        unrecorded(
+            "a block written with carriage returns",
+            "CRLF",
+            "<details>\r\n<summary>Returns</summary>\r\n\r\nA paragraph of its body.\r\n\r\n</details>\r\n"
+                .to_owned(),
+        ),
         unrecorded(
             "no blank line before </details>",
             "LAST",
@@ -669,7 +685,7 @@ fn visible(long_form: &str) -> &str {
         .split("<!-- onetaskgraph.metadata")
         .next()
         .unwrap_or_default()
-        .trim_end_matches('\n')
+        .trim_end_matches(['\r', '\n'])
 }
 
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown copied into a second folder, the loopback board and the loopback Linear workspace.
@@ -725,12 +741,12 @@ fn a_shape_that_is_not_the_authored_form_is_never_translated_and_linear_stores_i
                     .unwrap_or_else(|| panic!("{what}: landed"))
                     .to_owned(),
             };
-            let authored = shape.authored.trim_end_matches('\n');
+            let authored = shape.authored.trim_end_matches(['\r', '\n']);
             match &dst {
                 // Byte for byte: read back, and as the folder or the board itself holds it.
                 Store::Local => {
                     assert_eq!(
-                        at.content(&sandbox).trim_end_matches('\n'),
+                        at.content(&sandbox).trim_end_matches(['\r', '\n']),
                         authored,
                         "{what}"
                     );
@@ -742,7 +758,7 @@ fn a_shape_that_is_not_the_authored_form_is_never_translated_and_linear_stores_i
                 }
                 Store::Github(_) => {
                     assert_eq!(
-                        at.content(&sandbox).trim_end_matches('\n'),
+                        at.content(&sandbox).trim_end_matches(['\r', '\n']),
                         authored,
                         "{what}"
                     );
@@ -786,7 +802,7 @@ fn a_shape_that_is_not_the_authored_form_is_never_translated_and_linear_stores_i
                     match &shape.recorded {
                         Some(recorded) => assert_eq!(
                             stored,
-                            recorded.trim_end_matches('\n'),
+                            recorded.trim_end_matches(['\r', '\n']),
                             "{what}: stored as the spike recorded Linear storing it"
                         ),
                         None => assert_eq!(
@@ -902,6 +918,30 @@ fn every_copied_item_reads_back_through_the_store_as_authored() {
              <code>there</code> &lt;now&gt;</summary>\n\nInside it.\n\n</details>",
             "a section made in Linear reads back as an authored block"
         );
+
+        // A shape Linear holds that is not one section in its form reads back as it is stored:
+        // a section with an empty summary — Linear's own after a stray `>>>` — one missing a
+        // margin, and one never closed; and of sections nested in Linear, the outer reads back
+        // as the authored block, the inner kept as it is, because authored blocks do not nest.
+        for (stored, read) in [
+            ("+++ \n\nUnder no summary.\n\n+++", None),
+            ("+++ Tight\nNo margin above.\n\n+++", None),
+            ("+++ Open\n\nNever closed.", None),
+            (
+                "+++ Outer\n\nOuter text.\n\n+++ Inner\n\nInner text.\n\n+++\n\n+++",
+                Some(
+                    "<details>\n<summary>Outer</summary>\n\nOuter text.\n\n+++ Inner\n\nInner \
+                     text.\n\n+++\n\n</details>",
+                ),
+            ),
+        ] {
+            workspace.edit_description(landed["T"].native(), stored);
+            assert_eq!(
+                landed["T"].content(&sandbox),
+                read.unwrap_or(stored),
+                "{stored:?} reads back as it should"
+            );
+        }
 
         // A rendering copied to Linear still verifies against its recorded `body_digest`.
         let template = sandbox.subdirectory("templates").join("design.md");

@@ -376,14 +376,22 @@ def observe() -> int:
 
         def reported(report: dict) -> list[tuple[QualifiedId, QualifiedId | None]]:
             """Each item a copy reported: its source, and where it landed when it did."""
+            known = {record.id for record in source_records}
             found = []
             for index in range(len(at(report, "items"))):
                 item = object_at(report, "items", index)
-                destination = item.get("destination")
-                found.append((QualifiedId(text_at(item, "source")), QualifiedId(destination) if isinstance(destination, str) else None))
+                origin, destination = text_at(item, "source"), item.get("destination")
+                if origin not in known:
+                    raise Failure(f"a copy reported {origin!r}, which it was not asked to copy; next: read the copy's report")
+                if destination is not None and not (isinstance(destination, str) and re.fullmatch(r"[^:\s]+:\S+", destination)):
+                    raise Failure(f"a copy reported {destination!r} as where {origin} landed, which is no qualified id; next: read the copy's report")
+                found.append((QualifiedId(origin), QualifiedId(destination) if destination is not None else None))
             return found
 
+        source_records: list[Record] = []
+
         def copy(source: dict[str, Record], to: str) -> dict[str, Record]:
+            source_records[:] = list(source.values())
             reports = []
             try:
                 reports.append(binary("project", "copy", source["P"].id, "--to", to))

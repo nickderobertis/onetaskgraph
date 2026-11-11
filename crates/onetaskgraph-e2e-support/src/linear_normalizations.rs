@@ -1,3 +1,4 @@
+// llmlint: ignore-file[code_lands_in_the_domain_that_owns_it] This is the loopback Linear's own record of what real Linear stores: the loopback lives in this shared e2e harness because more than one suite drives it — the engine's own `onetaskgraph-e2e` and the Linear suite both copy into it — and `linear_markdown::stored`, which these fixtures hold, is here for that reason, as the standing suppression on that module records. A copy of the set in one suite would leave the other's loopback unheld.
 //! The recorded Linear normalizations: what real Linear stored for each Markdown spike
 //! `spike-expandable-blocks` wrote it, committed unchanged under
 //! `fixtures/expandable_blocks/` of this crate from the spike's `normalizations.json` and
@@ -101,7 +102,6 @@ const FIXTURES: [(&str, &str); 17] = [
     ),
 ];
 
-/// The spike's `normalizations.json`.
 const NORMALIZATIONS: &str = include_str!("../fixtures/expandable_blocks/normalizations.json");
 
 /// Every recorded fixture, in name order.
@@ -193,8 +193,8 @@ struct Shape {
     edits: BTreeSet<(String, String)>,
     /// Whether the run lost blank lines (`Less`), gained some (`Greater`), or kept their count.
     blanks: std::cmp::Ordering,
-    /// Whether a line of whitespace alone became empty.
-    emptied: bool,
+    /// Whether the lines sent held a line of whitespace alone, which Linear stores empty.
+    whitespace_line: bool,
 }
 
 /// The shape of the change from `sent` to `stored`, when its lines holding something pair up
@@ -220,7 +220,7 @@ fn shape(sent: &[String], stored: &[String]) -> Option<Shape> {
     Some(Shape {
         edits,
         blanks: blank(stored).cmp(&blank(sent)),
-        emptied: sent
+        whitespace_line: sent
             .iter()
             .any(|line| !line.is_empty() && line.trim().is_empty()),
     })
@@ -340,7 +340,7 @@ pub fn hunks(sent: &str, stored: &str) -> Vec<Hunk> {
 
 /// The recorded entry `hunk` is an instance of: one whose change has its shape — each of its
 /// edits one the entry made, its blank lines moving as the entry's did or not at all, and a line
-/// of whitespace emptied only where the entry emptied one.
+/// of whitespace alone among its lines only where the entry's held one.
 #[must_use]
 pub fn accounting_entry(hunk: &Hunk) -> Option<Normalization> {
     static SHAPED: std::sync::OnceLock<Vec<(Normalization, Option<Shape>)>> =
@@ -369,7 +369,7 @@ pub fn accounting_entry(hunk: &Hunk) -> Option<Normalization> {
                 wanted.edits.is_subset(&recorded.edits)
                     && (wanted.blanks == std::cmp::Ordering::Equal
                         || wanted.blanks == recorded.blanks)
-                    && (!wanted.emptied || recorded.emptied)
+                    && (!wanted.whitespace_line || recorded.whitespace_line)
             })
         })
         .map(|(entry, _)| entry.clone())

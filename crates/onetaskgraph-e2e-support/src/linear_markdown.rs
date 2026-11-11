@@ -64,9 +64,9 @@ pub fn stored(content: &str) -> String {
     // Whether the line before was a heading or a paragraph's line, which a list opening on the
     // next line is set apart from by a blank line.
     let mut after_prose = false;
-    // Whether the last unindented line holding anything was a list's item, and whether that
-    // list's items are bullets: the lines indented under it are its items' own.
-    let mut in_list: Option<bool> = None;
+    // The kind of list the last unindented line holding anything was an item of, if any: the
+    // lines indented under it are its items' own.
+    let mut in_list: Option<ListKind> = None;
     for line in content.split_inclusive('\n') {
         let body = line.trim_end_matches(['\n', '\r']);
         let end = &line[body.len()..];
@@ -82,7 +82,6 @@ pub fn stored(content: &str) -> String {
             continue;
         }
         if body.trim().is_empty() {
-            // A line of whitespace alone is stored empty.
             if !blank_run {
                 stored.push_str(end);
             }
@@ -107,7 +106,11 @@ pub fn stored(content: &str) -> String {
         let bullet = rest.strip_prefix("- ").or_else(|| rest.strip_prefix("* "));
         let continued = item.filter(|_| bullet.is_none() && !image && !opens_block(rest));
         let listed = bullet.is_some() || ordered(rest).is_some();
-        let marker = listed.then_some(bullet.is_some());
+        let marker = listed.then_some(if bullet.is_some() {
+            ListKind::Bullet
+        } else {
+            ListKind::Ordered
+        });
         let table_row = rest.starts_with('|') && rest.ends_with('|');
         // An unindented item of the list the last unindented line was one of continues it.
         let continues_list = marker.is_some() && indent.is_empty() && in_list == marker;
@@ -209,6 +212,15 @@ pub fn stored(content: &str) -> String {
 /// `spike-expandable-blocks` recorded `&amp; &lt;tag&gt;` stored as `& <tag>`, in a paragraph and in
 /// a collapsible section's summary alike.
 const ENTITIES: [(&str, char); 3] = [("&amp;", '&'), ("&lt;", '<'), ("&gt;", '>')];
+
+/// The two kinds of list the loopback tells apart when it joins a list's items.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ListKind {
+    /// Items opening `- ` or `* `.
+    Bullet,
+    /// Items opening with a number.
+    Ordered,
+}
 
 /// Whether `text`, a line with its indentation taken off, is an ATX heading.
 fn heading(text: &str) -> bool {

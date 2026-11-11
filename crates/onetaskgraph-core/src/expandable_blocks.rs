@@ -26,8 +26,8 @@
 //!
 //! A shape that is not the authored form — an attribute on `<details>`, a missing blank line, an
 //! indented or fenced block, a nested block, a summary holding another tag — is never translated,
-//! and neither is a block whose Linear form would not read back as itself: see
-//! [`ExpandableForm::written`].
+//! and neither is a block whose Linear form would not read back as itself — one written with
+//! carriage returns among them: see [`ExpandableForm::written`].
 
 use std::sync::Arc;
 
@@ -267,7 +267,12 @@ fn authored_regions(content: &str) -> Vec<Region> {
             continue;
         };
         let nested = (index + 1..close).any(opens);
-        let block = (!nested && lines[index].text == "<details>")
+        // A block written with carriage returns would not read back from Linear byte for byte —
+        // Linear keeps none — so it is no block to translate.
+        let returned = lines[index..=close]
+            .iter()
+            .any(|line| line.ending != "\n" && line.ending != "");
+        let block = (!nested && !returned && lines[index].text == "<details>")
             .then(|| authored_parts(&lines[index..=close]))
             .flatten()
             .filter(|block| summary_markup(&block.summary).is_some());
@@ -671,6 +676,7 @@ mod tests {
             "<details>\n<summary>A * star</summary>\n\nBody.\n\n</details>\n",
             "<details>\n<summary>Q & A</summary>\n\nBody.\n\n</details>\n",
             "<details>\n<summary> S</summary>\n\nBody.\n\n</details>\n",
+            "<details>\r\n<summary>S</summary>\r\n\r\nBody.\r\n\r\n</details>\r\n",
         ] {
             assert_eq!(ExpandableForm::Linear.written(shape), shape, "{shape}");
         }
