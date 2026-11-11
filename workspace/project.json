@@ -63,11 +63,10 @@
         "{workspaceRoot}/biome.json",
         "{workspaceRoot}/nx.json",
         "{workspaceRoot}/package.json",
-        "{workspaceRoot}/.claude/**/*.json",
-        "{workspaceRoot}/workspace/**/*.json",
-        "{workspaceRoot}/crates/*/project.json",
-        "{workspaceRoot}/sdks/*/project.json",
-        "{workspaceRoot}/sdks/*/*.json",
+        "{workspaceRoot}/.claude/**/*.{json,jsonc,js,mjs,cjs,jsx,ts,mts,cts,tsx,css,graphql,gql}",
+        "{workspaceRoot}/workspace/**/*.{json,jsonc,js,mjs,cjs,jsx,ts,mts,cts,tsx,css,graphql,gql}",
+        "{workspaceRoot}/crates/**/*.{json,jsonc,js,mjs,cjs,jsx,ts,mts,cts,tsx,css,graphql,gql}",
+        "{workspaceRoot}/sdks/**/*.{json,jsonc,js,mjs,cjs,jsx,ts,mts,cts,tsx,css,graphql,gql}",
         {
           "runtime": "node -p process.platform"
         }

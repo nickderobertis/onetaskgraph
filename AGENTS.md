@@ -1871,6 +1871,10 @@ reads unavailable until the re-copy of create-repo's fix, which falls back to th
   Shared script copies stay byte-identical to their upstream pins.
   `biome.json` excludes exactly the two upstream-owned JavaScript copies; the comment and
   exact-path digest map in `.github/cache-policy/tests/cache.test.mjs` hold their byte identity.
+  It also excludes the captured Linear fixtures in `crates/onetaskgraph-e2e-support/fixtures/expandable_blocks/`,
+  which their README holds byte for byte. `workspace:format-check` keys on every file type biome
+  reads under the paths it formats: with only `project.json` files in its key it replayed a pass
+  over those fixtures until a cache miss turned main's lint red.
   `.github/nx-policy` owns the cached platform/output checks and the uncached real-Nx hash
   matrix over the workspace input contracts and a fixed git baseline. Semantic manifest inputs
   use `nx-version-free-inputs.mjs`; format checks and linters that read their text retain raw
