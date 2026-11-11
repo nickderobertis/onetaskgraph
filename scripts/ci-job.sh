@@ -95,10 +95,17 @@ case "$JOB" in
     # The workflow suites have a phase of their own too, with a slot for each of their four
     # journeys: their release CD journeys are the job's longest single task, and queued behind
     # the other suites' slots they started eleven minutes in and ran the job past its timeout.
-    phases="1 affected test tag:test-in-coverage:*,onetaskgraph-linear,onetaskgraph-linear-e2e,github-workflows
+    #
+    # So the SDKs' `test-uncovered` runs first, alone: sdk-python's syncs the lock into a
+    # scratch environment from sdks/python, and with the workflow suites starting at once their
+    # release CD journeys build that same directory (`uv build sdks/python`) beside it — run
+    # 42914613065 found the SDK missing from that environment. It takes seconds and builds
+    # nothing, so the job's other phases start that much later and no more.
+    phases="0 affected test-uncovered *,!tag:layer:sdk
+1 affected test tag:test-in-coverage:*,onetaskgraph-linear,onetaskgraph-linear-e2e,github-workflows
 1 affected test *,!github-workflows --parallel=4
 1 affected test *,!onetaskgraph-linear,!onetaskgraph-linear-e2e
-1 affected test-uncovered,coverage *,!tag:layer:sdk
+1 affected coverage *,!tag:layer:sdk
 1 run scripts:distribution-check -"
     if "$skip_rust_coverage"; then
       coverage_budget_exclusions="onetaskgraph-github-projects-e2e,onetaskgraph-linear-e2e,onetaskgraph-live-janitor"
