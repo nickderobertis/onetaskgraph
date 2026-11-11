@@ -116,6 +116,14 @@ class Record:
 
 
 @dataclasses.dataclass(frozen=True)
+class Outcome:
+    """One item a copy reported: the record it copied, and where it landed when it did."""
+
+    source: QualifiedId
+    destination: QualifiedId | None
+
+
+@dataclasses.dataclass(frozen=True)
 class Section:
     """One `collapsible_section` node of a Linear editor state: its heading's text and marks, and
     the types of the nodes inside it beside the heading."""
@@ -374,7 +382,7 @@ def observe() -> int:
         def shown(record: Record) -> dict:
             return object_at(binary(record.verb, "show", record.id), "items", 0, "item")
 
-        def reported(report: dict) -> list[tuple[QualifiedId, QualifiedId | None]]:
+        def reported(report: dict) -> list[Outcome]:
             """Each item a copy reported: its source, and where it landed when it did."""
             known = {record.id for record in source_records}
             found = []
@@ -385,7 +393,7 @@ def observe() -> int:
                     raise Failure(f"a copy reported {origin!r}, which it was not asked to copy; next: read the copy's report")
                 if destination is not None and not (isinstance(destination, str) and re.fullmatch(r"[^:\s]+:\S+", destination)):
                     raise Failure(f"a copy reported {destination!r} as where {origin} landed, which is no qualified id; next: read the copy's report")
-                found.append((QualifiedId(origin), QualifiedId(destination) if destination is not None else None))
+                found.append(Outcome(QualifiedId(origin), QualifiedId(destination) if destination is not None else None))
             return found
 
         source_records: list[Record] = []
@@ -399,16 +407,16 @@ def observe() -> int:
             finally:
                 # Everything a copy reported landing is removed, whichever later step failed.
                 for report in reports:
-                    for origin, destination in reported(report):
-                        if destination is None:
+                    for outcome in reported(report):
+                        if outcome.destination is None:
                             continue
-                        verb = next(record.verb for record in source.values() if record.id == origin)
-                        landed = Record("", verb, destination)
+                        verb = next(record.verb for record in source.values() if record.id == outcome.source)
+                        landed = Record("", verb, outcome.destination)
                         if to == "board":
                             created_issues.append(text_at(shown(landed), "location", "url"))
                         else:
                             created_linear.append(landed)
-            by_source = dict(pair for report in reports for pair in reported(report))
+            by_source = {outcome.source: outcome.destination for report in reports for outcome in reported(report)}
             landed_at = {}
             for name, record in source.items():
                 destination = by_source.get(record.id)
@@ -427,9 +435,9 @@ def observe() -> int:
             stored = text_at(request(scratch_issue(url), f"bearer {token}"), "body")
             run.github_bodies[name] = stored
             for n, summary in enumerate(SUMMARIES, start=1):
-                opening = f"<details>\n<summary>{summary.authored}</summary>\n\nParagraph of block {n}."
-                run.check(f"GitHub {name}: block {n} is stored in the authored form", opening in stored and f"| reads {n} | 27 |\n\n</details>" in stored, stored[:400])
-                run.check(f"GitHub {name}: block {n}'s heading carries its anchor", f'<a id="detail-of-block-{n}"></a>\n### Detail of block {n}' in stored, stored[:400])
+                heading = f"### Detail of block {n}"
+                anchored = block(summary, n).replace(heading, f'<a id="detail-of-block-{n}"></a>\n{heading}')
+                run.check(f"GitHub {name}: block {n} is stored whole in the authored form, its heading anchored", anchored in stored, stored[:400])
 
         # Linear: every block a collapsible section, stored as one in its editor state.
         for name, record in onward.items():

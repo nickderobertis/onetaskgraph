@@ -140,20 +140,6 @@ pub fn blocks(content: &str) -> usize {
         .count()
 }
 
-/// A Linear collapsible section: its summary as Linear stores it, and its body.
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct Section {
-    summary: String,
-    body: String,
-}
-
-impl Section {
-    /// The section as Linear's Markdown spells it, its last line ended by `ending`.
-    fn render(&self, ending: &str) -> String {
-        format!("+++ {}\n\n{}\n\n+++{ending}", self.summary, self.body)
-    }
-}
-
 /// The lines from one opening line to its closing one, and what they hold when they are
 /// exactly one block of a form.
 struct Region {
@@ -324,65 +310,6 @@ fn joined(lines: &[Line<'_>]) -> String {
     text
 }
 
-/// Every region of `stored` a `+++ <summary>` line outside fenced code opens, through the `+++`
-/// line that closes it, an inner `+++ ` line nesting one level deeper. A region that is exactly
-/// one section, its first and last body lines holding something, carries it.
-fn linear_regions(stored: &str) -> Vec<Region> {
-    let lines = lines(stored);
-    let fenced = fenced(&lines);
-    let opens = |index: usize| !fenced[index] && lines[index].text.starts_with("+++ ");
-    let closes = |index: usize| !fenced[index] && lines[index].text == "+++";
-    let mut regions = Vec::new();
-    let mut index = 0;
-    while index < lines.len() {
-        if !opens(index) {
-            index += 1;
-            continue;
-        }
-        let mut depth = 0_usize;
-        let mut close = None;
-        for at in index..lines.len() {
-            if opens(at) {
-                depth += 1;
-            } else if closes(at) {
-                depth -= 1;
-                if depth == 0 {
-                    close = Some(at);
-                    break;
-                }
-            }
-        }
-        let Some(close) = close else {
-            index += 1;
-            continue;
-        };
-        let section = match &lines[index..=close] {
-            [header, blank, body @ .., after, _]
-                if blank.text.is_empty()
-                    && after.text.is_empty()
-                    && body
-                        .first()
-                        .is_some_and(|line| !line.text.trim().is_empty())
-                    && body.last().is_some_and(|line| !line.text.trim().is_empty()) =>
-            {
-                let summary = &header.text["+++ ".len()..];
-                (!summary.trim().is_empty()).then(|| Section {
-                    summary: summary.to_owned(),
-                    body: joined(body),
-                })
-            }
-            _ => None,
-        };
-        regions.push(Region {
-            lines: (index, close),
-            ending: lines[close].ending,
-            shape: section.map_or(Shape::Other, Shape::Section),
-        });
-        index = close + 1;
-    }
-    regions
-}
-
 /// `content` with each region `replace` answers for put in that answer's place, every other line
 /// as it was.
 fn rewritten(
@@ -407,6 +334,11 @@ fn rewritten(
         index += 1;
     }
     text
+}
+
+/// The text of `region` of `lines`, its last line's break left off.
+fn region_text(lines: &[Line<'_>], region: &Region) -> String {
+    joined(&lines[region.lines.0..=region.lines.1])
 }
 
 /// One run of a summary's markup.
@@ -501,6 +433,80 @@ fn escaped(text: &str) -> String {
         .replace('>', "&gt;")
 }
 
+// llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] This region is Linear's form alone — its section, how it is parsed back, how it is written, and the `BodyMarkup` that hands it to the Linear plugin. The task contract this module implements requires each destination kind's expandable form to be one entry of `ExpandableForm` in `onetaskgraph-core`, the one place that kind's form is written and read back; no plugin may depend on the engine (AGENTS.md), so a plugin cannot own a form the engine reads, and Linear's form — with what it remembers of blocks it read back as literal text, which is part of reading that form back — reaches the Linear plugin only as the `BodyMarkup` this entry hands it, as GitHub's anchors do in `section_links`.
+/// A Linear collapsible section: its summary as Linear stores it, and its body.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Section {
+    summary: String,
+    body: String,
+}
+
+impl Section {
+    /// The section as Linear's Markdown spells it, its last line ended by `ending`.
+    fn render(&self, ending: &str) -> String {
+        format!("+++ {}\n\n{}\n\n+++{ending}", self.summary, self.body)
+    }
+}
+
+/// Every region of `stored` a `+++ <summary>` line outside fenced code opens, through the `+++`
+/// line that closes it, an inner `+++ ` line nesting one level deeper. A region that is exactly
+/// one section, its first and last body lines holding something, carries it.
+fn linear_regions(stored: &str) -> Vec<Region> {
+    let lines = lines(stored);
+    let fenced = fenced(&lines);
+    let opens = |index: usize| !fenced[index] && lines[index].text.starts_with("+++ ");
+    let closes = |index: usize| !fenced[index] && lines[index].text == "+++";
+    let mut regions = Vec::new();
+    let mut index = 0;
+    while index < lines.len() {
+        if !opens(index) {
+            index += 1;
+            continue;
+        }
+        let mut depth = 0_usize;
+        let mut close = None;
+        for at in index..lines.len() {
+            if opens(at) {
+                depth += 1;
+            } else if closes(at) {
+                depth -= 1;
+                if depth == 0 {
+                    close = Some(at);
+                    break;
+                }
+            }
+        }
+        let Some(close) = close else {
+            index += 1;
+            continue;
+        };
+        let section = match &lines[index..=close] {
+            [header, blank, body @ .., after, _]
+                if blank.text.is_empty()
+                    && after.text.is_empty()
+                    && body
+                        .first()
+                        .is_some_and(|line| !line.text.trim().is_empty())
+                    && body.last().is_some_and(|line| !line.text.trim().is_empty()) =>
+            {
+                let summary = &header.text["+++ ".len()..];
+                (!summary.trim().is_empty()).then(|| Section {
+                    summary: summary.to_owned(),
+                    body: joined(body),
+                })
+            }
+            _ => None,
+        };
+        regions.push(Region {
+            lines: (index, close),
+            ending: lines[close].ending,
+            shape: section.map_or(Shape::Other, Shape::Section),
+        });
+        index = close + 1;
+    }
+    regions
+}
+
 /// `block` as a Linear section, when its summary is the authored form's and its Linear summary
 /// can be spelled — its text holding no backtick and no `*`, which Linear reads as marks, and
 /// no space at either end.
@@ -591,12 +597,6 @@ fn linear_written(authored: &str, literal: &std::collections::HashSet<String>) -
     })
 }
 
-/// The text of `region` of `lines`, its last line's break left off.
-fn region_text(lines: &[Line<'_>], region: &Region) -> String {
-    joined(&lines[region.lines.0..=region.lines.1])
-}
-
-// llmlint: ignore-block[code_lands_in_the_domain_that_owns_it] The task contract this module implements requires each destination kind's expandable form to be one entry of `ExpandableForm` in `onetaskgraph-core`, the one place that kind's form is written and read back; no plugin may depend on the engine (AGENTS.md), so a plugin cannot own a form the engine reads, and Linear's form — with what it remembers of blocks it read back as literal text, which is part of reading that form back — reaches the Linear plugin only as the `BodyMarkup` this entry hands it, as GitHub's anchors do in `section_links`.
 /// Linear's collapsible sections, as the Linear source applies them to every body it sends and
 /// receives.
 ///
