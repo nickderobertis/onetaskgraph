@@ -584,10 +584,7 @@ pub struct TaskCommentsArgs {
 #[derive(Debug, Args)]
 pub struct TaskFindArgs {
     /// The configured source whose tasks are searched.
-    ///
-    /// llmlint: ignore[invalid_states_unrepresentable] — as `TaskCommentsArgs::source`: a name
-    /// that cannot be a source name and one naming no configured source are the same typo, and
-    /// both owe the same next action.
+    // llmlint: ignore[invalid_states_unrepresentable] — as `TaskCommentsArgs::source`: a name that cannot be a source name and one naming no configured source are the same typo, and both owe the same next action.
     #[arg(value_name = "SOURCE")]
     pub source: String,
 
@@ -600,8 +597,7 @@ pub struct TaskFindArgs {
 #[derive(Debug, Args)]
 pub struct TaskBatchArgs {
     /// The configured source whose tasks are written.
-    ///
-    /// llmlint: ignore[invalid_states_unrepresentable] — as `TaskCommentsArgs::source`.
+    // llmlint: ignore[invalid_states_unrepresentable] — as `TaskCommentsArgs::source`.
     #[arg(value_name = "SOURCE")]
     pub source: String,
 
@@ -2370,10 +2366,7 @@ pub struct TaskCopyArgs {
     /// task is copied, and the command exits 4. Given as a bare `<VERSION>` beside exactly one
     /// id, the whole copy is refused as `version-moved` instead. A counterpart the copy creates
     /// holds nothing.
-    ///
-    /// llmlint: ignore[invalid_states_unrepresentable] — a version is the source's own opaque
-    /// token, and which id each names is read in `main` against the ids given, refusing one
-    /// naming none of them before anything is read.
+    // llmlint: ignore[invalid_states_unrepresentable] — a version is the source's own opaque token, and which id each names is read in `main` against the ids given, refusing one naming none of them before anything is read.
     #[arg(long = "if-version", value_name = "[ID=]VERSION")]
     pub if_version: Vec<String>,
     #[command(flatten)]
