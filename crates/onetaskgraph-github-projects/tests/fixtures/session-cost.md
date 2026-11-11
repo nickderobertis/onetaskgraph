@@ -51,7 +51,8 @@ and four fewer reads of one issue — on top of this branch's lanes. The two add
 
 ## Whole credentialed lane
 
-The budget is `github-live-session-points`, max 299 in the GitHub e2e budgets file.
+The budget is `github-live-session-points`, max 304 in the GitHub e2e budgets file (299 until
+the batched search's reconciliation, below).
 One selected credentialed Linux job runs the main and asset entry points sequentially,
 under one fresh session identity. Other platform and coverage runs remain credentialless.
 The reporter reads both completed records and hands the attributed sum to onebudgetspec;
@@ -324,4 +325,7 @@ page still read. The largest round this source sends is then every slot on its f
 and the reconciliation prices the document under it. The worst case of every slot at a whole
 page is still pinned at 22 by the same file and held under the node limit by
 `tests/node_count.rs`. The offline record moves from 399,965 worst-case nodes to 325,488 at the
-same 239 requests. No budget ceiling changes.
+same 239 requests. A credentialed session of both entry points then measured 300 (Reconciliation
+44, Setup 57, the rest as main's), and GitHub priced the largest round at 4 points, hypothetical
+and executed. Those 4 are the new document's real cost over main's 292, and Setup's board-copy
+polling spreads 52-57 between runs, so by the manager's ruling of 2026-11-11 the ceiling is 304.

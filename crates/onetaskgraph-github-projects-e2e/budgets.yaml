@@ -89,14 +89,14 @@ budgets:
     threshold: 0
   - id: github-live-session-points
     description: >-
-      Whole credentialed GitHub lane primary points, attributed from complete current telemetry with explicit modelled prices, protecting shared-account headroom.
+      Whole credentialed GitHub lane primary points, attributed from complete current telemetry with explicit modelled prices, protecting shared-account headroom. 304 rather than 299 by the manager's ruling of 2026-11-11: the batched search `task find` sends (`graphql::SEARCH_BATCH`) joined the documents the lane reconciles, and its largest round — every slot on its 3-row first page and one resumed page sharing 20 rows — really costs 4 points, priced so by GitHub. Main measured 292 (Admission 2, Schema 13, Reconciliation 40, Setup 53, Capabilities 31, CommentActivity 17, ChangeToken 83, Cleanup 27, OrphanRecovery 3, AssetSetup 11, AssetTask 6, AssetDocument 6); the branch before its rounds shared their resumed rows 315 (Reconciliation 62: a round of whole resumed pages was a 22-point request); after, 300 (Reconciliation 44, Setup 57 — Setup's board-copy polling spreads 52-57 between runs, which this change does not touch).
     labels: [github, live-session]
     measure: reported
     # llmlint: ignore[budget_commands_measure_directly] This task fixes the report-only report_live_session command: it reads current main/assets telemetry and uses the existing SDK; onebudgetspec alone judges the threshold.
     command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_live_session", "--exact", "--nocapture", "../../target/debug/telemetry/github-live-session"]
     unit: points
     direction: max
-    threshold: 299
+    threshold: 304
   - id: github-plan-copy-seconds-unchanged
     description: >-
       The simulated seconds, each request held for the timing spike's mean for its kind, of an unchanged re-copy of the generated 10-item plan (a 50 KB project, eight 45-49 KB tasks with 10 edges, 19 field values, a 35 KB document with a 104 KB PNG), one `project copy` then one `document copy`, the larger of three recordings on a 2,000-item loopback board and again on a 20,000-item one — with no write policy, screened through the released onevcs boundary commands, and in the host's configuration (the plan's source declared `visibility: private`, the board's `cache: {enabled: true}`, screening on). It protects the time the manager and the user wait for every plan revision filed onto the plans board.
