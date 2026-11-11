@@ -4070,13 +4070,16 @@ impl LocalMdSource {
             self.representable_list(field, near, list)?;
         }
         // A write replacing a task's file keeps what no copy carries: its parent, and its
-        // `## Links` section re-rendered from the links it holds.
-        // A file that cannot be read keeps nothing: the write below reports why it cannot land.
-        let existing = write
-            .target
-            .as_ref()
-            .and_then(|target| self.locate(Kind::Task, target).ok().flatten())
-            .and_then(|path| self.parse(WorkKind::Task, &path).ok());
+        // `## Links` section re-rendered from the links it holds. A file that is there but
+        // cannot be read or parsed refuses the write, rather than being read as holding neither
+        // and losing both; anything else at that path is the write's own to report.
+        let existing = match write.target.as_ref() {
+            Some(target) => match self.locate(Kind::Task, target)? {
+                Some(path) if path.is_file() => Some(self.parse(WorkKind::Task, &path)?),
+                _ => None,
+            },
+            None => None,
+        };
         let parent = existing.as_ref().and_then(|entry| entry.parent.clone());
         let content = task.content.as_deref().map(|content| {
             onetaskgraph_plugin_api::relinked(

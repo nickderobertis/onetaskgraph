@@ -2288,3 +2288,23 @@ fn document_relative_fields_are_fields_this_plugin_declares() {
         );
     }
 }
+
+#[tokio::test]
+async fn a_write_over_a_task_file_that_cannot_be_parsed_is_refused_and_leaves_it_as_it_was() {
+    let (root, source) = source();
+    // A parent and a link stored in a file whose front matter no longer parses: replacing it
+    // would lose both, so the write is refused rather than reading the file as holding neither.
+    let path = root.path().join("tasks/broken.md");
+    let broken = "---\ntitle: [unclosed\nparent: alpha\n---\nThe body.\n";
+    fs::write(&path, broken).expect("the broken file");
+    let refused = source
+        .write_task(&ItemWrite {
+            target: Some(NativeId("broken".into())),
+            item: outgoing("broken", "Alpha", "doing", StatusCategory::InProgress),
+            depends_on: Vec::new(),
+        })
+        .await
+        .expect_err("a file that cannot be parsed is not replaced");
+    assert!(refused.to_string().contains("broken"), "{refused}");
+    assert_eq!(fs::read_to_string(&path).expect("the file"), broken);
+}
