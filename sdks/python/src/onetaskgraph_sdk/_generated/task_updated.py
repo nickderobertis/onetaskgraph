@@ -265,6 +265,19 @@ class WriteFallback(BaseModel):
     ]
 
 
+class GuardOutcome(StrEnum):
+    GuardOutcomeWritten = "written"
+    GuardOutcomeHeld = "held"
+
+
+class PriorityCondition(BaseModel):
+    held: Annotated[
+        Priority,
+        Field(description="The counterpart's priority, as the copy's own pre-write read held it."),
+    ]
+    met: Annotated[bool, Field(description="Whether that priority is one the condition names.")]
+
+
 class LocatorKind(StrEnum):
     LocatorKindSource = "source"
     LocatorKindItem = "item"
@@ -355,6 +368,21 @@ class WriteResult(BaseModel):
         Priority | None,
         Field(
             description="A task's priority after the write — `null` for a project or a document, which carry\nnone, and where an expected write that failed cannot say."
+        ),
+    ] = None
+
+
+class PriorityGuard(BaseModel):
+    outcome: Annotated[
+        GuardOutcome | None,
+        Field(
+            description="`written` when the task held a priority the guard names, and `held` when it did not —\nabsent for a write made without the guard."
+        ),
+    ] = None
+    priority_condition: Annotated[
+        PriorityCondition | None,
+        Field(
+            description="What the guard found the task's priority at before the write, and whether that is one it\nnames — the shape `task copy --when-destination-priority` reports — absent for a write\nmade without the guard."
         ),
     ] = None
 
@@ -561,6 +589,12 @@ class TaskUpdated(BaseModel):
         GlobalId | None,
         Field(
             description="The public projection a written status category was mirrored to — absent when the\nupdate wrote no status, and for a task with no projection."
+        ),
+    ] = None
+    guard: Annotated[
+        PriorityGuard | None,
+        Field(
+            description="What `--when-priority` found the task's priority at, and whether the update was written\nor held — absent for an update given no priority guard."
         ),
     ] = None
     sanitization: Sanitization | None = None

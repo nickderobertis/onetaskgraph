@@ -917,6 +917,67 @@ test("several fields of one task are updated in one call through the real binary
   }
 });
 
+test("batched searches, updates and comments drive the real binary, each answered on its own", async () => {
+  const batchRoot = metadataFolder();
+  try {
+    writeFileSync(
+      resolve(batchRoot, "work/tasks/T-2.md"),
+      "---\ntitle: Two\nstatus: todo\npriority: high\n---\nsecond body\n",
+    );
+    const batchClient = new OnetaskgraphClient({ binaryPath: binary, cwd: batchRoot });
+
+    const found = await batchClient.taskFind("work", {
+      schema_version: 1,
+      queries: [
+        { key: "one", text: "One", in: "title" },
+        { key: "kept", metadata: { "myapp.kept": "1" } },
+        { key: "none", text: "nothing holds this" },
+      ],
+    });
+    expect(found.answers.map((answer) => [answer.key, answer.complete])).toEqual([
+      ["one", true],
+      ["kept", true],
+      ["none", true],
+    ]);
+    expect(found.answers[0]?.items.map((item) => item.id)).toEqual(["work:T-1"]);
+    expect(found.answers[2]?.items).toEqual([]);
+    const unnarrowed = batchClient.taskFind("work", {
+      schema_version: 1,
+      queries: [{ key: "everything" }],
+    });
+    await expect(unnarrowed).rejects.toThrow("everything");
+
+    const current = (await batchClient.taskShow("work:T-1")).items[0]?.item.version ?? null;
+    const updated = await batchClient.taskUpdateMany("work", {
+      schema_version: 1,
+      updates: [
+        { item: "work:T-1", title: "One, batched", if_version: current },
+        { item: "work:T-2", title: "Two, batched", if_version: "md1|stale" },
+        { item: "work:T-2", priority: "low", when_priority: ["none"] },
+      ],
+    });
+    expect(updated.results.map((result) => result.outcome)).toEqual([
+      "written",
+      "version-moved",
+      "held",
+    ]);
+    expect(updated.results[1]?.current_version).toEqual(expect.any(String));
+    expect((await batchClient.taskShow("work:T-2")).items[0]?.item.title).toBe("Two");
+
+    const commented = await batchClient.taskCommentAddMany("work", {
+      schema_version: 1,
+      comments: [
+        { item: "work:T-1", body: "first" },
+        { item: "work:T-404", body: "nowhere" },
+      ],
+    });
+    expect(commented.results.map((result) => result.outcome)).toEqual(["written", "error"]);
+    expect(commented.results[1]?.reason).toContain("work:T-404");
+  } finally {
+    rmSync(batchRoot, { recursive: true, force: true });
+  }
+});
+
 test("taskUpdate sends exactly the flags the binary's task update reports, no more and no fewer", () => {
   // The option-to-flag table is a second statement of the command line, so it is reconciled
   // against the binary's own help both ways: a flag the binary gains that no option sends, and
@@ -949,6 +1010,7 @@ test("taskUpdate sends exactly the flags the binary's task update reports, no mo
         expect: "gh2|v",
         ifVersion: "md1|v",
         repositories: ["github.com/example-org/widget"],
+        whenPriority: ["none", "low"],
       }),
       ...taskUpdateFlags({ delivers: [], dependsOn: [], termScope: [], repositories: [] }),
     ].filter((argument) => argument.startsWith("--")),
@@ -1002,6 +1064,16 @@ test("taskCopy sends exactly the flags the binary's task copy reports, no more a
     ].filter((argument) => argument.startsWith("--")),
   );
   expect([...sent].sort()).toEqual(own);
+  // Each counterpart held to its own version is one `--if-version <ID>=<VERSION>`.
+  expect(taskCopyFlags({ ifVersion: ["work:T-1=md1|a", "work:T-2=md1|b"] })).toEqual([
+    "--if-version",
+    "work:T-1=md1|a",
+    "--if-version",
+    "work:T-2=md1|b",
+  ]);
+  expect(() => taskCopyFlags({ ifVersion: [3] as unknown as string[] })).toThrow(
+    "ifVersion[0] is not a string",
+  );
 });
 
 test("taskUpdate refuses options it could not send as the caller wrote them", () => {

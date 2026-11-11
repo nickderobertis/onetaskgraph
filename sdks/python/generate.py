@@ -50,6 +50,11 @@ RESPONSE_ROOTS = {
     # One kind of attestation on one item: valid, void with a reason, or absent.
     "task_attestation_check": "AttestationCheck",
     "task_update": "TaskUpdated",
+    # Many narrowed searches of one source, each answered under its own key across every page.
+    "task_find": "FoundTasks",
+    # Many held updates and many comments of one source, each answered on its own.
+    "task_update_many": "TasksUpdated",
+    "task_comment_add_many": "CommentsAdded",
     "project_list": "QueryResponseOfQualifiedProject",
     "project_show": "QueryResponseOfQualifiedProject",
     "project_deps": "QueryResponseOfQualifiedEdge",
@@ -186,6 +191,13 @@ CONTRACT_ROOTS = {
     # The v1 request `task project-human` reads from its input file, which a producer builds
     # by name from the one declaration the engine exports.
     "HumanTaskProjection",
+    # The request documents `task find`, `task update-many` and `task comment add-many` read,
+    # which their generated methods take typed, and the vocabulary each batch answers per item
+    # in, which a caller branches on by name.
+    "FindRequest",
+    "UpdateBatch",
+    "CommentBatch",
+    "BatchOutcome",
 }
 # Commands that answer in more than one shape, by the plugin of the source they are asked
 # about: each command's RESPONSE_ROOTS entry is one shape, and these are the others. `sources
@@ -314,6 +326,9 @@ OPTION_TYPES = {
     "item": "list[GlobalId | str] | tuple[GlobalId | str, ...]",
     # Every page of a listing at once.
     "all": "bool",
+    # The file a batch command reads its document from; generated methods take the document
+    # itself and pass `-` (see `DOCUMENT_COMMANDS`), so neither is ever a keyword.
+    "queries": "str",
     # A task read with its forward dependency edges beside it.
     "with_deps": "bool",
 }
@@ -403,6 +418,7 @@ OPTION_PLACEHOLDERS = {
     "item": "ID",
     "all": None,
     "with_deps": None,
+    "queries": "FILE",
 }
 
 
@@ -439,6 +455,11 @@ COMMAND_OPTIONS: dict[tuple[str, ...], dict[str, OptionShape]] = {
         ),
         # The status categories a copy keeps, beside ids or a query, named as a category.
         "status": OptionShape(type="choice_list", placeholder="CATEGORY"),
+        # Each counterpart held to its own version, `<ID>=<VERSION>` repeated — or the one
+        # counterpart of a one-id copy to a bare `<VERSION>`, one string as before.
+        "if_version": OptionShape(
+            type="VersionToken | list[str] | tuple[str, ...]", placeholder="[ID=]VERSION"
+        ),
     },
     # `task comments` keeps the tasks holding a metadata string exactly as `task list` does.
     ("task", "comments"): {
@@ -963,6 +984,8 @@ def operands(command: tuple[str, ...]) -> tuple[str, ...]:
             return ("source",)
         case ("task" | "project" | "document", "create") | ("task", "comments"):
             return ("source",)
+        case ("task", "find" | "update-many") | ("task", "comment", "add-many"):
+            return ("source",)
         case ("task" | "project" | "document", "render" | "answers"):
             return ("id",)
         case ("task", "assets"):
@@ -1026,6 +1049,35 @@ ANSWERS_COMMANDS = {
     ("document", "render"),
 }
 
+
+class DocumentCommand(NamedTuple):
+    """A command reading its whole request as one JSON document from a file or `-`."""
+
+    option: str
+    """The option naming that file, which the generated method always passes as `-`."""
+    parameter: str
+    """The generated method's parameter holding the document."""
+    model: str
+    """The schema root the document is, which the method takes it as and validates it to."""
+
+
+# The commands that read one request document, which generated methods take as that document —
+# typed, or a mapping validated to it — and write to the binary's standard input, passing `-`
+# for the option that names the file. A caller holding a batch needs no file to hand it over.
+DOCUMENT_COMMANDS: dict[tuple[str, ...], DocumentCommand] = {
+    ("task", "find"): DocumentCommand(option="queries", parameter="request", model="FindRequest"),
+    ("task", "update-many"): DocumentCommand(
+        option="input", parameter="batch", model="UpdateBatch"
+    ),
+    ("task", "comment", "add-many"): DocumentCommand(
+        option="input", parameter="batch", model="CommentBatch"
+    ),
+}
+
+# The options of one command that take either one string or a list of them: `task copy
+# --if-version`, one bare version for a one-id copy or `<ID>=<VERSION>` per counterpart.
+STRING_OR_LIST_OPTIONS = {("task", "copy"): {"if_version"}}
+
 # The commands whose `file` operand names a template, which generated methods check before the
 # binary is started: see `_template_file` below. It is optional, because `--template-loader`
 # names the template in its place.
@@ -1068,7 +1120,7 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         "from functools import cache",
         "from typing import TYPE_CHECKING, Literal, overload",
         "",
-        "from pydantic import JsonValue, TypeAdapter",
+        "from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError",
         "",
         # The models are read through `models` when a method runs, so importing this module
         # imports none of them: each is built when the first method answering with it is
@@ -1088,6 +1140,7 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
                     "SourceName",
                     "StatusCategory",
                     "SanitizeDryRun",
+                    *(document.model for document in DOCUMENT_COMMANDS.values()),
                 }
             )
         ],
@@ -1139,6 +1192,40 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         "    except ValueError as error:",
         '        message = f"{method}: answers are not a JSON mapping: {error}"',
         "        raise TypeError(message) from error",
+        "",
+        "",
+        "def _document(method: str, model: type[BaseModel], document: object) -> str:",
+        '    """A batch command\'s request as the JSON document the binary reads on stdin.',
+        "",
+        "    Taken as its model, or as a mapping validated to it here, so a malformed member is",
+        "    refused before the binary is started, naming the member; written by its wire names,",
+        "    leaving out every member that is `None`, which the binary reads as absent.",
+        '    """',
+        "    if isinstance(document, model):",
+        "        checked = document",
+        "    elif isinstance(document, Mapping):",
+        "        try:",
+        "            checked = model.model_validate(dict(document))",
+        "        except ValidationError as error:",
+        '            message = f"{method}: the request is not a {model.__name__}: {error}"',
+        "            raise TypeError(message) from error",
+        "    else:",
+        "        kind = type(document).__name__",
+        "        message = (",
+        '            f"{method}: the request is a {kind}; next: pass a {model.__name__} or a "',
+        '            "mapping of its members"',
+        "        )",
+        "        raise TypeError(message)",
+        "    return checked.model_dump_json(by_alias=True, exclude_none=True)",
+        "",
+        "",
+        "def _string_or_strings(",
+        "    method: str, option: str, values: object",
+        ") -> str | list[str] | tuple[str, ...] | None:",
+        '    """One string, or a repeated option\'s values checked as `_strings` checks them."""',
+        "    if isinstance(values, str):",
+        "        return values",
+        "    return _strings(method, option, values)",
         "",
         "",
         "def _template_file(method: str, file: object) -> str | None:",
@@ -1260,12 +1347,14 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         return_type = RETURN_TYPES.get(name, " | ".join((root, *ALTERNATE_ROOTS.get(name, ()))))
         taken = positionals.get(command, ())
         required = REQUIRED_OPTIONS.get(command, ())
+        document = DOCUMENT_COMMANDS.get(command)
         keywords = [
             item
             for item in option_names(command)
             if item not in taken
             and item not in required
             and not (command in ANSWERS_COMMANDS and item == "answers")
+            and not (document is not None and item == document.option)
         ]
         body = ["body: str | None = None"] if command in BODY_COMMANDS else []
         if command in ANSWERS_COMMANDS:
@@ -1277,6 +1366,13 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
                 + (" | None = None" if optional else "")
                 for positional in taken
             ]
+            + (
+                []
+                if document is None
+                else [
+                    f"{document.parameter}: {document.model} | Mapping[str, JsonValue]",
+                ]
+            )
             # A required option is typed as the operand of its name is, unless its command
             # shapes it otherwise: `project create --id` is a native id, not a qualified one. It
             # follows the `*` for a command whose required options are keyword-only.
@@ -1299,9 +1395,18 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         passed = [
             f"{item}=_strings({name!r}, {item!r}, {item})"
             if item in TEMPLATE_STRING_LISTS
+            else f"{item}=_string_or_strings({name!r}, {item!r}, {item})"
+            if item in STRING_OR_LIST_OPTIONS.get(command, set())
             else entry
             for item, entry in zip([*taken, *required, *keywords], passed, strict=True)
         ]
+        if document is not None:
+            passed.extend(
+                [
+                    f'{document.option}="-"',
+                    f"stdin=_document({name!r}, _models.{document.model}, {document.parameter})",
+                ]
+            )
         passed.extend(
             f"{option}={value!r}" for option, value in FIXED_OPTIONS.get(command, {}).items()
         )
@@ -1430,7 +1535,16 @@ def enum_defaults(lines: list[str]) -> list[str]:
     rewritten: list[str] = []
     annotated: str | None = None
     for line in lines:
-        if re.fullmatch(r"    \w+: Annotated\[", line):
+        # A field the formatter fits on one line — `FindQuery.in_` — carries its type and its
+        # default together.
+        if one_line := re.fullmatch(
+            r"(    \w+: Annotated\[(\w+)(?: \| None)?, .*\] = )\"(.*)\"", line
+        ):
+            member = members.get(one_line.group(2), {}).get(one_line.group(3))
+            if member is not None:
+                line = f"{one_line.group(1)}{one_line.group(2)}.{member}"
+            annotated = None
+        elif re.fullmatch(r"    \w+: Annotated\[", line):
             annotated = ""
         elif annotated == "" and (typed := re.fullmatch(r"        (\w+)(?: \| None)?,", line)):
             annotated = typed.group(1)

@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from functools import cache
 from typing import TYPE_CHECKING, Literal, overload
 
-from pydantic import JsonValue, TypeAdapter
+from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 
 from . import models as _models
 
@@ -16,7 +16,9 @@ if TYPE_CHECKING:
         AttestationCheck,
         Attested,
         CacheCleared,
+        CommentBatch,
         CommentList,
+        CommentsAdded,
         CommentsSince,
         CommentWritten,
         CopyReport,
@@ -24,6 +26,8 @@ if TYPE_CHECKING:
         DocumentDetail,
         EffectiveConfig,
         FieldsReport,
+        FindRequest,
+        FoundTasks,
         GlobalId,
         HumanTaskProjected,
         IssuesCompleted,
@@ -58,9 +62,11 @@ if TYPE_CHECKING:
         TaskDetails,
         TaskPrioritySet,
         TaskStatusSet,
+        TasksUpdated,
         TaskUpdated,
         TemplateAnswers,
         TemplateVariables,
+        UpdateBatch,
     )
 
 POSITIONALS: dict[tuple[str, ...], tuple[str, ...]] = {
@@ -94,6 +100,7 @@ POSITIONALS: dict[tuple[str, ...], tuple[str, ...]] = {
     ("task", "attest"): ("id",),
     ("task", "attestation", "check"): ("id",),
     ("task", "comment", "add"): ("id",),
+    ("task", "comment", "add-many"): ("source",),
     ("task", "comment", "delete"): ("id", "comment_id"),
     ("task", "comment", "edit"): ("id", "comment_id"),
     ("task", "comment", "list"): ("id",),
@@ -102,6 +109,7 @@ POSITIONALS: dict[tuple[str, ...], tuple[str, ...]] = {
     ("task", "copy"): ("ids",),
     ("task", "create"): ("source",),
     ("task", "deps"): ("id",),
+    ("task", "find"): ("source",),
     ("task", "locate"): ("ids",),
     ("task", "metadata", "set"): ("id", "key", "value"),
     ("task", "priority", "set"): ("id", "priority"),
@@ -110,6 +118,7 @@ POSITIONALS: dict[tuple[str, ...], tuple[str, ...]] = {
     ("task", "show-many"): ("ids",),
     ("task", "status", "set"): ("id", "category"),
     ("task", "update"): ("id",),
+    ("task", "update-many"): ("source",),
     ("template", "render"): ("file",),
     ("template", "variables"): ("file",),
 }
@@ -153,6 +162,40 @@ def _answers_document(method: str, answers: Mapping[str, JsonValue]) -> str:
     except ValueError as error:
         message = f"{method}: answers are not a JSON mapping: {error}"
         raise TypeError(message) from error
+
+
+def _document(method: str, model: type[BaseModel], document: object) -> str:
+    """A batch command's request as the JSON document the binary reads on stdin.
+
+    Taken as its model, or as a mapping validated to it here, so a malformed member is
+    refused before the binary is started, naming the member; written by its wire names,
+    leaving out every member that is `None`, which the binary reads as absent.
+    """
+    if isinstance(document, model):
+        checked = document
+    elif isinstance(document, Mapping):
+        try:
+            checked = model.model_validate(dict(document))
+        except ValidationError as error:
+            message = f"{method}: the request is not a {model.__name__}: {error}"
+            raise TypeError(message) from error
+    else:
+        kind = type(document).__name__
+        message = (
+            f"{method}: the request is a {kind}; next: pass a {model.__name__} or a "
+            "mapping of its members"
+        )
+        raise TypeError(message)
+    return checked.model_dump_json(by_alias=True, exclude_none=True)
+
+
+def _string_or_strings(
+    method: str, option: str, values: object
+) -> str | list[str] | tuple[str, ...] | None:
+    """One string, or a repeated option's values checked as `_strings` checks them."""
+    if isinstance(values, str):
+        return values
+    return _strings(method, option, values)
 
 
 def _template_file(method: str, file: object) -> str | None:
@@ -3340,6 +3383,80 @@ class GeneratedClient:
         )
 
     @overload
+    async def task_comment_add_many(
+        self,
+        source: SourceName | str,
+        batch: CommentBatch | Mapping[str, JsonValue],
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+    ) -> CommentsAdded: ...
+
+    @overload
+    async def task_comment_add_many(
+        self,
+        source: SourceName | str,
+        batch: CommentBatch | Mapping[str, JsonValue],
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+    ) -> CommentsAdded | SanitizeDryRun: ...
+
+    @overload
+    async def task_comment_add_many(
+        self,
+        source: SourceName | str,
+        batch: CommentBatch | Mapping[str, JsonValue],
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+    ) -> CommentsAdded | SanitizeDryRun: ...
+
+    async def task_comment_add_many(
+        self,
+        source: SourceName | str,
+        batch: CommentBatch | Mapping[str, JsonValue],
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+    ) -> CommentsAdded | SanitizeDryRun:
+        """Run ``onetaskgraph task comment add-many``."""
+        return await self._invoke(
+            ["task", "comment", "add-many"],
+            _models.CommentsAdded | _models.SanitizeDryRun,
+            source=source,
+            default_sources=default_sources,
+            page_size=page_size,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
+            set=set,
+            term_scope=_strings("task_comment_add_many", "term_scope", term_scope),
+            input="-",
+            stdin=_document("task_comment_add_many", _models.CommentBatch, batch),
+        )
+
+    @overload
     async def task_comment_delete(
         self,
         id: GlobalId | str,
@@ -3794,7 +3911,7 @@ class GeneratedClient:
         default_sources: list[str] | tuple[str, ...] | None = None,
         dry_run: bool | None = None,
         expect: VersionToken | None = None,
-        if_version: VersionToken | None = None,
+        if_version: VersionToken | list[str] | tuple[str, ...] | None = None,
         match_by: str | None = None,
         metadata: list[str] | tuple[str, ...] | None = None,
         no_link: bool | None = None,
@@ -3850,7 +3967,7 @@ class GeneratedClient:
         default_sources: list[str] | tuple[str, ...] | None = None,
         dry_run: bool | None = None,
         expect: VersionToken | None = None,
-        if_version: VersionToken | None = None,
+        if_version: VersionToken | list[str] | tuple[str, ...] | None = None,
         match_by: str | None = None,
         metadata: list[str] | tuple[str, ...] | None = None,
         no_link: bool | None = None,
@@ -3906,7 +4023,7 @@ class GeneratedClient:
         default_sources: list[str] | tuple[str, ...] | None = None,
         dry_run: bool | None = None,
         expect: VersionToken | None = None,
-        if_version: VersionToken | None = None,
+        if_version: VersionToken | list[str] | tuple[str, ...] | None = None,
         match_by: str | None = None,
         metadata: list[str] | tuple[str, ...] | None = None,
         no_link: bool | None = None,
@@ -3961,7 +4078,7 @@ class GeneratedClient:
         default_sources: list[str] | tuple[str, ...] | None = None,
         dry_run: bool | None = None,
         expect: VersionToken | None = None,
-        if_version: VersionToken | None = None,
+        if_version: VersionToken | list[str] | tuple[str, ...] | None = None,
         match_by: str | None = None,
         metadata: list[str] | tuple[str, ...] | None = None,
         no_link: bool | None = None,
@@ -4016,7 +4133,7 @@ class GeneratedClient:
             default_sources=default_sources,
             dry_run=dry_run,
             expect=expect,
-            if_version=if_version,
+            if_version=_string_or_strings("task_copy", "if_version", if_version),
             match_by=match_by,
             metadata=_strings("task_copy", "metadata", metadata),
             no_link=no_link,
@@ -4303,6 +4420,75 @@ class GeneratedClient:
             replace=replace,
             sanitize_dry_run=sanitize_dry_run,
             set=set,
+        )
+
+    @overload
+    async def task_find(
+        self,
+        source: SourceName | str,
+        request: FindRequest | Mapping[str, JsonValue],
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> FoundTasks: ...
+
+    @overload
+    async def task_find(
+        self,
+        source: SourceName | str,
+        request: FindRequest | Mapping[str, JsonValue],
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> FoundTasks | SanitizeDryRun: ...
+
+    @overload
+    async def task_find(
+        self,
+        source: SourceName | str,
+        request: FindRequest | Mapping[str, JsonValue],
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> FoundTasks | SanitizeDryRun: ...
+
+    async def task_find(
+        self,
+        source: SourceName | str,
+        request: FindRequest | Mapping[str, JsonValue],
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> FoundTasks | SanitizeDryRun:
+        """Run ``onetaskgraph task find``."""
+        return await self._invoke(
+            ["task", "find"],
+            _models.FoundTasks | _models.SanitizeDryRun,
+            source=source,
+            default_sources=default_sources,
+            page_size=page_size,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
+            set=set,
+            queries="-",
+            stdin=_document("task_find", _models.FindRequest, request),
         )
 
     @overload
@@ -5364,6 +5550,9 @@ class GeneratedClient:
         status_name: str | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
         title: str | None = None,
+        when_priority: list[Literal["none", "urgent", "high", "medium", "low"]]
+        | tuple[Literal["none", "urgent", "high", "medium", "low"], ...]
+        | None = None,
     ) -> TaskUpdated: ...
 
     @overload
@@ -5396,6 +5585,9 @@ class GeneratedClient:
         status_name: str | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
         title: str | None = None,
+        when_priority: list[Literal["none", "urgent", "high", "medium", "low"]]
+        | tuple[Literal["none", "urgent", "high", "medium", "low"], ...]
+        | None = None,
     ) -> TaskUpdated | SanitizeDryRun: ...
 
     @overload
@@ -5428,6 +5620,9 @@ class GeneratedClient:
         status_name: str | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
         title: str | None = None,
+        when_priority: list[Literal["none", "urgent", "high", "medium", "low"]]
+        | tuple[Literal["none", "urgent", "high", "medium", "low"], ...]
+        | None = None,
     ) -> TaskUpdated | SanitizeDryRun: ...
 
     async def task_update(
@@ -5459,6 +5654,9 @@ class GeneratedClient:
         status_name: str | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
         title: str | None = None,
+        when_priority: list[Literal["none", "urgent", "high", "medium", "low"]]
+        | tuple[Literal["none", "urgent", "high", "medium", "low"], ...]
+        | None = None,
     ) -> TaskUpdated | SanitizeDryRun:
         """Run ``onetaskgraph task update``."""
         return await self._invoke(
@@ -5487,6 +5685,81 @@ class GeneratedClient:
             status_name=status_name,
             term_scope=_strings("task_update", "term_scope", term_scope),
             title=title,
+            when_priority=when_priority,
+        )
+
+    @overload
+    async def task_update_many(
+        self,
+        source: SourceName | str,
+        batch: UpdateBatch | Mapping[str, JsonValue],
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+    ) -> TasksUpdated: ...
+
+    @overload
+    async def task_update_many(
+        self,
+        source: SourceName | str,
+        batch: UpdateBatch | Mapping[str, JsonValue],
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+    ) -> TasksUpdated | SanitizeDryRun: ...
+
+    @overload
+    async def task_update_many(
+        self,
+        source: SourceName | str,
+        batch: UpdateBatch | Mapping[str, JsonValue],
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+    ) -> TasksUpdated | SanitizeDryRun: ...
+
+    async def task_update_many(
+        self,
+        source: SourceName | str,
+        batch: UpdateBatch | Mapping[str, JsonValue],
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+    ) -> TasksUpdated | SanitizeDryRun:
+        """Run ``onetaskgraph task update-many``."""
+        return await self._invoke(
+            ["task", "update-many"],
+            _models.TasksUpdated | _models.SanitizeDryRun,
+            source=source,
+            default_sources=default_sources,
+            page_size=page_size,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
+            set=set,
+            term_scope=_strings("task_update_many", "term_scope", term_scope),
+            input="-",
+            stdin=_document("task_update_many", _models.UpdateBatch, batch),
         )
 
     @overload

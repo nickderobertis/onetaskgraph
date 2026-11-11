@@ -1578,6 +1578,12 @@ them do; this is the inventory of what is owed, not a status board.
      by configuration alone — Linear team sources with no default and no route, folders of
      Markdown `drafts` and `authoring`, templates of its own — copies a plan to a named team,
      its dry run sizing every item, and lands every item there and nowhere else.
+160. Over a folder of Markdown and an in-memory source, `task find` answers each of its queries
+     with exactly its matches across pages and refuses an unnarrowed one naming its key; `task
+     copy --if-version <ID>=<VERSION>`, `task comment add-many` and `task update-many` write
+     every item but one another writer moved, answered `version-moved` with its version, one a
+     priority guard `held` and one naming no task `error`, each update's fields landing all or
+     none; and `task update --when-priority` writes every field only while the guard holds.
 
 ## The public boundary
 
