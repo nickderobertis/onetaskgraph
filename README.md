@@ -546,6 +546,77 @@ Every aliased relation write is charged to the source's pacing as one content cr
 GitHub's secondary limit, not its point budget, is what sustained relation writes reach.
 <!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 
+### Assignees: one person, or none
+
+A source holds assignees only once its configuration opts in, on every plugin:
+
+```yaml
+sources:
+  board:
+    plugin: github-projects
+    config:
+      assignees: true   # default false
+```
+
+Off — the default — nothing changes: no read asks the destination for assignees, no item carries
+an `assignees` key, and every write naming an assignee is refused before anything is read or
+written, naming the source and the setting (`no-assignees`).
+
+**Reading.** An opted-in source's tasks carry `assignees: [<person>, ...]` in every shape the
+store answers — `task show`, `task show-many`, `task list`, `task find` — holding **every**
+person the item is assigned to, `[]` when nobody. A person is named as the destination names
+one:
+
+| Destination | A person is | Notes |
+|---|---|---|
+| `github-projects` | the user's **login** | An issue may hold several, and all of them are read. |
+| `linear` | the user's **display name** (their @handle) | Unique within a workspace; resolved to the user once per process, in one request for every name a call needs. |
+| `local-md` | the string as written, in the task's `assignees:` front-matter list | A file a person edited to hold several reads back with all of them. |
+| `in-memory` | the string as given | |
+
+A task's change token covers its assignees, so a cached read pinned to a token never serves
+assignees older than it.
+
+**Writing: one person or none.** Every write names at most one person and **replaces** whatever
+the item holds — on GitHub every earlier login is removed, on Linear the assignee is set or
+cleared:
+
+```bash
+onetaskgraph task create board --project P --title "Fix it" --assignee octocat   # at most once
+onetaskgraph task assignee set board:I_kw... hubot                  # replaces every assignee
+onetaskgraph task assignee set board:I_kw...                        # naming none: unassign
+onetaskgraph task assignee set board:I_kw... hubot --if-version V   # held to the version read
+```
+
+A person the destination will not assign is refused for that item, naming them, while the rest of
+the call goes on. GitHub assigns only people who can be assigned to issues in the issue's
+repository, and answers a write that names anyone else by leaving them off; so each write's answer
+is compared with what it asked for rather than trusted. On Linear an unknown display name is
+refused.
+
+**Guards: a person's own assignment stands.** A guard names a *set*, because a read can hold
+several people, and a write lands only while the item holds exactly the people named:
+
+- `task update-many`: an update's `"assignee": "<person>"` assigns, `"assignee": null`
+  unassigns, and leaving it out leaves the assignees as they are. `"when_assignees":
+  [<person>...]` writes the update only while the task holds exactly those people (`[]`: only
+  while it is unassigned); otherwise nothing of it is written and it answers `held`. An item a
+  person gave a second assignee therefore holds a write guarded on the first alone.
+- `task copy ... --when-destination-assignees <PERSON|none>` (repeat for each person; `none`
+  alone for nobody): a copy between two opted-in sources gives a **created** item the source
+  item's assignee, and writes it over an **existing** item only beside this flag and only while
+  that item holds exactly the set named — keeping the item's own otherwise. Each updated item's
+  outcome carries `assignee_condition: {"held": [<person>...], "met": <bool>}`. Decided on the
+  copy's own read, so it adds no request, as `--when-destination-priority` is. A source item
+  holding more than one person is refused for that item, naming it and how many it holds, the
+  call's other items going on. A copy from or to a source that has not opted in carries no
+  assignee and is not refused for it.
+
+An assignee write rides the documents the call already sends — `assigneeId` in Linear's
+`issueUpdate` or `issueBatchCreate` input, `assigneeIds` in GitHub's `createIssue` or
+`updateIssue` — and costs at most one person lookup per call naming someone not yet resolved in
+the process (a GitHub login to its node id, a Linear display name to its user id).
+
 ### Seeing which plan you got
 
 `--explain` renders the plan the query ran, per source. Here one `--label` query reaches

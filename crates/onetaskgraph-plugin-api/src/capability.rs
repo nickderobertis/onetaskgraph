@@ -87,6 +87,7 @@ pub struct Capabilities {
         default = "no_assignees",
         skip_serializing_if = "Support::is_unsupported"
     )]
+    #[schemars(!skip_serializing_if)]
     pub assignees: Support,
     /// Whether the source keeps only the tasks whose priority a query lists, itself.
     ///
