@@ -239,7 +239,6 @@ pub(crate) fn walk() -> Vec<(&'static str, Phase)> {
     run_batch(&cycle, &batch, &mut calls, false);
     run_batch(&cycle, &batch, &mut calls, true);
 
-    // The comment pass.
     let listed = cycle.measured("pass: comments since", &mut calls, || {
         cycle.json(
             &[

@@ -97,6 +97,24 @@ impl LinearSource {
         singles: &[&str],
         each: &[Value],
     ) -> Result<Aliased, SourceError> {
+        Ok(match self.send_composed_each(singles, each).await? {
+            Ok(values) => Aliased::Answered(values.into_iter().collect::<Result<Vec<_>, _>>()?),
+            Err((at, refusal)) => Aliased::Refused(at, refusal),
+        })
+    }
+
+    /// [`Self::send_composed_of`], each alias answered on its own: one the answer leaves out is
+    /// that alias's malformed answer beside every other's, where a write applied whole still
+    /// needs every answer it can read.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::send_aliased`].
+    async fn send_composed_each(
+        &self,
+        singles: &[&str],
+        each: &[Value],
+    ) -> Result<Result<Vec<Result<Value, SourceError>>, (usize, Refusal)>, SourceError> {
         let document = graphql::composed(singles);
         match self
             .answer_with(
@@ -106,7 +124,7 @@ impl LinearSource {
             )
             .await?
         {
-            Ok(data) => (0..each.len())
+            Ok(data) => Ok(Ok((0..each.len())
                 .map(|at| {
                     data.get(format!("a{at}"))
                         .cloned()
@@ -117,10 +135,9 @@ impl LinearSource {
                             ),
                         })
                 })
-                .collect::<Result<Vec<_>, _>>()
-                .map(Aliased::Answered),
+                .collect())),
             Err(refusal) => match refusal.alias() {
-                Some(at) if at < each.len() => Ok(Aliased::Refused(at, refusal)),
+                Some(at) if at < each.len() => Ok(Err((at, refusal))),
                 _ => Err(refusal.into_error()),
             },
         }
@@ -606,16 +623,21 @@ impl LinearSource {
                 .iter()
                 .map(|(_, create)| create.variables.clone())
                 .collect();
-            match self.send_aliased(graphql::ISSUE_CREATE, &each).await? {
-                Aliased::Answered(values) => {
+            let singles = vec![graphql::ISSUE_CREATE; each.len()];
+            match self.send_composed_each(&singles, &each).await? {
+                Ok(values) => {
                     // Linear applied the whole document, so every create in it that its answer
                     // names is recorded to be taken back before any answer is refused as
                     // malformed — one malformed answer leaves the others nameable.
                     let mut landed = Vec::with_capacity(values.len());
                     let mut malformed = None;
                     for ((at, create), value) in queued.drain(..).zip(values) {
-                        let answered = json!({"issueCreate": value});
-                        let named = super::mutation_payload(&answered, MutationRoot::IssueCreate)
+                        let named = value
+                            .and_then(|value| {
+                                let answered = json!({"issueCreate": value});
+                                super::mutation_payload(&answered, MutationRoot::IssueCreate)
+                                    .cloned()
+                            })
                             .and_then(|payload| {
                                 payload.get("issue").cloned().ok_or_else(|| {
                                     SourceError::Malformed {
@@ -668,7 +690,7 @@ impl LinearSource {
                         .await?;
                     }
                 }
-                Aliased::Refused(refused, _) => {
+                Err((refused, _)) => {
                     // Nothing of the document landed: that one on its own, the rest together.
                     let (at, alone) = queued.remove(refused);
                     created[at] = Some(

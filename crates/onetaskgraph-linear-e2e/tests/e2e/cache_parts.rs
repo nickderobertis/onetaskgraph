@@ -980,7 +980,7 @@ fn a_relation_write_whose_far_edges_entry_cannot_be_retired_is_refused_unsent() 
 
 #[cfg(unix)]
 #[test]
-fn a_batched_update_naming_a_task_whose_entry_cannot_be_retired_sends_no_update_of_the_batch() {
+fn a_batch_naming_a_task_whose_entry_cannot_be_retired_sends_nothing_of_the_batch() {
     use std::os::unix::fs::PermissionsExt as _;
     let cached = Cached::new(held());
     filled(&cached, &COMMENTS);
@@ -1014,7 +1014,27 @@ fn a_batched_update_naming_a_task_whose_entry_cannot_be_retired_sends_no_update_
         batch.to_str().expect("a path"),
         "--json",
     ];
+    let comments = cached.sandbox.project().join("comments.json");
+    std::fs::write(
+        &comments,
+        json!({"schema_version": 1, "comments": [
+            {"item": "linear:L-2", "body": "A note on the second."},
+            {"item": "linear:L-1", "body": "A note on the first."},
+        ]})
+        .to_string(),
+    )
+    .expect("a batch");
+    let comment = [
+        "task",
+        "comment",
+        "add-many",
+        "linear",
+        "--input",
+        comments.to_str().expect("a path"),
+        "--json",
+    ];
     let before = cached.workspace.served().len();
+    let commented = cached.run(&comment);
     let output = cached.run(&write);
     let sent: Vec<String> = cached.workspace.served()[before..]
         .iter()
@@ -1027,6 +1047,17 @@ fn a_batched_update_naming_a_task_whose_entry_cannot_be_retired_sends_no_update_
         "{}",
         crate::common::stderr(&output)
     );
+    assert_eq!(
+        commented.status.code(),
+        Some(4),
+        "{}",
+        crate::common::stderr(&commented)
+    );
+    let noted: Value =
+        serde_json::from_str(&crate::common::stdout(&commented)).expect("the batch answers JSON");
+    for result in noted["results"].as_array().expect("results") {
+        assert_eq!(result["outcome"], "error", "{result:#}");
+    }
     let answered: Value =
         serde_json::from_str(&crate::common::stdout(&output)).expect("the batch answers JSON");
     // L-2's own entry could be retired, but the batch goes as one request, so neither is sent.

@@ -768,6 +768,30 @@ fn a_batched_create_linear_will_not_take_back_is_named_as_still_held() {
 /// copy is run again.
 #[test]
 fn a_batched_create_answered_malformed_takes_back_every_create_it_can_name() {
+    a_batched_create_answered_without(
+        |data| {
+            data["a1"]
+                .as_object_mut()
+                .expect("a payload")
+                .remove("issue");
+        },
+        "missing issueCreate.issue",
+    );
+}
+
+#[test]
+fn a_batched_create_answered_without_an_alias_takes_back_every_create_it_can_name() {
+    a_batched_create_answered_without(
+        |data| {
+            data.as_object_mut().expect("data").remove("a1");
+        },
+        "without alias a1",
+    );
+}
+
+/// Copy the plan with its batched create's answer bent by `bend`, and hold the copy to taking
+/// back the two creates the answer still names and to refusing with `said`.
+fn a_batched_create_answered_without(bend: fn(&mut Value), said: &str) {
     let road = Road::of(PARALLEL);
     road.author();
     let workspace = &road.workspace.held;
@@ -775,16 +799,11 @@ fn a_batched_create_answered_malformed_takes_back_every_create_it_can_name() {
         onetaskgraph_linear::graphql::aliased(onetaskgraph_linear::graphql::ISSUE_CREATE, 3)
             .into_boxed_str(),
     );
-    // The middle create's payload answered with no issue.
+    // The middle create's answer bent.
     workspace.bend_answers(
         move |operation, _| operation == creates,
         1,
-        |_, data| {
-            data["a1"]
-                .as_object_mut()
-                .expect("a payload")
-                .remove("issue");
-        },
+        move |_, data| bend(data),
     );
     let mut copy = road.sandbox.command();
     copy.envs(road.workspace.clock.client_env(0))
@@ -800,14 +819,14 @@ fn a_batched_create_answered_malformed_takes_back_every_create_it_can_name() {
         .write_stdin("");
     let output = copy.assert().get_output().clone();
     assert_ne!(output.status.code(), Some(0), "{}", stdout(&output));
-    let said = format!("{}{}", stdout(&output), crate::common::stderr(&output));
-    assert!(said.contains("missing issueCreate.issue"), "{said}");
-    assert!(said.contains("inspect"), "{said}");
+    let output = format!("{}{}", stdout(&output), crate::common::stderr(&output));
+    assert!(output.contains(said), "{output}");
+    assert!(output.contains("inspect"), "{output}");
     let held: Vec<String> = ["Build the ledger", "Ship the ledger", "Test the ledger"]
         .into_iter()
         .filter(|title| titled(&road, title) == 1)
         .map(str::to_owned)
         .collect();
     // The two the answer named are taken back; the one it did not name is what to inspect.
-    assert_eq!(held.len(), 1, "{held:?}: {said}");
+    assert_eq!(held.len(), 1, "{held:?}: {output}");
 }
