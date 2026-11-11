@@ -648,6 +648,15 @@ pub mod graphql {
     pub const DOCUMENT_NOT_FOUND_MESSAGE: &str = "Entity not found: Document";
     /// Its user-facing alternative, on the terms of [`ISSUE_NOT_FOUND_PRESENTABLE`].
     pub const DOCUMENT_NOT_FOUND_PRESENTABLE: &str = "Could not find referenced Document.";
+    /// Linear's refusal of a page asked for `after` (or `before`) a cursor it cannot find, as the
+    /// live capability journey met it on 2026-11-11 (run 43027479734) — `cursor not found`, whose
+    /// `userPresentableMessage` reads `Could not find cursor '<cursor>'.` — partway through a walk
+    /// in pages of one over issues that run had just created, the cursor being the last of them.
+    /// A cursor is the id of the row it follows, so a replica that does not hold that row yet
+    /// cannot place it. The loopback of `tests/absent_and_refused.rs` answers with these two.
+    pub const CURSOR_NOT_FOUND_MESSAGE: &str = "cursor not found";
+    /// Its user-facing alternative, up to the cursor it names.
+    pub const CURSOR_NOT_FOUND_PRESENTABLE: &str = "Could not find cursor";
     /// Linear's refusal of a `projectCreate` under an id a record already holds — a deleted
     /// one's included — answered under HTTP 200, as the live project-create journey of
     /// `onetaskgraph-linear-e2e` observed it on 2026-11-03 and checks, for each of the three
@@ -1771,6 +1780,24 @@ pub async fn status_names(
         .await
 }
 
+/// How many times a page Linear refused for a cursor it cannot find is read again before the
+/// refusal is the caller's, and the pause before the first of them, doubling before each after:
+/// 0.5, 1, 2 and 4 seconds, 7.5 in all. Only a page that names a cursor and is refused for it
+/// waits, so no other read's requests or time change.
+const STALE_CURSOR_REREADS: u32 = 4;
+const STALE_CURSOR_PAUSE: std::time::Duration = std::time::Duration::from_millis(500);
+/// The cause those pauses are taken under, on this source's clock.
+const STALE_CURSOR_WAIT: onetaskgraph_plugin_api::WaitCause =
+    onetaskgraph_plugin_api::WaitCause::new("linear-cursor-lag");
+
+/// Whether a request's variables ask for a page after (or before) a cursor, rather than a
+/// connection's first page.
+fn resumes_a_page(variables: &Value) -> bool {
+    ["after", "before"]
+        .iter()
+        .any(|key| variables.get(key).is_some_and(Value::is_string))
+}
+
 /// How long Linear's filtered reads may go on missing a comment after it was made or edited,
 /// which a read of the comments made since an instant sets its watermark back by.
 const COMMENT_FILTER_LAG: std::time::Duration = std::time::Duration::from_secs(60);
@@ -2147,6 +2174,15 @@ impl Refusal {
         )
     }
 
+    /// Whether Linear refused a page because it cannot find the cursor the page was asked to
+    /// follow, in either of its spellings.
+    fn cursor_missing(&self) -> bool {
+        self.missing(
+            graphql::CURSOR_NOT_FOUND_MESSAGE,
+            graphql::CURSOR_NOT_FOUND_PRESENTABLE,
+        )
+    }
+
     /// Whether this refusal is Linear's `message` — or its `presentable` alternative — for the
     /// one entity the request addressed.
     fn missing(&self, message: &str, presentable: &str) -> bool {
@@ -2245,9 +2281,41 @@ fn elided(said: &str) -> String {
 
 impl LinearSource {
     async fn send(&self, query: &str, variables: Value) -> Result<Value, SourceError> {
-        self.answer(query, variables)
-            .await?
-            .map_err(|refusal| refusal.into_error())
+        if !resumes_a_page(&variables) {
+            return self
+                .answer(query, variables)
+                .await?
+                .map_err(|refusal| refusal.into_error());
+        }
+        // A page resumed from a cursor Linear cannot place yet is read again, the same page
+        // after the same cursor, on this source's clock: the cursor is the id of the row the
+        // last page ended on, and a replica behind the one that answered that page does not
+        // hold the row yet (see [`graphql::CURSOR_NOT_FOUND_MESSAGE`]). Nothing restarts the
+        // walk from its first page, which could hand the caller a row twice; a cursor still not
+        // found after [`STALE_CURSOR_REREADS`] reads again is refused, naming it.
+        let mut pause = STALE_CURSOR_PAUSE;
+        let mut reread = 0;
+        loop {
+            match self.answer(query, variables.clone()).await? {
+                Ok(data) => return Ok(data),
+                Err(refusal) if refusal.cursor_missing() && reread < STALE_CURSOR_REREADS => {
+                    reread += 1;
+                    self.clock.sleep_because(pause, STALE_CURSOR_WAIT).await;
+                    pause = pause.saturating_mul(2);
+                }
+                Err(refusal) if refusal.cursor_missing() => {
+                    return Err(SourceError::Refused {
+                        message: format!(
+                            "Linear did not recognise the page's cursor on {} reads of it: {}; \
+                             start the walk again from its first page",
+                            reread + 1,
+                            refusal.0.said()
+                        ),
+                    });
+                }
+                Err(refusal) => return Err(refusal.into_error()),
+            }
+        }
     }
 
     /// Send a mutation addressing one item by id, answering `None` when Linear refuses it
@@ -2549,8 +2617,9 @@ impl LinearSource {
             {
                 return Err(limited);
             }
-            // An id naming nothing is the one refusal a caller acts on rather than reports,
-            // so it reads the same whichever status Linear sends it under.
+            // An id naming nothing, and a cursor Linear cannot place, are the refusals a caller
+            // acts on rather than reports, so each reads the same whichever status Linear sends
+            // it under.
             if let Some(missing) = serde_json::from_str::<Envelope>(&text)
                 .ok()
                 .and_then(|body| body.errors.into_iter().next())
@@ -2559,6 +2628,7 @@ impl LinearSource {
                     refusal.entity_missing()
                         || refusal.project_missing()
                         || refusal.document_missing()
+                        || refusal.cursor_missing()
                 })
             {
                 return Ok(Err(missing));
