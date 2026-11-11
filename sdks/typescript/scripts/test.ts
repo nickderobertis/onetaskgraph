@@ -71,7 +71,7 @@ async function requireResult(
   const result = await run(args, cwd, env);
   if (result.status !== expectedStatus || result.signal !== null) {
     throw new Error(
-      `${label}: expected exit ${expectedStatus}, got ${result.status} (signal ${result.signal})\n${result.stdout}\n${result.stderr}`,
+      `${label}: expected exit ${expectedStatus}, got ${result.status} (signal ${result.signal}); read the runner's output below for the failing test, then re-run \`bun scripts/test.ts ${args.join(" ")}\` from sdks/typescript\n${result.stdout}\n${result.stderr}`,
     );
   }
   return `${result.stdout}\n${result.stderr}`;
@@ -121,7 +121,11 @@ async function runFixture(
       STARTED_AT: resolve(fixtures, `${label.replaceAll(" ", "-")}.started`),
     },
   );
-  if (!existsSync(report)) throw new Error(`${label}: the runner wrote no report\n${output}`);
+  if (!existsSync(report)) {
+    throw new Error(
+      `${label}: the runner wrote no JUnit report at ${report}; check that this bun (\`bun --version\`) still accepts --reporter=junit --reporter-outfile, and read its output below\n${output}`,
+    );
+  }
   return { cases: reportedCases(report), output };
 }
 
@@ -163,7 +167,7 @@ test("a delayed subprocess succeeds", async () => {
     const expectedPass = [{ name: "a delayed subprocess succeeds", failure: null }];
     if (JSON.stringify(passed.cases) !== JSON.stringify(expectedPass)) {
       throw new Error(
-        `delayed subprocess did not pass: the runner reported ${JSON.stringify(passed.cases)}\n${passed.output}`,
+        `delayed subprocess did not pass: the runner reported ${JSON.stringify(passed.cases)}; a TimeoutError means the shared timeout (${HANG_TIMEOUT_MS} ms) no longer covers a 5.2 s subprocess, anything else is in the output below\n${passed.output}`,
       );
     }
 
@@ -183,12 +187,14 @@ test("a stuck test is terminated", async () => {
     );
     const refused = await runFixture("stuck test", 1, stuck, fixtures);
     if (!existsSync(resolve(fixtures, "stuck-test.started"))) {
-      throw new Error(`the stuck test's body never began, so nothing was stuck\n${refused.output}`);
+      throw new Error(
+        `the stuck test's body never began, so nothing was stuck; read the runner's output below for why the fixture did not load or run\n${refused.output}`,
+      );
     }
     const expectedTimeout = [{ name: "a stuck test is terminated", failure: "TimeoutError" }];
     if (JSON.stringify(refused.cases) !== JSON.stringify(expectedTimeout)) {
       throw new Error(
-        `stuck test was not terminated by the shared timeout: the runner reported ${JSON.stringify(refused.cases)}\n${refused.output}`,
+        `stuck test was not terminated by the shared timeout: the runner reported ${JSON.stringify(refused.cases)} where it owes one TimeoutError; check that \`--timeout=${HANG_TIMEOUT_MS}\` still reaches \`bun test\` in run(), and read the output below\n${refused.output}`,
       );
     }
     process.stdout.write(
