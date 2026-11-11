@@ -1243,3 +1243,128 @@ fn a_far_end_turned_into_a_project_is_carried_by_the_next_copy_that_reads_the_ta
         "the next copy that reads T-4 carries what its far end has become"
     );
 }
+
+/// A `--comments` copy of a board's projects into a Linear workspace that rewrites the Markdown it
+/// is sent writes nothing on a repeat, though the board's token does not vouch for a project's
+/// forward edges — the copy holds those to the destination's itself — and a dependency added
+/// between the projects on the board since is still carried by the next copy, which a token
+/// trusted for a part it does not cover would have skipped.
+#[test]
+fn a_repeat_comments_copy_of_a_boards_projects_into_linear_writes_nothing_and_a_new_edge_is_carried()
+ {
+    use crate::section_links::{Store, configure, ok, outcomes, store};
+    use onetaskgraph_e2e_support::fixtures::LinearMarkdown;
+
+    let sandbox = Sandbox::new();
+    let (_, authored) = store(&sandbox, "local-md", "authored", None);
+    let root = crate::section_links::root_of(&sandbox, "authored");
+    for folder in ["projects", "tasks"] {
+        std::fs::create_dir_all(root.join(folder)).expect("a folder");
+    }
+    for (path, front, body) in [
+        (
+            "projects/P.md",
+            "title: First plan\nstatus: todo",
+            "The first plan.\n\n- a list\n- of two\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n",
+        ),
+        (
+            "projects/Q.md",
+            "title: Second plan\nstatus: todo",
+            "The second plan.\n",
+        ),
+        (
+            "tasks/T.md",
+            "title: A task\nstatus: todo\nproject: P",
+            "The task.\n",
+        ),
+    ] {
+        std::fs::write(root.join(path), format!("---\n{front}\n---\n{body}")).expect("a record");
+    }
+    let (Store::Github(board), board_config) = store(&sandbox, "github-projects", "board", None)
+    else {
+        unreachable!("a board")
+    };
+    let (Store::Linear(workspace), linear_config) = store(&sandbox, "linear", "linear", None)
+    else {
+        unreachable!("a workspace")
+    };
+    workspace.rewrite_markdown_on_write(LinearMarkdown::Measured);
+    configure(
+        &sandbox,
+        &[
+            ("authored", &authored),
+            ("board", &board_config),
+            ("linear", &linear_config),
+        ],
+    );
+    let on_board = |key: &str| {
+        let copied = outcomes(&ok(
+            &sandbox,
+            &[
+                "project",
+                "copy",
+                &format!("authored:{key}"),
+                "--to",
+                "board",
+                "--json",
+            ],
+        ));
+        copied[&format!("authored:{key}")]["destination"]
+            .as_str()
+            .expect("landed on the board")
+            .to_owned()
+    };
+    let (p, q) = (on_board("P"), on_board("Q"));
+    let copy = |id: &str| {
+        ok(
+            &sandbox,
+            &[
+                "project",
+                "copy",
+                id,
+                "--to",
+                "linear",
+                "--comments",
+                "--json",
+            ],
+        );
+    };
+    let mutations = |since: usize| -> Vec<String> {
+        workspace
+            .served_since(since)
+            .into_iter()
+            .map(|(query, _)| query)
+            .filter(|query| query.trim_start().starts_with("mutation"))
+            .collect()
+    };
+    for id in [&q, &p] {
+        copy(id);
+    }
+    // The first repeat may bring the task's record up to date with the link the first copy
+    // recorded on the board; the one after it has nothing left to write.
+    for id in [&q, &p] {
+        copy(id);
+    }
+    let mark = workspace.served_count();
+    for id in [&q, &p] {
+        copy(id);
+    }
+    assert_eq!(
+        mutations(mark),
+        Vec::<String>::new(),
+        "a repeat copy of the unchanged projects writes nothing to Linear"
+    );
+
+    // The first plan now depends on the second, on the board.
+    let native = |id: &str| id.split_once(':').expect("a qualified id").1.to_owned();
+    board.block(&native(&p), &[native(&q)]);
+    let mark = workspace.served_count();
+    copy(&p);
+    let written = mutations(mark);
+    assert!(
+        written
+            .iter()
+            .any(|query| query.contains("projectRelationCreate")),
+        "the dependency added on the board is carried: {written:#?}"
+    );
+}
