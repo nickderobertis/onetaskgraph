@@ -701,6 +701,24 @@ fn every_malformed_input_is_refused_naming_it_and_the_rest_of_the_call_goes_on()
         json!("invalid-batch"),
         "{refused:#}"
     );
+    // An edge leaving `parent` out is refused rather than read as a removal: `null` removes.
+    let refused = store.exited(
+        &["task", "parent", "set-many", "--input", "-"],
+        Some(&json!({"schema_version": 1, "edges": [{"child": "work:t2"}]}).to_string()),
+        1,
+    );
+    assert_eq!(
+        refused["failure"]["kind"],
+        json!("invalid-batch"),
+        "{refused:#}"
+    );
+    assert!(
+        refused["failure"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("parent"),
+        "{refused:#}"
+    );
 
     // Each malformed edge and link is its own error, beside one that is written.
     let edges = store.parents(

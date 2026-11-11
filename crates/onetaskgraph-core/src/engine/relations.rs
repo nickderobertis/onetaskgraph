@@ -52,8 +52,9 @@ pub struct ParentEdge {
     // llmlint: ignore[invalid_states_unrepresentable] Read as text so a malformed id is that edge's own `error`, naming it, rather than a refusal of the whole batch; `Engine::set_parents` parses it as a `GlobalId` before anything is sent.
     pub child: String,
     /// The parent's qualified id, a task of the child's own source, or `null` to remove the
-    /// child's parent.
+    /// child's parent. Required: an edge leaving it out is refused rather than read as a removal.
     // llmlint: ignore[invalid_states_unrepresentable] As `child`.
+    #[serde(deserialize_with = "nullable")]
     pub parent: Option<String>,
     /// The version the child must be at for anything to be written, as a read reported it.
     #[serde(default)]
@@ -1050,6 +1051,10 @@ fn stored_links(
         .map_err(|why| format!("{id}: {why}"))?
         .into_iter()
         .map(|link| match link.other.parse::<GlobalId>() {
+            Ok(_) if link.link_type.trim().is_empty() => Err(format!(
+                "{id} holds a link to {} that names no type",
+                link.other
+            )),
             Ok(other) => Ok((link, other)),
             Err(error) => Err(format!(
                 "{id} holds a `{}` link whose other end {:?} is not a qualified id: {error}",
@@ -1095,6 +1100,23 @@ fn answers_each(
     answers: Vec<Option<Relations>>,
 ) -> Result<Vec<Option<Relations>>, EngineError> {
     if answers.len() == asked.len() {
+        // Each answer is held to the task it was asked about, so a read never lends one task's
+        // content, links or version to another.
+        for (native, answer) in asked.iter().zip(&answers) {
+            if let Some(relations) = answer
+                && &relations.task.id != native
+            {
+                return Err(source_failed(
+                    source,
+                    SourceError::Malformed {
+                        message: format!(
+                            "asked for the relations of {native}, it answered with those of {}",
+                            relations.task.id
+                        ),
+                    },
+                ));
+            }
+        }
         return Ok(answers);
     }
     Err(source_failed(
@@ -1107,6 +1129,12 @@ fn answers_each(
             ),
         },
     ))
+}
+
+/// A member that must be present and may be `null`: serde reads an absent `Option` as `None`
+/// unless the member names its own deserializer, so naming this one makes it required.
+fn nullable<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {
+    Option::<String>::deserialize(deserializer)
 }
 
 /// One parent edge checked: its source and the write, or what it is answered without one.

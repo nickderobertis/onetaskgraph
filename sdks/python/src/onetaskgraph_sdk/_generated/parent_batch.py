@@ -17,7 +17,7 @@ class ParentEdge(BaseModel):
     parent: Annotated[
         str | None,
         Field(
-            description="The parent's qualified id, a task of the child's own source, or `null` to remove the\nchild's parent."
+            description="The parent's qualified id, a task of the child's own source, or `null` to remove the\nchild's parent. Required: an edge leaving it out is refused rather than read as a removal."
         ),
     ] = None
     if_version: Annotated[

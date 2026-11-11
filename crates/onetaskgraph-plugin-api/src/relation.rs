@@ -24,6 +24,7 @@ use crate::{NativeId, SourceError, Task};
 #[serde(deny_unknown_fields)]
 pub struct TaskLink {
     /// The link's type name — the caller's word, which no destination stores natively.
+    // llmlint: ignore[invalid_states_unrepresentable] This is the stored shape the task fixes literally, `{"type": "<name>", …}`, read back from an endpoint a person can edit: a read answers what an endpoint holds rather than failing every link of it on one bad name, and the engine refuses an empty name both where it writes one (`LinkTypeName` in `engine/relations.rs`) and where it reads one (`stored_links`). A newtype here would change the contract every plugin builds against, which this crate keeps still.
     #[serde(rename = "type")]
     pub link_type: String,
     /// Which end of the directed link this item is.

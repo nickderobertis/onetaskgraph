@@ -7272,7 +7272,7 @@ const SIXTY_SECOND_BUNDLE_SHAPE: [(&str, u64); 170] = [
     ("PageOfTask", 0x999e022251984937),
     ("PageRequest", 0x6c7be3975028b78c),
     ("PageToken", 0xc685683af2c78c39),
-    ("ParentBatch", 0x186cd34e2928d682),
+    ("ParentBatch", 0x2fd7712d88224ee8),
     ("ParentOutcome", 0x174952d4ef2c0c4e),
     ("ParentsSet", 0xfeeba078b330a062),
     ("Placement", 0xe5c1c0857f3cbaeb),

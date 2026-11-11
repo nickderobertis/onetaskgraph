@@ -1200,3 +1200,43 @@ fn filled(board: &Board, id: &str) -> String {
     );
     version
 }
+
+#[test]
+fn a_removal_whose_second_end_is_refused_answers_partial_and_a_repeat_finishes_it() {
+    let board = Board::of(vec![issue("A-1", None), issue("B-2", None)], &mirrored());
+    let (added, _) = board.links("add-many", &[("A-1", "B-2", "caused-by")]);
+    assert_eq!(outcomes(&added), ["written"]);
+    assert_eq!(board.board.relates_to("A-1"), ["B-2"]);
+
+    // The native relation goes first, then A-1's end lands and B-2's is refused.
+    board.board.reject_mutation_of("B-2");
+    let (partial, served) = board.links("remove-many", &[("A-1", "B-2", "caused-by")]);
+    assert_eq!(outcomes(&partial), ["partial"], "{:#}", partial.json);
+    assert_eq!(partial.code, Some(4));
+    let reason = partial.json["results"][0]["reason"].as_str().unwrap();
+    assert!(reason.starts_with("board:A-1 landed"), "{reason}");
+    assert_eq!(fields_sent(&served, graphql::REMOVE_RELATES_TO), [1]);
+    assert!(board.board.relates_to("A-1").is_empty());
+    let read = board.relations(&["A-1", "B-2"]);
+    assert!(links_of(&read[0]).is_empty());
+    assert_eq!(
+        links_of(&read[1]),
+        [link("caused-by", "in", "A-1", "missing")]
+    );
+
+    // Repeating the removal takes the end that remains, and the pair stays unrelated.
+    let (finished, _) = board.links("remove-many", &[("A-1", "B-2", "caused-by")]);
+    assert_eq!(outcomes(&finished), ["written"], "{:#}", finished.json);
+    let read = board.relations(&["A-1", "B-2"]);
+    assert!(read.iter().all(|item| links_of(item).is_empty()));
+    assert!(board.board.relates_to("A-1").is_empty());
+    assert!(board.board.relates_to("B-2").is_empty());
+    for id in ["A-1", "B-2"] {
+        let body = board.board.item(id).unwrap()["body"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert!(!body.contains("## Links"), "{id}: {body}");
+        assert!(!body.contains("onetaskgraph.links"), "{id}: {body}");
+    }
+}

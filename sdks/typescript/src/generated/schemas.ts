@@ -14514,7 +14514,7 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "type": "string"
           },
           "parent": {
-            "description": "The parent's qualified id, a task of the child's own source, or `null` to remove the\nchild's parent.",
+            "description": "The parent's qualified id, a task of the child's own source, or `null` to remove the\nchild's parent. Required: an edge leaving it out is refused rather than read as a removal.",
             "type": [
               "string",
               "null"

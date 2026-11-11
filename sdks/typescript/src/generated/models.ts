@@ -8262,7 +8262,7 @@ export interface ParentEdge {
 child: string
 /**
  * The parent's qualified id, a task of the child's own source, or `null` to remove the
- * child's parent.
+ * child's parent. Required: an edge leaving it out is refused rather than read as a removal.
  */
 parent?: (string | null)
 /**
