@@ -2774,3 +2774,72 @@ test("taskComments sends exactly the flags the binary's task comments reports, n
   expect(() => taskCommentsFlags("2026-01-01T00:00:00Z", "done")).toThrow("not an object");
   expect(() => taskCommentsFlags("2026-01-01T00:00:00Z", ["done"])).toThrow("not an object");
 });
+
+test("a guarded update and a copy holding each counterpart to its own version drive the real binary", async () => {
+  const root = metadataFolder();
+  try {
+    writeFileSync(resolve(root, "work/tasks/T-2.md"), "---\ntitle: Two\nstatus: todo\n---\nbody\n");
+    mkdirSync(resolve(root, "into", "tasks"), { recursive: true });
+    writeFileSync(
+      resolve(root, "onetaskgraph.yaml"),
+      JSON.stringify({
+        sources: {
+          work: { plugin: "local-md", config: { root: resolve(root, "work") } },
+          into: { plugin: "local-md", config: { root: resolve(root, "into") } },
+        },
+      }),
+    );
+    const client = new OnetaskgraphClient({ binaryPath: binary, cwd: root });
+
+    // T-1 holds no priority: a guard naming `high` holds the update back, one naming `none`
+    // lets every field it names through.
+    const held = await client.taskUpdate("work:T-1", {
+      title: "Not yet",
+      priority: "urgent",
+      whenPriority: ["high"],
+    });
+    expect(held.guard?.outcome).toBe("held");
+    expect(held.written).toEqual([]);
+    expect((await client.taskShow("work:T-1")).items[0]?.item.title).toBe("One");
+    const written = await client.taskUpdate("work:T-1", {
+      title: "Now",
+      priority: "urgent",
+      whenPriority: ["none", "low"],
+    });
+    expect(written.guard?.outcome).toBe("written");
+    const now = (await client.taskShow("work:T-1")).items[0]?.item;
+    expect([now?.title, now?.priority]).toEqual(["Now", "urgent"]);
+
+    // Both copied, then each counterpart held to its own version: another writer moves the
+    // first, so it alone is refused and the second lands.
+    const created = await client.taskCopy(["work:T-1", "work:T-2"], "into");
+    const landed = created.items.map((item) => {
+      if (!("destination" in item)) throw new Error(`a destination: ${JSON.stringify(item)}`);
+      return String(item.destination);
+    });
+    const versions = await Promise.all(
+      landed.map(async (id) => String((await client.taskShow(id)).items[0]?.item.version)),
+    );
+    await client.taskUpdate(String(landed[0]), { title: "Moved by another writer" });
+    await client.taskUpdate("work:T-1", { title: "Now, again" });
+    await client.taskUpdate("work:T-2", { title: "Two, again" });
+    const copy = client.taskCopy(["work:T-1", "work:T-2"], "into", {
+      ifVersion: [`work:T-1=${versions[0]}`, `work:T-2=${versions[1]}`],
+    });
+    const report = await copy;
+    const outcomes = report.items.map((item) => [
+      item.action,
+      "error" in item ? item.error?.kind : undefined,
+    ]);
+    expect(outcomes).toEqual([
+      ["failed", "version-moved"],
+      ["updated", undefined],
+    ]);
+    const titles = await Promise.all(
+      landed.map(async (id) => (await client.taskShow(id)).items[0]?.item.title),
+    );
+    expect(titles).toEqual(["Moved by another writer", "Two, again"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
