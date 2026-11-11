@@ -898,24 +898,40 @@ impl CachedSource {
         task || project || self.servable_document(id).is_some()
     }
 
-    /// A batched write of `ids`, each answered on its own: every id's entries retired before it
-    /// is sent — an id that cannot be retired answered refused, and the batch not sent — and
-    /// invalidated after, whatever each came to.
-    async fn retiring_each<T>(
+    /// A batched write of `items`, each answered on its own: every item's entries — those of
+    /// the task `id_of` names — retired before it is sent, and invalidated after, whatever it
+    /// came to. An item whose entries cannot be retired is answered with that refusal and not
+    /// sent; `write` sends the rest together.
+    async fn retiring_each<I: Clone, T, F>(
         &self,
-        ids: &[&NativeId],
-        write: impl Future<Output = Vec<Result<T, SourceError>>>,
-    ) -> Vec<Result<T, SourceError>> {
-        for id in ids {
-            if let Err(error) = self.cache.retire_before_write(id) {
-                return ids.iter().map(|_| Err(error.clone())).collect();
+        items: &[I],
+        id_of: impl Fn(&I) -> &NativeId,
+        write: impl FnOnce(Vec<I>) -> F,
+    ) -> Vec<Result<T, SourceError>>
+    where
+        F: Future<Output = Vec<Result<T, SourceError>>>,
+    {
+        let mut answers: Vec<Option<Result<T, SourceError>>> = items.iter().map(|_| None).collect();
+        let mut sent: Vec<usize> = Vec::with_capacity(items.len());
+        for (at, item) in items.iter().enumerate() {
+            match self.cache.retire_before_write(id_of(item)) {
+                Ok(()) => sent.push(at),
+                Err(error) => answers[at] = Some(Err(error)),
             }
         }
-        let written = write.await;
-        for id in ids {
-            self.cache.invalidate(id);
+        if !sent.is_empty() {
+            let written = write(sent.iter().map(|at| items[*at].clone()).collect()).await;
+            let mut written = written.into_iter();
+            for at in &sent {
+                answers[*at] = Some(written.next().unwrap_or_else(|| {
+                    Err(SourceError::Malformed {
+                        message: "an item of the batch was given no answer".to_owned(),
+                    })
+                }));
+                self.cache.invalidate(id_of(&items[*at]));
+            }
         }
-        written
+        answers.into_iter().flatten().collect()
     }
 
     /// Run one write naming `id`, every entry naming it taken out of service before anything is
@@ -1776,18 +1792,24 @@ impl TaskSource for CachedSource {
         &self,
         comments: &[onetaskgraph_plugin_api::BatchComment],
     ) -> Vec<Result<onetaskgraph_plugin_api::BatchAnswer<Comment>, SourceError>> {
-        let ids: Vec<&NativeId> = comments.iter().map(|each| &each.task).collect();
-        self.retiring_each(&ids, self.inner.add_comments(comments))
-            .await
+        self.retiring_each(
+            comments,
+            |each| &each.task,
+            |sent| async move { self.inner.add_comments(&sent).await },
+        )
+        .await
     }
 
     async fn update_tasks(
         &self,
         updates: &[onetaskgraph_plugin_api::BatchUpdate],
     ) -> Vec<Result<onetaskgraph_plugin_api::BatchAnswer<TaskUpdateOutcome>, SourceError>> {
-        let ids: Vec<&NativeId> = updates.iter().map(|each| &each.id).collect();
-        self.retiring_each(&ids, self.inner.update_tasks(updates))
-            .await
+        self.retiring_each(
+            updates,
+            |each| &each.id,
+            |sent| async move { self.inner.update_tasks(&sent).await },
+        )
+        .await
     }
 
     async fn edit_comment(

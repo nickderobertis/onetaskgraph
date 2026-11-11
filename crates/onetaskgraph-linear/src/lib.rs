@@ -5524,6 +5524,12 @@ impl TaskSource for LinearSource {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clear();
+        // A person may edit an issue between commands, so the whole issue a read answered is
+        // never a later command's write context.
+        self.contexts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
         self.answered().clear();
         Ok(())
     }

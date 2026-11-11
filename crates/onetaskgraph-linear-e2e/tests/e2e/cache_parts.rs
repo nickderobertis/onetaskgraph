@@ -980,7 +980,7 @@ fn a_relation_write_whose_far_edges_entry_cannot_be_retired_is_refused_unsent() 
 
 #[cfg(unix)]
 #[test]
-fn a_batch_naming_a_task_whose_entry_cannot_be_retired_sends_nothing_of_the_batch() {
+fn a_batch_item_whose_entry_cannot_be_retired_is_refused_unsent_and_the_rest_are_written() {
     use std::os::unix::fs::PermissionsExt as _;
     let cached = Cached::new(held());
     filled(&cached, &COMMENTS);
@@ -1036,10 +1036,7 @@ fn a_batch_naming_a_task_whose_entry_cannot_be_retired_sends_nothing_of_the_batc
     let before = cached.workspace.served().len();
     let commented = cached.run(&comment);
     let output = cached.run(&write);
-    let sent: Vec<String> = cached.workspace.served()[before..]
-        .iter()
-        .map(|(document, _)| document.clone())
-        .collect();
+    let sent: Vec<(String, Value)> = cached.workspace.served()[before..].to_vec();
     std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).expect("writable");
     assert_eq!(
         output.status.code(),
@@ -1053,26 +1050,31 @@ fn a_batch_naming_a_task_whose_entry_cannot_be_retired_sends_nothing_of_the_batc
         "{}",
         crate::common::stderr(&commented)
     );
-    let noted: Value =
-        serde_json::from_str(&crate::common::stdout(&commented)).expect("the batch answers JSON");
-    for result in noted["results"].as_array().expect("results") {
-        assert_eq!(result["outcome"], "error", "{result:#}");
-    }
-    let answered: Value =
-        serde_json::from_str(&crate::common::stdout(&output)).expect("the batch answers JSON");
-    // L-2's own entry could be retired, but the batch goes as one request, so neither is sent.
-    for result in answered["results"].as_array().expect("results") {
-        assert_eq!(result["outcome"], "error", "{result:#}");
+    // Each item answers on its own: L-2, whose entry could be retired, is written; L-1 is
+    // refused and nothing naming it is sent.
+    for answer in [&commented, &output] {
+        let answered: Value =
+            serde_json::from_str(&crate::common::stdout(answer)).expect("the batch answers JSON");
+        let results = answered["results"].as_array().expect("results");
+        assert_eq!(results[0]["outcome"], "written", "{answered:#}");
+        assert_eq!(results[1]["outcome"], "error", "{answered:#}");
         assert!(
-            result["reason"]
+            results[1]["reason"]
                 .as_str()
                 .is_some_and(|reason| reason.contains("the write was not sent")),
-            "{result:#}"
+            "{answered:#}"
         );
     }
+    let mutations: Vec<&(String, Value)> = sent
+        .iter()
+        .filter(|(document, _)| document.starts_with("mutation"))
+        .collect();
+    assert!(!mutations.is_empty(), "L-2 was written");
     assert!(
-        !sent.iter().any(|document| document.starts_with("mutation")),
-        "nothing was written: {sent:?}"
+        !mutations
+            .iter()
+            .any(|(_, variables)| variables.to_string().contains("\"L-1\"")),
+        "nothing naming L-1 was sent: {mutations:?}"
     );
     // With the directory writable again, the same batch lands and the entry goes.
     let (landed, _) = cached.ok(&write);

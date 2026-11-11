@@ -7779,3 +7779,22 @@ async fn an_aliased_read_answered_with_another_issue_is_refused_for_that_issue_a
         "{read:?}"
     );
 }
+
+/// The whole issue a read answered is a write's context for the rest of that command alone: a
+/// person may edit it before the next, whose write must not be composed on it.
+#[tokio::test]
+async fn an_issue_read_in_one_command_is_no_write_context_in_the_next() {
+    let (endpoint, _) = response_server(vec![held_issue("i1")]);
+    let source = source(&endpoint);
+    let read = source.get_task(&"i1".into()).await.expect("the read");
+    assert!(read.is_some());
+    assert!(
+        source.write_context(&"i1".into()).is_some(),
+        "the read is this command's context"
+    );
+    source.end_command().await.expect("the command ends");
+    assert!(
+        source.write_context(&"i1".into()).is_none(),
+        "no context outlives its command"
+    );
+}
