@@ -728,6 +728,10 @@ of a project, which a write the public boundary screens reads of that project. F
 the engine answers it by its default, none, so the members cross as the project's own
 `query_tasks` and `query_documents`, as they always did.
 
+`TaskSource::read_ahead_records_for_copy` — the copy's read ahead with what each counterpart is
+— is not a message either: the engine reads nothing ahead for a hosted source, so each
+counterpart crosses as its own `get_task`, `get_project` or `get_document`.
+
 ### 4.4a `get_task_detail`
 
 Only a plugin that declared `task_details: true` (§3.13) and `comments` `"native"` (§4.2) is
@@ -820,6 +824,11 @@ passes; a task that never settles is written nowhere and reported failed.
   **optional**: absent is not a filter, and the engine sends it only to a plugin that declared
   `filter_by_origin` native (§4.2). On the command line these two are `task list --metadata
   <KEY>[/<SEGMENT>…]=<VALUE>` (repeatable) and `task list --origin <SOURCE>:<ID>`.
+
+`TaskSource::query_tasks_batch` — a page of each of many queries in one call, what `task find`
+asks — is not a message of this protocol: for a hosted source the engine answers it by the
+trait's default, one `query_tasks` per query, each a message of its own, and a plugin written
+against this document implements nothing more.
 
 ### 4.6 `query_projects`
 
@@ -1047,6 +1056,10 @@ whole without the key, as its `write_project` or `write_document`. `TaskSource::
 `TaskSource::written_version` know nothing of a write, so a write's `result` carries a `null`
 `version` for a source hosted over this protocol. A plugin written against this document
 implements nothing more.
+
+`TaskSource::records_created_together` is not a message either: the engine answers it for a
+hosted source by the trait's default, false, and never asks it `write_tasks`, so no task it
+creates carries anything a single create would not.
 
 ### 4.9a Image assets on `write_task` and `write_document`
 
@@ -1943,6 +1956,11 @@ same way, naming why, rather than escaping it into something else. A comment id 
 comment on a *different* task of this source is a comment this task does not have, and is
 answered `null`.
 
+`TaskSource::add_comments` — many comments in one call, what `task comment add-many` asks — is
+not a message of this protocol: for a hosted source the engine answers it by the trait's
+default, one `add_comment` per comment, preceded by a `get_task` of each task a comment is held
+to a version of.
+
 ### 4.16a `write_comment_copy`
 
 Only a plugin that declared `comments` `"native"`, answered `"supported"` to §3.3 **and**
@@ -2219,6 +2237,11 @@ The engine sends no update naming a status category this plugin's handshake did 
 a plugin without `task_updates` (§3.6). An update naming one key in both `metadata_set` and
 `metadata_remove` is refused before it is sent, with `{"kind": "refused"}`, and a plugin
 handed one refuses it the same way.
+
+`TaskSource::update_tasks` — many held updates in one call, what `task update-many` asks — is
+not a message of this protocol: for a hosted source the engine answers it by the trait's
+default, one `update_task` per update, preceded by a `get_task` of each task an update is held
+to a version of or guarded by a priority.
 
 ### 4.22 `end_command`
 
