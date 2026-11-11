@@ -140,6 +140,12 @@ mod end_command;
 // rules, so they cannot sit behind a plugin crate's edge, which AGENTS.md forbids depending on
 // the engine at any depth.
 mod edge_scope;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
+// narrower edge for it: every journey here drives the binary against folders of Markdown and the
+// loopback GitHub board and Linear workspace, with no credential and no network. Translating a
+// block between destinations is the engine's (`expandable_blocks` in `onetaskgraph-core`), and a
+// copy between two plugins cannot sit behind one plugin crate's edge.
+mod expandable_blocks;
 mod failures;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
 // narrower edge for it: every journey here drives the binary against folders of Markdown, with

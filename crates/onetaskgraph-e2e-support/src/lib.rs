@@ -9,6 +9,8 @@
 //!   made;
 //! - [`fixtures`]: the journey-matrix table and the loopback servers behind its rows;
 //! - [`linear_vocabulary`]: the one Linear team's vocabulary more than one suite configures;
+//! - [`linear_normalizations`]: the Linear normalizations spike `spike-expandable-blocks`
+//!   recorded, which the loopback Linear and the journeys through it read;
 //! - [`images`]: the test images every asset journey stores or copies, generated in the test;
 //! - [`loopback`]: the persistent HTTP/1.1 connections those servers keep with the binary;
 //! - [`clock`]: the simulated clock a spawned binary's pacing and backoff run on;
@@ -34,6 +36,7 @@ mod github_schema;
 pub mod images;
 pub mod linear_editor;
 pub mod linear_markdown;
+pub mod linear_normalizations;
 pub mod linear_vocabulary;
 pub mod loopback;
 pub mod onevcs;

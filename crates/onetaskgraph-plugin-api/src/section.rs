@@ -1,10 +1,11 @@
 //! What a source says about the headings of a record it stores, and the markup a body is
-//! written and read with where its destination needs some to address a heading.
+//! written and read with where its destination spells part of it otherwise than authored.
 //!
-//! Both exist for a copy's section links — a link to one heading of another record, or of
-//! the same one. How each destination spells such a link is decided once, in the engine,
-//! and never here: a plugin only reports what its backend stores ([`StoredHeading`]) and
-//! applies the markup it is handed ([`BodyMarkup`]), so it holds no copy of any form.
+//! Both exist for what a copy writes into a body in each destination's own form: a section
+//! link — a link to one heading of another record, or of the same one — and an expandable
+//! block. How each destination spells either is decided once, in the engine, and never here:
+//! a plugin only reports what its backend stores ([`StoredHeading`]) and applies the markup it
+//! is handed ([`BodyMarkup`]), so it holds no copy of any form.
 
 use std::sync::Arc;
 
@@ -23,8 +24,9 @@ pub struct StoredHeading {
     pub id: String,
 }
 
-/// Markup a destination's bodies carry for a reader to address their headings, which the
-/// engine hands a source when it builds it.
+/// Markup a destination's bodies carry — an anchor a reader addresses a heading by, or a
+/// collapsible section in the destination's own spelling — which the engine hands a source
+/// when it builds it.
 ///
 /// A source given one applies [`written`](Self::written) to every body it sends its backend
 /// and [`read`](Self::read) to every body it reads back, so what the engine reads through

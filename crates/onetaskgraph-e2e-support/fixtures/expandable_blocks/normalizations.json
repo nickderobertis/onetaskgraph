@@ -1,0 +1,5617 @@
+{
+  "captured": "2026-11-10",
+  "team": "TES2",
+  "about": "Every change Linear's stored-Markdown normalizer made to a probe or sample written through the API: each entry the lines sent and the lines stored, from the fixture named. `write: first` compares the Markdown sent with what Linear stored; `write: second` compares that stored answer, written back once, with what Linear stored the second time.",
+  "normalizations": [
+    {
+      "fixture": "fixtures/issue-authored.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe A01."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe A01."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-authored.json",
+      "write": "first",
+      "sent": [
+        "<summary>Probe A02: Entities &amp; &lt;tag&gt; in a summary</summary>"
+      ],
+      "stored": [
+        "<summary>Probe A02: Entities & <tag> in a summary</summary>"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-authored.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe A02."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe A02."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-authored.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe A03."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe A03."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-authored.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe A04."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe A04."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-authored.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe A05."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe A05."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-authored.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe A06."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe A06."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-authored.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe A07."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe A07."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-authored.json",
+      "write": "first",
+      "sent": [
+        "- First bullet",
+        "- Second bullet"
+      ],
+      "stored": [
+        "* First bullet",
+        "* Second bullet"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-authored.json",
+      "write": "first",
+      "sent": [
+        "| --- | --- |"
+      ],
+      "stored": [
+        "| -- | -- |"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-authored.json",
+      "write": "first",
+      "sent": [
+        ""
+      ],
+      "stored": []
+    },
+    {
+      "fixture": "fixtures/issue-no-blank-after-summary.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe T01."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe T01."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-no-blank-after-summary.json",
+      "write": "first",
+      "sent": [
+        "<summary>Probe T02: Entities &amp; &lt;tag&gt; in a summary</summary>",
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe T02."
+      ],
+      "stored": [
+        "<summary>Probe T02: Entities & <tag> in a summary</summary>",
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe T02."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-no-blank-after-summary.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe T03."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe T03."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-no-blank-after-summary.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe T04."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe T04."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-no-blank-after-summary.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe T05."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe T05."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-no-blank-after-summary.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe T06."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe T06."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-no-blank-after-summary.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe T07."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe T07."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-no-blank-after-summary.json",
+      "write": "first",
+      "sent": [
+        "- First bullet",
+        "- Second bullet"
+      ],
+      "stored": [
+        "",
+        "* First bullet",
+        "* Second bullet"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-no-blank-after-summary.json",
+      "write": "first",
+      "sent": [],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-no-blank-after-summary.json",
+      "write": "first",
+      "sent": [],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-no-blank-after-summary.json",
+      "write": "first",
+      "sent": [],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-no-blank-after-summary.json",
+      "write": "first",
+      "sent": [],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-no-blank-after-summary.json",
+      "write": "first",
+      "sent": [
+        "| --- | --- |"
+      ],
+      "stored": [
+        "| -- | -- |"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-no-blank-after-summary.json",
+      "write": "first",
+      "sent": [
+        ""
+      ],
+      "stored": []
+    },
+    {
+      "fixture": "fixtures/issue-linear-plus.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe P01."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe P01."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-linear-plus.json",
+      "write": "first",
+      "sent": [
+        "+++ Probe P02: Entities &amp; &lt;tag&gt; in a summary"
+      ],
+      "stored": [
+        "+++ Probe P02: Entities & <tag> in a summary"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-linear-plus.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe P02."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe P02."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-linear-plus.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe P03."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe P03."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-linear-plus.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe P04."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe P04."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-linear-plus.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe P05."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe P05."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-linear-plus.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe P06."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe P06."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-linear-plus.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe P07."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe P07."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-linear-plus.json",
+      "write": "first",
+      "sent": [
+        "- First bullet",
+        "- Second bullet"
+      ],
+      "stored": [
+        "* First bullet",
+        "* Second bullet"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-linear-plus.json",
+      "write": "first",
+      "sent": [
+        "| --- | --- |"
+      ],
+      "stored": [
+        "| -- | -- |"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-linear-plus.json",
+      "write": "first",
+      "sent": [
+        ""
+      ],
+      "stored": []
+    },
+    {
+      "fixture": "fixtures/issue-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        ">>> Probe R01: Plain summary text"
+      ],
+      "stored": [
+        "+++ Probe R01: Plain summary text"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe R01."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe R01."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        ">>>"
+      ],
+      "stored": [
+        "+++"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        ">>> Probe R02: Entities &amp; &lt;tag&gt; in a summary"
+      ],
+      "stored": [
+        "+++ Probe R02: Entities & <tag> in a summary"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe R02."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe R02."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        ">>>"
+      ],
+      "stored": [
+        "+++"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        ">>> Probe R03: Inline code `copy --dry-run` in backticks"
+      ],
+      "stored": [
+        "+++ Probe R03: Inline code `copy --dry-run` in backticks"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe R03."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe R03."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        ">>>"
+      ],
+      "stored": [
+        "+++"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        ">>> Probe R04: Inline code <code>copy --dry-run</code> as HTML"
+      ],
+      "stored": [
+        "+++ Probe R04: Inline code <code>copy --dry-run</code> as HTML"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe R04."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe R04."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        ">>>"
+      ],
+      "stored": [
+        "+++"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        ">>> Probe R05: **Bold** text in a summary"
+      ],
+      "stored": [
+        "+++ Probe R05: **Bold** text in a summary"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe R05."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe R05."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        ">>>"
+      ],
+      "stored": [
+        "+++"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        ">>> Probe R06: <strong>Bold</strong> as HTML"
+      ],
+      "stored": [
+        "+++ Probe R06: <strong>Bold</strong> as HTML"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe R06."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe R06."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        ">>>"
+      ],
+      "stored": [
+        "+++"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        ">>> Probe R07: Body — paragraph"
+      ],
+      "stored": [
+        "+++ Probe R07: Body — paragraph"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe R07."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe R07."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        ">>>"
+      ],
+      "stored": [
+        "+++"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        ">>> Probe R08: Body — lists"
+      ],
+      "stored": [
+        "+++ Probe R08: Body — lists"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        "- First bullet",
+        "- Second bullet"
+      ],
+      "stored": [
+        "* First bullet",
+        "* Second bullet"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        ">>>"
+      ],
+      "stored": [
+        "+++"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        ">>> Probe R09: Body — headings"
+      ],
+      "stored": [
+        "+++ Probe R09: Body — headings"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        ">>>"
+      ],
+      "stored": [
+        "+++"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        ">>> Probe R10: Body — fenced code"
+      ],
+      "stored": [
+        "+++ Probe R10: Body — fenced code"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        ">>>"
+      ],
+      "stored": [
+        "+++"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        ">>> Probe R11: Body — image"
+      ],
+      "stored": [
+        "+++ Probe R11: Body — image"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        ">>>"
+      ],
+      "stored": [
+        "+++"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        ">>> Probe R12: Body — table"
+      ],
+      "stored": [
+        "+++ Probe R12: Body — table"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        "| --- | --- |"
+      ],
+      "stored": [
+        "| -- | -- |"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        ">>>"
+      ],
+      "stored": [
+        "+++"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        ">>> Probe R13: Body — nested"
+      ],
+      "stored": [
+        "+++ Probe R13: Body — nested"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        ">>> Probe R13i: nested inner summary"
+      ],
+      "stored": [
+        "+++ Probe R13i: nested inner summary"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        ">>>"
+      ],
+      "stored": [
+        "+++",
+        "",
+        "+++"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        ">>>"
+      ],
+      "stored": [
+        "+++ "
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-linear-arrow.json",
+      "write": "first",
+      "sent": [],
+      "stored": [
+        "+++"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-details-open.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe O01."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe O01."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-details-open.json",
+      "write": "first",
+      "sent": [
+        "<summary>Probe O02: Entities &amp; &lt;tag&gt; in a summary</summary>"
+      ],
+      "stored": [
+        "<summary>Probe O02: Entities & <tag> in a summary</summary>"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-details-open.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe O02."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe O02."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-details-open.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe O03."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe O03."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-details-open.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe O04."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe O04."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-details-open.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe O05."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe O05."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-details-open.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe O06."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe O06."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-details-open.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe O07."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe O07."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-details-open.json",
+      "write": "first",
+      "sent": [
+        "- First bullet",
+        "- Second bullet"
+      ],
+      "stored": [
+        "* First bullet",
+        "* Second bullet"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-details-open.json",
+      "write": "first",
+      "sent": [
+        "| --- | --- |"
+      ],
+      "stored": [
+        "| -- | -- |"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-details-open.json",
+      "write": "first",
+      "sent": [
+        ""
+      ],
+      "stored": []
+    },
+    {
+      "fixture": "fixtures/issue-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "- A list item holding the block that follows"
+      ],
+      "stored": [
+        "* A list item holding the block that follows"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  ",
+        "  A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe L01.",
+        "  "
+      ],
+      "stored": [
+        "",
+        "  A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe L01.",
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "",
+        "- A list item holding the block that follows"
+      ],
+      "stored": [
+        "* A list item holding the block that follows"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  <summary>Probe L02: Entities &amp; &lt;tag&gt; in a summary</summary>",
+        "  ",
+        "  A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe L02.",
+        "  "
+      ],
+      "stored": [
+        "  <summary>Probe L02: Entities & <tag> in a summary</summary>",
+        "",
+        "  A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe L02.",
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "",
+        "- A list item holding the block that follows"
+      ],
+      "stored": [
+        "* A list item holding the block that follows"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  ",
+        "  A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe L03.",
+        "  "
+      ],
+      "stored": [
+        "",
+        "  A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe L03.",
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "",
+        "- A list item holding the block that follows"
+      ],
+      "stored": [
+        "* A list item holding the block that follows"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  ",
+        "  A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe L04.",
+        "  "
+      ],
+      "stored": [
+        "",
+        "  A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe L04.",
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "",
+        "- A list item holding the block that follows"
+      ],
+      "stored": [
+        "* A list item holding the block that follows"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  ",
+        "  A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe L05.",
+        "  "
+      ],
+      "stored": [
+        "",
+        "  A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe L05.",
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "",
+        "- A list item holding the block that follows"
+      ],
+      "stored": [
+        "* A list item holding the block that follows"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  ",
+        "  A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe L06.",
+        "  "
+      ],
+      "stored": [
+        "",
+        "  A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe L06.",
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "",
+        "- A list item holding the block that follows"
+      ],
+      "stored": [
+        "* A list item holding the block that follows"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  ",
+        "  A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe L07.",
+        "  "
+      ],
+      "stored": [
+        "",
+        "  A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe L07.",
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "",
+        "- A list item holding the block that follows"
+      ],
+      "stored": [
+        "* A list item holding the block that follows"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  ",
+        "  - First bullet",
+        "  - Second bullet",
+        "  "
+      ],
+      "stored": [
+        "  * First bullet",
+        "  * Second bullet"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "",
+        "- A list item holding the block that follows"
+      ],
+      "stored": [
+        "* A list item holding the block that follows"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "",
+        "- A list item holding the block that follows"
+      ],
+      "stored": [
+        "* A list item holding the block that follows"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "",
+        "- A list item holding the block that follows"
+      ],
+      "stored": [
+        "* A list item holding the block that follows"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "",
+        "- A list item holding the block that follows"
+      ],
+      "stored": [
+        "* A list item holding the block that follows"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  | --- | --- |"
+      ],
+      "stored": [
+        "  | -- | -- |"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "",
+        "- A list item holding the block that follows"
+      ],
+      "stored": [
+        "* A list item holding the block that follows"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  ",
+        "  - A list item holding the block that follows",
+        "  "
+      ],
+      "stored": [
+        "  * A list item holding the block that follows",
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "    "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "    "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-in-list-item.json",
+      "write": "first",
+      "sent": [
+        ""
+      ],
+      "stored": []
+    },
+    {
+      "fixture": "fixtures/issue-in-fenced-code.json",
+      "write": "first",
+      "sent": [
+        ""
+      ],
+      "stored": []
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe A01."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe A01."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "<summary>Probe A02: Entities &amp; &lt;tag&gt; in a summary</summary>"
+      ],
+      "stored": [
+        "<summary>Probe A02: Entities & <tag> in a summary</summary>"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe A02."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe A02."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe A03."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe A03."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe A04."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe A04."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe A05."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe A05."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe A06."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe A06."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe A07."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe A07."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "- First bullet",
+        "- Second bullet"
+      ],
+      "stored": [
+        "* First bullet",
+        "* Second bullet"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "| --- | --- |"
+      ],
+      "stored": [
+        "| -- | -- |"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe T01."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe T01."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "<summary>Probe T02: Entities &amp; &lt;tag&gt; in a summary</summary>",
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe T02."
+      ],
+      "stored": [
+        "<summary>Probe T02: Entities & <tag> in a summary</summary>",
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe T02."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe T03."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe T03."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe T04."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe T04."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe T05."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe T05."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe T06."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe T06."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe T07."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe T07."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "- First bullet",
+        "- Second bullet"
+      ],
+      "stored": [
+        "",
+        "* First bullet",
+        "* Second bullet"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "| --- | --- |"
+      ],
+      "stored": [
+        "| -- | -- |"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe P01."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe P01."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "+++ Probe P02: Entities &amp; &lt;tag&gt; in a summary"
+      ],
+      "stored": [
+        "+++ Probe P02: Entities & <tag> in a summary"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe P02."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe P02."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe P03."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe P03."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe P04."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe P04."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe P05."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe P05."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe P06."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe P06."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe P07."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe P07."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "- First bullet",
+        "- Second bullet"
+      ],
+      "stored": [
+        "* First bullet",
+        "* Second bullet"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "| --- | --- |"
+      ],
+      "stored": [
+        "| -- | -- |"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        ">>> Probe R01: Plain summary text"
+      ],
+      "stored": [
+        "+++ Probe R01: Plain summary text"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe R01."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe R01."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        ">>>"
+      ],
+      "stored": [
+        "+++"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        ">>> Probe R02: Entities &amp; &lt;tag&gt; in a summary"
+      ],
+      "stored": [
+        "+++ Probe R02: Entities & <tag> in a summary"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe R02."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe R02."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        ">>>"
+      ],
+      "stored": [
+        "+++"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        ">>> Probe R03: Inline code `copy --dry-run` in backticks"
+      ],
+      "stored": [
+        "+++ Probe R03: Inline code `copy --dry-run` in backticks"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe R03."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe R03."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        ">>>"
+      ],
+      "stored": [
+        "+++"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        ">>> Probe R04: Inline code <code>copy --dry-run</code> as HTML"
+      ],
+      "stored": [
+        "+++ Probe R04: Inline code <code>copy --dry-run</code> as HTML"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe R04."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe R04."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        ">>>"
+      ],
+      "stored": [
+        "+++"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        ">>> Probe R05: **Bold** text in a summary"
+      ],
+      "stored": [
+        "+++ Probe R05: **Bold** text in a summary"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe R05."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe R05."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        ">>>"
+      ],
+      "stored": [
+        "+++"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        ">>> Probe R06: <strong>Bold</strong> as HTML"
+      ],
+      "stored": [
+        "+++ Probe R06: <strong>Bold</strong> as HTML"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe R06."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe R06."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        ">>>"
+      ],
+      "stored": [
+        "+++"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        ">>> Probe R07: Body — paragraph"
+      ],
+      "stored": [
+        "+++ Probe R07: Body — paragraph"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe R07."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe R07."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        ">>>"
+      ],
+      "stored": [
+        "+++"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        ">>> Probe R08: Body — lists"
+      ],
+      "stored": [
+        "+++ Probe R08: Body — lists"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "- First bullet",
+        "- Second bullet"
+      ],
+      "stored": [
+        "* First bullet",
+        "* Second bullet"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        ">>>"
+      ],
+      "stored": [
+        "+++"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        ">>> Probe R09: Body — headings"
+      ],
+      "stored": [
+        "+++ Probe R09: Body — headings"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        ">>>"
+      ],
+      "stored": [
+        "+++"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        ">>> Probe R10: Body — fenced code"
+      ],
+      "stored": [
+        "+++ Probe R10: Body — fenced code"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        ">>>"
+      ],
+      "stored": [
+        "+++"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        ">>> Probe R11: Body — image"
+      ],
+      "stored": [
+        "+++ Probe R11: Body — image"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        ">>>"
+      ],
+      "stored": [
+        "+++"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        ">>> Probe R12: Body — table"
+      ],
+      "stored": [
+        "+++ Probe R12: Body — table"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "| --- | --- |"
+      ],
+      "stored": [
+        "| -- | -- |"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        ">>>"
+      ],
+      "stored": [
+        "+++"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        ">>> Probe R13: Body — nested"
+      ],
+      "stored": [
+        "+++ Probe R13: Body — nested"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        ">>> Probe R13i: nested inner summary"
+      ],
+      "stored": [
+        "+++ Probe R13i: nested inner summary"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        ">>>"
+      ],
+      "stored": [
+        "+++",
+        "",
+        "+++"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        ">>>"
+      ],
+      "stored": [
+        "+++ "
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe O01."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe O01."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "<summary>Probe O02: Entities &amp; &lt;tag&gt; in a summary</summary>"
+      ],
+      "stored": [
+        "<summary>Probe O02: Entities & <tag> in a summary</summary>"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe O02."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe O02."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe O03."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe O03."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe O04."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe O04."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe O05."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe O05."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe O06."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe O06."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe O07."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe O07."
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "- First bullet",
+        "- Second bullet"
+      ],
+      "stored": [
+        "* First bullet",
+        "* Second bullet"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "| --- | --- |"
+      ],
+      "stored": [
+        "| -- | -- |"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "- A list item holding the block that follows"
+      ],
+      "stored": [
+        "* A list item holding the block that follows"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  ",
+        "  A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe L01.",
+        "  "
+      ],
+      "stored": [
+        "",
+        "  A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe L01.",
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "",
+        "- A list item holding the block that follows"
+      ],
+      "stored": [
+        "* A list item holding the block that follows"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  <summary>Probe L02: Entities &amp; &lt;tag&gt; in a summary</summary>",
+        "  ",
+        "  A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe L02.",
+        "  "
+      ],
+      "stored": [
+        "  <summary>Probe L02: Entities & <tag> in a summary</summary>",
+        "",
+        "  A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe L02.",
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "",
+        "- A list item holding the block that follows"
+      ],
+      "stored": [
+        "* A list item holding the block that follows"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  ",
+        "  A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe L03.",
+        "  "
+      ],
+      "stored": [
+        "",
+        "  A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe L03.",
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "",
+        "- A list item holding the block that follows"
+      ],
+      "stored": [
+        "* A list item holding the block that follows"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  ",
+        "  A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe L04.",
+        "  "
+      ],
+      "stored": [
+        "",
+        "  A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe L04.",
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "",
+        "- A list item holding the block that follows"
+      ],
+      "stored": [
+        "* A list item holding the block that follows"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  ",
+        "  A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe L05.",
+        "  "
+      ],
+      "stored": [
+        "",
+        "  A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe L05.",
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "",
+        "- A list item holding the block that follows"
+      ],
+      "stored": [
+        "* A list item holding the block that follows"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  ",
+        "  A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe L06.",
+        "  "
+      ],
+      "stored": [
+        "",
+        "  A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe L06.",
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "",
+        "- A list item holding the block that follows"
+      ],
+      "stored": [
+        "* A list item holding the block that follows"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  ",
+        "  A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe L07.",
+        "  "
+      ],
+      "stored": [
+        "",
+        "  A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe L07.",
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "",
+        "- A list item holding the block that follows"
+      ],
+      "stored": [
+        "* A list item holding the block that follows"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  ",
+        "  - First bullet",
+        "  - Second bullet",
+        "  "
+      ],
+      "stored": [
+        "  * First bullet",
+        "  * Second bullet"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "",
+        "- A list item holding the block that follows"
+      ],
+      "stored": [
+        "* A list item holding the block that follows"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "",
+        "- A list item holding the block that follows"
+      ],
+      "stored": [
+        "* A list item holding the block that follows"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "",
+        "- A list item holding the block that follows"
+      ],
+      "stored": [
+        "* A list item holding the block that follows"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "",
+        "- A list item holding the block that follows"
+      ],
+      "stored": [
+        "* A list item holding the block that follows"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  | --- | --- |"
+      ],
+      "stored": [
+        "  | -- | -- |"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "",
+        "- A list item holding the block that follows"
+      ],
+      "stored": [
+        "* A list item holding the block that follows"
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  ",
+        "  - A list item holding the block that follows",
+        "  "
+      ],
+      "stored": [
+        "  * A list item holding the block that follows",
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "    "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "    "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/issue-all-forms.json",
+      "write": "first",
+      "sent": [],
+      "stored": [
+        "+++"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-authored.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe A01."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe A01."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-authored.json",
+      "write": "first",
+      "sent": [
+        "<summary>Probe A02: Entities &amp; &lt;tag&gt; in a summary</summary>"
+      ],
+      "stored": [
+        "<summary>Probe A02: Entities & <tag> in a summary</summary>"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-authored.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe A02."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe A02."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-authored.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe A03."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe A03."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-authored.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe A04."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe A04."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-authored.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe A05."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe A05."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-authored.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe A06."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe A06."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-authored.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe A07."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe A07."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-authored.json",
+      "write": "first",
+      "sent": [
+        "- First bullet",
+        "- Second bullet"
+      ],
+      "stored": [
+        "* First bullet",
+        "* Second bullet"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-authored.json",
+      "write": "first",
+      "sent": [
+        "| --- | --- |"
+      ],
+      "stored": [
+        "| -- | -- |"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-authored.json",
+      "write": "first",
+      "sent": [
+        ""
+      ],
+      "stored": []
+    },
+    {
+      "fixture": "fixtures/document-no-blank-after-summary.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe T01."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe T01."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-no-blank-after-summary.json",
+      "write": "first",
+      "sent": [
+        "<summary>Probe T02: Entities &amp; &lt;tag&gt; in a summary</summary>",
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe T02."
+      ],
+      "stored": [
+        "<summary>Probe T02: Entities & <tag> in a summary</summary>",
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe T02."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-no-blank-after-summary.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe T03."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe T03."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-no-blank-after-summary.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe T04."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe T04."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-no-blank-after-summary.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe T05."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe T05."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-no-blank-after-summary.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe T06."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe T06."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-no-blank-after-summary.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe T07."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe T07."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-no-blank-after-summary.json",
+      "write": "first",
+      "sent": [
+        "- First bullet",
+        "- Second bullet"
+      ],
+      "stored": [
+        "",
+        "* First bullet",
+        "* Second bullet"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-no-blank-after-summary.json",
+      "write": "first",
+      "sent": [],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-no-blank-after-summary.json",
+      "write": "first",
+      "sent": [],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-no-blank-after-summary.json",
+      "write": "first",
+      "sent": [],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-no-blank-after-summary.json",
+      "write": "first",
+      "sent": [],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-no-blank-after-summary.json",
+      "write": "first",
+      "sent": [
+        "| --- | --- |"
+      ],
+      "stored": [
+        "| -- | -- |"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-no-blank-after-summary.json",
+      "write": "first",
+      "sent": [
+        ""
+      ],
+      "stored": []
+    },
+    {
+      "fixture": "fixtures/document-linear-plus.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe P01."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe P01."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-linear-plus.json",
+      "write": "first",
+      "sent": [
+        "+++ Probe P02: Entities &amp; &lt;tag&gt; in a summary"
+      ],
+      "stored": [
+        "+++ Probe P02: Entities & <tag> in a summary"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-linear-plus.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe P02."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe P02."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-linear-plus.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe P03."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe P03."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-linear-plus.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe P04."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe P04."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-linear-plus.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe P05."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe P05."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-linear-plus.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe P06."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe P06."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-linear-plus.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe P07."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe P07."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-linear-plus.json",
+      "write": "first",
+      "sent": [
+        "- First bullet",
+        "- Second bullet"
+      ],
+      "stored": [
+        "* First bullet",
+        "* Second bullet"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-linear-plus.json",
+      "write": "first",
+      "sent": [
+        "| --- | --- |"
+      ],
+      "stored": [
+        "| -- | -- |"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-linear-plus.json",
+      "write": "first",
+      "sent": [
+        ""
+      ],
+      "stored": []
+    },
+    {
+      "fixture": "fixtures/document-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        ">>> Probe R01: Plain summary text"
+      ],
+      "stored": [
+        "+++ Probe R01: Plain summary text"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe R01."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe R01."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        ">>>"
+      ],
+      "stored": [
+        "+++"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        ">>> Probe R02: Entities &amp; &lt;tag&gt; in a summary"
+      ],
+      "stored": [
+        "+++ Probe R02: Entities & <tag> in a summary"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe R02."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe R02."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        ">>>"
+      ],
+      "stored": [
+        "+++"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        ">>> Probe R03: Inline code `copy --dry-run` in backticks"
+      ],
+      "stored": [
+        "+++ Probe R03: Inline code `copy --dry-run` in backticks"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe R03."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe R03."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        ">>>"
+      ],
+      "stored": [
+        "+++"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        ">>> Probe R04: Inline code <code>copy --dry-run</code> as HTML"
+      ],
+      "stored": [
+        "+++ Probe R04: Inline code <code>copy --dry-run</code> as HTML"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe R04."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe R04."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        ">>>"
+      ],
+      "stored": [
+        "+++"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        ">>> Probe R05: **Bold** text in a summary"
+      ],
+      "stored": [
+        "+++ Probe R05: **Bold** text in a summary"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe R05."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe R05."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        ">>>"
+      ],
+      "stored": [
+        "+++"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        ">>> Probe R06: <strong>Bold</strong> as HTML"
+      ],
+      "stored": [
+        "+++ Probe R06: <strong>Bold</strong> as HTML"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe R06."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe R06."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        ">>>"
+      ],
+      "stored": [
+        "+++"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        ">>> Probe R07: Body — paragraph"
+      ],
+      "stored": [
+        "+++ Probe R07: Body — paragraph"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe R07."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe R07."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        ">>>"
+      ],
+      "stored": [
+        "+++"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        ">>> Probe R08: Body — lists"
+      ],
+      "stored": [
+        "+++ Probe R08: Body — lists"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        "- First bullet",
+        "- Second bullet"
+      ],
+      "stored": [
+        "* First bullet",
+        "* Second bullet"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        ">>>"
+      ],
+      "stored": [
+        "+++"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        ">>> Probe R09: Body — headings"
+      ],
+      "stored": [
+        "+++ Probe R09: Body — headings"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        ">>>"
+      ],
+      "stored": [
+        "+++"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        ">>> Probe R10: Body — fenced code"
+      ],
+      "stored": [
+        "+++ Probe R10: Body — fenced code"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        ">>>"
+      ],
+      "stored": [
+        "+++"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        ">>> Probe R11: Body — image"
+      ],
+      "stored": [
+        "+++ Probe R11: Body — image"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        ">>>"
+      ],
+      "stored": [
+        "+++"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        ">>> Probe R12: Body — table"
+      ],
+      "stored": [
+        "+++ Probe R12: Body — table"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        "| --- | --- |"
+      ],
+      "stored": [
+        "| -- | -- |"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        ">>>"
+      ],
+      "stored": [
+        "+++"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        ">>> Probe R13: Body — nested"
+      ],
+      "stored": [
+        "+++ Probe R13: Body — nested"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        ">>> Probe R13i: nested inner summary"
+      ],
+      "stored": [
+        "+++ Probe R13i: nested inner summary"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        ">>>"
+      ],
+      "stored": [
+        "+++",
+        "",
+        "+++"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-linear-arrow.json",
+      "write": "first",
+      "sent": [
+        ">>>"
+      ],
+      "stored": [
+        "+++ "
+      ]
+    },
+    {
+      "fixture": "fixtures/document-linear-arrow.json",
+      "write": "first",
+      "sent": [],
+      "stored": [
+        "+++"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-details-open.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe O01."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe O01."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-details-open.json",
+      "write": "first",
+      "sent": [
+        "<summary>Probe O02: Entities &amp; &lt;tag&gt; in a summary</summary>"
+      ],
+      "stored": [
+        "<summary>Probe O02: Entities & <tag> in a summary</summary>"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-details-open.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe O02."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe O02."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-details-open.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe O03."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe O03."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-details-open.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe O04."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe O04."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-details-open.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe O05."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe O05."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-details-open.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe O06."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe O06."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-details-open.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe O07."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe O07."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-details-open.json",
+      "write": "first",
+      "sent": [
+        "- First bullet",
+        "- Second bullet"
+      ],
+      "stored": [
+        "* First bullet",
+        "* Second bullet"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-details-open.json",
+      "write": "first",
+      "sent": [
+        "| --- | --- |"
+      ],
+      "stored": [
+        "| -- | -- |"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-details-open.json",
+      "write": "first",
+      "sent": [
+        ""
+      ],
+      "stored": []
+    },
+    {
+      "fixture": "fixtures/document-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "- A list item holding the block that follows"
+      ],
+      "stored": [
+        "* A list item holding the block that follows"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  ",
+        "  A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe L01.",
+        "  "
+      ],
+      "stored": [
+        "",
+        "  A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe L01.",
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "",
+        "- A list item holding the block that follows"
+      ],
+      "stored": [
+        "* A list item holding the block that follows"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  <summary>Probe L02: Entities &amp; &lt;tag&gt; in a summary</summary>",
+        "  ",
+        "  A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe L02.",
+        "  "
+      ],
+      "stored": [
+        "  <summary>Probe L02: Entities & <tag> in a summary</summary>",
+        "",
+        "  A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe L02.",
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "",
+        "- A list item holding the block that follows"
+      ],
+      "stored": [
+        "* A list item holding the block that follows"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  ",
+        "  A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe L03.",
+        "  "
+      ],
+      "stored": [
+        "",
+        "  A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe L03.",
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "",
+        "- A list item holding the block that follows"
+      ],
+      "stored": [
+        "* A list item holding the block that follows"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  ",
+        "  A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe L04.",
+        "  "
+      ],
+      "stored": [
+        "",
+        "  A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe L04.",
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "",
+        "- A list item holding the block that follows"
+      ],
+      "stored": [
+        "* A list item holding the block that follows"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  ",
+        "  A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe L05.",
+        "  "
+      ],
+      "stored": [
+        "",
+        "  A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe L05.",
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "",
+        "- A list item holding the block that follows"
+      ],
+      "stored": [
+        "* A list item holding the block that follows"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  ",
+        "  A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe L06.",
+        "  "
+      ],
+      "stored": [
+        "",
+        "  A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe L06.",
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "",
+        "- A list item holding the block that follows"
+      ],
+      "stored": [
+        "* A list item holding the block that follows"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  ",
+        "  A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe L07.",
+        "  "
+      ],
+      "stored": [
+        "",
+        "  A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe L07.",
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "",
+        "- A list item holding the block that follows"
+      ],
+      "stored": [
+        "* A list item holding the block that follows"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  ",
+        "  - First bullet",
+        "  - Second bullet",
+        "  "
+      ],
+      "stored": [
+        "  * First bullet",
+        "  * Second bullet"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "",
+        "- A list item holding the block that follows"
+      ],
+      "stored": [
+        "* A list item holding the block that follows"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "",
+        "- A list item holding the block that follows"
+      ],
+      "stored": [
+        "* A list item holding the block that follows"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "",
+        "- A list item holding the block that follows"
+      ],
+      "stored": [
+        "* A list item holding the block that follows"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "",
+        "- A list item holding the block that follows"
+      ],
+      "stored": [
+        "* A list item holding the block that follows"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  | --- | --- |"
+      ],
+      "stored": [
+        "  | -- | -- |"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "",
+        "- A list item holding the block that follows"
+      ],
+      "stored": [
+        "* A list item holding the block that follows"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  ",
+        "  - A list item holding the block that follows",
+        "  "
+      ],
+      "stored": [
+        "  * A list item holding the block that follows",
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "    "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "    "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-in-list-item.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-in-list-item.json",
+      "write": "first",
+      "sent": [
+        ""
+      ],
+      "stored": []
+    },
+    {
+      "fixture": "fixtures/document-in-fenced-code.json",
+      "write": "first",
+      "sent": [
+        ""
+      ],
+      "stored": []
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe A01."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe A01."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "<summary>Probe A02: Entities &amp; &lt;tag&gt; in a summary</summary>"
+      ],
+      "stored": [
+        "<summary>Probe A02: Entities & <tag> in a summary</summary>"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe A02."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe A02."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe A03."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe A03."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe A04."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe A04."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe A05."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe A05."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe A06."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe A06."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe A07."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe A07."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "- First bullet",
+        "- Second bullet"
+      ],
+      "stored": [
+        "* First bullet",
+        "* Second bullet"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "| --- | --- |"
+      ],
+      "stored": [
+        "| -- | -- |"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe T01."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe T01."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "<summary>Probe T02: Entities &amp; &lt;tag&gt; in a summary</summary>",
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe T02."
+      ],
+      "stored": [
+        "<summary>Probe T02: Entities & <tag> in a summary</summary>",
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe T02."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe T03."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe T03."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe T04."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe T04."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe T05."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe T05."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe T06."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe T06."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe T07."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe T07."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "- First bullet",
+        "- Second bullet"
+      ],
+      "stored": [
+        "",
+        "* First bullet",
+        "* Second bullet"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "| --- | --- |"
+      ],
+      "stored": [
+        "| -- | -- |"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe P01."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe P01."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "+++ Probe P02: Entities &amp; &lt;tag&gt; in a summary"
+      ],
+      "stored": [
+        "+++ Probe P02: Entities & <tag> in a summary"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe P02."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe P02."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe P03."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe P03."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe P04."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe P04."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe P05."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe P05."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe P06."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe P06."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe P07."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe P07."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "- First bullet",
+        "- Second bullet"
+      ],
+      "stored": [
+        "* First bullet",
+        "* Second bullet"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "| --- | --- |"
+      ],
+      "stored": [
+        "| -- | -- |"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        ">>> Probe R01: Plain summary text"
+      ],
+      "stored": [
+        "+++ Probe R01: Plain summary text"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe R01."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe R01."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        ">>>"
+      ],
+      "stored": [
+        "+++"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        ">>> Probe R02: Entities &amp; &lt;tag&gt; in a summary"
+      ],
+      "stored": [
+        "+++ Probe R02: Entities & <tag> in a summary"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe R02."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe R02."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        ">>>"
+      ],
+      "stored": [
+        "+++"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        ">>> Probe R03: Inline code `copy --dry-run` in backticks"
+      ],
+      "stored": [
+        "+++ Probe R03: Inline code `copy --dry-run` in backticks"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe R03."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe R03."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        ">>>"
+      ],
+      "stored": [
+        "+++"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        ">>> Probe R04: Inline code <code>copy --dry-run</code> as HTML"
+      ],
+      "stored": [
+        "+++ Probe R04: Inline code <code>copy --dry-run</code> as HTML"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe R04."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe R04."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        ">>>"
+      ],
+      "stored": [
+        "+++"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        ">>> Probe R05: **Bold** text in a summary"
+      ],
+      "stored": [
+        "+++ Probe R05: **Bold** text in a summary"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe R05."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe R05."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        ">>>"
+      ],
+      "stored": [
+        "+++"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        ">>> Probe R06: <strong>Bold</strong> as HTML"
+      ],
+      "stored": [
+        "+++ Probe R06: <strong>Bold</strong> as HTML"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe R06."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe R06."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        ">>>"
+      ],
+      "stored": [
+        "+++"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        ">>> Probe R07: Body — paragraph"
+      ],
+      "stored": [
+        "+++ Probe R07: Body — paragraph"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe R07."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe R07."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        ">>>"
+      ],
+      "stored": [
+        "+++"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        ">>> Probe R08: Body — lists"
+      ],
+      "stored": [
+        "+++ Probe R08: Body — lists"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "- First bullet",
+        "- Second bullet"
+      ],
+      "stored": [
+        "* First bullet",
+        "* Second bullet"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        ">>>"
+      ],
+      "stored": [
+        "+++"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        ">>> Probe R09: Body — headings"
+      ],
+      "stored": [
+        "+++ Probe R09: Body — headings"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        ">>>"
+      ],
+      "stored": [
+        "+++"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        ">>> Probe R10: Body — fenced code"
+      ],
+      "stored": [
+        "+++ Probe R10: Body — fenced code"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        ">>>"
+      ],
+      "stored": [
+        "+++"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        ">>> Probe R11: Body — image"
+      ],
+      "stored": [
+        "+++ Probe R11: Body — image"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        ">>>"
+      ],
+      "stored": [
+        "+++"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        ">>> Probe R12: Body — table"
+      ],
+      "stored": [
+        "+++ Probe R12: Body — table"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "| --- | --- |"
+      ],
+      "stored": [
+        "| -- | -- |"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        ">>>"
+      ],
+      "stored": [
+        "+++"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        ">>> Probe R13: Body — nested"
+      ],
+      "stored": [
+        "+++ Probe R13: Body — nested"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        ">>> Probe R13i: nested inner summary"
+      ],
+      "stored": [
+        "+++ Probe R13i: nested inner summary"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        ">>>"
+      ],
+      "stored": [
+        "+++",
+        "",
+        "+++"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        ">>>"
+      ],
+      "stored": [
+        "+++ "
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe O01."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe O01."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "<summary>Probe O02: Entities &amp; &lt;tag&gt; in a summary</summary>"
+      ],
+      "stored": [
+        "<summary>Probe O02: Entities & <tag> in a summary</summary>"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe O02."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe O02."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe O03."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe O03."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe O04."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe O04."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe O05."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe O05."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe O06."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe O06."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe O07."
+      ],
+      "stored": [
+        "A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe O07."
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "- First bullet",
+        "- Second bullet"
+      ],
+      "stored": [
+        "* First bullet",
+        "* Second bullet"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "| --- | --- |"
+      ],
+      "stored": [
+        "| -- | -- |"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "- A list item holding the block that follows"
+      ],
+      "stored": [
+        "* A list item holding the block that follows"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  ",
+        "  A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe L01.",
+        "  "
+      ],
+      "stored": [
+        "",
+        "  A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe L01.",
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "",
+        "- A list item holding the block that follows"
+      ],
+      "stored": [
+        "* A list item holding the block that follows"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  <summary>Probe L02: Entities &amp; &lt;tag&gt; in a summary</summary>",
+        "  ",
+        "  A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe L02.",
+        "  "
+      ],
+      "stored": [
+        "  <summary>Probe L02: Entities & <tag> in a summary</summary>",
+        "",
+        "  A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe L02.",
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "",
+        "- A list item holding the block that follows"
+      ],
+      "stored": [
+        "* A list item holding the block that follows"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  ",
+        "  A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe L03.",
+        "  "
+      ],
+      "stored": [
+        "",
+        "  A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe L03.",
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "",
+        "- A list item holding the block that follows"
+      ],
+      "stored": [
+        "* A list item holding the block that follows"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  ",
+        "  A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe L04.",
+        "  "
+      ],
+      "stored": [
+        "",
+        "  A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe L04.",
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "",
+        "- A list item holding the block that follows"
+      ],
+      "stored": [
+        "* A list item holding the block that follows"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  ",
+        "  A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe L05.",
+        "  "
+      ],
+      "stored": [
+        "",
+        "  A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe L05.",
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "",
+        "- A list item holding the block that follows"
+      ],
+      "stored": [
+        "* A list item holding the block that follows"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  ",
+        "  A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe L06.",
+        "  "
+      ],
+      "stored": [
+        "",
+        "  A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe L06.",
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "",
+        "- A list item holding the block that follows"
+      ],
+      "stored": [
+        "* A list item holding the block that follows"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  ",
+        "  A paragraph with *emphasis* and [a link](https://github.com/nickderobertis/onetaskgraph-live-scratch) in probe L07.",
+        "  "
+      ],
+      "stored": [
+        "",
+        "  A paragraph with *emphasis* and [a link](<https://github.com/nickderobertis/onetaskgraph-live-scratch>) in probe L07.",
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "",
+        "- A list item holding the block that follows"
+      ],
+      "stored": [
+        "* A list item holding the block that follows"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  ",
+        "  - First bullet",
+        "  - Second bullet",
+        "  "
+      ],
+      "stored": [
+        "  * First bullet",
+        "  * Second bullet"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "",
+        "- A list item holding the block that follows"
+      ],
+      "stored": [
+        "* A list item holding the block that follows"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "",
+        "- A list item holding the block that follows"
+      ],
+      "stored": [
+        "* A list item holding the block that follows"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "",
+        "- A list item holding the block that follows"
+      ],
+      "stored": [
+        "* A list item holding the block that follows"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "",
+        "- A list item holding the block that follows"
+      ],
+      "stored": [
+        "* A list item holding the block that follows"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  | --- | --- |"
+      ],
+      "stored": [
+        "  | -- | -- |"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "",
+        "- A list item holding the block that follows"
+      ],
+      "stored": [
+        "* A list item holding the block that follows"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  ",
+        "  - A list item holding the block that follows",
+        "  "
+      ],
+      "stored": [
+        "  * A list item holding the block that follows",
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "    "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "    "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [
+        "  "
+      ],
+      "stored": [
+        ""
+      ]
+    },
+    {
+      "fixture": "fixtures/document-all-forms.json",
+      "write": "first",
+      "sent": [],
+      "stored": [
+        "+++"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-sample-after.json",
+      "write": "first",
+      "sent": [
+        "| --- | --- | --- | --- | --- |"
+      ],
+      "stored": [
+        "| -- | -- | -- | -- | -- |"
+      ]
+    },
+    {
+      "fixture": "fixtures/document-sample-after.json",
+      "write": "first",
+      "sent": [
+        ""
+      ],
+      "stored": []
+    }
+  ]
+}

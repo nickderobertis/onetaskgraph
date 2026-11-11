@@ -170,28 +170,35 @@ fn is_status_line(line: &str) -> bool {
 }
 
 /// Serve `listener` on a thread of its own, each connection on another, answering each of its
-/// requests in turn with what `answer` returns — whole HTTP/1.1 response bytes, sent without a
+/// requests in turn with what `answer` returns — a whole HTTP/1.1 response, as text or as bytes,
+/// sent without a
 /// `Connection: close` so the client keeps the connection — or, for `None`, closing that
 /// connection with the request unanswered.
 ///
 /// Counts each connection accepted on `accepted`, which the caller may already have handed out.
-pub(crate) fn serve<A>(listener: TcpListener, accepted: Arc<AtomicUsize>, mut answer: A)
+pub(crate) fn serve<A, R>(listener: TcpListener, accepted: Arc<AtomicUsize>, mut answer: A)
 where
-    A: FnMut(&Request) -> Option<String> + Send + 'static,
+    A: FnMut(&Request) -> Option<R> + Send + 'static,
+    R: Into<Vec<u8>>,
 {
     serve_counting(
         listener,
         Arc::default(),
         accepted,
         move |request, stream| {
-            let Some(mut reply) = answer(request) else {
+            let Some(reply) = answer(request) else {
                 return After::Close;
             };
+            let mut reply: Vec<u8> = reply.into();
             if request.closes() {
                 // Said, so the client knows not to send another request on it.
-                reply = reply.replacen("\r\n", "\r\nConnection: close\r\n", 1);
+                let after_status = reply
+                    .windows(2)
+                    .position(|pair| pair == b"\r\n")
+                    .map_or(reply.len(), |at| at + 2);
+                reply.splice(after_status..after_status, *b"Connection: close\r\n");
             }
-            match stream.write_all(reply.as_bytes()) {
+            match stream.write_all(&reply) {
                 Ok(()) => After::KeepOpen,
                 // llmlint: ignore[changed_behavior_has_e2e] A write to a loopback peer fails only once the peer's reset has arrived, which no test can order against the write; the read side of the same reporting is held by tests/loopback_reads.rs.
                 Err(error) => {

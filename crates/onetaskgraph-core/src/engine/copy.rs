@@ -11609,15 +11609,26 @@ fn reads_comments(request: &CopyRequest) -> bool {
 }
 
 impl Engine {
-    /// Whether `item`'s source token vouches for every part a copy of it writes, on the terms of
-    /// [`Self::token_covers_a_copy`] — a project's fields and forward edges, a document's
-    /// fields and assets.
+    /// Whether `item`'s source token vouches for every part a copy of it writes that
+    /// [`recorded_unchanged`] does not compare for itself, on the terms of
+    /// [`Self::token_covers_a_copy`] — a project's fields, a document's fields and assets.
+    ///
+    /// A project's forward edges are not among them: [`recorded_unchanged`] holds the edges this
+    /// copy would write, read from the source now, to the ones the destination holds, so a token
+    /// that does not cover them — a GitHub board's — still says the rest of the project is as the
+    /// copy that recorded it left it. Asking it to cover them too left such a project never
+    /// recognised as unchanged on a destination that rewrites the Markdown it is sent, and
+    /// written again on every repeat copy.
     fn version_covers_a_copy(&self, item: &Planned) -> bool {
         match &item.item {
             Item::Task(_) => self.token_covers_a_copy(&item.source.source, item.carried.is_some()),
             Item::Project(_) => self.readable(&item.source.source).is_ok_and(|source| {
-                let coverage = source.source().project_version_coverage();
-                coverage.fields.reason().is_none() && coverage.forward_edges.reason().is_none()
+                source
+                    .source()
+                    .project_version_coverage()
+                    .fields
+                    .reason()
+                    .is_none()
             }),
             Item::Document(_) => self.readable(&item.source.source).is_ok_and(|source| {
                 let coverage = source.source().document_version_coverage();
@@ -11655,7 +11666,7 @@ fn skips(task: &Task, held: &Prior, with_comments: bool, destination: &SourceNam
     } else {
         None
     };
-    let now = record::digest(held_task, &held.edges, comments, destination);
+    let now = record::digests_of(&held.item, &held.edges, comments, destination);
     record::skips(
         task.version.as_deref(),
         with_comments,
@@ -12186,7 +12197,7 @@ fn recorded_unchanged(
         None
     };
     let counted = held.counted_edges(edges);
-    let now = record::digest_of(&held.item, &counted, comments, destination);
+    let now = record::digests_of(&held.item, &counted, comments, destination);
     if !record::holds(
         described(&held.item).1,
         &version.to_string(),
