@@ -151,7 +151,13 @@ impl LinearSource {
         if issue.is_null() || issue.get("archivedAt").is_some_and(|at| !at.is_null()) {
             return Ok(None);
         }
-        let task = map_task(issue, &self.name, &self.statuses, self.spelling())?;
+        let task = map_task(
+            issue,
+            &self.name,
+            &self.statuses,
+            self.spelling(),
+            self.assignees,
+        )?;
         if !self.in_scope(task.project.as_ref()) {
             return Ok(None);
         }

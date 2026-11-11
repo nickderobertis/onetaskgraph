@@ -1,6 +1,6 @@
 //! What every instance of one Linear tracker in a process shares: the team's vocabulary — its
-//! id, its workflow states and the workspace's project statuses — and the ids of the labels its
-//! writes named.
+//! id, its workflow states and the workspace's project statuses — the ids of the labels its
+//! writes named, and the ids of the people its assignee writes named.
 //!
 //! A long-lived caller builds a source instance per command, and several sources over one team
 //! are each an instance; each would otherwise read the same vocabulary afresh. Nothing of a
@@ -33,6 +33,19 @@ pub(crate) fn vocabularies() -> MutexGuard<'static, Vocabularies> {
 /// is of, and its name.
 pub(crate) fn labels() -> MutexGuard<'static, Labels> {
     static HELD: OnceLock<Mutex<Labels>> = OnceLock::new();
+    HELD.get_or_init(Mutex::default)
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Every user id an assignee write resolved, by its tracker — endpoint and API key's workspace —
+/// and the display name it was resolved from.
+type People = HashMap<(String, String), String>;
+
+/// Every user id an assignee write resolved, by its tracker and the display name it was
+/// resolved from.
+pub(crate) fn people() -> MutexGuard<'static, People> {
+    static HELD: OnceLock<Mutex<People>> = OnceLock::new();
     HELD.get_or_init(Mutex::default)
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)

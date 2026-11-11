@@ -117,6 +117,17 @@
 # pageInfo{hasNextPage}}` on each row, and Linear answered it with no error and scored it. It is
 # the comments page an attached cache's documents read a token's comments part from, and the
 # published SDK schema the comment contract above was pinned from declares it among the seven.
+#
+# A task's assignee carries a date of its own. `Issue.assignee: User` ("The user to whom the
+# issue is assigned. Null if the issue is unassigned."), `User.displayName` ("The user's display
+# (nick) name. Must be unique within the workspace."), `assigneeId: String` on
+# `IssueCreateInput` and on `IssueUpdateInput` ("UUID of the new assignee. Null unassigns the
+# issue."), `Query.users` with its `filter: UserFilter` and `first: Int` (between 1 and 250),
+# `UserConnection`, and `UserFilter.displayName: StringComparator` are pinned 2026-11-11 from
+# Linear's published SDK schema, `packages/sdk/src/schema.graphql` in the `linear/linear`
+# repository as it stood that day, with the nullability that file states. Only a source with
+# `config.assignees: true` selects or sends any of them; `StringComparator.in` and `.eq` were
+# already pinned above.
 type Query {
   "The user's organization."
   organization: Organization!
@@ -132,6 +143,7 @@ type Query {
   projectLabels(filter: ProjectLabelFilter): ProjectLabelConnection!
   teams(first: Int, filter: TeamFilter): TeamConnection!
   projectStatuses(first: Int, after: String): ProjectStatusConnection!
+  users(first: Int, filter: UserFilter): UserConnection!
 }
 type Mutation {
   fileUpload(contentType: String!, filename: String!, size: Int!): UploadPayload!
@@ -187,6 +199,7 @@ type Issue {
   relations(first: Int!, after: String): IssueRelationConnection!
   inverseRelations(first: Int!, after: String): IssueRelationConnection!
   comments(before: String, last: Int, first: Int): CommentConnection!
+  assignee: User
 }
 type Project {
   teams(first: Int, after: String): TeamConnection!
@@ -255,6 +268,9 @@ type ProjectLabel {
   id: ID!
   name: String!
   color: String
+}
+type UserConnection {
+  nodes: [User!]!
 }
 type IssueConnection {
   nodes: [Issue!]!
@@ -482,6 +498,9 @@ input ProjectStatusFilter {
 input ProjectLabelFilter {
   name: StringComparator
 }
+input UserFilter {
+  displayName: StringComparator
+}
 input IssueLabelFilter {
   name: StringComparator
 }
@@ -518,6 +537,7 @@ input IssueCreateInput {
   priority: Int
   labelIds: [String!]!
   projectId: String
+  assigneeId: String
 }
 # Every member optional, as published — corrected 2026-09-15 from the SDK schema named in the
 # header, where this file had carried `title`, `stateId` and `labelIds` as required. An absent
@@ -531,6 +551,7 @@ input IssueUpdateInput {
   projectId: String
   # Set, moved and — with null — removed by spike `spike-relations` on 2026-11-08 (66, 70, 73).
   parentId: String
+  assigneeId: String
 }
 input ProjectCreateInput {
   # The identifier, chosen by the caller, as Linear's published ProjectCreateInput documents it:
