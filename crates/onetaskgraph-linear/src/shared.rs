@@ -15,12 +15,13 @@ use onetaskgraph_plugin_api::NativeId;
 
 use super::{Vocabulary, WriteKind};
 
-/// Every tracker's vocabulary, by its endpoint and team.
+/// Every tracker's vocabulary, by its tracker — endpoint and API key's workspace — and team.
 type Vocabularies = HashMap<(String, String), Arc<Vocabulary>>;
-/// Every label id read, by its tracker's endpoint, which label set it is of, and its name.
+/// Every label id read, by its tracker — endpoint and API key's workspace — which label set it
+/// is of, and its name.
 type Labels = HashMap<(String, WriteKind, String), NativeId>;
 
-/// Every tracker's vocabulary, by its endpoint and team.
+/// Every tracker's vocabulary, by its tracker — endpoint and API key's workspace — and team.
 pub(crate) fn vocabularies() -> MutexGuard<'static, Vocabularies> {
     static HELD: OnceLock<Mutex<Vocabularies>> = OnceLock::new();
     HELD.get_or_init(Mutex::default)
@@ -28,7 +29,8 @@ pub(crate) fn vocabularies() -> MutexGuard<'static, Vocabularies> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// Every label id read, by its tracker's endpoint, which label set it is of, and its name.
+/// Every label id read, by its tracker — endpoint and API key's workspace — which label set it
+/// is of, and its name.
 pub(crate) fn labels() -> MutexGuard<'static, Labels> {
     static HELD: OnceLock<Mutex<Labels>> = OnceLock::new();
     HELD.get_or_init(Mutex::default)

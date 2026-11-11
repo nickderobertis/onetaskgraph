@@ -973,3 +973,158 @@ async fn comments_since_over_a_source_miscounting_its_details_reads_each_task_on
         );
     }
 }
+
+/// A real folder of Markdown whose reads carry no version, and where another writer raises a
+/// task's priority to `high` straight after the first read of it.
+struct Versionless {
+    inner: Box<dyn onetaskgraph_plugin_api::TaskSource>,
+    reads: std::sync::atomic::AtomicUsize,
+}
+
+#[async_trait::async_trait]
+impl onetaskgraph_plugin_api::TaskSource for Versionless {
+    fn kind(&self) -> &'static str {
+        self.inner.kind()
+    }
+    fn capabilities(&self) -> onetaskgraph_plugin_api::Capabilities {
+        self.inner.capabilities()
+    }
+    fn writes(&self) -> onetaskgraph_plugin_api::WriteSupport {
+        self.inner.writes()
+    }
+    async fn health(
+        &self,
+    ) -> Result<onetaskgraph_plugin_api::Health, onetaskgraph_plugin_api::SourceError> {
+        self.inner.health().await
+    }
+    async fn get_task(
+        &self,
+        id: &onetaskgraph_plugin_api::NativeId,
+    ) -> Result<Option<Task>, onetaskgraph_plugin_api::SourceError> {
+        let read = self.inner.get_task(id).await?;
+        if self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+            let raised = TaskUpdate {
+                priority: Some(Priority::High),
+                ..TaskUpdate::default()
+            };
+            self.inner.update_task(id, &raised).await?;
+        }
+        Ok(read.map(|task| Task {
+            version: None,
+            ..task
+        }))
+    }
+    async fn get_project(
+        &self,
+        id: &onetaskgraph_plugin_api::NativeId,
+    ) -> Result<Option<onetaskgraph_plugin_api::Project>, onetaskgraph_plugin_api::SourceError>
+    {
+        self.inner.get_project(id).await
+    }
+    async fn query_tasks(
+        &self,
+        query: &onetaskgraph_plugin_api::TaskQuery,
+        page: &onetaskgraph_plugin_api::PageRequest,
+    ) -> Result<onetaskgraph_plugin_api::Page<Task>, onetaskgraph_plugin_api::SourceError> {
+        self.inner.query_tasks(query, page).await
+    }
+    async fn query_projects(
+        &self,
+        query: &onetaskgraph_plugin_api::ProjectQuery,
+        page: &onetaskgraph_plugin_api::PageRequest,
+    ) -> Result<
+        onetaskgraph_plugin_api::Page<onetaskgraph_plugin_api::Project>,
+        onetaskgraph_plugin_api::SourceError,
+    > {
+        self.inner.query_projects(query, page).await
+    }
+    async fn labels(
+        &self,
+        page: &onetaskgraph_plugin_api::PageRequest,
+    ) -> Result<
+        onetaskgraph_plugin_api::Page<onetaskgraph_plugin_api::Label>,
+        onetaskgraph_plugin_api::SourceError,
+    > {
+        self.inner.labels(page).await
+    }
+    async fn task_dependencies(
+        &self,
+        id: &onetaskgraph_plugin_api::NativeId,
+        direction: onetaskgraph_plugin_api::Direction,
+        page: &onetaskgraph_plugin_api::PageRequest,
+    ) -> Result<
+        onetaskgraph_plugin_api::Page<onetaskgraph_plugin_api::DependencyEdge>,
+        onetaskgraph_plugin_api::SourceError,
+    > {
+        self.inner.task_dependencies(id, direction, page).await
+    }
+    async fn project_dependencies(
+        &self,
+        id: &onetaskgraph_plugin_api::NativeId,
+        direction: onetaskgraph_plugin_api::Direction,
+        page: &onetaskgraph_plugin_api::PageRequest,
+    ) -> Result<
+        onetaskgraph_plugin_api::Page<onetaskgraph_plugin_api::DependencyEdge>,
+        onetaskgraph_plugin_api::SourceError,
+    > {
+        self.inner.project_dependencies(id, direction, page).await
+    }
+    async fn update_task(
+        &self,
+        id: &onetaskgraph_plugin_api::NativeId,
+        update: &TaskUpdate,
+    ) -> Result<
+        Option<onetaskgraph_plugin_api::TaskUpdateOutcome>,
+        onetaskgraph_plugin_api::SourceError,
+    > {
+        self.inner.update_task(id, update).await
+    }
+    async fn metering(
+        &self,
+    ) -> Result<Option<onetaskgraph_plugin_api::Metering>, onetaskgraph_plugin_api::SourceError>
+    {
+        self.inner.metering().await
+    }
+}
+
+#[tokio::test]
+async fn a_guard_a_versionless_source_cannot_hold_is_decided_again_by_the_source_before_it_writes()
+{
+    use onetaskgraph_plugin_api::SourcePlugin as _;
+    let root = tempfile::tempdir().expect("a folder");
+    drop(folders(root.path()));
+    let plan = name("plan");
+    let inner = onetaskgraph_local_md::Plugin
+        .build(
+            &plan,
+            &json!({"root": root.path().join("plan")}),
+            &NoSecrets,
+        )
+        .expect("the local-md plugin builds");
+    let source = onetaskgraph_core::ResolvedSource::adopt(
+        plan.clone(),
+        Box::new(Versionless {
+            inner,
+            reads: std::sync::atomic::AtomicUsize::new(0),
+        }),
+    );
+    let engine = Engine::new(
+        vec![onetaskgraph_core::ConfiguredSource::Ready(source)],
+        vec![plan],
+    );
+    // `c` is at `low` when the engine's guard reads it, and `high` by the time the write would
+    // be sent.
+    let updated = engine
+        .update_task_when(
+            &id("plan:c"),
+            &retitle("Charlie, guarded"),
+            &[Priority::Low],
+            None,
+        )
+        .await
+        .expect("answered");
+    let guard = updated.guard.expect("the guard says what it found");
+    assert_eq!(guard.outcome(), GuardOutcome::Held, "{guard:?}");
+    assert!(updated.written.is_empty(), "{updated:?}");
+    assert_eq!(task(&engine, "plan:c").await.title, "Charlie batch");
+}

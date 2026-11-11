@@ -922,11 +922,18 @@ impl Engine {
             held_to = task.version;
         }
         let before = readings(&[resolved]).await;
+        // A read that gave no version leaves the write nothing to be held to, so the guard goes
+        // with it, for the source to decide again on its own read just before it writes.
+        let when_priority = if held_to.is_none() {
+            when.to_vec()
+        } else {
+            Vec::new()
+        };
         let batch = [BatchUpdate {
             id: id.native.clone(),
             update: update.clone(),
             if_version: held_to.clone(),
-            when_priority: Vec::new(),
+            when_priority,
         }];
         let answer = one_each(&id.source, 1, resolved.source().update_tasks(&batch).await)
             .into_iter()

@@ -1184,3 +1184,76 @@ fn a_second_held_comment_on_one_issue_is_decided_on_the_version_the_first_left()
         .collect();
     assert_eq!(outcomes, ["written", "version-moved"], "{}", ran.json);
 }
+
+/// Every hosted Linear source shares one endpoint, and two workspaces may each have a team
+/// spelled the same: two sources whose API keys differ are two trackers, each reading its own
+/// vocabulary and its own label ids, never the other's.
+#[test]
+fn two_sources_of_one_endpoint_with_different_keys_share_no_vocabulary_or_label_ids() {
+    use onetaskgraph_core::{Body, TaskCreate};
+    let sandbox = Sandbox::new();
+    let held = json!({"tasks": writable(), "documents": [], "labels": [],
+                      "projects": [{"id": "P-1", "title": "Plans", "content": "The plans.",
+                                    "status": {"category": "todo", "name": "Todo"},
+                                    "labels": []}],
+                      "task_dependencies": [], "project_dependencies": []});
+    let (config, workspace) = linear_workspace(&sandbox, held);
+    let mut sources = Vec::new();
+    let mut selection = Vec::new();
+    for (name, key) in [("north", "workspace-a-key"), ("south", "workspace-b-key")] {
+        let name = SourceName::new(name).unwrap();
+        let secrets = onetaskgraph_core::Secrets::load(onetaskgraph_core::Environment::from_pairs(
+            [("LINEAR_API_KEY", key)],
+        ))
+        .expect("an environment with no credentials file");
+        let source = onetaskgraph_linear::Plugin
+            .build(&name, &config, &secrets)
+            .expect("the Linear source builds");
+        sources.push(ConfiguredSource::Ready(ResolvedSource::adopt(
+            name.clone(),
+            source,
+        )));
+        selection.push(name);
+    }
+    let engine = Engine::new(sources, selection);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a runtime");
+    let create = |source: &str| TaskCreate {
+        source: SourceName::new(source).unwrap(),
+        project: onetaskgraph_plugin_api::NativeId::from("P-1"),
+        title: format!("Labelled in {source}"),
+        body: Body::plain("A labelled task."),
+        status: None,
+        labels: vec!["triage".to_owned()],
+        repositories: Vec::new(),
+        depends_on: Vec::new(),
+        delivers: Vec::new(),
+        metadata: std::collections::BTreeMap::new(),
+        assets: Vec::new(),
+        classification: Default::default(),
+    };
+    for source in ["north", "south"] {
+        let mark = workspace.served_count();
+        runtime
+            .block_on(engine.create_task(&create(source)))
+            .expect("the create lands");
+        let sent = workspace.served_since(mark);
+        let counted = |needle: &str| {
+            sent.iter()
+                .filter(|(query, _)| query.contains(needle))
+                .count()
+        };
+        assert_eq!(
+            counted("teams(first:2"),
+            1,
+            "{source} reads its own vocabulary"
+        );
+        assert_eq!(
+            counted("issueLabels("),
+            1,
+            "{source} looks up its own label"
+        );
+    }
+}

@@ -2950,13 +2950,23 @@ impl LinearSource {
         held.clone()
     }
 
+    /// The tracker this source reads: its endpoint and the workspace its API key belongs to,
+    /// told apart by a digest of the key that never leaves this process — every hosted source
+    /// shares one endpoint, and two workspaces may each have a team spelled the same.
+    fn tracker(&self) -> String {
+        use std::hash::{Hash as _, Hasher as _};
+        let mut digest = std::collections::hash_map::DefaultHasher::new();
+        self.key.expose_secret().hash(&mut digest);
+        format!("{} {:016x}", self.endpoint.0, digest.finish())
+    }
+
     /// The key every instance of this source's tracker in this process shares what it reads of
-    /// the team under: the endpoint and the team — `None` for a source with no team, which
+    /// the team under: the tracker and the team — `None` for a source with no team, which
     /// resolves nothing.
     fn shared_key(&self) -> Option<(String, String)> {
         self.team
             .as_ref()
-            .map(|team| (self.endpoint.0.clone(), team.0.clone()))
+            .map(|team| (self.tracker(), team.0.clone()))
     }
 
     /// Drop what this instance holds, after a write carrying one of its ids failed: the id may
@@ -2968,7 +2978,7 @@ impl LinearSource {
             .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
         if let Some(key) = self.shared_key() {
             shared::vocabularies().remove(&key);
-            shared::labels().retain(|(endpoint, _, _), _| *endpoint != key.0);
+            shared::labels().retain(|(tracker, _, _), _| *tracker != key.0);
         }
     }
 
@@ -3044,7 +3054,8 @@ impl LinearSource {
         labels: &[Label],
         kind: WriteKind,
     ) -> Result<Vec<NativeId>, SourceError> {
-        let key = |name: &str| (self.endpoint.0.clone(), kind, name.to_owned());
+        let tracker = self.tracker();
+        let key = |name: &str| (tracker.clone(), kind, name.to_owned());
         let lookup = |name: &'_ str| match kind {
             WriteKind::Project => Lookup::ProjectLabel(name.to_owned()),
             WriteKind::Task => Lookup::IssueLabel(name.to_owned()),
