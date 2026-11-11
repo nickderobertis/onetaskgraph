@@ -6758,6 +6758,20 @@ impl LinearWorkspace {
     }
 
     /// Replace one comment's body, as its author editing it in Linear would.
+    /// Every comment this workspace holds on `issue`, each its id and its body as stored.
+    #[must_use]
+    pub fn comments_on(&self, issue: &str) -> Vec<Value> {
+        self.state.lock().unwrap()["_linear_comments"]
+            .as_array()
+            .map(|rows| {
+                rows.iter()
+                    .filter(|row| row["issue"] == json!(issue))
+                    .map(|row| json!({"id": row["id"], "body": row["body"]}))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     pub fn edit_comment(&self, comment: &str, body: &str) {
         let mut data = self.state.lock().unwrap();
         let (_, stamp) = linear_tick(&mut data);

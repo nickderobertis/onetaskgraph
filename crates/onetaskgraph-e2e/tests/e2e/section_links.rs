@@ -222,7 +222,7 @@ pub(crate) fn configure(sandbox: &Sandbox, sources: &[(&str, &Value)]) {
 impl Store {
     /// What this store has been sent so far: every request a hosted one served, or every file
     /// of the folder at `root` and its bytes.
-    fn mark(&self, root: Option<&Path>) -> Mark {
+    pub(crate) fn mark(&self, root: Option<&Path>) -> Mark {
         match self {
             Self::Local => Mark::Files(files_under(root.expect("a folder's root"))),
             Self::Github(board) => Mark::Served(board.served_count()),
@@ -232,7 +232,7 @@ impl Store {
 
     /// Every write this store was sent since `mark`: each mutation a hosted one served, or each
     /// file of the folder at `root` created, changed or removed.
-    fn writes_since(&self, mark: &Mark, root: Option<&Path>) -> Vec<String> {
+    pub(crate) fn writes_since(&self, mark: &Mark, root: Option<&Path>) -> Vec<String> {
         match (self, mark) {
             (Self::Local, Mark::Files(before)) => {
                 let after = files_under(root.expect("a folder's root"));
@@ -298,7 +298,7 @@ impl Store {
     }
 
     /// The record's body as this store itself holds it, the metadata slot left out.
-    fn raw(&self, landed: &Landed) -> String {
+    pub(crate) fn raw(&self, landed: &Landed) -> String {
         let raw = match self {
             Self::Local => return String::new(),
             Self::Github(board) => board
@@ -335,7 +335,7 @@ fn stored_id8(workspace: &LinearWorkspace, at: &Landed, text: &str, ordinal: usi
 }
 
 /// What a store held before a command.
-enum Mark {
+pub(crate) enum Mark {
     /// Each file under a folder, and its bytes.
     Files(BTreeMap<String, Vec<u8>>),
     /// How many requests a hosted store had served.
@@ -406,17 +406,17 @@ fn relative(from: &str, to: &str) -> String {
 #[derive(Clone)]
 pub(crate) struct Landed {
     /// `task`, `project` or `document`.
-    verb: &'static str,
+    pub(crate) verb: &'static str,
     /// Its qualified id.
-    id: String,
+    pub(crate) id: String,
 }
 
 impl Landed {
-    fn native(&self) -> &str {
+    pub(crate) fn native(&self) -> &str {
         self.id.split_once(':').expect("a qualified id").1
     }
 
-    fn collection(&self) -> &'static str {
+    pub(crate) fn collection(&self) -> &'static str {
         self.record().collection()
     }
 
@@ -430,7 +430,7 @@ impl Landed {
     }
 
     /// Where its store says it is.
-    fn location(&self, sandbox: &Sandbox) -> String {
+    pub(crate) fn location(&self, sandbox: &Sandbox) -> String {
         let shown = shown(sandbox, self.verb, &self.id);
         shown["location"]["path"]
             .as_str()
@@ -440,7 +440,7 @@ impl Landed {
     }
 
     /// Its content, read back through the store.
-    fn content(&self, sandbox: &Sandbox) -> String {
+    pub(crate) fn content(&self, sandbox: &Sandbox) -> String {
         shown(sandbox, self.verb, &self.id)["content"]
             .as_str()
             .unwrap_or_default()
@@ -449,7 +449,7 @@ impl Landed {
 }
 
 /// Standard output of a run that had to succeed.
-fn ok(sandbox: &Sandbox, arguments: &[&str]) -> String {
+pub(crate) fn ok(sandbox: &Sandbox, arguments: &[&str]) -> String {
     let output = sandbox
         .command()
         .args(arguments)
@@ -467,14 +467,14 @@ fn ok(sandbox: &Sandbox, arguments: &[&str]) -> String {
 }
 
 /// One record as `show --json` answers it.
-fn shown(sandbox: &Sandbox, verb: &str, id: &str) -> Value {
+pub(crate) fn shown(sandbox: &Sandbox, verb: &str, id: &str) -> Value {
     let rendered = ok(sandbox, &[verb, "show", id, "--json"]);
     let response: Value = serde_json::from_str(&rendered).expect("show emits JSON");
     response["items"][0]["item"].clone()
 }
 
 /// What one copy reported: each source id, and its outcome.
-fn outcomes(rendered: &str) -> BTreeMap<String, Value> {
+pub(crate) fn outcomes(rendered: &str) -> BTreeMap<String, Value> {
     let report: Value = serde_json::from_str(rendered).expect("a copy emits JSON");
     report["items"]
         .as_array()
@@ -742,7 +742,7 @@ fn repeats_writing_nothing(
 }
 
 /// The folder a local store named `name` keeps its records in.
-fn root_of(sandbox: &Sandbox, name: &str) -> PathBuf {
+pub(crate) fn root_of(sandbox: &Sandbox, name: &str) -> PathBuf {
     std::fs::canonicalize(sandbox.subdirectory(name)).expect("a root")
 }
 
