@@ -515,7 +515,10 @@ fn two_issues_recording_one_origin_are_chosen_or_refused_as_that_origins_own_loo
         "no item is created for t0: {batch_tasks:#?}"
     );
     assert_eq!(
-        count(&batch_served, graphql::ISSUE_CREATE),
+        count(
+            &crate::fixtures::linear_per_item(&batch_served),
+            graphql::ISSUE_CREATE
+        ),
         2,
         "t1 and t2 alone are created"
     );

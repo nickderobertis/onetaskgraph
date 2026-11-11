@@ -392,8 +392,9 @@ fn a_copied_plan_reads_back_from_linear_as_the_digest_its_provenance_records() {
         assert!(errors.is_empty(), "{errors}");
         if !cache {
             // Every request this copy sends, and nothing else: one origin read for the project
-            // and its task, one read of each item by the id its origin's key derives before it
-            // is created under that id, one write of each item as composed, one follow-up write
+            // and its task, one read of the project by the id its origin's key derives before it
+            // is created under that id — a copy creating several items reads no issue's id
+            // first, the keyed create's own conflict finding an earlier copy's — one write of each item as composed, one follow-up write
             // of each item Linear rewrote — all three — and the document's own origin lookup; no
             // read of an item after a write of it, and no read of the destination project the
             // document is filed under. What Linear stores is read off each mutation's own answer.
@@ -403,7 +404,6 @@ fn a_copied_plan_reads_back_from_linear_as_the_digest_its_provenance_records() {
                 [
                     "originIssues",
                     "project",
-                    "issue",
                     "projectCreate",
                     "issueCreate",
                     "projectUpdate",

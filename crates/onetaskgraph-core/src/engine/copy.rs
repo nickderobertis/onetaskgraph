@@ -5907,6 +5907,45 @@ impl Engine {
         Ok(outcomes)
     }
 
+    /// Stamp `landing`, a task created together with others at a destination whose creates
+    /// together carry the copy's record, exactly as [`Self::write`] stamps a create of it: the
+    /// mark that its every edge is on its own record, and the record of this copy — so the write
+    /// the copy then makes of it says what its create already did.
+    fn stamp_created(
+        &self,
+        destination: &ResolvedSource,
+        item: &Planned,
+        suggested: &NativeId,
+        edges: &[DependencyEdge],
+        landing: &mut Item,
+        journal: &mut Journal,
+    ) {
+        // Tasks are created together only by a copy that does not always record itself — one
+        // that does creates each on its own — so this is the stamping its write of each uses.
+        let stamping = Stamping::WithCarrier;
+        let Item::Task(task) = landing else {
+            return;
+        };
+        let stamped = stamping.stamps(task, None);
+        if self.declared(destination.name()) != crate::config::SourceVisibility::Private {
+            let recorded = stamped
+                || task
+                    .metadata
+                    .contains_key(MetadataKey::COPIED_DESTINATION_VERSION_KEY);
+            if edges.len() != item.edges.len() {
+                task.metadata.remove(MetadataKey::EDGES_ON_RECORD_KEY);
+            } else if recorded {
+                task.metadata
+                    .insert(MetadataKey::EDGES_ON_RECORD_KEY.to_owned(), Value::from(1));
+            }
+        }
+        if stamped {
+            let digested = self.digested_comments(destination, item, suggested, journal);
+            let record = record_of(item, landing, edges, destination.name(), None, digested);
+            record.stamp(metadata_of(landing));
+        }
+    }
+
     /// Create, together, the tasks of `planned` that land as new items at a destination creating
     /// several in one request — its [`create_batch_limit`](onetaskgraph_plugin_api::TaskSource::create_batch_limit)
     /// over one — answering each one's index in `planned` with the id it was created under.
@@ -5925,10 +5964,17 @@ impl Engine {
     ) -> Result<BTreeMap<usize, NativeId>, EngineError> {
         let mut together: Vec<(SourceName, Vec<usize>)> = Vec::new();
         for (index, item) in planned.iter().enumerate() {
+            // At a destination whose creates together carry the copy's record, a task depending
+            // on another of this copy is created on its own, after what it depends on, so its
+            // edges land with its create rather than in a second write.
+            let whole = self
+                .writable(&item.to)
+                .is_ok_and(|destination| destination.source().records_created_together());
             if !(matches!(item.item, Item::Task(_))
                 && matches!(item.target, Target::Create)
                 && !item.skipped
-                && item.assets.is_empty())
+                && item.assets.is_empty()
+                && !(whole && planned.iter().any(|other| depends_on(item, other))))
             {
                 continue;
             }
@@ -5966,18 +6012,29 @@ impl Engine {
                         &running.private,
                     ));
                     let project = filed[*index].clone();
-                    let landing = as_written(
+                    let suggested = created_id(&item.item, project.as_ref());
+                    let mut landing = as_written(
                         destination,
                         item,
                         outgoing(
                             item,
-                            created_id(&item.item, project.as_ref()),
+                            suggested.clone(),
                             project.clone(),
                             &recorded(item, None),
                             &delivers,
                             None,
                         ),
                     );
+                    if destination.source().records_created_together() {
+                        self.stamp_created(
+                            destination,
+                            item,
+                            &suggested,
+                            &edges,
+                            &mut landing,
+                            journal,
+                        );
+                    }
                     self.at_write(
                         destination,
                         &item.source.to_string(),
@@ -8152,8 +8209,8 @@ impl Engine {
         // A task created together with others is written once more, as the item its create
         // made, now that it can name its edges to them: it was journalled when it was created.
         let stamping = match created {
-            Some(_) => Stamping::Never,
-            None => Stamping::of(request, rerecord),
+            Some(_) if !destination.source().records_created_together() => Stamping::Never,
+            _ => Stamping::of(request, rerecord),
         };
         // What the item holds once written, as the copy sent it and the destination reads a
         // status back: refined from the destination's own answers once the whole copy is done.

@@ -1512,6 +1512,18 @@ pub trait TaskSource: Send + Sync {
         Ok(None)
     }
 
+    /// Whether a task this source creates through [`write_tasks`](Self::write_tasks) may carry
+    /// everything a copy's own write of it would — the copy's record of it among them — so the
+    /// write a copy then makes of it, naming the same, writes nothing.
+    ///
+    /// A copy then creates together only the tasks that depend on no other task of the copy,
+    /// whose edges are all nameable at their create, and creates each of the others on its own,
+    /// after what it depends on. Defaulted to `false`: a task created together lands with no
+    /// record, and the write after it names its edges to the others.
+    fn records_created_together(&self) -> bool {
+        false
+    }
+
     /// How many tasks this source creates in one [`write_tasks`](Self::write_tasks): more than
     /// one only for a source that creates several in one request.
     ///

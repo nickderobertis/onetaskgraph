@@ -66,6 +66,31 @@ impl Request {
         self.query.trim_start().starts_with("mutation")
     }
 
+    /// Every Linear id a long-form mutation wrote: the one it named or created, or — for a
+    /// batch — each alias's, as [`Self::written`] reads a write of one item.
+    fn written_all(&self) -> Vec<String> {
+        let Some(singles) = onetaskgraph_linear::graphql::decomposed(&self.query) else {
+            return self.written().into_iter().collect();
+        };
+        singles
+            .iter()
+            .enumerate()
+            .filter_map(|(at, single)| {
+                let root = single
+                    .split_once('{')
+                    .map(|(_, body)| body.trim_start())
+                    .and_then(|body| body.split(['(', ' ']).next())
+                    .unwrap_or_default();
+                Self {
+                    query: (*single).to_owned(),
+                    variables: onetaskgraph_linear::graphql::alias_variables(&self.variables, at),
+                    answer: json!({"data": {root: self.answer["data"][format!("a{at}")]}}),
+                }
+                .written()
+            })
+            .collect()
+    }
+
     /// The Linear id a long-form mutation wrote: the one it named, or the one it created.
     fn written(&self) -> Option<String> {
         let root = self.root();
@@ -99,9 +124,13 @@ impl Sent {
         self.requests.len() + self.uploads + self.puts + self.gets
     }
 
-    /// Every long-form write, by the Linear id it wrote, in the order sent.
+    /// Every long-form write, by the Linear id it wrote, in the order sent — each alias of a
+    /// batched write as the write of its own item it is.
     fn writes(&self) -> Vec<String> {
-        self.requests.iter().filter_map(Request::written).collect()
+        self.requests
+            .iter()
+            .flat_map(Request::written_all)
+            .collect()
     }
 
     /// How many long-form writes named `id`.
@@ -127,8 +156,9 @@ impl Sent {
         let mut written: BTreeSet<String> = BTreeSet::new();
         let mut reads = Vec::new();
         for request in &self.requests {
-            if let Some(id) = request.written() {
-                written.insert(id);
+            let wrote = request.written_all();
+            if !wrote.is_empty() {
+                written.extend(wrote);
                 continue;
             }
             if request.mutation() {
@@ -491,20 +521,13 @@ pub(crate) fn first_copy_of_the_realistic_plan() -> FirstCopy {
     for sent in [&project_sent, &document_sent] {
         assert_eq!(sent.reads_after_a_write(), Vec::<String>::new());
     }
-    // One request answers every origin lookup, the organization and the resolution; each item
-    // the lookup listed nothing for is then read by the id its origin's key derives — the
-    // project, then each of its five tasks — before the copy creates it under that id.
+    // One request answers every origin lookup, the organization and the resolution; the project
+    // the lookup listed nothing for is then read by the id its origin's key derives, before the
+    // copy creates it under that id. A task is read for no such id: its keyed create finds an
+    // issue an earlier copy made there by Linear's own refusal of a create under a held id.
     assert_eq!(
         project_sent.before_the_first_write(),
-        [
-            "originIssues",
-            "project",
-            "issue",
-            "issue",
-            "issue",
-            "issue",
-            "issue"
-        ],
+        ["originIssues", "project"],
         "one request answers every origin lookup, the organization and the resolution"
     );
     assert!(

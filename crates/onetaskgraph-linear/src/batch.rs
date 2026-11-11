@@ -4,22 +4,20 @@
 //! carries every item, each under its own alias. Linear answers each alias as it answers the
 //! document alone, so a batch costs one request where the items would each have cost theirs.
 //!
-//! **Where Linear fails a batch as a whole.** Every root this source batches is non-null, so an
-//! alias Linear refuses — an id naming nothing, an input it rejects — answers the whole
-//! document with no `data`, the error's `path` naming that alias; Linear executes a mutation
-//! document's fields in order, so every write aliased before the refused one was applied and
-//! none after it. This source therefore never lets one item's refusal decide another's:
+//! **Where Linear fails a batch as a whole.** Every root this source batches is non-null, and
+//! Linear applies an aliased document as one write: an alias it refuses — an id naming
+//! nothing, an input it rejects, a create under an id a record holds — answers the whole
+//! document with no `data` and one error whose `path` is that alias, and nothing of any alias
+//! before or after it lands. Observed on the sandbox team on 2026-11-11: an aliased
+//! `issueCreate` document whose second alias conflicted created neither the first nor the
+//! third issue, and an aliased `issueUpdate` document whose second alias named no issue
+//! updated neither the first nor the third. So one item's refusal never decides another's:
 //!
 //! - a **read** refused at one alias answers that item absent when the refusal says it names
-//!   nothing — and otherwise fails as that item's own — and the rest are read again together;
-//! - an **update** refused at one alias is sent again on its own, for its own answer, and the
-//!   rest are sent together again: an update sets the values it names, so sending one Linear
-//!   already applied again changes nothing;
-//! - a **comment** — which is not safe to send twice — is created only on an issue a batched
-//!   read just found, which removes the one refusal a caller's input predictably meets; one
-//!   refused anyway is answered refused, each comment aliased before it is found again by a
-//!   read of its issue's latest comments rather than written twice, and each after it is sent
-//!   again together.
+//!   nothing — and otherwise fails as that item's own — and the rest are read together again;
+//! - a **write** refused at one alias is sent again on its own, for its own answer, and the
+//!   rest are sent together again. Nothing of the refused document landed, so no write — a
+//!   comment included — is ever sent twice.
 //!
 //! A source the store's cache stands in front of reads with documents of their own, which this
 //! does not batch: it answers each item as the single-item method does.
@@ -44,6 +42,18 @@ pub(crate) enum Aliased {
     Answered(Vec<Value>),
     /// The alias at this index was refused, with this refusal; nothing was answered.
     Refused(usize, Refusal),
+}
+
+/// The most creates one aliased `issueCreate` document carries.
+pub(crate) const CREATE_BATCH: usize = 25;
+
+/// One create `write_tasks` gathered: the write, the variables its `issueCreate` is sent, the
+/// id it is sent under when its key chooses one, and the relations it writes once it exists.
+pub(crate) struct QueuedCreate {
+    pub(crate) write: onetaskgraph_plugin_api::ItemWrite<Task>,
+    pub(crate) variables: Value,
+    pub(crate) sent: Option<NativeId>,
+    pub(crate) edges: Vec<onetaskgraph_plugin_api::DependencyEdge>,
 }
 
 impl LinearSource {
@@ -288,9 +298,9 @@ impl LinearSource {
     }
 
     /// [`TaskSource::add_comments`](onetaskgraph_plugin_api::TaskSource::add_comments): every
-    /// issue read in one aliased read — which finds each, decides each hold, and is what keeps a
-    /// comment off an issue Linear would refuse it on — and every comment then created in one
-    /// aliased `commentCreate` document; see the module documentation.
+    /// issue read in one aliased read — which finds each and decides each hold — and every
+    /// comment then created in one aliased `commentCreate` document; see the module
+    /// documentation.
     pub(crate) async fn comment_batched(
         &self,
         comments: &[BatchComment],
@@ -365,19 +375,20 @@ impl LinearSource {
                         );
                     }
                 }
-                Ok(Aliased::Refused(refused, refusal)) => {
-                    // Every comment aliased before the refused one landed, unanswered: each is
-                    // found by a read of its issue rather than written a second time.
-                    let landed: Vec<(usize, NativeId)> = sending.drain(..refused).collect();
-                    let (at, _) = sending.remove(0);
-                    answers[at] = Some(Err(refusal.into_error()));
-                    for (at, issue) in landed {
-                        answers[at] = Some(
-                            self.landed_comment(&issue, comments[at].comment.body.as_str())
-                                .await
-                                .map(BatchAnswer::Written),
-                        );
-                    }
+                Ok(Aliased::Refused(refused, _)) => {
+                    // Nothing of the document landed: that one alone, for its own answer, and
+                    // the rest together again.
+                    let (at, issue) = sending.remove(refused);
+                    answers[at] = Some(
+                        self.send(
+                            graphql::COMMENT_CREATE,
+                            json!({"input": {"issueId": issue.0,
+                                             "body": comments[at].comment.body.as_str()}}),
+                        )
+                        .await
+                        .and_then(|data| written_comment(&data, MutationRoot::CommentCreate))
+                        .map(BatchAnswer::Written),
+                    );
                 }
                 Err(error) => {
                     for (at, _) in sending.drain(..) {
@@ -398,27 +409,272 @@ impl LinearSource {
             .collect()
     }
 
-    /// The newest comment on `issue` saying exactly `body` — one a batch created and whose
-    /// answer Linear withheld when it refused a later alias.
-    async fn landed_comment(&self, issue: &NativeId, body: &str) -> Result<Comment, SourceError> {
-        let page = PageRequest {
-            cursor: None,
-            limit: MAX_PAGE_SIZE,
+    /// Queue the create `write_task` composed — `input`, with the team and the id its key
+    /// derives — for the `write_tasks` gathering it; nothing is sent.
+    pub(crate) async fn create_queued(
+        &self,
+        write: &onetaskgraph_plugin_api::ItemWrite<Task>,
+        mut input: Value,
+        team: NativeId,
+        create: &super::CreateId,
+        edges: Vec<onetaskgraph_plugin_api::DependencyEdge>,
+    ) -> Result<NativeId, SourceError> {
+        input["teamId"] = Value::String(team.0);
+        let sent = match create {
+            super::CreateId::Unchosen => None,
+            super::CreateId::Keyed(key) | super::CreateId::Origin { key, .. } => {
+                let ids = super::linear_ids_of_key(&key.hyphenated().to_string())?;
+                ids.into_iter().next().map(NativeId)
+            }
         };
-        <Self as onetaskgraph_plugin_api::TaskSource>::task_comments(self, issue, &page)
-            .await?
-            .and_then(|page| {
-                page.items
-                    .into_iter()
-                    .rev()
-                    .find(|comment| comment.body == body)
-            })
-            .ok_or_else(|| SourceError::Unavailable {
+        if let Some(id) = &sent {
+            input["id"] = Value::String(id.0.clone());
+        }
+        self.queued_creates
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(QueuedCreate {
+                write: write.clone(),
+                variables: json!({"input": input}),
+                sent,
+                edges,
+            });
+        Ok(NativeId(String::new()))
+    }
+
+    /// [`TaskSource::write_tasks`](onetaskgraph_plugin_api::TaskSource::write_tasks): every create
+    /// composed as `write_task` composes it and sent in one aliased `issueCreate` document, each
+    /// answered — its id, the content Linear stored and its location — as a create alone is.
+    ///
+    /// Linear applies the document as one write, so one it refuses lands nothing: that create is
+    /// made on its own, as `write_task` makes it — a create under an id a record holds finding
+    /// the issue an earlier attempt made there — and the rest are sent together again. All of
+    /// them or none, as the contract asks: one refused alone takes back every create made.
+    pub(crate) async fn create_batched(
+        &self,
+        writes: &[onetaskgraph_plugin_api::ItemWrite<Task>],
+    ) -> Result<Vec<NativeId>, SourceError> {
+        if let Some(write) = writes.iter().find(|write| write.target.is_some()) {
+            return Err(SourceError::Refused {
                 message: format!(
-                    "a comment on {issue} was sent in a batch Linear refused part of, and a read \
-                     of the issue finds it nowhere; read its comments before adding it again"
+                    "write_tasks creates tasks, and the write of {} names an existing target; \
+                     next: update it with write_task",
+                    write.item.id
                 ),
+            });
+        }
+        self.deferring_creates
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let mut composed = Ok(());
+        for write in writes {
+            if let Err(error) =
+                <Self as onetaskgraph_plugin_api::TaskSource>::write_task(self, write).await
+            {
+                composed = Err(error);
+                break;
+            }
+        }
+        self.deferring_creates
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        let mut queued: Vec<(usize, QueuedCreate)> = std::mem::take(
+            &mut *self
+                .queued_creates
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
+        .into_iter()
+        .enumerate()
+        .collect();
+        composed?;
+        let mut created: Vec<Option<NativeId>> = writes.iter().map(|_| None).collect();
+        let outcome = self.send_queued(&mut queued, &mut created).await;
+        if let Err(error) = outcome {
+            for id in created.iter().flatten() {
+                let _ = <Self as onetaskgraph_plugin_api::TaskSource>::delete_task(self, id).await;
+            }
+            return Err(error);
+        }
+        created
+            .into_iter()
+            .map(|id| {
+                id.ok_or_else(|| SourceError::Malformed {
+                    message: "a create of the batch was given no id".to_owned(),
+                })
             })
+            .collect()
+    }
+
+    /// Send every queued create, recording each one's id in `created` at its index.
+    async fn send_queued(
+        &self,
+        queued: &mut Vec<(usize, QueuedCreate)>,
+        created: &mut [Option<NativeId>],
+    ) -> Result<(), SourceError> {
+        while !queued.is_empty() {
+            if queued.len() == 1 {
+                let (at, alone) = queued.remove(0);
+                created[at] = Some(
+                    <Self as onetaskgraph_plugin_api::TaskSource>::write_task(self, &alone.write)
+                        .await?,
+                );
+                continue;
+            }
+            let each: Vec<Value> = queued
+                .iter()
+                .map(|(_, create)| create.variables.clone())
+                .collect();
+            match self.send_aliased(graphql::ISSUE_CREATE, &each).await? {
+                Aliased::Answered(values) => {
+                    for ((at, create), value) in queued.drain(..).zip(values) {
+                        let answered = json!({"issueCreate": value});
+                        let issue = super::mutation_payload(&answered, MutationRoot::IssueCreate)?
+                            .get("issue")
+                            .ok_or_else(|| SourceError::Malformed {
+                                message: "missing issueCreate.issue".to_owned(),
+                            })?;
+                        let id = super::created_as(
+                            NativeId(super::backend_id(issue, "id")?.into()),
+                            create.sent.as_ref(),
+                            "issue",
+                        )?;
+                        self.hold_stored(
+                            onetaskgraph_plugin_api::MetadataRecord::Task,
+                            &id,
+                            issue,
+                        )?;
+                        let mut sent = create.variables["input"].clone();
+                        if let Some(input) = sent.as_object_mut() {
+                            input.remove("teamId");
+                            input.remove("id");
+                        }
+                        self.created_inputs
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .insert(id.clone(), sent);
+                        self.write_relations(
+                            &id,
+                            &create.edges,
+                            super::WriteKind::Task,
+                            super::HeldRelations::None,
+                        )
+                        .await?;
+                        created[at] = Some(id);
+                    }
+                }
+                Aliased::Refused(refused, _) => {
+                    // Nothing of the document landed: that one on its own, the rest together.
+                    let (at, alone) = queued.remove(refused);
+                    created[at] = Some(
+                        <Self as onetaskgraph_plugin_api::TaskSource>::write_task(
+                            self,
+                            &alone.write,
+                        )
+                        .await?,
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether the issue `id`, which `write_tasks` created in this command, was created saying
+    /// exactly `input` — the write a copy then makes of it, naming no edge, writes nothing — and,
+    /// when it was, the content Linear stored it with held again as that write's answer.
+    pub(crate) fn just_created_as(
+        &self,
+        id: &NativeId,
+        input: &Value,
+    ) -> Result<bool, SourceError> {
+        let sent = self
+            .created_inputs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(id);
+        if sent.as_ref() != Some(input) {
+            return Ok(false);
+        }
+        let held = self
+            .written
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&(onetaskgraph_plugin_api::MetadataRecord::Task, id.clone()))
+            .cloned();
+        // One brought in step by a compared update holds no create's answer: what it stores was
+        // read rather than sent, so there is no stored content to report for it.
+        if let Some(issue) = held {
+            self.hold_stored(onetaskgraph_plugin_api::MetadataRecord::Task, id, &issue)?;
+        }
+        Ok(true)
+    }
+
+    /// Bring the issue `held` — one an earlier attempt of this create made under the same id —
+    /// in step with `write`, as a create would have written it, by a compared update: only the
+    /// title, the description, the state, the priority and the labels that differ are sent, the
+    /// metadata the write names laid over what the issue's slot holds so a key a person added
+    /// there since is kept, and its relations reconciled with the write's edges.
+    pub(crate) async fn bring_in_step(
+        &self,
+        held: &NativeId,
+        write: &onetaskgraph_plugin_api::ItemWrite<Task>,
+        state: &NativeId,
+        labels: &[NativeId],
+        description: Option<&str>,
+        edges: &[onetaskgraph_plugin_api::DependencyEdge],
+    ) -> Result<(), SourceError> {
+        let Some((before, raw)) = self.issue_held(held, Read::Load).await? else {
+            return Err(SourceError::Unavailable {
+                message: format!(
+                    "Linear refused a create under {held} as held by an issue, and then read                      none there; copy again"
+                ),
+            });
+        };
+        let (content, wanted) = super::metadata_description(description.map(str::to_owned))?;
+        let (_, mut slot) = super::metadata_description(raw.clone())?;
+        slot.extend(wanted);
+        let merged = Self::described(content.as_deref(), &slot)?;
+        let mut input = serde_json::Map::new();
+        if before.title != write.item.title {
+            input.insert("title".into(), json!(write.item.title));
+        }
+        if merged != raw {
+            input.insert("description".into(), json!(merged));
+        }
+        if before.status.category != write.item.status.category {
+            input.insert("stateId".into(), json!(state.0));
+        }
+        if before.priority != write.item.priority {
+            input.insert(
+                "priority".into(),
+                json!(super::linear_priority(write.item.priority)),
+            );
+        }
+        let mut held_labels: Vec<&str> = before
+            .labels
+            .iter()
+            .map(|label| label.id.as_str())
+            .collect();
+        let mut sent_labels: Vec<&str> = labels.iter().map(|label| label.0.as_str()).collect();
+        held_labels.sort_unstable();
+        sent_labels.sort_unstable();
+        if held_labels != sent_labels {
+            input.insert("labelIds".into(), json!(labels));
+        }
+        if !input.is_empty() {
+            let data = self
+                .send(
+                    graphql::ISSUE_UPDATE_READ,
+                    json!({"id": held.0, "input": Value::Object(input)}),
+                )
+                .await?;
+            self.updated_issue(&data, held)?;
+        }
+        self.write_relations(
+            held,
+            edges,
+            super::WriteKind::Task,
+            super::HeldRelations::Unread,
+        )
+        .await
     }
 
     /// [`TaskSource::get_task_details`](onetaskgraph_plugin_api::TaskSource::get_task_details)

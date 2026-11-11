@@ -7230,6 +7230,35 @@ fn linear_serve(
                 request["query"].as_str().unwrap_or_default().to_owned(),
                 request.get("variables").cloned().unwrap_or(Value::Null),
             ));
+            // An aliased document carrying an operation refused is refused at that alias, whole,
+            // as Linear refuses one item of a batch: nothing of it is applied.
+            let refused_alias = {
+                let mut pending = failing.lock().unwrap();
+                let operation = request["query"].as_str().unwrap_or_default();
+                onetaskgraph_linear::graphql::decomposed(operation).and_then(|singles| {
+                    singles.iter().enumerate().find_map(|(alias, single)| {
+                        pending
+                            .iter()
+                            .position(|failing| failing == single)
+                            .map(|at| {
+                                pending.remove(at);
+                                alias
+                            })
+                    })
+                })
+            };
+            if let Some(alias) = refused_alias {
+                let body = json!({"data": null, "errors": [{"message": LINEAR_REFUSED_WRITE,
+                                                            "path": [format!("a{alias}")]}]});
+                let text = body.to_string();
+                answers.lock().unwrap().push(body);
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{text}",
+                    text.len()
+                );
+                continue;
+            }
             let refused = {
                 let mut pending = failing.lock().unwrap();
                 let operation = request["query"].as_str().unwrap_or_default();
@@ -7269,12 +7298,25 @@ fn linear_serve(
                 request["query"].as_str().unwrap_or_default(),
             );
             let (status, response) = if let Some(singles) = aliased {
-                linear_aliased(
+                let answered = linear_aliased(
                     &singles,
                     &request,
                     recorded.as_ref(),
                     &mut state.lock().unwrap(),
-                )
+                );
+                // A batch applied whole and its answer then lost, as `lose_answer_once` asks.
+                let operation = request["query"].as_str().unwrap_or_default();
+                let mut lost = workspace.lost.lock().unwrap();
+                match lost.iter().position(|lost| *lost == operation) {
+                    Some(at) if answered.1.get("errors").is_none() => {
+                        lost.remove(at);
+                        (
+                            "502 Bad Gateway",
+                            json!({"errors":[{"message":"the answer was lost"}]}),
+                        )
+                    }
+                    _ => answered,
+                }
             } else {
                 match linear_response(&request, recorded.as_ref(), &mut state.lock().unwrap()) {
                     Ok(mut body) => {
@@ -7360,10 +7402,35 @@ fn linear_serve(
     json!({"endpoint":endpoint,"team":"FIX","status_mapping":linear_default_mapping()})
 }
 
-/// An aliased document — the documents `singles` composed — answered as Linear answers one: each
-/// alias as its document alone answers it, in order; the first one refused ends the answer there with no
-/// `data` and an error at that alias's path, every mutation before it applied and none after,
-/// because each root this plugin batches is non-null.
+/// The requests `served` — as a loopback Linear served them — with each aliased document split
+/// into the one-item document and variables each of its aliases carries, in order: what a
+/// journey counting one item's reads or writes counts, however many items one request carried.
+pub fn linear_per_item(served: &[(String, Value)]) -> Vec<(String, Value)> {
+    served
+        .iter()
+        .flat_map(
+            |(query, variables)| match onetaskgraph_linear::graphql::decomposed(query) {
+                Some(singles) => singles
+                    .into_iter()
+                    .enumerate()
+                    .map(|(at, single)| {
+                        (
+                            single.to_owned(),
+                            onetaskgraph_linear::graphql::alias_variables(variables, at),
+                        )
+                    })
+                    .collect(),
+                None => vec![(query.clone(), variables.clone())],
+            },
+        )
+        .collect()
+}
+
+/// An aliased document — the documents `singles` composed — answered as Linear answers one, as
+/// observed on the sandbox team on 2026-11-11: each alias as its document alone answers it, in
+/// order, and the first one refused ends the answer with no `data` and one error at that alias's
+/// path, the whole document applied as one write — nothing of any alias before or after it lands.
+
 fn linear_aliased(
     singles: &[&str],
     request: &Value,
@@ -7371,6 +7438,7 @@ fn linear_aliased(
     data: &mut Value,
 ) -> (&'static str, Value) {
     let variables = request.get("variables").cloned().unwrap_or(Value::Null);
+    let before = data.clone();
     let mut answered = serde_json::Map::new();
     for (at, single) in singles.iter().enumerate() {
         let alias = format!("a{at}");
@@ -7385,6 +7453,8 @@ fn linear_aliased(
                 answered.insert(alias, value);
             }
             Err(message) => {
+                // Nothing of the document lands, the aliases before this one included.
+                *data = before;
                 return (
                     "200 OK",
                     json!({"data": null, "errors": [{"message": message, "path": [alias]}]}),

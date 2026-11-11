@@ -236,13 +236,37 @@ fn mutations(served: &[(String, Value)]) -> Vec<String> {
     served
         .iter()
         .filter(|(query, _)| query.trim_start().starts_with("mutation"))
-        .map(|(query, _)| {
-            query
-                .split_once('{')
-                .and_then(|(_, rest)| rest.trim_start().split(['(', ' ', '{']).next())
-                .unwrap_or_default()
-                .to_owned()
+        .flat_map(|(query, _)| roots(query))
+        .collect()
+}
+
+/// The root field of each write `query` sends: its own, or each alias's of a batch.
+fn roots(query: &str) -> Vec<String> {
+    let root = |single: &str| {
+        single
+            .split_once('{')
+            .and_then(|(_, rest)| rest.trim_start().split(['(', ' ', '{']).next())
+            .unwrap_or_default()
+            .to_owned()
+    };
+    match onetaskgraph_linear::graphql::decomposed(query) {
+        Some(singles) => singles.into_iter().map(root).collect(),
+        None => vec![root(query)],
+    }
+}
+
+/// Every write of `served` — the last requests `workspace` answered — that landed: each one
+/// Linear answered with no error. A create Linear refused, because a record already holds the id
+/// it was sent under, wrote nothing.
+fn landed_writes(workspace: &LinearWorkspace, served: &[(String, Value)]) -> Vec<String> {
+    let answered = workspace.answered();
+    served
+        .iter()
+        .zip(&answered[answered.len() - served.len()..])
+        .filter(|((query, _), answer)| {
+            query.trim_start().starts_with("mutation") && answer.get("errors").is_none()
         })
+        .flat_map(|((query, _), _)| roots(query))
         .collect()
 }
 
@@ -252,6 +276,22 @@ fn creates(served: &[(String, Value)]) -> Vec<String> {
         .into_iter()
         .filter(|root| root.ends_with("Create") && !root.contains("Relation"))
         .collect()
+}
+
+/// The issue creates of `served` that landed.
+fn landed_creates(workspace: &LinearWorkspace, served: &[(String, Value)]) -> usize {
+    landed_writes(workspace, served)
+        .iter()
+        .filter(|root| *root == "issueCreate")
+        .count()
+}
+
+/// The one request a copy creating the plan's two tasks sends them in.
+fn both_creates() -> &'static str {
+    Box::leak(
+        onetaskgraph_linear::graphql::aliased(onetaskgraph_linear::graphql::ISSUE_CREATE, 2)
+            .into_boxed_str(),
+    )
 }
 
 fn every(report: &Value, action: &str) -> bool {
@@ -314,8 +354,14 @@ fn a_repeat_project_copy_straight_after_the_first_writes_nothing_while_listings_
     let (first, _) = plan.ok(&PROJECT_COPY);
     assert!(every(&first, "created"), "{first}");
     let (repeat, served) = plan.ok(&PROJECT_COPY);
-    assert_eq!(mutations(&served), Vec::<String>::new(), "{repeat}");
-    assert!(every(&repeat, "unchanged"), "{repeat}");
+    // A copy creating several issues reads none of their ids first: each create Linear refuses
+    // under an id its counterpart holds, and nothing lands.
+    assert_eq!(
+        landed_writes(&plan.workspace, &served),
+        Vec::<String>::new(),
+        "{repeat}"
+    );
+    assert_eq!(actions(&repeat)["notes:P"], "unchanged", "{repeat}");
     for source in ["notes:P", "notes:first", "notes:second"] {
         assert_eq!(landed(&repeat, source), landed(&first, source), "{source}");
     }
@@ -383,8 +429,11 @@ fn a_repeat_on_a_host_holding_nothing_of_the_earlier_copy_creates_nothing_while_
     );
     // Another host: no cache, state or data directory of the first, and nothing in the folder.
     let (repeat, served) = plan.ok_on(&plan.sandbox.subdirectory("second-host"), &PROJECT_COPY);
-    assert_eq!(creates(&served), Vec::<String>::new(), "{repeat}");
-    assert_eq!(mutations(&served), Vec::<String>::new(), "{repeat}");
+    assert_eq!(
+        landed_writes(&plan.workspace, &served),
+        Vec::<String>::new(),
+        "{repeat}"
+    );
     for source in ["notes:P", "notes:first", "notes:second"] {
         assert_eq!(landed(&repeat, source), landed(&first, source), "{source}");
     }
@@ -476,23 +525,20 @@ fn another_origins_record_at_the_first_id_is_read_past_by_the_create_and_the_loo
 /// tried, and the copy fails naming Linear's refusal.
 #[test]
 fn a_refusal_other_than_a_taken_id_fails_the_create_and_no_other_id_is_tried() {
-    let plan = Plan::over(
-        Vec::new(),
-        &[onetaskgraph_linear::graphql::ISSUE_CREATE],
-        true,
-    );
+    let plan = Plan::over(Vec::new(), &[both_creates()], true);
     let (output, served) = plan.run_on(&plan.sandbox.subdirectory("host"), &PROJECT_COPY);
     assert!(!output.status.success(), "{}", stdout(&output));
     let said = format!("{}{}", stdout(&output), stderr(&output));
     assert!(said.contains(LINEAR_REFUSED_WRITE), "{said}");
     assert_eq!(
-        creates(&served)
+        served
             .iter()
-            .filter(|root| *root == "issueCreate")
+            .filter(|(query, _)| query.contains("issueCreate("))
             .count(),
         1,
-        "one create, under one id"
+        "one create request, each task under one id"
     );
+    assert_eq!(landed_creates(&plan.workspace, &served), 0);
 }
 
 /// A create refused because its id is taken reads what holds it, and a read that fails is the
@@ -501,14 +547,12 @@ fn a_refusal_other_than_a_taken_id_fails_the_create_and_no_other_id_is_tried() {
 fn a_failed_read_of_a_taken_id_fails_the_create_and_no_other_id_is_tried() {
     let (first, _) = first_ids();
     let plan = Plan::over(vec![issue_at(&first, "notes:other")], &[], true);
-    // The lookup's read of that id answers; the read after the refused create does not.
-    let reads = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    // A copy creating several issues reads none of their ids first: the read after the refused
+    // create is the first, and it does not answer.
     let held = first.clone();
     plan.workspace.bend_answers(
         move |query, variables| {
-            query == onetaskgraph_linear::graphql::ISSUE
-                && variables["id"] == held.as_str()
-                && reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 1
+            query == onetaskgraph_linear::graphql::ISSUE && variables["id"] == held.as_str()
         },
         1,
         |_, data| *data = json!({"issue": 5}),
@@ -528,12 +572,13 @@ fn a_failed_read_of_a_taken_id_fails_the_create_and_no_other_id_is_tried() {
     assert_eq!(issue_creates[0], first.as_str());
 }
 
-/// A copy whose lookup cannot show its counterpart absent creates nothing: here the issue under
-/// the origin key's first id was trashed, its successor under the second id is inside the lag
-/// window, and the read by id stops at the trashed one — so the create is sent, refused for the
-/// id each generation's record holds, and the copy is refused naming the counterpart it found.
+/// A copy whose lookup cannot show its counterpart creates nothing: here the issue under the
+/// origin key's first id was trashed and its successor under the second id is inside the lag
+/// window, so the creates are sent, refused for the id each generation's record holds, and the
+/// one holding the successor finds it — the counterpart an earlier copy made of this origin —
+/// and brings it in step by a compared update, which here changes nothing.
 #[test]
-fn a_create_whose_id_holds_its_counterpart_is_refused_naming_it_and_creates_nothing() {
+fn a_create_whose_id_holds_its_counterpart_finds_it_and_creates_nothing() {
     let plan = Plan::new();
     plan.workspace.lag_listings();
     let (first, _) = plan.ok(&PROJECT_COPY);
@@ -545,27 +590,18 @@ fn a_create_whose_id_holds_its_counterpart_is_refused_naming_it_and_creates_noth
     let successor = landed(&second, "notes:first");
     assert_ne!(successor, trashed);
 
-    let (output, served) = plan.run_on(&plan.sandbox.subdirectory("host"), &PROJECT_COPY);
-    assert!(!output.status.success(), "{}", stdout(&output));
-    let said = format!("{}{}", stdout(&output), stderr(&output));
-    assert!(
-        said.contains(successor.trim_start_matches("dest:"))
-            && said.contains("notes:first")
-            && said.contains("nothing was created"),
-        "the refusal names the counterpart it found: {said}"
+    let (third, served) = plan.ok_on(&plan.sandbox.subdirectory("host"), &PROJECT_COPY);
+    assert_eq!(landed(&third, "notes:first"), successor, "{third}");
+    assert_eq!(
+        landed_creates(&plan.workspace, &served),
+        0,
+        "nothing was created: {third}"
     );
-    let landed_creates: Vec<String> = served
-        .iter()
-        .zip(plan.workspace.answered()[plan.workspace.answered().len() - served.len()..].iter())
-        .filter(|((query, _), answer)| {
-            query.trim_start().starts_with("mutation")
-                && query.contains("Create(")
-                && answer.get("errors").is_none()
-                && !query.contains("Relation")
-        })
-        .map(|((query, _), _)| query.clone())
-        .collect();
-    assert_eq!(landed_creates, Vec::<String>::new(), "nothing was created");
+    assert_eq!(
+        landed_writes(&plan.workspace, &served),
+        Vec::<String>::new(),
+        "and nothing differed to update: {third}"
+    );
 }
 
 /// The lookup's own read by the origin key's id is the answer when it fails: the copy fails and
@@ -587,10 +623,9 @@ fn a_failed_key_read_fails_the_lookup_and_creates_nothing() {
     );
     let (output, served) = plan.run_on(&plan.sandbox.subdirectory("host"), &PROJECT_COPY);
     assert!(!output.status.success(), "{}", stdout(&output));
-    assert!(
-        !served
-            .iter()
-            .any(|(query, _)| query == onetaskgraph_linear::graphql::ISSUE_CREATE),
+    assert_eq!(
+        landed_creates(&plan.workspace, &served),
+        0,
         "no issue is created after the read that failed"
     );
 }
@@ -669,12 +704,9 @@ fn a_counterpart_deleted_or_trashed_on_linear_is_created_once_again() {
         "a trashed record keeps its id, so the next is taken"
     );
     assert_eq!(
-        creates(&served)
-            .iter()
-            .filter(|root| *root == "issueCreate")
-            .count(),
-        3,
-        "the deleted one's create, and the trashed one's under two ids, one refused"
+        landed_creates(&plan.workspace, &served),
+        2,
+        "the deleted one's create, and the trashed one's under its next id"
     );
 
     plan.workspace.settle_listings();
@@ -713,12 +745,12 @@ fn one_plan_copied_to_two_linear_destinations_lands_once_in_each() {
         let from_there = other.served().len();
         let (repeat, _) = plan.ok(arguments);
         assert_eq!(
-            mutations(&plan.workspace.served()[from_here..]),
+            landed_writes(&plan.workspace, &plan.workspace.served()[from_here..]),
             Vec::<String>::new(),
             "{repeat}"
         );
         assert_eq!(
-            mutations(&other.served()[from_there..]),
+            landed_writes(&other, &other.served()[from_there..]),
             Vec::<String>::new(),
             "{repeat}"
         );
@@ -798,19 +830,18 @@ fn a_lost_create_answer_is_found_by_its_id_on_the_next_copy_and_never_created_tw
     let (first, _) = first_ids();
     let plan = Plan::new();
     plan.workspace.lag_listings();
-    plan.workspace
-        .lose_answer_once(onetaskgraph_linear::graphql::ISSUE_CREATE);
+    plan.workspace.lose_answer_once(both_creates());
     let (output, served) = plan.run_on(&plan.sandbox.subdirectory("host"), &PROJECT_COPY);
     assert!(!output.status.success(), "{}", stdout(&output));
     let tried: Vec<&Value> = served
         .iter()
-        .filter(|(query, _)| query == onetaskgraph_linear::graphql::ISSUE_CREATE)
-        .map(|(_, variables)| &variables["input"]["id"])
+        .filter(|(query, _)| query.contains("issueCreate("))
+        .map(|(_, variables)| &variables["input_0"]["id"])
         .collect();
     assert_eq!(
         tried,
         [&json!(first)],
-        "one create, under the first id alone"
+        "one create request, the first task under its first id alone"
     );
 
     let (again, served) = plan.ok(&PROJECT_COPY);
@@ -819,10 +850,9 @@ fn a_lost_create_answer_is_found_by_its_id_on_the_next_copy_and_never_created_tw
         format!("dest:{first}"),
         "{again}"
     );
-    assert!(
-        !served.iter().any(|(query, variables)| query
-            == onetaskgraph_linear::graphql::ISSUE_CREATE
-            && variables["input"]["id"] == first.as_str()),
-        "the issue the lost answer stored is not created again"
+    assert_eq!(
+        landed_creates(&plan.workspace, &served),
+        0,
+        "the issues the lost answer stored are not created again"
     );
 }

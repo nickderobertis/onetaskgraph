@@ -21,6 +21,7 @@ mod cache_budget;
 mod cache_documents;
 mod cache_parts;
 mod copy_skip;
+mod follow_up_cycle;
 mod health;
 mod human_items;
 mod lagging_lookups;

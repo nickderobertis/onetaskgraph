@@ -423,10 +423,11 @@ fn a_project_copy_lands_after_an_undo_deleted_the_project_its_key_derived_an_id_
     // The first copy creates the project and then is refused its first task, so its undo takes
     // the project back: the id the copy's key derives is now one a deleted project held, and
     // Linear lets an id name one record ever. Every copy of this plan since sends that key.
-    let setup = Setup::refusing(
-        2,
-        &every_generation(onetaskgraph_linear::graphql::ISSUE_CREATE),
-    );
+    // Every create of the first task is refused: the one request its create goes in beside the
+    // second task's, and then each id it is sent under alone.
+    let mut refusals = every_generation(onetaskgraph_linear::graphql::ISSUE_CREATE);
+    refusals.push(onetaskgraph_linear::graphql::ISSUE_CREATE);
+    let setup = Setup::refusing(2, &refusals);
     let copy = ["--json", "project", "copy", "plan:harbor", "--to", "linear"];
     let (output, served) = setup.run(&copy);
     assert_ne!(output.status.code(), Some(0), "{}", stdout(&output));

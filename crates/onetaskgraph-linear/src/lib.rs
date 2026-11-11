@@ -926,7 +926,8 @@ pub mod graphql {
 
     /// The documents this source sends batched by [`composed`], each the single-root document it
     /// batches.
-    pub const BATCHED: [&str; 12] = [
+    pub const BATCHED: [&str; 13] = [
+        ISSUE_CREATE,
         ISSUE_LABEL,
         PROJECT_LABEL,
         ISSUE_RELATION_CREATE,
@@ -1810,6 +1811,14 @@ struct LinearSource {
     /// moment later answers (spike `spike-linear-stored-content`), so a follow-up write that
     /// keeps the metadata slot byte for byte reads nothing after the write before it.
     written: std::sync::Mutex<std::collections::HashMap<(MetadataRecord, NativeId), Value>>,
+    /// Whether `write_tasks` is gathering the creates it sends together: each `write_task` it
+    /// makes is queued rather than sent.
+    deferring_creates: std::sync::atomic::AtomicBool,
+    /// The creates `write_tasks` gathered, in order.
+    queued_creates: std::sync::Mutex<Vec<batch::QueuedCreate>>,
+    /// What each issue `write_tasks` created was sent, by its id, until the write a copy then
+    /// makes of it — see `just_created_as`.
+    created_inputs: std::sync::Mutex<std::collections::HashMap<NativeId, Value>>,
     /// Whether a copy asked, through `begin_deferred_writes`, for the relations of the issues it
     /// creates to wait for its `finish_writes`.
     deferring: std::sync::atomic::AtomicBool,
@@ -1881,6 +1890,9 @@ impl LinearSource {
             edges_versions: std::sync::Mutex::new(std::collections::HashMap::new()),
             stored: std::sync::Mutex::new(std::collections::HashMap::new()),
             written: std::sync::Mutex::new(std::collections::HashMap::new()),
+            deferring_creates: std::sync::atomic::AtomicBool::new(false),
+            queued_creates: std::sync::Mutex::new(Vec::new()),
+            created_inputs: std::sync::Mutex::new(std::collections::HashMap::new()),
             deferring: std::sync::atomic::AtomicBool::new(false),
             deferred_relations: std::sync::Mutex::new(Vec::new()),
             ahead: std::sync::Mutex::new(std::collections::HashMap::new()),
@@ -2346,6 +2358,12 @@ impl LinearSource {
                         .copied_at(record, &NativeId(id.clone()), origin)
                         .await?
                 {
+                    // An issue an earlier copy made of this origin is this create's counterpart,
+                    // which a copy finds by its create's own conflict rather than by a read
+                    // before it: it is brought in step by a compared update — see `write_task`.
+                    if record == MetadataRecord::Task {
+                        return Ok(Written::Held(held));
+                    }
                     return Err(SourceError::Refused {
                         message: format!(
                             "Linear already holds {} {}, which an earlier copy made of {origin}, \
@@ -4364,6 +4382,25 @@ impl TaskSource for LinearSource {
         // it out would keep whatever the destination held, so a copy moving an issue back to
         // no priority would report success for a priority the destination still carries.
         let input = json!({"title":write.item.title,"description":description,"stateId":state,"priority":linear_priority(write.item.priority),"labelIds":labels,"projectId":project});
+        // The write a copy makes of an issue it has just created together with others, saying
+        // exactly what that create wrote and naming no edge, writes nothing: what Linear answered
+        // the create stands as this write's answer.
+        if let Some(id) = &write.target
+            && edges.is_empty()
+            && self.just_created_as(id, &input)?
+        {
+            return Ok(id.clone());
+        }
+        let sent_input = input.clone();
+        if write.target.is_none()
+            && self
+                .deferring_creates
+                .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return self
+                .create_queued(write, input, team, &create_id, edges)
+                .await;
+        }
         let (query, variables, root) = match &write.target {
             // Its relations read back in the same request, so a rewrite needs no read of them.
             Some(id) => (
@@ -4386,16 +4423,27 @@ impl TaskSource for LinearSource {
             .await
         {
             Ok(Written::Answered { data, sent }) => (data, sent),
-            // An earlier attempt's issue, or a concurrent one's: this create's, so it is written
-            // whole, finishing what that attempt left.
+            // An earlier attempt's issue, or a concurrent one's: this create's, brought in step
+            // with what this create would have written by a compared update of only the fields
+            // that differ — so what a person did to it since, a metadata key they added among
+            // them, is kept.
             Ok(Written::Held(held)) => {
-                return self
-                    .write_task(&ItemWrite {
-                        target: Some(held),
-                        item: write.item.clone(),
-                        depends_on: write.depends_on.clone(),
-                    })
-                    .await;
+                self.bring_in_step(
+                    &held,
+                    write,
+                    &state,
+                    &labels,
+                    description.as_deref(),
+                    &edges,
+                )
+                .await?;
+                // The write a copy makes of it next, saying what this create did, is the one
+                // this compared update already made, and writes nothing more.
+                self.created_inputs
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .insert(held.clone(), sent_input);
+                return Ok(held);
             }
             Err(error) => {
                 self.forget_vocabulary();
@@ -5351,6 +5399,20 @@ impl TaskSource for LinearSource {
         comments: &[onetaskgraph_plugin_api::BatchComment],
     ) -> Vec<Result<onetaskgraph_plugin_api::BatchAnswer<Comment>, SourceError>> {
         self.comment_batched(comments).await
+    }
+    /// As many as one aliased `issueCreate` document carries — see the `batch` module.
+    fn create_batch_limit(&self) -> usize {
+        batch::CREATE_BATCH
+    }
+    /// Linear answers a batched create with exactly what it stored for each issue, so each may
+    /// carry the copy's record as a create alone does.
+    fn records_created_together(&self) -> bool {
+        true
+    }
+    /// Every create in one aliased `issueCreate` document, each answered as a create alone is
+    /// — see the `batch` module.
+    async fn write_tasks(&self, writes: &[ItemWrite<Task>]) -> Result<Vec<NativeId>, SourceError> {
+        self.create_batched(writes).await
     }
     /// The relations of every issue the copy creates from here on are created together, in
     /// [`finish_writes`](Self::finish_writes).

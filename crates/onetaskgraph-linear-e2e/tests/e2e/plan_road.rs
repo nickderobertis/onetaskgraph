@@ -63,6 +63,32 @@ members:\n  \
 ---\n\
 The private plan for {{ goal }}.\n";
 
+/// The road's plan with no task depending on another: its three tasks are created together, in
+/// one request.
+const PARALLEL: &str = "---\n\
+onetaskgraph_template: 1\n\
+variables:\n  \
+  goal:\n    \
+    description: What the plan is for\n\
+members:\n  \
+  - id: road-build\n    \
+    title: \"Build {{ goal }}\"\n    \
+    template: {file: task.md}\n    \
+    answers: {change: \"Build the service for {{ goal }}.\"}\n    \
+    repositories: [github.com/acme/secret-service]\n  \
+  - id: road-test\n    \
+    title: \"Test {{ goal }}\"\n    \
+    template: {file: task.md}\n    \
+    answers: {change: \"Test the service for {{ goal }}.\"}\n    \
+    repositories: [github.com/acme/secret-service]\n  \
+  - id: road-ship\n    \
+    title: \"Ship {{ goal }}\"\n    \
+    template: {file: task.md}\n    \
+    answers: {change: \"Ship the service for {{ goal }}.\"}\n    \
+    repositories: [github.com/acme/secret-service]\n\
+---\n\
+The private plan for {{ goal }}.\n";
+
 const TASK: &str = "---\n\
 onetaskgraph_template: 1\n\
 variables:\n  \
@@ -84,6 +110,11 @@ struct Road {
 
 impl Road {
     fn new() -> Self {
+        Self::of(PLAN)
+    }
+
+    /// The road over the plan template `plan`.
+    fn of(plan: &str) -> Self {
         let sandbox = Sandbox::new();
         let mut held = json!({"tasks": [], "projects": [], "documents": [], "labels": [],
                               "task_dependencies": [], "project_dependencies": []});
@@ -97,7 +128,7 @@ impl Road {
         });
         let plans = sandbox.subdirectory("plans");
         let templates = sandbox.subdirectory("templates");
-        std::fs::write(templates.join("plan.md"), PLAN).expect("a template");
+        std::fs::write(templates.join("plan.md"), plan).expect("a template");
         std::fs::write(templates.join("task.md"), TASK).expect("a template");
         let image = templates.join("flow.png");
         std::fs::write(&image, onetaskgraph_e2e_support::images::png(7, 60_000)).expect("an image");
@@ -473,6 +504,168 @@ fn a_private_plan_copied_again_writes_nothing_until_its_source_is_edited() {
             .is_some_and(|content| content.contains("twice as fast")),
         "{shown}"
     );
+}
+
+/// What each of the parallel plan's three tasks landed as on the team: its id, as the copy of
+/// `report` answered it.
+fn landed_tasks(report: &Value) -> Vec<(String, String)> {
+    ["plans:road-build", "plans:road-test", "plans:road-ship"]
+        .iter()
+        .map(|source| {
+            let item = report["items"]
+                .as_array()
+                .expect("items")
+                .iter()
+                .find(|item| item["source"] == json!(source))
+                .unwrap_or_else(|| panic!("{source} was copied: {report}"));
+            (
+                (*source).to_owned(),
+                item["destination"]
+                    .as_str()
+                    .expect("a destination")
+                    .to_owned(),
+            )
+        })
+        .collect()
+}
+
+/// The issues the team holds titled `title`.
+fn titled(road: &Road, title: &str) -> usize {
+    road.json(&["task", "list", "--source", "team", "--all"], 0)["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .filter(|item| item["item"]["title"] == json!(title))
+        .count()
+}
+
+/// The copy whose one request of the plan's three creates Linear applied and whose answer was
+/// lost fails; the copy after it — inside the lag window, so no listing shows the issues — finds
+/// each by its create's own conflict and creates none of them a second time; the copy after it
+/// records once more the source's token, which that retry's links moved, and a copy after that
+/// writes nothing.
+#[test]
+fn a_retried_copy_after_a_lost_batched_create_answer_makes_no_duplicate() {
+    let road = Road::of(PARALLEL);
+    road.author();
+    let workspace = &road.workspace.held;
+    workspace.lag_listings();
+    let creates: &'static str = Box::leak(
+        onetaskgraph_linear::graphql::aliased(onetaskgraph_linear::graphql::ISSUE_CREATE, 3)
+            .into_boxed_str(),
+    );
+    workspace.lose_answer_once(creates);
+    let copy = [
+        "project",
+        "copy",
+        "plans:road",
+        "--documents",
+        "--to",
+        "team",
+    ];
+    let mut failed = road.sandbox.command();
+    failed
+        .envs(road.workspace.clock.client_env(0))
+        .args(copy)
+        .arg("--json")
+        .write_stdin("");
+    let output = failed.assert().get_output().clone();
+    assert_ne!(output.status.code(), Some(0), "{}", stdout(&output));
+
+    let again = road.json(&copy, 0);
+    workspace.settle_listings();
+    for (title, count) in [
+        ("Build the ledger", titled(&road, "Build the ledger")),
+        ("Test the ledger", titled(&road, "Test the ledger")),
+        ("Ship the ledger", titled(&road, "Ship the ledger")),
+    ] {
+        assert_eq!(count, 1, "{title} is held once: {again}");
+    }
+    // The copy after the retry records the source's token as the retry left it; nothing else.
+    road.json(&copy, 0);
+    let mark = workspace.served_count();
+    let unchanged = road.json(&copy, 0);
+    assert_eq!(landed_tasks(&unchanged), landed_tasks(&again));
+    let landed: Vec<String> = workspace
+        .served_since(mark)
+        .into_iter()
+        .zip(workspace.answered()[mark..].iter())
+        .filter(|((query, _), answer)| {
+            query.trim_start().starts_with("mutation") && answer.get("errors").is_none()
+        })
+        .map(|((query, _), _)| query)
+        .collect();
+    assert_eq!(
+        landed,
+        Vec::<String>::new(),
+        "a copy after it writes nothing"
+    );
+}
+
+/// A create Linear refuses because the issue an earlier attempt made holds its id brings that
+/// issue in step by a compared update of only what differs: the title a person changed is the
+/// copy's again, and the metadata key the person added beside the copy's is kept.
+#[test]
+fn a_conflicting_batched_create_brings_its_issue_in_step_keeping_a_persons_edit() {
+    let road = Road::of(PARALLEL);
+    road.author();
+    let workspace = &road.workspace.held;
+    workspace.lag_listings();
+    let creates: &'static str = Box::leak(
+        onetaskgraph_linear::graphql::aliased(onetaskgraph_linear::graphql::ISSUE_CREATE, 3)
+            .into_boxed_str(),
+    );
+    workspace.lose_answer_once(creates);
+    let copy = [
+        "project",
+        "copy",
+        "plans:road",
+        "--documents",
+        "--to",
+        "team",
+    ];
+    let mut failed = road.sandbox.command();
+    failed
+        .envs(road.workspace.clock.client_env(0))
+        .args(copy)
+        .arg("--json")
+        .write_stdin("");
+    assert_ne!(failed.assert().get_output().status.code(), Some(0));
+    // A person retitles the first issue and adds a key of their own to its metadata.
+    workspace.settle_listings();
+    let listed = road.json(&["task", "list", "--source", "team", "--all"], 0);
+    let build = listed["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .find(|item| item["item"]["title"] == "Build the ledger")
+        .expect("the first issue landed")["id"]
+        .as_str()
+        .expect("an id")
+        .trim_start_matches("team:")
+        .to_owned();
+    let held = workspace
+        .long_form("tasks", &build)
+        .expect("its description");
+    let edited = held.replacen("{\"", "{\"person.note\":\"kept\",\"", 1);
+    assert_ne!(edited, held, "the slot holds keys: {held}");
+    workspace.edit_description(&build, &edited);
+    workspace.retitle("tasks", &build, "A person's title");
+
+    workspace.lag_listings();
+    road.json(&copy, 0);
+    workspace.settle_listings();
+    let shown = road.json(&["task", "show", &format!("team:{build}")], 0);
+    let task = &shown["items"][0]["item"];
+    assert_eq!(
+        task["title"], "Build the ledger",
+        "the copy's title again: {task}"
+    );
+    assert_eq!(
+        task["metadata"]["person.note"], "kept",
+        "the person's key is kept: {task}"
+    );
+    assert_eq!(titled(&road, "Build the ledger"), 1);
 }
 
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] The budget's own journey, in this crate's `test` target whose telemetry the budget reads, as every `measure_*` journey here is.

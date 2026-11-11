@@ -319,6 +319,10 @@ impl TaskSource for HeldOff {
         self.noted(self.inner.member_classifications(project).await)
     }
 
+    fn records_created_together(&self) -> bool {
+        self.inner.records_created_together()
+    }
+
     fn create_batch_limit(&self) -> usize {
         self.inner.create_batch_limit()
     }
