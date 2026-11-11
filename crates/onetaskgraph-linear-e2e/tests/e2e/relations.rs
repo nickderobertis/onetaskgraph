@@ -1061,3 +1061,60 @@ fn a_mirrored_link_whose_native_relation_cannot_be_confirmed_is_not_removed_anyw
         assert_eq!(team.workspace.related_pairs(), pairs, "{case}");
     }
 }
+
+#[test]
+fn a_native_relation_linear_refuses_to_delete_keeps_that_link_while_the_others_are_removed() {
+    let team = Team::of(4);
+    let added = team.links(
+        "add-many",
+        &[("R-0", "R-1", "caused-by"), ("R-2", "R-3", "caused-by")],
+    );
+    assert_eq!(outcomes(&added), ["written", "written"], "{}", added.json);
+    assert_eq!(team.workspace.related_pairs().len(), 2);
+    let held: Vec<String> = ["R-2", "R-3"]
+        .iter()
+        .map(|id| team.workspace.long_form("tasks", id).expect("held"))
+        .collect();
+    // Linear refuses deleting the second pair's relation — the loopback's second relation —
+    // and, an aliased document of mutations being applied whole or not at all, that document.
+    team.workspace.refuse_writes_of("relation:1");
+    let removed = team.links(
+        "remove-many",
+        &[("R-0", "R-1", "caused-by"), ("R-2", "R-3", "caused-by")],
+    );
+    assert_eq!(outcomes(&removed), ["written", "error"], "{}", removed.json);
+    let reason = removed.json["results"][1]["reason"].as_str().unwrap();
+    assert!(reason.contains("native `related` relation"), "{reason}");
+    assert!(
+        reason.contains(crate::fixtures::LINEAR_REFUSED_WRITE),
+        "{reason}"
+    );
+    // The first pair is gone everywhere; the refused one is as it was at both ends.
+    assert_eq!(
+        team.workspace.related_pairs(),
+        [("R-2".to_owned(), "R-3".to_owned())]
+    );
+    for id in ["R-0", "R-1"] {
+        let stored = team.workspace.long_form("tasks", id).expect("held");
+        assert!(!stored.contains("## Links"), "{id}: {stored}");
+    }
+    let after: Vec<String> = ["R-2", "R-3"]
+        .iter()
+        .map(|id| team.workspace.long_form("tasks", id).expect("held"))
+        .collect();
+    assert_eq!(after, held, "the refused pair's metadata and sections");
+    let items = team.relations(&["R-2", "R-3"]);
+    assert_eq!(
+        links_of(&items[0]),
+        [link("caused-by", "out", "R-3", "present")]
+    );
+
+    // Once Linear takes the delete again, repeating the call completes it.
+    team.workspace.allow_writes_of("relation:1");
+    let repeated = team.links("remove-many", &[("R-2", "R-3", "caused-by")]);
+    assert_eq!(outcomes(&repeated), ["written"], "{}", repeated.json);
+    assert_eq!(repeated.count(graphql::ISSUE_RELATION_DELETE), 1);
+    assert!(team.workspace.related_pairs().is_empty());
+    let items = team.relations(&["R-2", "R-3"]);
+    assert!(links_of(&items[0]).is_empty() && links_of(&items[1]).is_empty());
+}
