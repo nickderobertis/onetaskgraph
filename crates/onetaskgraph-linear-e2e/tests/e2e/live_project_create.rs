@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 
 use crate::common::{Sandbox, stderr, stdout};
-use crate::fixtures::document;
+use crate::fixtures::{document, linear_workspace};
 use crate::linear_assets::document_lifecycle::namespace::Namespace;
 use crate::project_create::{outcome, plan_named, qualified, succeeded, task_title, titles};
 
@@ -95,9 +95,25 @@ fn respond(stream: &mut TcpStream, status: u16, body: &[u8]) {
     let _ = stream.write_all(body);
 }
 
-/// A relay in front of Linear, holding every request to this run's namespace, and the handle
-/// that tells it to lose an answer.
-fn relay(key: String, namespace: Arc<Namespace>) -> (String, Arc<Mutex<Relay>>) {
+/// The single documents `query` carries, each with the alias it is answered under: an aliased
+/// batch the plugin composed is each of its documents under `a<i>`, and anything else is itself,
+/// answered under its own root field.
+fn singles(query: &str) -> Vec<(Option<String>, &str)> {
+    onetaskgraph_linear::graphql::decomposed(query).map_or_else(
+        || vec![(None, query)],
+        |singles| {
+            singles
+                .into_iter()
+                .enumerate()
+                .map(|(at, single)| (Some(format!("a{at}")), single))
+                .collect()
+        },
+    )
+}
+
+/// A relay in front of `upstream` — Linear, or a loopback standing in for it — holding every
+/// request to this run's namespace, and the handle that tells it to lose an answer.
+fn relay(upstream: String, key: String, namespace: Arc<Namespace>) -> (String, Arc<Mutex<Relay>>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let endpoint = format!("http://{}/graphql", listener.local_addr().unwrap());
     let state = Arc::new(Mutex::new(Relay::default()));
@@ -139,17 +155,29 @@ fn relay(key: String, namespace: Arc<Namespace>) -> (String, Arc<Mutex<Relay>>) 
                 .unwrap_or("")
                 .to_owned();
             lock(&held).sent.push(root);
-            if query == onetaskgraph_linear::graphql::ISSUE_CREATE && {
-                let mut relay = lock(&held);
-                let refuse = relay.refuse_issue_creates > 0;
-                relay.refuse_issue_creates = relay.refuse_issue_creates.saturating_sub(1);
-                refuse
-            } {
-                respond(
-                    &mut stream,
-                    200,
-                    br#"{"errors":[{"message":"relay: this task is refused"}],"data":null}"#,
-                );
+            // The single documents this request carries, each with the alias it is answered
+            // under: an aliased batch of creates is as much a create as one sent alone.
+            let parts = singles(&query);
+            let first_create = parts
+                .iter()
+                .find(|(_, single)| *single == onetaskgraph_linear::graphql::ISSUE_CREATE);
+            let refusing = lock(&held).refuse_issue_creates > 0;
+            if let Some((alias, _)) = first_create
+                && refusing
+            {
+                let refused = match alias {
+                    // Refused as Linear refuses an alias of a batch: nothing of the document is
+                    // applied, and the error's path names the alias — so the plugin sends that
+                    // create again on its own, which is the create this refusal counts.
+                    Some(alias) => json!({"errors":[{"message":"relay: this task is refused",
+                                                      "path":[alias]}],"data":null}),
+                    None => {
+                        let mut relay = lock(&held);
+                        relay.refuse_issue_creates -= 1;
+                        json!({"errors":[{"message":"relay: this task is refused"}],"data":null})
+                    }
+                };
+                respond(&mut stream, 200, refused.to_string().as_bytes());
                 continue;
             }
             if query == onetaskgraph_linear::graphql::PROJECT
@@ -164,7 +192,7 @@ fn relay(key: String, namespace: Arc<Namespace>) -> (String, Arc<Mutex<Relay>>) 
             }
             let forwarded = runtime.block_on(async {
                 let response = client
-                    .post(LINEAR)
+                    .post(&upstream)
                     .header("Authorization", &key)
                     .json(&request)
                     .send()
@@ -183,38 +211,61 @@ fn relay(key: String, namespace: Arc<Namespace>) -> (String, Arc<Mutex<Relay>>) 
             let answer: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
             namespace.learn(&answer);
             let mut relay = lock(&held);
-            for (create, root, field, kind) in [
-                (
-                    onetaskgraph_linear::graphql::ISSUE_CREATE,
-                    "issueCreate",
-                    "issue",
-                    "issue",
-                ),
-                (
-                    onetaskgraph_linear::graphql::PROJECT_CREATE,
-                    "projectCreate",
-                    "project",
-                    "project",
-                ),
-                (
-                    onetaskgraph_linear::graphql::DOCUMENT_CREATE,
-                    "documentCreate",
-                    "document",
-                    "document",
-                ),
-            ] {
-                if query != create {
+            for (at, (alias, single)) in parts.iter().enumerate() {
+                let Some((root, field, kind)) = [
+                    (
+                        onetaskgraph_linear::graphql::ISSUE_CREATE,
+                        "issueCreate",
+                        "issue",
+                        "issue",
+                    ),
+                    (
+                        onetaskgraph_linear::graphql::PROJECT_CREATE,
+                        "projectCreate",
+                        "project",
+                        "project",
+                    ),
+                    (
+                        onetaskgraph_linear::graphql::DOCUMENT_CREATE,
+                        "documentCreate",
+                        "document",
+                        "document",
+                    ),
+                ]
+                .into_iter()
+                .find(|(create, ..)| create == single)
+                .map(|(_, root, field, kind)| (root, field, kind)) else {
                     continue;
-                }
+                };
+                // A create sent alone is answered under its root field and takes its variables
+                // as they are; an alias of a batch is answered under the alias and takes its own
+                // suffixed variables.
+                let (answered, variables) = match alias {
+                    Some(alias) => (
+                        &answer["data"][alias],
+                        onetaskgraph_linear::graphql::alias_variables(&request["variables"], at),
+                    ),
+                    None => (&answer["data"][root], request["variables"].clone()),
+                };
+                let error = answer["errors"].as_array().and_then(|errors| {
+                    errors.iter().find(|error| match alias {
+                        Some(alias) => error["path"].get(0).and_then(Value::as_str) == Some(alias),
+                        None => true,
+                    })
+                });
                 relay.observations.push(format!(
-                    "{root}: HTTP {status}, errors={}",
-                    answer.get("errors").cloned().unwrap_or(Value::Null)
+                    "{}{root}: HTTP {status}, errors={}",
+                    alias
+                        .as_ref()
+                        .map(|alias| format!("{alias}: "))
+                        .unwrap_or_default(),
+                    error.cloned().unwrap_or(Value::Null)
                 ));
-                if let Some(id) = answer["data"][root][field]["id"].as_str() {
+                if let Some(id) = answered[field]["id"].as_str() {
                     relay.created.push((kind, id.to_owned()));
                 }
-                if let Some(error) = answer["errors"].get(0) {
-                    let sent = request["variables"]["input"]["id"]
+                if let Some(error) = error {
+                    let sent = variables["input"]["id"]
                         .as_str()
                         .unwrap_or_default()
                         .to_owned();
@@ -533,7 +584,7 @@ pub(crate) fn live_project_create(
         onetaskgraph_live::artifact::now_micros(),
     )
     .to_string();
-    let (endpoint, relayed) = relay(key.to_owned(), namespace);
+    let (endpoint, relayed) = relay(LINEAR.to_owned(), key.to_owned(), namespace);
     let journey = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         drive(
             runtime, key, team, &team_id, &mapping, &stamp, &endpoint, &relayed,
@@ -924,4 +975,87 @@ fn drive(
         "each task once, under the project the re-copy made"
     );
     let _ = qualified;
+}
+
+/// The relay this journey reads every create through, in front of the loopback Linear rather than
+/// Linear, so `cargo test` holds it without a credential: a `project copy` sends its tasks'
+/// creates as one aliased `issueCreate` document, and the relay records each of them — which it
+/// once did not, so the credentialed journey found no task the copy had created — and refuses
+/// that document as Linear refuses an alias of a batch, so the copy then sends the task's create
+/// on its own under every id its key derives.
+#[test]
+fn the_relay_reads_and_refuses_each_create_of_an_aliased_batch() {
+    let sandbox = Sandbox::new();
+    let (config, _workspace) = linear_workspace(
+        &sandbox,
+        json!({"tasks": [], "projects": [], "documents": [], "labels": [],
+               "task_dependencies": [], "project_dependencies": []}),
+    );
+    let upstream = config["endpoint"]
+        .as_str()
+        .expect("the loopback's endpoint")
+        .to_owned();
+    let namespace = Arc::new(Namespace::new(
+        onetaskgraph_live::artifact::Run::current(),
+        config["team"].as_str().expect("the loopback's team"),
+    ));
+    let (endpoint, relayed) = relay(upstream, "loopback-key".to_owned(), namespace);
+    let mut relayed_config = config.clone();
+    relayed_config["endpoint"] = json!(endpoint);
+    let root = plan_named(&sandbox, "harbor", "Harbor", "Harbor spare", 2);
+    sandbox.project_document(&document(&json!({
+        "plan": {"plugin": "local-md", "config": {"root": root}},
+        "dest": {"plugin": "linear", "config": relayed_config},
+    })));
+    let copy = ["--json", "project", "copy", "plan:harbor", "--to", "dest"];
+
+    // Refused: the batch, then the task's create alone under each id its key derives.
+    lock(&relayed).refuse_issue_creates = usize::from(onetaskgraph_linear::CREATE_ID_GENERATIONS);
+    let output = sandbox.command().args(copy).output().unwrap();
+    assert_ne!(
+        output.status.code(),
+        Some(0),
+        "a copy whose task is refused does not succeed: {}\n{}",
+        stdout(&output),
+        seen(&relayed)
+    );
+    assert_eq!(
+        lock(&relayed).refuse_issue_creates,
+        0,
+        "every id the task's key derives was tried alone: {}",
+        seen(&relayed)
+    );
+    assert!(
+        lock(&relayed).sent.iter().any(|root| root == "a0:"),
+        "the copy sent its creates as one aliased document: {}",
+        seen(&relayed)
+    );
+
+    // Answered: every create of the batch is one the relay saw made.
+    let before = lock(&relayed).created.len();
+    let output = sandbox.command().args(copy).output().unwrap();
+    let report = succeeded(&copy, &output);
+    assert_eq!(
+        outcome(&report, "plan:harbor")["action"],
+        "created",
+        "{report:#}"
+    );
+    let made: Vec<&'static str> = lock(&relayed).created[before..]
+        .iter()
+        .map(|(kind, _)| *kind)
+        .collect();
+    assert_eq!(
+        made,
+        ["project", "issue", "issue"],
+        "the relay saw the project and both tasks of the batch created: {}",
+        seen(&relayed)
+    );
+    assert!(
+        lock(&relayed)
+            .observations
+            .iter()
+            .any(|seen| seen.starts_with("a1: issueCreate:")),
+        "{}",
+        seen(&relayed)
+    );
 }
