@@ -1310,6 +1310,7 @@ impl TaskSource for LocalMdSource {
             task_dependencies: DependencySupport::BothDirections,
             project_dependencies: DependencySupport::BothDirections,
             max_page_size: MAX_PAGE_SIZE,
+            assignees: Support::Unsupported,
         }
     }
     fn writes(&self) -> WriteSupport {
@@ -3567,6 +3568,7 @@ fn stored_task(d: Entry) -> Task {
         delivers: d.delivers,
         delivered_by: d.delivered_by,
         classification: d.common.classification,
+        assignees: None,
     }
 }
 fn project(d: Entry) -> Project {

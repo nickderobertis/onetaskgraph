@@ -5210,6 +5210,7 @@ fn a_response_carries_the_plan_that_produced_it_and_round_trips() {
             delivers: Vec::new(),
             delivered_by: Vec::new(),
             classification: Default::default(),
+            assignees: None,
         }],
         // The hex of
         // `{"query":"0123456789abcdef","streams":[{"source":"work","stream":"items","cursor":"50"}]}`

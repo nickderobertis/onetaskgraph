@@ -616,6 +616,7 @@ impl TaskSource for Rendezvous {
             task_dependencies: DependencySupport::BothDirections,
             project_dependencies: DependencySupport::BothDirections,
             max_page_size: 10,
+            assignees: Support::Unsupported,
         }
     }
 
@@ -662,6 +663,7 @@ impl TaskSource for Rendezvous {
             delivers: Vec::new(),
             delivered_by: Vec::new(),
             classification: Default::default(),
+            assignees: None,
         }]))
     }
 
@@ -762,6 +764,7 @@ impl TaskSource for Stuck {
             task_dependencies: DependencySupport::BothDirections,
             project_dependencies: DependencySupport::BothDirections,
             max_page_size: 10,
+            assignees: Support::Unsupported,
         }
     }
 
@@ -1040,6 +1043,7 @@ impl TaskSource for StuckEdges {
             task_dependencies: DependencySupport::ForwardOnly,
             project_dependencies: DependencySupport::ForwardOnly,
             max_page_size: 10,
+            assignees: Support::Unsupported,
         }
     }
 
@@ -1125,6 +1129,7 @@ fn one_task(id: &NativeId) -> Task {
         delivers: Vec::new(),
         delivered_by: Vec::new(),
         classification: Default::default(),
+        assignees: None,
     }
 }
 
@@ -1498,6 +1503,7 @@ impl Recording {
                 delivers: Vec::new(),
                 delivered_by: Vec::new(),
                 classification: Default::default(),
+                assignees: None,
             })
             .collect();
         Page {
@@ -1534,6 +1540,7 @@ impl TaskSource for Recording {
             task_dependencies: DependencySupport::BothDirections,
             project_dependencies: DependencySupport::BothDirections,
             max_page_size: self.ceiling,
+            assignees: Support::Unsupported,
         }
     }
 

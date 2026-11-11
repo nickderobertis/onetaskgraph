@@ -103,6 +103,7 @@ fn task(title: &str, content: &str, metadata: Value) -> Task {
         delivers: Vec::new(),
         delivered_by: Vec::new(),
         classification: Default::default(),
+        assignees: None,
     }
 }
 

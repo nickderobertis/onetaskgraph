@@ -50,6 +50,7 @@ impl TaskSource for Silent {
             task_dependencies: DependencySupport::ForwardOnly,
             project_dependencies: DependencySupport::BothDirections,
             max_page_size: 25,
+            assignees: Support::Unsupported,
         }
     }
     async fn health(&self) -> Result<Health, SourceError> {
@@ -852,6 +853,7 @@ fn a_task_round_trips_through_json_with_every_field_populated() {
         delivers: Vec::new(),
         delivered_by: Vec::new(),
         classification: Default::default(),
+        assignees: None,
     };
 
     let encoded = serde_json::to_string(&task).expect("encodes");
@@ -1465,6 +1467,7 @@ fn outgoing() -> Task {
         delivers: Vec::new(),
         delivered_by: Vec::new(),
         classification: Default::default(),
+        assignees: None,
     }
 }
 

@@ -792,7 +792,7 @@ impl GitHubProjectsSource {
                 }
                 Some(item) => match item.task() {
                     Ok(task) => {
-                        decided_on(self, Some(&task), each.if_version.as_deref(), &[]).map(Ok)
+                        decided_on(self, Some(&task), each.if_version.as_deref(), &[], None).map(Ok)
                     }
                     Err(error) => Some(Err(error)),
                 },
@@ -840,7 +840,9 @@ impl GitHubProjectsSource {
     ) -> Result<BatchAnswer<Comment>, SourceError> {
         if each.if_version.is_some() {
             let task = TaskSource::get_task(self, &each.task).await?;
-            if let Some(answer) = decided_on(self, task.as_ref(), each.if_version.as_deref(), &[]) {
+            if let Some(answer) =
+                decided_on(self, task.as_ref(), each.if_version.as_deref(), &[], None)
+            {
                 return Ok(answer);
             }
         }
@@ -1002,6 +1004,7 @@ impl GitHubProjectsSource {
                 task.as_ref(),
                 each.if_version.as_deref(),
                 &each.when_priority,
+                each.when_assignees.as_deref(),
             ) {
                 return Ok(answer);
             }
@@ -1085,6 +1088,7 @@ impl GitHubProjectsSource {
                 Some(&task),
                 each.if_version.as_deref(),
                 &each.when_priority,
+                each.when_assignees.as_deref(),
             ) {
                 answers[at] = Some(Ok(answer));
                 continue;
@@ -1127,6 +1131,7 @@ impl GitHubProjectsSource {
                         Some(task),
                         each.if_version.as_deref(),
                         &each.when_priority,
+                        each.when_assignees.as_deref(),
                     ),
                     // The task's first update in this batch found it missing or unreadable.
                     None => Some(BatchAnswer::Missing),

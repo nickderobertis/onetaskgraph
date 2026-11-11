@@ -263,6 +263,7 @@ impl LinearSource {
             now.as_ref().map(|(task, _)| task),
             each.if_version.as_deref(),
             &[],
+            None,
         ) {
             return Ok(answer);
         }
@@ -285,6 +286,7 @@ impl LinearSource {
             now.as_ref().map(|(task, _)| task),
             each.if_version.as_deref(),
             &each.when_priority,
+            each.when_assignees.as_deref(),
         ) {
             return Ok(answer);
         }
@@ -350,6 +352,7 @@ impl LinearSource {
                 held.as_ref().map(|(task, _)| task),
                 each.if_version.as_deref(),
                 &each.when_priority,
+                each.when_assignees.as_deref(),
             ) {
                 answers[at] = Some(Ok(answer));
                 continue;
@@ -530,6 +533,7 @@ impl LinearSource {
                 held.as_ref().map(|(task, _)| task),
                 each.if_version.as_deref(),
                 &[],
+                None,
             ) {
                 answers[at] = Some(Ok(answer));
                 continue;

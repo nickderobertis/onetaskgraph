@@ -13585,6 +13585,7 @@ impl Resolved {
             delivers: self.delivers.clone(),
             delivered_by: self.delivered_by.clone(),
             classification: self.classification,
+            assignees: None,
         })
     }
 
@@ -14401,6 +14402,7 @@ impl TaskSource for GitHubProjectsSource {
             task_dependencies: DependencySupport::BothDirections,
             project_dependencies: DependencySupport::BothDirections,
             max_page_size: MAX_PAGE_SIZE,
+            assignees: Support::Unsupported,
         }
     }
     async fn visibility(

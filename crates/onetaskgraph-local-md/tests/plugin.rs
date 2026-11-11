@@ -935,6 +935,7 @@ fn outgoing(id: &str, title: &str, status: &str, category: StatusCategory) -> Ta
         delivers: Vec::new(),
         delivered_by: Vec::new(),
         classification: Default::default(),
+        assignees: None,
     }
 }
 
@@ -1435,6 +1436,7 @@ async fn an_unstated_status_reads_as_backlog_and_draft_is_read_as_an_ordinary_st
                 delivers: Vec::new(),
                 delivered_by: Vec::new(),
                 classification: Default::default(),
+                assignees: None,
             },
             depends_on: Vec::new(),
         })
@@ -1567,6 +1569,7 @@ async fn every_declared_capability_is_applied_to_the_real_folder() {
             task_dependencies: onetaskgraph_plugin_api::DependencySupport::BothDirections,
             project_dependencies: onetaskgraph_plugin_api::DependencySupport::BothDirections,
             max_page_size: onetaskgraph_local_md::MAX_PAGE_SIZE,
+            assignees: Support::Unsupported,
         }
     );
 

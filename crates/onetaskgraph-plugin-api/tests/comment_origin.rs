@@ -188,6 +188,7 @@ impl TaskSource for Keeping {
             task_dependencies: DependencySupport::ForwardOnly,
             project_dependencies: DependencySupport::ForwardOnly,
             max_page_size: 25,
+            assignees: Support::Unsupported,
         }
     }
     async fn health(&self) -> Result<Health, SourceError> {

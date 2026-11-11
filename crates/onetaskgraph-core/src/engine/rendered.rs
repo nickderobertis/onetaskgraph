@@ -708,6 +708,7 @@ impl Engine {
                     .collect(),
                 delivered_by: Vec::new(),
                 classification,
+                assignees: None,
             },
             depends_on,
         };

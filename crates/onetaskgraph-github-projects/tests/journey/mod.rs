@@ -2732,6 +2732,7 @@ fn artifact_task(
         delivers: Vec::new(),
         delivered_by: Vec::new(),
         classification: Default::default(),
+        assignees: None,
     }
 }
 
@@ -5073,6 +5074,7 @@ pub async fn run(nomination: Nomination) {
             task_dependencies: DependencySupport::BothDirections,
             project_dependencies: DependencySupport::BothDirections,
             max_page_size: onetaskgraph_github_projects::MAX_PAGE_SIZE,
+            assignees: Support::Unsupported,
         }
     );
     // A board is a container of projects now, so how many it holds is the board's business.

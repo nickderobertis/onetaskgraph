@@ -448,6 +448,7 @@ async fn an_update_the_task_already_holds_writes_nothing_and_says_so() {
                 kind: DependencyKind::Blocks,
             }]),
             repositories: Some(before.repositories.clone()),
+            assignees: None,
         };
         let answer = store.update(&update).await.expect("an answer");
         assert!(answer.written.is_empty(), "{kind:?}: {:?}", answer.written);

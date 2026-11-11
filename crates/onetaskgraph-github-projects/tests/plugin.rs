@@ -3944,6 +3944,7 @@ fn task(id: &str, title: &str, status: Status) -> Task {
         delivers: Vec::new(),
         delivered_by: Vec::new(),
         classification: Default::default(),
+        assignees: None,
     }
 }
 
@@ -9427,6 +9428,7 @@ async fn health_names_the_board_it_read_and_the_source_declares_what_it_applies(
             task_dependencies: DependencySupport::BothDirections,
             project_dependencies: DependencySupport::BothDirections,
             max_page_size: onetaskgraph_github_projects::MAX_PAGE_SIZE,
+            assignees: Support::Unsupported,
         }
     );
     assert_eq!(

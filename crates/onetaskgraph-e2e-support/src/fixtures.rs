@@ -235,6 +235,7 @@ impl Declared {
             task_dependencies: self.task_dependencies,
             project_dependencies: self.project_dependencies,
             max_page_size: self.max_page_size,
+            assignees: Support::Unsupported,
         }
     }
 

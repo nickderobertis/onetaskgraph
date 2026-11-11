@@ -556,6 +556,7 @@ impl From<&CapabilityConfig> for Capabilities {
             task_dependencies: value.task_dependencies,
             project_dependencies: value.project_dependencies,
             max_page_size: value.max_page_size.get(),
+            assignees: Support::Unsupported,
         }
     }
 }

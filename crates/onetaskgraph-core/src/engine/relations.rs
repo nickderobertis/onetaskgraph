@@ -951,6 +951,7 @@ impl Engine {
                     update,
                     if_version: endpoint.read.task.version.clone(),
                     when_priority: Vec::new(),
+                    when_assignees: None,
                 },
             ));
         }

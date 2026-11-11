@@ -4279,6 +4279,7 @@ impl TaskSource for LinearSource {
             task_dependencies: DependencySupport::BothDirections,
             project_dependencies: DependencySupport::BothDirections,
             max_page_size: MAX_PAGE_SIZE,
+            assignees: Support::Unsupported,
         }
     }
     fn writes(&self) -> WriteSupport {
@@ -7035,6 +7036,7 @@ fn map_task(
         delivers,
         delivered_by,
         classification,
+        assignees: None,
     })
 }
 /// A priority as Linear's `Issue.priority` and its two input members spell it.

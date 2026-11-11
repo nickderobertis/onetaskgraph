@@ -830,6 +830,7 @@ impl Engine {
             delivers: None,
             depends_on: None,
             repositories: each.repositories.clone(),
+            assignees: None,
         };
         if update.is_empty() {
             return Err(named(
@@ -853,6 +854,7 @@ impl Engine {
                 update,
                 if_version: each.if_version.clone(),
                 when_priority: each.when_priority.clone(),
+                when_assignees: None,
             },
         ))
     }
@@ -934,6 +936,7 @@ impl Engine {
             update: update.clone(),
             if_version: held_to.clone(),
             when_priority,
+            when_assignees: None,
         }];
         let answer = one_each(&id.source, 1, resolved.source().update_tasks(&batch).await)
             .into_iter()
