@@ -226,15 +226,15 @@ budgets:
     description: >-
       The requests one private plan's whole road sends its Linear team through the store — the
       first copy with its design document and image, an unchanged re-copy, the design-approval
-      attestation, and one settlement of a status and a metadata key per node — counted at the
-      loopback Linear. It protects headroom on the production Linear key every manager of a host
-      shares.
+      attestation, and one settlement of a status and a metadata key per node, each node's
+      version read first — counted at the loopback Linear. It protects headroom on the
+      production Linear key every manager of a host shares.
     measure: reported
     # llmlint: ignore[budget_commands_measure_directly] As every budget of this file: the runner entry the task names reads only the telemetry `plan_road.rs` recorded and hands it to onebudgetspec, which alone judges it.
     command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-linear-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_private_plan_road", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-linear-e2e"]
     unit: requests
     direction: max
-    threshold: 24
+    threshold: 28
   # llmlint: ignore[budgets_track_product_owner_outcomes] The task registering it fixes it: one follow-up cycle of batched store calls is what an orchestrator's follow-ups cost the production Linear key, and its repeated passes hold that a retry re-spends almost nothing on settled work.
   - id: linear-requests-per-follow-up-cycle
     description: >-

@@ -395,8 +395,8 @@ pub(crate) fn walk() -> Vec<(&'static str, Phase)> {
     assert_eq!(attested["record"]["kind"], "design-approval", "{attested}");
 
     // Each node settled once, held to the version `task show` reads now: a Linear create's
-    // answer vouches for none, so the settling engine holds the one it last read. Those reads
-    // are the engine's own and fall before the settlement phase's mark.
+    // answer vouches for none, so the settling engine reads each first, and those reads are
+    // the settlement phase's own requests.
     let mut updates = Vec::new();
     for (at, node) in NODES.iter().enumerate() {
         let (id, _) = landed(&format!("plans:{node}"));
@@ -418,7 +418,6 @@ pub(crate) fn walk() -> Vec<(&'static str, Phase)> {
         json!({"schema_version": 1, "updates": updates}).to_string(),
     )
     .expect("a batch");
-    mark = workspace.served_count();
     let settled = road.json(
         &["task", "update-many", "team", "--input", &path(&input)],
         0,
