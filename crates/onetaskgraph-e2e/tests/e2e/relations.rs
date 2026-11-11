@@ -978,6 +978,22 @@ fn every_malformed_input_is_refused_naming_it_and_the_rest_of_the_call_goes_on()
     );
     assert_eq!(outcomes(&blocked), ["error"]);
     assert!(reason(&blocked, 0).contains("work:t4"), "{blocked:#}");
+
+    // So is a stored type ending in a line break, which its `## Links` section could not list
+    // on one line, rather than read as the type without it.
+    std::fs::write(
+        store.work.join("tasks").join("t4.md"),
+        "---\ntitle: Another symptom\nstatus: todo\nmetadata:\n  \"onetaskgraph.links\": \
+         [{\"type\": \"x\\n\", \"direction\": \"in\", \"other\": \"work:t3\"}]\n---\n\
+         The t4 body.\n",
+    )
+    .expect("a spoiled file");
+    let spoiled = store.exited(&["task", "relations", "work:t4"], None, 1);
+    let message = spoiled["failure"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("work:t4") && message.contains("line break"),
+        "{spoiled:#}"
+    );
 }
 
 #[test]

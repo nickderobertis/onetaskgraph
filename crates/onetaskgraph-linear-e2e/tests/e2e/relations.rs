@@ -22,7 +22,9 @@ use onetaskgraph_linear::graphql;
 use serde_json::{Value, json};
 
 use crate::common::{Sandbox, stderr, stdout};
-use crate::fixtures::{LinearWorkspace, document, linear_per_item, linear_workspace};
+use crate::fixtures::{
+    LinearWorkspace, document, linear_identifier, linear_per_item, linear_workspace,
+};
 use crate::telemetry::record;
 
 /// One issue at `Todo`.
@@ -1298,4 +1300,51 @@ fn a_native_relation_linear_refuses_to_delete_keeps_that_link_while_the_others_a
     assert!(team.workspace.related_pairs().is_empty());
     let items = team.relations(&["R-2", "R-3"]);
     assert!(links_of(&items[0]).is_empty() && links_of(&items[1]).is_empty());
+}
+
+#[test]
+fn an_issue_named_by_its_identifier_is_refused_naming_the_id_to_name_it_by_writing_nothing() {
+    // Linear resolves an issue's identifier as readily as its id, and answers with the id. A
+    // relation is held between ids — the qualified id every read reports — so a parent or a link
+    // named by an identifier is refused saying which id to name it by. The call's one relation
+    // read answers every issue it names or none, so the refusal is every item's, and nothing is
+    // written.
+    let team = Team::configured(3, &json!({"caused-by": {"native": "related"}}));
+    team.workspace.resolve_identifiers();
+    let child = linear_identifier("R-1");
+    let set = team.parents(&[(child.as_str(), Some("R-0")), ("R-2", Some("R-0"))]);
+    assert_eq!(outcomes(&set), ["error", "error"], "{}", set.json);
+    assert_eq!(set.code, Some(4));
+    for at in 0..2 {
+        let reason = set.json["results"][at]["reason"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(
+            reason.contains(&format!(
+                "{child} is the issue's identifier; name it by its id R-1"
+            )),
+            "{}",
+            set.json
+        );
+    }
+    assert_eq!(set.count(graphql::ISSUE_PARENT_UPDATE), 0, "{:?}", set.sent);
+    assert_eq!(team.workspace.parent_of("R-1"), None);
+    assert_eq!(team.workspace.parent_of("R-2"), None);
+
+    let from = linear_identifier("R-0");
+    let added = team.links("add-many", &[(from.as_str(), "R-2", "caused-by")]);
+    assert_eq!(outcomes(&added), ["error"], "{}", added.json);
+    let reason = added.json["results"][0]["reason"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(reason.contains("name it by its id R-0"), "{}", added.json);
+    assert_eq!(added.count(graphql::ISSUE_RELATION_CREATE), 0);
+    assert!(team.workspace.related_pairs().is_empty());
+
+    // Named by their ids, the same edges and link are written.
+    let set = team.parents(&[("R-1", Some("R-0")), ("R-2", Some("R-0"))]);
+    assert_eq!(outcomes(&set), ["written", "written"], "{}", set.json);
+    let added = team.links("add-many", &[("R-0", "R-2", "caused-by")]);
+    assert_eq!(outcomes(&added), ["written"], "{}", added.json);
+    assert_eq!(team.workspace.related_pairs().len(), 1);
 }

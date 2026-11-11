@@ -348,15 +348,17 @@ struct LinkTypeName(String);
 impl LinkTypeName {
     /// `name` checked, or why it names no type a link can carry.
     fn new(name: &str) -> Result<Self, &'static str> {
-        let name = name.trim();
-        if name.is_empty() {
-            return Err("names no type");
-        }
+        // Checked before trimming, so a name ending in a line break is refused rather than read
+        // as the name without it while its stored spelling keeps the break.
         if name.chars().any(char::is_control) {
             return Err(
                 "names a type holding a line break or another control character, which its \
                  `## Links` section cannot list on one line",
             );
+        }
+        let name = name.trim();
+        if name.is_empty() {
+            return Err("names no type");
         }
         Ok(Self(name.to_owned()))
     }
@@ -1060,14 +1062,18 @@ fn bullet(link: &TaskLink, other: Option<&Relations>) -> String {
         LinkDirection::Out => "→",
         LinkDirection::In => "←",
     };
-    let address = other.and_then(|other| {
-        other.task.url.clone().or_else(|| {
-            other.task.location.as_ref().map(|location| match location {
-                Location::Url(url) => url.clone(),
-                Location::Path(path) => path.clone(),
+    // An address spanning lines could not stay on the bullet's one line, so the bullet names
+    // the other end without it.
+    let address = other
+        .and_then(|other| {
+            other.task.url.clone().or_else(|| {
+                other.task.location.as_ref().map(|location| match location {
+                    Location::Url(url) => url.clone(),
+                    Location::Path(path) => path.clone(),
+                })
             })
         })
-    });
+        .filter(|address| !address.chars().any(char::is_control));
     let title = other.map_or_else(
         || link.other.clone(),
         |other| {

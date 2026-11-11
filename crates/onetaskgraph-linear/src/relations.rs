@@ -562,10 +562,23 @@ impl LinearSource {
 }
 
 /// Refuse an alias's answer naming another issue than the one it asked for.
+///
+/// An issue named by its identifier (`ENG-1`) rather than its id is refused saying which id to
+/// name it by: Linear resolves either, but a relation is held between ids — the qualified id
+/// every read reports — and an identifier is a handle the store never matches on, so a parent
+/// or a link named by one could never be compared with what Linear answers about it.
 fn answered_for(issue: &Value, asked: &NativeId) -> Result<(), SourceError> {
     match issue.get("id").and_then(Value::as_str) {
         Some(id) if id == asked.0 => Ok(()),
         _ if issue.is_null() => Ok(()),
+        Some(id) if issue.get("identifier").and_then(Value::as_str) == Some(asked.0.as_str()) => {
+            Err(SourceError::Refused {
+                message: format!(
+                    "{asked} is the issue's identifier; name it by its id {id}, as `task list` \
+                     and `task show` report it"
+                ),
+            })
+        }
         answered => Err(SourceError::Malformed {
             message: format!(
                 "Linear answered the alias asking for {asked} with {}",

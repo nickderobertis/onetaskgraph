@@ -7622,6 +7622,7 @@ fn linear_serve(
                 );
                 continue;
             }
+            let request = linear_identifiers_resolved(request, &state.lock().unwrap());
             let aliased = onetaskgraph_linear::graphql::decomposed(
                 request["query"].as_str().unwrap_or_default(),
             );
@@ -8264,6 +8265,14 @@ impl LinearWorkspace {
         self.add_row("documents", row);
     }
 
+    /// Resolve an issue's identifier (`ENG-R0`) wherever a request's variables name an issue
+    /// by it, as Linear resolves either spelling of an issue, and answer with the issue's id as
+    /// Linear does. Off unless a journey turns it on, so every other journey's requests are read
+    /// exactly as they were sent.
+    pub fn resolve_identifiers(&self) {
+        self.state.lock().unwrap()["_linear_resolve_identifiers"] = json!(true);
+    }
+
     fn add_row(&self, collection: &str, row: Value) {
         let mut data = self.state.lock().unwrap();
         data[collection]
@@ -8271,6 +8280,43 @@ impl LinearWorkspace {
             .expect("the workspace holds the collection")
             .push(row);
     }
+}
+
+/// `request` with each variable value that is exactly an issue's identifier replaced by that
+/// issue's id, when the workspace was asked to [`resolve_identifiers`](LinearWorkspace::resolve_identifiers);
+/// `request` unchanged otherwise.
+fn linear_identifiers_resolved(mut request: Value, data: &Value) -> Value {
+    if data["_linear_resolve_identifiers"] != json!(true) {
+        return request;
+    }
+    let ids: std::collections::BTreeMap<String, String> = data["tasks"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|row| {
+            let id = row["id"].as_str()?;
+            let identifier = row["_identifier"]
+                .as_str()
+                .map_or_else(|| linear_identifier(id), str::to_owned);
+            Some((identifier, id.to_owned()))
+        })
+        .collect();
+    fn resolve(value: &mut Value, ids: &std::collections::BTreeMap<String, String>) {
+        match value {
+            Value::String(text) => {
+                if let Some(id) = ids.get(text.as_str()) {
+                    *text = id.clone();
+                }
+            }
+            Value::Array(items) => items.iter_mut().for_each(|item| resolve(item, ids)),
+            Value::Object(fields) => fields.values_mut().for_each(|field| resolve(field, ids)),
+            _ => {}
+        }
+    }
+    if let Some(variables) = request.get_mut("variables") {
+        resolve(variables, &ids);
+    }
+    request
 }
 
 /// A copy's batched origin read: each aliased connection answered as the `issues` and
