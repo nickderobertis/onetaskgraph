@@ -1,0 +1,12 @@
+[
+  {
+    "query": "mutation($id:String!,$input:IssueUpdateInput!){ issueUpdate(id:$id,input:$input){success issue{ id identifier title description descriptionState url createdAt updatedAt archivedAt state{name type} priority labels{nodes{id name color}} project{id} }} }",
+    "variables": {
+      "id": "R-0",
+      "input": {
+        "title": "Retitled",
+        "description": "A new body.\n\n<!-- onetaskgraph.metadata `{\"caller.note\":\"kept\"}` -->"
+      }
+    }
+  }
+]

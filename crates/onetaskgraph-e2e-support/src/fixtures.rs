@@ -10,6 +10,8 @@
 //! knows has no row here. Every registered plugin is implemented, so every row carries a
 //! working source fixture.
 
+#[path = "linear_relations.rs"]
+pub mod linear_relations;
 use onetaskgraph_plugin_api::{Capabilities, DependencySupport, Support};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -8328,6 +8330,11 @@ fn linear_response(
         serde_json::from_value(request.clone()).map_err(|_| "invalid GraphQL request")?;
     use onetaskgraph_linear::graphql;
     let operation = request.query.as_str();
+    if let Some(answer) =
+        linear_relations::answer(operation, &Value::Object(request.variables.clone()), data)
+    {
+        return answer;
+    }
     if operation == graphql::COUNTERPART_LOOKUPS || operation == graphql::COUNTERPART_LOOKUPS_CACHED
     {
         return linear_origin_lookups(operation, &Value::Object(request.variables), recorded, data);
@@ -9560,8 +9567,11 @@ fn linear_write_relation(
     }]
     .as_array_mut()
     .ok_or("fixture edges are not an array")?;
-    // A relation Linear already derived from a link is the one asked for.
-    if !edges.contains(&edge) {
+    // A relation Linear already derived from a link is the one asked for — and a `related` one
+    // has no direction, so one created again the other way round is the same relation (spike
+    // `spike-relations`, requests 190–191).
+    let reversed = json!({"from": edge["to"], "to": edge["from"], "kind": edge["kind"]});
+    if !edges.contains(&edge) && !(kind == "related" && edges.contains(&reversed)) {
         edges.push(edge);
     }
     Ok(if project {
