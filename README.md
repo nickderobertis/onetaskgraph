@@ -404,18 +404,19 @@ from standard input with `-`.
 - `task update-many <SOURCE> --input FILE` applies `{"schema_version": 1, "updates": [{"item",
   "if_version", "title", "body", "status", "priority", "when_priority", "metadata",
   "remove_metadata", "repositories"}]}` — every member but `item` optional — each update one
-  held write of every field it names: `written` with the version after it where the write's
-  own answers determine one (a GitHub board's never do, so it answers none), `held` when its
-  priority guard declined, `version-moved` with the version its task is at, or `error`.
+  held write of every field it names: `written` with the version the task holds after it, where
+  the write's own answers — or, on a GitHub board, the read right after a write no answer shows
+  whole — determine one, `held` when its priority guard declined, `version-moved` with the
+  version its task is at, or `error`. A GitHub board's version waits a minute for the ticket to
+  settle: a write held to it before then is refused, and one held to it after goes ahead.
 
 No item's failure writes or refuses another, and a batch exits `4` when any item is
 `version-moved` or `error`. A source asks its backend for as few requests as it can: Linear
 reads the tasks a batch writes in one aliased request and sends the updates, or the comments,
 in one more, and runs the searches of one round of pages as one aliased request. Where Linear
-refuses one alias of such a request it answers none of them, so the item it refused is sent
-or answered on its own and the rest are sent together again — an update twice changes nothing,
-and a comment is never sent twice: one Linear refused after the comments aliased before it
-landed has each of those found again by a read of its task. A folder of Markdown and an
+refuses one alias of such a request it applies none of them, so the item it refused is sent
+or answered on its own and the rest are sent together again — nothing of the refused request
+landed, so no write, a comment included, is ever sent twice. A folder of Markdown and an
 in-memory source answer each item with what one call for it would.
 
 A task can name the tasks it **delivers**: finishing it finishes them. In a folder of

@@ -9372,14 +9372,6 @@ impl GitHubProjectsSource {
         }))
     }
 
-    /// Replace one issue's visible body and its [`MetadataKey::TEMPLATE_KEY`] slot entry
-    /// together, and nothing else; see [`TaskSource::set_task_rendering`].
-    ///
-    /// One update of the body: the content outside the slot, and inside it that one entry,
-    /// every other entry kept as it was. This source keeps no template answers — an issue has
-    /// no room beside itself that is not its body, and answers written there would duplicate
-    /// what the content already says and count against GitHub's body limit — so `answers`
-    /// reaches nothing here. A body that would not change is not sent at all.
     /// The change token the task `id` holds after the writes a targeted update just sent: the
     /// one the last mutation's own response showed, or, where none showed the whole issue, the
     /// one a read made now spells. `None` when that read cannot say — never the token the
@@ -9400,6 +9392,14 @@ impl GitHubProjectsSource {
         Some(token)
     }
 
+    /// Replace one issue's visible body and its [`MetadataKey::TEMPLATE_KEY`] slot entry
+    /// together, and nothing else; see [`TaskSource::set_task_rendering`].
+    ///
+    /// One update of the body: the content outside the slot, and inside it that one entry,
+    /// every other entry kept as it was. This source keeps no template answers — an issue has
+    /// no room beside itself that is not its body, and answers written there would duplicate
+    /// what the content already says and count against GitHub's body limit — so `answers`
+    /// reaches nothing here. A body that would not change is not sent at all.
     async fn replace_rendering(
         &self,
         id: &NativeId,

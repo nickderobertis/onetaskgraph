@@ -212,6 +212,15 @@ def test_many_comments_are_each_answered_on_their_own(binary: Path, store: Path)
     assert asyncio.run(client.task_comment_list("plan:b")).comments == []
 
 
+class Fields(NamedTuple):
+    """The four fields an update of the batch below writes, as a task reads back."""
+
+    content: str | None
+    colour: object
+    status: str
+    priority: str
+
+
 def test_many_updates_write_every_field_or_none(binary: Path, store: Path) -> None:
     """Each update's content, metadata, status and priority land together, or none of them do."""
     client = client_at(binary, store)
@@ -254,14 +263,19 @@ def test_many_updates_write_every_field_or_none(binary: Path, store: Path) -> No
     assert moved.current_version == moved_to
     assert missing.reason is not None and "plan:nowhere" in missing.reason
 
-    def fields(task: str) -> tuple[str | None, object, str, str]:
+    def fields(task: str) -> Fields:
         item = asyncio.run(client.task_show(task)).items[0].item
         colour = item.metadata.get("myapp.colour") if item.metadata else None
-        return item.content, colour, item.status.category.value, item.priority.value
+        return Fields(
+            content=item.content,
+            colour=colour,
+            status=item.status.category.value,
+            priority=item.priority.value,
+        )
 
-    assert fields("plan:a") == ("Rewritten.\n", "black", "done", "low")
-    assert fields("plan:b") == ("The b body.", "red", "todo", "high")
-    assert fields("plan:c") == ("The c body.", "blue", "in-progress", "low")
+    assert fields("plan:a") == Fields("Rewritten.\n", "black", "done", "low")
+    assert fields("plan:b") == Fields("The b body.", "red", "todo", "high")
+    assert fields("plan:c") == Fields("The c body.", "blue", "in-progress", "low")
 
 
 def test_a_guarded_update_writes_every_field_only_while_its_guard_holds(
