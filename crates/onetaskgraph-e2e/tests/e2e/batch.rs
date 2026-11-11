@@ -105,6 +105,12 @@ impl Store {
                            "config": {"capabilities": {"priority": "native",
                                                        "comments": "native"},
                                       "tasks": self.memory}},
+                // A source that holds no priority, which a guard naming one cannot be put to.
+                "bare": {"plugin": "in-memory",
+                         "config": {"capabilities": {"priority": "unsupported"},
+                                    "tasks": [{"id": "x", "title": "Bare", "labels": [],
+                                               "status": {"category": "todo",
+                                                          "name": "todo"}}]}},
             },
         });
         self.sandbox
@@ -883,4 +889,74 @@ fn an_update_of_a_batch_removes_metadata_and_replaces_repositories_and_moves_not
         assert_eq!(cleared["metadata"]["myapp.colour"], "blue");
         assert_eq!(store.shown(&item("d"))["metadata"]["myapp.colour"], "red");
     }
+}
+
+#[test]
+fn every_priority_a_guard_names_is_put_to_a_source_that_holds_none() {
+    let store = Store::new();
+    let (_, err) = store.human(
+        &[
+            "task",
+            "update",
+            "bare:x",
+            "--title",
+            "Guarded",
+            "--when-priority",
+            "none",
+            "--when-priority",
+            "high",
+        ],
+        "",
+        1,
+    );
+    assert!(err.contains("high"), "{err}");
+    let updates = json!({"schema_version": 1, "updates": [
+        {"item": "bare:x", "title": "Guarded", "when_priority": ["none", "high"]},
+        {"item": "bare:x", "title": "Unguarded"},
+    ]})
+    .to_string();
+    let updated = store.exited(
+        &["task", "update-many", "bare", "--input", "-"],
+        Some(&updates),
+        4,
+    );
+    assert_eq!(outcomes(&updated), ["error", "written"]);
+    let reason = updated["results"][0]["reason"].as_str().unwrap_or_default();
+    assert!(reason.contains("high"), "{reason}");
+}
+
+#[test]
+fn an_update_of_a_batch_keeps_the_tasks_it_delivers_in_step_and_says_when_it_could_not() {
+    let store = Store::new();
+    store.exited(
+        &["task", "update", "plan:a", "--delivers", "plan:f"],
+        None,
+        0,
+    );
+    // Naming it already fails to keep it in step, as `task update` says by exiting `4`.
+    store.exited(
+        &["task", "update", "plan:c", "--delivers", "elsewhere:Z-1"],
+        None,
+        4,
+    );
+    let updates = json!({"schema_version": 1, "updates": [
+        {"item": "plan:a", "status": "in-progress"},
+        {"item": "plan:c", "status": "done"},
+    ]})
+    .to_string();
+    let updated = store.exited(
+        &["task", "update-many", "plan", "--input", "-"],
+        Some(&updates),
+        4,
+    );
+    assert_eq!(outcomes(&updated), ["written", "error"], "{updated:#}");
+    // The delivered task followed its deliverer.
+    assert_eq!(store.shown("plan:f")["status"]["category"], "in-progress");
+    // The second was written; a task it delivers, in no configured source, could not follow.
+    let reason = updated["results"][1]["reason"].as_str().unwrap_or_default();
+    assert!(
+        reason.contains("was written") && reason.contains("elsewhere:Z-1"),
+        "{reason}"
+    );
+    assert_eq!(store.shown("plan:c")["status"]["category"], "done");
 }

@@ -7312,7 +7312,7 @@ const SIXTY_FIRST_BUNDLE_SHAPE: [(&str, u64); 159] = [
     ("TaskUpdate", 0x36714bdce96c5c3c),
     ("TaskUpdateOutcome", 0xe6fda7657d974d23),
     ("TaskUpdated", 0x6633ac3f21c6e233),
-    ("TasksUpdated", 0xffe52481f34a5a4e),
+    ("TasksUpdated", 0xbdcd15c2d074e2bc),
     ("TemplateAnswers", 0xbeb56ff5ed8f5ebc),
     ("TemplateProvenance", 0x297651a29bb44a49),
     ("TemplateVariable", 0x32da636b1c5f1476),

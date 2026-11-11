@@ -44,7 +44,9 @@ class UpdateResult(BaseModel):
     ] = None
     reason: Annotated[
         str | None,
-        Field(description="Why it was not written — present when `outcome` is `error`."),
+        Field(
+            description="Why it is answered `error` — present when `outcome` is `error`: that it was not written,\nor that it was and keeping the tasks it delivers in step then failed."
+        ),
     ] = None
 
 

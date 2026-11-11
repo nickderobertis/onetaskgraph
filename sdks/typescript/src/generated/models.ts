@@ -17686,7 +17686,8 @@ version?: (string | null)
  */
 current_version?: (string | null)
 /**
- * Why it was not written — present when `outcome` is `error`.
+ * Why it is answered `error` — present when `outcome` is `error`: that it was not written,
+ * or that it was and keeping the tasks it delivers in step then failed.
  */
 reason?: (string | null)
 [k: string]: any

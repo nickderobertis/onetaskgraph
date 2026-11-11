@@ -31010,7 +31010,7 @@ export const runtimeSchemas = {
             ]
           },
           "reason": {
-            "description": "Why it was not written — present when `outcome` is `error`.",
+            "description": "Why it is answered `error` — present when `outcome` is `error`: that it was not written,\nor that it was and keeping the tasks it delivers in step then failed.",
             "type": [
               "string",
               "null"

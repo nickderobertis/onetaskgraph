@@ -248,7 +248,8 @@ pub struct UpdateResult {
     /// The version the task is at — present when `outcome` is `version-moved`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_version: Option<String>,
-    /// Why it was not written — present when `outcome` is `error`.
+    /// Why it is answered `error` — present when `outcome` is `error`: that it was not written,
+    /// or that it was and keeping the tasks it delivers in step then failed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
 }
@@ -708,6 +709,28 @@ impl Engine {
                         .updated(resolved, &id, &written.update, outcome, &before)
                         .await
                     {
+                        // A delivered task the rule could not keep in step leaves this update's
+                        // work unfinished, as `task update` exits `4` for it.
+                        Ok(updated) if updated.delivered.iter().any(super::Delivered::failed) => {
+                            let failures: Vec<String> = updated
+                                .delivered
+                                .iter()
+                                .filter_map(|entry| match &entry.outcome {
+                                    super::DeliveryOutcome::Failed { failure, .. } => {
+                                        Some(format!("{}: {}", entry.ticket, failure.message()))
+                                    }
+                                    _ => None,
+                                })
+                                .collect();
+                            update_error(
+                                &item,
+                                format!(
+                                    "{item} was written, then keeping the tasks it delivers in \
+                                     step failed — {}",
+                                    failures.join("; ")
+                                ),
+                            )
+                        }
                         Ok(updated) => UpdateResult {
                             item,
                             outcome: BatchOutcome::Written,
@@ -792,7 +815,7 @@ impl Engine {
                     .to_owned(),
             ));
         }
-        if let Some(guarded) = each.when_priority.first() {
+        for guarded in &each.when_priority {
             super::narrow::holds_priority(resolved, &id.to_string(), *guarded)
                 .map_err(|error| named(error.to_string()))?;
         }
@@ -829,7 +852,7 @@ impl Engine {
         if_version: Option<&str>,
     ) -> Result<TaskUpdated, EngineError> {
         let resolved = self.updatable(&id.source)?;
-        if let Some(guarded) = when.first() {
+        for guarded in when {
             super::narrow::holds_priority(resolved, &id.to_string(), *guarded)?;
         }
         let update = self.prepared_update(resolved, id, update).await?;
