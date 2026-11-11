@@ -3387,11 +3387,14 @@ mod tests {
         assert_eq!(probe.lock().expect("the probe").healths, 2);
     }
 
-    /// A source answering every batch of comments with one answer more than it was given.
+    /// A source answering every batch of comments with one answer more than it was given. Only
+    /// the test that withholds a directory's write permission uses it, which is unix-only.
+    #[cfg(unix)]
     struct Overanswering {
         inner: InMemorySource,
     }
 
+    #[cfg(unix)]
     #[async_trait::async_trait]
     impl TaskSource for Overanswering {
         fn kind(&self) -> &'static str {
