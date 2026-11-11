@@ -40,6 +40,20 @@ fn report() {
     }
 }
 
+/// The runner `linear-requests-per-private-plan-road` names: [`report`], under the name its task
+/// registered it with.
+#[test]
+fn report_private_plan_road() {
+    report();
+}
+
+/// The runner `linear-requests-per-follow-up-cycle` names: [`report`], under the name its task
+/// registered it with.
+#[test]
+fn report_follow_up_cycle() {
+    report();
+}
+
 /// End the runner with `reason` as the last of its stderr, and nothing after it.
 ///
 /// onebudgetspec keeps only the tail of a failed command's stderr, so a panic would not do: the
