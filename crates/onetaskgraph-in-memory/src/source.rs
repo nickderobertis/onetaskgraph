@@ -13,7 +13,7 @@ use onetaskgraph_plugin_api::{
     SecretResolver, SourceError, SourceName, SourcePlugin, Status, StatusCategory, Task, TaskQuery,
     TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome, TextFields, TextQuery, UpdatedField,
     Visibility, WriteSupport, WriteTarget, asset_sha256, assetless, commentless, documentless,
-    read_content, serve_asset_references, unwritable, unwritable_field,
+    read_content, relinked, serve_asset_references, unwritable, unwritable_field,
 };
 use schemars::{Schema, schema_for};
 
@@ -660,10 +660,19 @@ impl TaskSource for InMemorySource {
                     .ok_or_else(|| missing(target, "task"))?;
                 // The token a written task arrives with is its source's; this source derives its
                 // own from what it holds whenever the task is read, so none is stored.
+                // The task's `## Links` section is re-rendered from the links it holds.
+                let content = write.item.content.as_deref().map(|content| {
+                    relinked(
+                        content,
+                        held.tasks[position].content.as_deref(),
+                        &write.item.metadata,
+                    )
+                });
                 held.tasks[position] = Task {
                     id: target.clone(),
                     key: None,
                     version: None,
+                    content,
                     ..write.item.clone()
                 };
                 target.clone()
@@ -926,7 +935,9 @@ impl TaskSource for InMemorySource {
             .tasks
             .iter_mut()
             .find(|task| &task.id == id)
-            .map(|task| task.content = Some(content.to_owned())))
+            .map(|task| {
+                task.content = Some(relinked(content, task.content.as_deref(), &task.metadata));
+            }))
     }
 
     /// Replace one task's content and its provenance entry together. Answers are not kept:
@@ -947,7 +958,7 @@ impl TaskSource for InMemorySource {
             .iter_mut()
             .find(|task| &task.id == id)
             .map(|task| {
-                task.content = Some(content.to_owned());
+                task.content = Some(relinked(content, task.content.as_deref(), &task.metadata));
                 task.metadata
                     .insert(MetadataKey::TEMPLATE_KEY.to_owned(), provenance.clone());
             }))
@@ -976,7 +987,7 @@ impl TaskSource for InMemorySource {
             task.metadata
                 .insert(MetadataKey::TEMPLATE_KEY.to_owned(), provenance.clone());
             let served = serve_asset_references(content, &mut task.metadata, &uploads);
-            task.content = Some(served.clone());
+            task.content = Some(relinked(&served, task.content.as_deref(), &task.metadata));
             served
         };
         self.keep_assets(Owner::Task, id, assets)?;
@@ -1146,7 +1157,15 @@ impl TaskSource for InMemorySource {
             return Ok(None);
         };
         let before = held.tasks[position].clone();
-        let after = update.applied_to(&before);
+        let mut after = update.applied_to(&before);
+        // A content write keeps the task's `## Links` section, re-rendered from its links.
+        if let Some(content) = &update.content {
+            after.content = Some(relinked(
+                content,
+                before.content.as_deref(),
+                &after.metadata,
+            ));
+        }
         let mut written = update.changed(&before, &after);
         if let Some(edges) = &update.depends_on {
             let wanted = rooted(edges, id, ItemKind::Task);
