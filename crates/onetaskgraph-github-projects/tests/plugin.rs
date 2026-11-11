@@ -2299,13 +2299,19 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
     }
     if query == onetaskgraph_github_projects::graphql::ISSUE_DETAILS {
         // Each alias is the one-item detail read of the id its own variable names, and the
-        // comments ride along only when the batch asked for them.
+        // comments ride along only when the batch asked for them. A slot a short batch binds to
+        // an id an earlier slot named reads that issue again, which is one issue read.
         let mut answered = serde_json::Map::new();
+        let mut read: Vec<(String, Value)> = Vec::new();
         for slot in 0..onetaskgraph_github_projects::DETAIL_BATCH {
             let id = variables[format!("id{slot}")]
                 .as_str()
                 .expect("every slot of a batch names an id")
                 .to_owned();
+            if let Some((_, node)) = read.iter().find(|(earlier, _)| *earlier == id) {
+                answered.insert(format!("i{slot}"), node.clone());
+                continue;
+            }
             let node = detail_node(
                 &mut state,
                 &id,
@@ -2314,6 +2320,7 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
                 variables["comments"] == json!(true),
                 asked,
             );
+            read.push((id, node.clone()));
             answered.insert(format!("i{slot}"), node);
         }
         return Value::Object(answered);

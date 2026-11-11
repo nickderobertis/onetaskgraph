@@ -1,0 +1,737 @@
+//! The batched calls — `task find`, `task comment add-many`, `task update-many`, and `task copy`
+//! held per item by `--if-version` — through the binary against the loopback board: each item
+//! answered on its own, and each call sent in as few requests as GitHub allows, which the board's
+//! record of every request it served says.
+
+use std::collections::BTreeSet;
+use std::path::PathBuf;
+
+use onetaskgraph_github_projects::graphql;
+use serde_json::{Value, json};
+
+use crate::common::{Sandbox, stderr, stdout};
+use crate::fixtures::{GitHubBoardFields, github_projects_with_items};
+
+/// One open issue on the board, at the `Status` option `status`.
+fn issue(id: &str, title: &str, body: &str, status: &str) -> Value {
+    json!({"item":format!("ITEM-{id}"),"id":id,"type":"Issue","title":title,"body":body,
+        "state":"OPEN","reason":null,"parent":null,"repo":"nickderobertis/onetaskgraph",
+        "status":status,"origin":"","labels":[]})
+}
+
+struct Board {
+    sandbox: Sandbox,
+    board: GitHubBoardFields,
+    notes: PathBuf,
+}
+
+/// What one invocation answered: its exit code, its JSON and its standard error.
+struct Answered {
+    code: Option<i32>,
+    json: Value,
+    stderr: String,
+}
+
+impl Board {
+    fn of(items: Vec<Value>) -> Self {
+        let sandbox = Sandbox::new();
+        let (config, board) = github_projects_with_items(&sandbox, items);
+        let notes = sandbox.subdirectory("notes");
+        std::fs::create_dir_all(notes.join("tasks")).expect("the folder");
+        sandbox.project_document(
+            &serde_json::to_string_pretty(&json!({
+                "sources": {
+                    "board": {"plugin": "github-projects", "config": config},
+                    "notes": {"plugin": "local-md", "config": {"root": notes,
+                        "status_mapping": {"Todo": "todo", "Doing": "in-progress"}}},
+                },
+            }))
+            .expect("a document"),
+        );
+        Self {
+            sandbox,
+            board,
+            notes,
+        }
+    }
+
+    fn run(&self, arguments: &[&str], stdin: &str) -> Answered {
+        let output = self
+            .sandbox
+            .command()
+            .args(arguments)
+            .write_stdin(stdin)
+            .assert()
+            .get_output()
+            .clone();
+        Answered {
+            code: output.status.code(),
+            json: serde_json::from_str(&stdout(&output)).unwrap_or(Value::Null),
+            stderr: stderr(&output),
+        }
+    }
+
+    /// [`Self::run`], with every request the board served for it.
+    fn measured(&self, arguments: &[&str], stdin: &str) -> (Answered, Vec<(String, Value)>) {
+        let mark = self.board.served_count();
+        let answered = self.run(arguments, stdin);
+        (answered, self.board.served_since(mark))
+    }
+
+    /// Each task's version, as `task show-many` reads it now.
+    fn versions(&self, ids: &[&str]) -> Vec<String> {
+        let qualified: Vec<String> = ids.iter().map(|id| format!("board:{id}")).collect();
+        let mut arguments = vec!["task", "show-many", "--no-comments", "--json"];
+        arguments.extend(qualified.iter().map(String::as_str));
+        let shown = self.run(&arguments, "");
+        assert_eq!(shown.code, Some(0), "{}", shown.stderr);
+        shown.json["details"]
+            .as_array()
+            .unwrap_or_else(|| panic!("the details: {:#}", shown.json))
+            .iter()
+            .map(|detail| {
+                detail["items"][0]["item"]["version"]
+                    .as_str()
+                    .expect("a version")
+                    .to_owned()
+            })
+            .collect()
+    }
+
+    /// Write the folder's task `id`.
+    fn author(&self, id: &str, body: &str) {
+        std::fs::write(
+            self.notes.join(format!("tasks/{id}.md")),
+            format!("---\ntitle: Ticket {id}\nstatus: Todo\n---\n{body}\n"),
+        )
+        .expect("a task");
+    }
+
+    /// Copy the folder's `ids` onto the board, each recording its link, and answer the board
+    /// id each landed as.
+    fn copied(&self, ids: &[&str]) -> Vec<String> {
+        let qualified: Vec<String> = ids.iter().map(|id| format!("notes:{id}")).collect();
+        let mut arguments = vec!["task", "copy"];
+        arguments.extend(qualified.iter().map(String::as_str));
+        arguments.extend(["--to", "board", "--json"]);
+        let copied = self.run(&arguments, "");
+        assert_eq!(copied.code, Some(0), "{}", copied.stderr);
+        let landed = copied.json["items"]
+            .as_array()
+            .expect("the items")
+            .iter()
+            .map(|item| {
+                item["destination"]
+                    .as_str()
+                    .expect("a destination")
+                    .trim_start_matches("board:")
+                    .to_owned()
+            })
+            .collect();
+        // Every change before a read has settled, so each read reports a version.
+        self.board.pass_time(120);
+        landed
+    }
+}
+
+/// The documents of `served`, in order.
+fn documents(served: &[(String, Value)]) -> Vec<&str> {
+    served
+        .iter()
+        .map(|(document, _)| document.as_str())
+        .collect()
+}
+
+/// Whether `document` is a mutation.
+fn mutation(document: &str) -> bool {
+    document.trim_start().starts_with("mutation")
+}
+
+/// The board ids every answer of a `task find` holds under `key`.
+fn found(answer: &Value, key: &str) -> BTreeSet<String> {
+    let answers = answer["answers"].as_array().expect("the answers");
+    let one = answers
+        .iter()
+        .find(|answer| answer["key"] == key)
+        .unwrap_or_else(|| panic!("no answer under {key}: {answer:#}"));
+    one["items"]
+        .as_array()
+        .expect("the items")
+        .iter()
+        .map(|item| {
+            item["id"]
+                .as_str()
+                .expect("an id")
+                .trim_start_matches("board:")
+                .to_owned()
+        })
+        .collect()
+}
+
+fn set(ids: impl IntoIterator<Item = String>) -> BTreeSet<String> {
+    ids.into_iter().collect()
+}
+
+/// A board holding, beside the shared dataset, more than one page of each of two searches:
+/// 25 release checklists, 7 deploy steps — 4 of them in progress — two follow-ups of proposal
+/// p42, two tickets copied from `notes:o1` and one copied from `notes:o10`.
+fn searched_board() -> Board {
+    let mut items: Vec<Value> = (0..25)
+        .map(|n| {
+            issue(
+                &format!("R-{n}"),
+                &format!("Release checklist {n}"),
+                &format!("release step {n}"),
+                "Todo",
+            )
+        })
+        .collect();
+    items.extend((0..7).map(|n| {
+        issue(
+            &format!("D-{n}"),
+            &format!("Deploy step {n}"),
+            &format!("deploy {n}"),
+            if n % 2 == 0 { "Doing" } else { "Todo" },
+        )
+    }));
+    items.extend((0..2).map(|n| issue(&format!("F-{n}"), "A follow-up", "followed up", "Todo")));
+    for (id, origin) in [
+        ("O-0", "notes:o1"),
+        ("O-1", "notes:o1"),
+        ("O-2", "notes:o10"),
+    ] {
+        let mut copied = issue(id, "A copied ticket", "copied", "Todo");
+        copied["origin"] = json!(origin);
+        items.push(copied);
+    }
+    let board = Board::of(items);
+    for n in 0..2 {
+        board.board.set_metadata(
+            &format!("F-{n}"),
+            "orchestrator.follow-up",
+            json!({"proposal": "p42"}),
+        );
+    }
+    board.board.pass_time(120);
+    board
+}
+
+/// The five searches of the find journeys.
+fn five_queries() -> String {
+    json!({"schema_version": 1, "queries": [
+        {"key": "releases", "text": "release"},
+        {"key": "follow-ups", "metadata": {"orchestrator.follow-up/proposal": "p42"}},
+        {"key": "copies", "origin": "notes:o1"},
+        {"key": "deploying", "text": "deploy", "status": ["in-progress"]},
+        {"key": "nothing", "text": "zebra"},
+    ]})
+    .to_string()
+}
+
+#[test]
+fn a_find_answers_each_query_under_its_key_across_pages_in_one_request_a_round() {
+    let board = searched_board();
+    let (answered, served) = board.measured(
+        &["task", "find", "board", "--queries", "-", "--json"],
+        &five_queries(),
+    );
+    assert_eq!(answered.code, Some(0), "{}", answered.stderr);
+    let answer = &answered.json;
+    assert_eq!(
+        found(answer, "releases"),
+        set((0..25).map(|n| format!("R-{n}"))),
+        "{answer:#}"
+    );
+    assert_eq!(
+        found(answer, "follow-ups"),
+        set((0..2).map(|n| format!("F-{n}")))
+    );
+    assert_eq!(
+        found(answer, "copies"),
+        set(["O-0".to_owned(), "O-1".to_owned()])
+    );
+    assert_eq!(
+        found(answer, "deploying"),
+        set([0, 2, 4, 6].map(|n| format!("D-{n}")))
+    );
+    assert_eq!(found(answer, "nothing"), BTreeSet::new());
+    for each in answer["answers"].as_array().expect("answers") {
+        assert_eq!(each["complete"], true, "{each}");
+        assert_eq!(each["reason"], Value::Null, "{each}");
+    }
+    // One request a round: the five together, then the two with more than a first page
+    // together, then the last page of the one with more still — one search request per
+    // result page, never one per query.
+    assert_eq!(
+        documents(&served),
+        [
+            graphql::SEARCH_BATCH,
+            graphql::SEARCH_BATCH,
+            graphql::SEARCH_ISSUES
+        ],
+        "{served:#?}"
+    );
+    let first = &served[0].1;
+    let asked: Vec<&str> = (0..onetaskgraph_github_projects::SEARCH_BATCH)
+        .filter(|slot| first[format!("ask{slot}")] == true)
+        .map(|slot| first[format!("search{slot}")].as_str().expect("a search"))
+        .collect();
+    assert_eq!(
+        asked.len(),
+        5,
+        "every query's search in the first: {first:#}"
+    );
+    assert_eq!(first["origin0"], true, "{first:#}");
+    assert_eq!(first["filter0"], "onetaskgraph.origin:\"notes:o1\"");
+    let second = &served[1].1;
+    let continuing = (0..onetaskgraph_github_projects::SEARCH_BATCH)
+        .filter(|slot| second[format!("ask{slot}")] == true)
+        .count();
+    assert_eq!(continuing, 2, "{second:#}");
+}
+
+#[test]
+fn a_find_refuses_an_unnarrowed_query_naming_its_key_and_reads_nothing() {
+    let board = searched_board();
+    let request = json!({"schema_version": 1, "queries": [
+        {"key": "releases", "text": "release"},
+        {"key": "everything in progress", "status": ["in-progress"]},
+    ]})
+    .to_string();
+    let (answered, served) = board.measured(
+        &["task", "find", "board", "--queries", "-", "--json"],
+        &request,
+    );
+    assert_ne!(answered.code, Some(0), "{:#}", answered.json);
+    assert!(
+        answered.stderr.contains("everything in progress"),
+        "{}",
+        answered.stderr
+    );
+    assert!(served.is_empty(), "{served:#?}");
+}
+
+#[test]
+fn a_refused_page_of_one_query_cuts_that_answer_short_and_completes_the_others() {
+    let board = searched_board();
+    // The release search's first page is answered and its second refused at its own alias.
+    board.board.refuse_search_page("\"release\"", 1);
+    let (answered, served) = board.measured(
+        &["task", "find", "board", "--queries", "-", "--json"],
+        &five_queries(),
+    );
+    assert_eq!(answered.code, Some(4), "{}", answered.stderr);
+    let answers = answered.json["answers"].as_array().expect("answers");
+    let releases = answers
+        .iter()
+        .find(|answer| answer["key"] == "releases")
+        .expect("the releases");
+    assert_eq!(releases["complete"], false, "{releases:#}");
+    let reason = releases["reason"].as_str().expect("a reason");
+    assert!(reason.contains("page 2"), "{reason}");
+    assert!(reason.contains("releases"), "{reason}");
+    assert_eq!(
+        found(&answered.json, "releases").len(),
+        onetaskgraph_github_projects::SEARCH_BATCH_FIRST_PAGE as usize,
+        "what its first page answered"
+    );
+    for key in ["follow-ups", "copies", "deploying", "nothing"] {
+        let answer = answers
+            .iter()
+            .find(|answer| answer["key"] == key)
+            .expect("an answer");
+        assert_eq!(answer["complete"], true, "{answer:#}");
+    }
+    assert_eq!(
+        found(&answered.json, "deploying"),
+        set([0, 2, 4, 6].map(|n| format!("D-{n}")))
+    );
+    assert_eq!(
+        documents(&served),
+        [graphql::SEARCH_BATCH, graphql::SEARCH_BATCH],
+        "the refused search is walked no further: {served:#?}"
+    );
+}
+
+#[test]
+fn a_copy_holding_two_items_writes_the_one_at_its_version_and_refuses_the_moved_one() {
+    let board = Board::of(Vec::new());
+    for id in ["c0", "c1", "c2", "c3"] {
+        board.author(id, &format!("first {id}"));
+    }
+    let landed = board.copied(&["c0", "c1", "c2", "c3"]);
+    let ids: Vec<&str> = landed.iter().map(String::as_str).collect();
+    let versions = board.versions(&ids);
+    for id in ["c0", "c1", "c2", "c3"] {
+        let path = board.notes.join(format!("tasks/{id}.md"));
+        let text = std::fs::read_to_string(&path).expect("the task");
+        std::fs::write(
+            &path,
+            text.replace(&format!("first {id}"), &format!("second {id}")),
+        )
+        .expect("an edit");
+    }
+    // Another writer moves the second ticket after its version was read.
+    board.board.edit_body(ids[1], "a person's own words");
+    board.board.pass_time(120);
+    let moved_to = board.versions(&[ids[1]]).remove(0);
+    let held = [
+        format!("notes:c0={}", versions[0]),
+        format!("notes:c1={}", versions[1]),
+    ];
+    let copied = board.run(
+        &[
+            "task",
+            "copy",
+            "notes:c0",
+            "notes:c1",
+            "notes:c2",
+            "notes:c3",
+            "--to",
+            "board",
+            "--if-version",
+            &held[0],
+            "--if-version",
+            &held[1],
+            "--json",
+        ],
+        "",
+    );
+    assert_eq!(copied.code, Some(4), "{}", copied.stderr);
+    let items = copied.json["items"].as_array().expect("items");
+    for (at, item) in items.iter().enumerate() {
+        if at == 1 {
+            assert_eq!(item["action"], "failed", "{item:#}");
+            assert_eq!(item["error"]["kind"], "version-moved", "{item:#}");
+            assert_eq!(item["held"]["version"], json!(moved_to), "{item:#}");
+        } else {
+            assert_eq!(item["action"], "updated", "{item:#}");
+        }
+    }
+    for (at, id) in ids.iter().enumerate() {
+        let body = board.board.body(id);
+        let body = body.as_str().expect("a body");
+        if at == 1 {
+            assert_eq!(
+                body, "a person's own words",
+                "left as the other writer left it"
+            );
+        } else {
+            assert!(body.starts_with(&format!("second c{at}")), "{body}");
+        }
+    }
+}
+
+#[test]
+fn comments_added_together_hold_their_versions_in_one_read_and_one_mutation() {
+    let board = Board::of(
+        (0..4)
+            .map(|n| issue(&format!("A-{n}"), "Asked", "a question", "Todo"))
+            .collect(),
+    );
+    board.board.pass_time(120);
+    let versions = board.versions(&["A-0", "A-1", "A-2", "A-3"]);
+    // Another writer comments on the second after its version was read.
+    board
+        .board
+        .add_comment_by("A-1", "a person got there first", "ada");
+    board.board.pass_time(120);
+    let moved_to = board.versions(&["A-1"]).remove(0);
+    let batch = json!({"schema_version": 1, "comments": [
+        {"item": "board:A-0", "body": "answer 0", "if_version": versions[0]},
+        {"item": "board:A-1", "body": "answer 1", "if_version": versions[1]},
+        {"item": "board:A-2", "body": "answer 2"},
+        {"item": "board:A-3", "body": "answer 3"},
+    ]});
+    let (answered, served) = board.measured(
+        &[
+            "task", "comment", "add-many", "board", "--input", "-", "--json",
+        ],
+        &batch.to_string(),
+    );
+    assert_eq!(answered.code, Some(4), "{}", answered.stderr);
+    let results = answered.json["results"].as_array().expect("results");
+    for (at, result) in results.iter().enumerate() {
+        if at == 1 {
+            assert_eq!(result["outcome"], "version-moved", "{result:#}");
+            assert_eq!(result["current_version"], json!(moved_to), "{result:#}");
+        } else {
+            assert_eq!(result["outcome"], "written", "{result:#}");
+            assert!(result["comment"]["id"].is_string(), "{result:#}");
+        }
+    }
+    for n in [0, 2, 3] {
+        let bodies: Vec<Value> = board
+            .board
+            .comments_on(&format!("A-{n}"))
+            .iter()
+            .map(|comment| comment["body"].clone())
+            .collect();
+        assert_eq!(bodies, [json!(format!("answer {n}"))]);
+    }
+    let bodies: Vec<Value> = board
+        .board
+        .comments_on("A-1")
+        .iter()
+        .map(|comment| comment["body"].clone())
+        .collect();
+    assert_eq!(bodies, [json!("a person got there first")]);
+    // One read deciding every hold, and the four comments in one mutation request.
+    assert_eq!(
+        documents(&served),
+        [graphql::ISSUE_DETAILS, graphql::ADD_COMMENTS],
+        "{served:#?}"
+    );
+}
+
+/// The four tickets of the update journeys: `U-2` holds a `Low` priority, the rest none.
+fn ticket_board() -> Board {
+    let board = Board::of(
+        (0..4)
+            .map(|n| {
+                issue(
+                    &format!("U-{n}"),
+                    "A ticket",
+                    &format!("ticket {n}"),
+                    "Todo",
+                )
+            })
+            .collect(),
+    );
+    board.board.assign_priority("U-2", Some("Low"));
+    board.board.pass_time(120);
+    board
+}
+
+/// One held update of `id` setting content, a metadata key, a status and, while it holds none,
+/// a priority.
+fn triage(id: &str, version: Option<&String>) -> Value {
+    json!({"item": format!("board:{id}"), "if_version": version,
+           "body": format!("{id} triaged"), "status": "in-progress",
+           "priority": "high", "when_priority": ["none"],
+           "metadata": {"orchestrator.triage": {"by": "orchestrator"}}})
+}
+
+#[test]
+fn updates_written_together_hold_their_versions_and_guards_and_write_each_whole() {
+    let board = ticket_board();
+    let versions = board.versions(&["U-0", "U-1", "U-2", "U-3"]);
+    // Another writer edits the second after its version was read.
+    board.board.edit_body("U-1", "a person's own words");
+    board.board.pass_time(120);
+    let moved_to = board.versions(&["U-1"]).remove(0);
+    let batch = json!({"schema_version": 1, "updates": [
+        triage("U-0", Some(&versions[0])),
+        triage("U-1", Some(&versions[1])),
+        triage("U-2", Some(&versions[2])),
+        triage("U-3", None),
+    ]});
+    let (answered, served) = board.measured(
+        &["task", "update-many", "board", "--input", "-", "--json"],
+        &batch.to_string(),
+    );
+    assert_eq!(answered.code, Some(4), "{}", answered.stderr);
+    let outcomes: Vec<&str> = answered.json["results"]
+        .as_array()
+        .expect("results")
+        .iter()
+        .map(|result| result["outcome"].as_str().expect("an outcome"))
+        .collect();
+    assert_eq!(
+        outcomes,
+        ["written", "version-moved", "held", "written"],
+        "{:#}",
+        answered.json
+    );
+    assert_eq!(
+        answered.json["results"][1]["current_version"],
+        json!(moved_to)
+    );
+    // Every field of a written update changed; nothing of a refused one did.
+    for id in ["U-0", "U-3"] {
+        let body = board.board.body(id);
+        let body = body.as_str().expect("a body");
+        assert!(body.starts_with(&format!("{id} triaged")), "{body}");
+        assert!(body.contains("orchestrator.triage"), "{body}");
+        assert_eq!(board.board.status(id).as_deref(), Some("Doing"));
+        assert_eq!(board.board.priority(id).as_deref(), Some("High"));
+    }
+    assert_eq!(board.board.body("U-1"), json!("a person's own words"));
+    assert_eq!(board.board.status("U-1").as_deref(), Some("Todo"));
+    assert_eq!(board.board.priority("U-1"), None);
+    assert_eq!(board.board.body("U-2"), json!("ticket 2"));
+    assert_eq!(board.board.status("U-2").as_deref(), Some("Todo"));
+    assert_eq!(board.board.priority("U-2").as_deref(), Some("Low"));
+    // Read once, together; then every field write in one request and every issue update in
+    // one more — never a request per ticket.
+    let mutations: Vec<&str> = documents(&served)
+        .into_iter()
+        .filter(|document| mutation(document))
+        .collect();
+    assert_eq!(
+        mutations,
+        [graphql::WRITE_TASKS, graphql::WRITE_TASKS],
+        "{served:#?}"
+    );
+    assert_eq!(
+        documents(&served)
+            .into_iter()
+            .filter(|document| *document == graphql::ISSUE_DETAILS)
+            .count(),
+        1,
+        "{served:#?}"
+    );
+    assert!(
+        !documents(&served).contains(&graphql::ISSUE),
+        "no ticket read on its own: {served:#?}"
+    );
+}
+
+#[test]
+fn a_guarded_update_writes_content_metadata_and_priority_only_while_the_guard_holds() {
+    let board = ticket_board();
+    let content = board.notes.join("content.md");
+    std::fs::write(&content, "rewritten").expect("the content");
+    let content = content.to_str().expect("a path");
+    let update = |id: &str| {
+        board.run(
+            &[
+                "task",
+                "update",
+                &format!("board:{id}"),
+                "--body-file",
+                content,
+                "--metadata",
+                "orchestrator.triage={\"by\":\"orchestrator\"}",
+                "--priority",
+                "high",
+                "--when-priority",
+                "none",
+                "--json",
+            ],
+            "",
+        )
+    };
+    let written = update("U-0");
+    assert_eq!(written.code, Some(0), "{}", written.stderr);
+    let body = board.board.body("U-0");
+    let body = body.as_str().expect("a body");
+    assert!(body.starts_with("rewritten"), "{body}");
+    assert!(body.contains("orchestrator.triage"), "{body}");
+    assert_eq!(board.board.priority("U-0").as_deref(), Some("High"));
+    let held = update("U-2");
+    assert_eq!(held.code, Some(0), "{}", held.stderr);
+    assert_eq!(held.json["guard"]["outcome"], "held", "{:#}", held.json);
+    assert_eq!(held.json["guard"]["priority_condition"]["held"], "low");
+    assert_eq!(held.json["written"], json!([]));
+    assert_eq!(board.board.body("U-2"), json!("ticket 2"));
+    assert_eq!(board.board.priority("U-2").as_deref(), Some("Low"));
+}
+
+#[test]
+fn a_batch_answers_a_missing_task_and_a_refused_mutation_each_on_its_own() {
+    let board = Board::of(
+        (0..4)
+            .map(|n| {
+                issue(
+                    &format!("M-{n}"),
+                    "A ticket",
+                    &format!("ticket {n}"),
+                    "Todo",
+                )
+            })
+            .collect(),
+    );
+    board.board.pass_time(120);
+    let comments = json!({"schema_version": 1, "comments": [
+        {"item": "board:M-0", "body": "noted 0"},
+        {"item": "board:NOPE-1", "body": "noted nowhere"},
+        {"item": "board:M-1", "body": "noted 1"},
+        {"item": "board:M-3", "body": "noted 3"},
+        {"item": "board:M-2", "body": "noted 2"},
+    ]});
+    board.board.reject_mutation_of("M-3");
+    let added = board.run(
+        &[
+            "task", "comment", "add-many", "board", "--input", "-", "--json",
+        ],
+        &comments.to_string(),
+    );
+    assert_eq!(added.code, Some(4), "{}", added.stderr);
+    let results = added.json["results"].as_array().expect("results");
+    for (at, named) in [(1, "NOPE-1"), (3, "M-3")] {
+        assert_eq!(results[at]["outcome"], "error", "{:#}", results[at]);
+        let reason = results[at]["reason"].as_str().expect("a reason");
+        assert!(reason.contains(named), "{reason}");
+    }
+    for at in [0, 2, 4] {
+        assert_eq!(results[at]["outcome"], "written", "{:#}", results[at]);
+    }
+    assert!(board.board.comments_on("M-3").is_empty());
+    for n in 0..3 {
+        assert_eq!(board.board.comments_on(&format!("M-{n}")).len(), 1);
+    }
+
+    board.board.reject_mutation_of("M-3");
+    let updates = json!({"schema_version": 1, "updates": [
+        {"item": "board:M-0", "body": "M-0 settled", "status": "in-progress"},
+        {"item": "board:NOPE-1", "body": "nowhere", "status": "in-progress"},
+        {"item": "board:M-1", "body": "M-1 settled", "status": "in-progress"},
+        {"item": "board:M-3", "body": "M-3 settled", "status": "in-progress"},
+        {"item": "board:M-2", "body": "M-2 settled", "status": "in-progress"},
+    ]});
+    let updated = board.run(
+        &["task", "update-many", "board", "--input", "-", "--json"],
+        &updates.to_string(),
+    );
+    assert_eq!(updated.code, Some(4), "{}", updated.stderr);
+    let results = updated.json["results"].as_array().expect("results");
+    for (at, named) in [(1, "NOPE-1"), (3, "M-3")] {
+        assert_eq!(results[at]["outcome"], "error", "{:#}", results[at]);
+        let reason = results[at]["reason"].as_str().expect("a reason");
+        assert!(reason.contains(named), "{reason}");
+    }
+    for (at, id) in [(0, "M-0"), (2, "M-1"), (4, "M-2")] {
+        assert_eq!(results[at]["outcome"], "written", "{:#}", results[at]);
+        let body = board.board.body(id);
+        assert!(
+            body.as_str()
+                .is_some_and(|body| body.starts_with(&format!("{id} settled"))),
+            "{body}"
+        );
+        assert_eq!(board.board.status(id).as_deref(), Some("Doing"));
+    }
+    // The refused ticket's field write was refused, so nothing of its update was sent.
+    assert_eq!(board.board.body("M-3"), json!("ticket 3"));
+    assert_eq!(board.board.status("M-3").as_deref(), Some("Todo"));
+}
+
+#[test]
+fn an_unchanged_recopy_of_five_decides_every_item_from_one_batched_read() {
+    let board = Board::of(Vec::new());
+    let ids = ["r0", "r1", "r2", "r3", "r4"];
+    for id in ids {
+        board.author(id, &format!("ticket {id}"));
+    }
+    board.copied(&ids);
+    let qualified: Vec<String> = ids.iter().map(|id| format!("notes:{id}")).collect();
+    let mut arguments = vec!["task", "copy"];
+    arguments.extend(qualified.iter().map(String::as_str));
+    arguments.extend(["--to", "board", "--json"]);
+    let (copied, served) = board.measured(&arguments, "");
+    assert_eq!(copied.code, Some(0), "{}", copied.stderr);
+    assert!(
+        copied.json["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .all(|item| item["action"] == "unchanged"),
+        "{:#}",
+        copied.json
+    );
+    assert_eq!(
+        documents(&served),
+        [graphql::ISSUE_COPY_DETAILS],
+        "{served:#?}"
+    );
+}

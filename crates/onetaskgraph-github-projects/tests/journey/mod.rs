@@ -801,6 +801,21 @@ pub fn dry_run_variables(document: &str) -> Value {
     for slot in 0..onetaskgraph_github_projects::COPY_DETAIL_BATCH {
         bind(&format!("read{slot}"), json!(true));
     }
+    // A batched search asks every one of its search slots and its origin slots, each at the
+    // largest page it is ever sent, as the offline bound prices it.
+    for slot in 0..onetaskgraph_github_projects::SEARCH_BATCH {
+        bind(&format!("search{slot}"), json!("repo:github/docs is:issue"));
+        bind(&format!("ask{slot}"), json!(true));
+        bind(&format!("after{slot}"), Value::Null);
+    }
+    for slot in 0..onetaskgraph_github_projects::SEARCH_BATCH_ORIGINS {
+        bind(
+            &format!("filter{slot}"),
+            json!(format!("{ORIGIN_FIELD}:\"node-count-reconciliation\"")),
+        );
+        bind(&format!("origin{slot}"), json!(true));
+        bind(&format!("itemsAfter{slot}"), Value::Null);
+    }
     bind("statusName", json!("Status"));
     bind("project", json!("node-count-reconciliation"));
     bind("children", json!(true));

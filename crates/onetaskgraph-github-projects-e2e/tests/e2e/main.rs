@@ -23,6 +23,7 @@ mod approval;
 // its reporter reads and whose `budgets` target judges it, as every budget of this crate does;
 // it is loopback-only and seconds long, beside the plan copy it builds on.
 mod approval_seconds;
+mod batched_calls;
 mod boundary;
 mod cache;
 mod cache_assets;
