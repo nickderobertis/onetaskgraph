@@ -20,6 +20,7 @@ use super::batch::{alias_answer, errors_at};
 use super::{
     BOARD_ITEMS_PAGE_SIZE, BoardKind, DETAIL_BATCH, GitHubProjectsSource, MAX_PAGE_SIZE,
     NESTED_PAGE_SIZE, RELATION_BATCH, Resolved, SubIssues, graphql, optional_str, required_str,
+    unresolvable_node,
 };
 use onetaskgraph_plugin_api::ItemKind;
 
@@ -116,104 +117,138 @@ impl GitHubProjectsSource {
     /// every id read together — with each issue's parent and a page of its sub-issues on a
     /// source reading them as children, and as a batched read of each item alone on one reading
     /// them as projects, where no task has a parent.
+    ///
+    /// Each answer is its own. A batch GitHub refuses because one of its ids resolves to no
+    /// node is read again an id at a time, as [`Self::items_by_ids`] reads one, so that id
+    /// answers `None` and every other id of the batch is answered; an issue answered malformed
+    /// is that id's error alone.
     pub(super) async fn relations_of(
         &self,
         ids: &[NativeId],
-    ) -> Result<Vec<Option<Relations>>, SourceError> {
+    ) -> Vec<Result<Option<Relations>, SourceError>> {
         if self.sub_issues == SubIssues::Project {
-            return self
-                .items_by_ids(ids)
-                .await?
-                .into_iter()
-                .map(|item| match item {
-                    Some(item) if item.kind == BoardKind::Work(ItemKind::Task) => {
-                        Ok(Some(Relations {
-                            task: item.task()?,
-                            parent: None,
-                            children: Vec::new(),
-                            children_complete: true,
-                        }))
-                    }
-                    _ => Ok(None),
-                })
-                .collect();
+            return match self.items_by_ids(ids).await {
+                Err(error) => ids.iter().map(|_| Err(error.clone())).collect(),
+                Ok(items) => items
+                    .into_iter()
+                    .map(|item| match item {
+                        Some(item) if item.kind == BoardKind::Work(ItemKind::Task) => {
+                            Ok(Some(Relations {
+                                task: item.task()?,
+                                parent: None,
+                                children: Vec::new(),
+                                children_complete: true,
+                            }))
+                        }
+                        _ => Ok(None),
+                    })
+                    .collect(),
+            };
         }
         let mut answers = Vec::with_capacity(ids.len());
         for batch in ids.chunks(DETAIL_BATCH) {
-            let mut variables = Map::new();
-            for slot in 0..DETAIL_BATCH {
-                let id = batch.get(slot).or(batch.last()).map(|id| id.0.clone());
-                variables.insert(format!("id{slot}"), json!(id));
-            }
-            variables.insert("first".to_owned(), json!(MAX_PAGE_SIZE));
-            variables.insert("nestedFirst".to_owned(), json!(NESTED_PAGE_SIZE));
-            variables.insert("boardItems".to_owned(), json!(BOARD_ITEMS_PAGE_SIZE));
-            variables.insert("duplicates".to_owned(), json!(true));
-            // Not one of the documents whose answer keeps its errors beside its data
-            // (`send_once`): a response carrying any GraphQL error — one at an alias's path
-            // included — is refused whole here, so no slot below is read from a part-answer.
-            let data = self
-                .graphql(graphql::ISSUE_RELATIONS, Value::Object(variables))
-                .await?;
-            for (slot, id) in batch.iter().enumerate() {
-                let node = data
-                    .get(format!("i{slot}"))
-                    .ok_or_else(|| SourceError::Malformed {
-                        message: format!(
-                            "GitHub answered a relations read with no item for {}",
-                            id.0
-                        ),
-                    })?;
-                if node.is_null() || optional_str(node, "__typename")? != Some("Issue") {
-                    answers.push(None);
-                    continue;
+            match self.relations_batch(batch).await {
+                Ok(each) => answers.extend(each),
+                Err(error) if unresolvable_node(&error) && batch.len() > 1 => {
+                    for id in batch {
+                        answers.push(match self.relations_batch(std::slice::from_ref(id)).await {
+                            Ok(mut each) => each.pop().unwrap_or(Ok(None)),
+                            Err(error) if unresolvable_node(&error) => Ok(None),
+                            Err(error) => Err(error),
+                        });
+                    }
                 }
-                if required_str(node, "id")? != id.0 {
-                    return Err(SourceError::Malformed {
-                        message: format!(
-                            "GitHub answered the relations read of {} with issue {}",
-                            id.0,
-                            required_str(node, "id")?
-                        ),
-                    });
-                }
-                let Some(item) = self.resolve_issue(node).await? else {
-                    answers.push(None);
-                    continue;
-                };
-                if item.kind != BoardKind::Work(ItemKind::Task) {
-                    answers.push(None);
-                    continue;
-                }
-                let connection = node
-                    .get("subIssues")
-                    .ok_or_else(|| SourceError::Malformed {
-                        message: format!("GitHub issue {} is missing subIssues", id.0),
-                    })?;
-                let children = connection
-                    .get("nodes")
-                    .and_then(Value::as_array)
-                    .ok_or_else(|| SourceError::Malformed {
-                        message: format!("GitHub issue {} subIssues.nodes is not an array", id.0),
-                    })?
-                    .iter()
-                    .map(|child| required_str(child, "id").map(|id| NativeId(id.to_owned())))
-                    .collect::<Result<Vec<_>, _>>()?;
-                let more = connection
-                    .pointer("/pageInfo/hasNextPage")
-                    .and_then(Value::as_bool)
-                    .ok_or_else(|| SourceError::Malformed {
-                        message: format!("GitHub issue {} subIssues has no pageInfo", id.0),
-                    })?;
-                answers.push(Some(Relations {
-                    parent: item.issue_parent.clone(),
-                    task: item.task()?,
-                    children,
-                    children_complete: !more,
-                }));
+                Err(error) if unresolvable_node(&error) => answers.push(Ok(None)),
+                Err(error) => answers.extend(batch.iter().map(|_| Err(error.clone()))),
             }
         }
+        answers
+    }
+
+    /// One [`graphql::ISSUE_RELATIONS`] read of `batch` — at most [`DETAIL_BATCH`] ids — each
+    /// id's answer its own; an error when the request was not answered.
+    async fn relations_batch(
+        &self,
+        batch: &[NativeId],
+    ) -> Result<Vec<Result<Option<Relations>, SourceError>>, SourceError> {
+        let mut variables = Map::new();
+        for slot in 0..DETAIL_BATCH {
+            let id = batch.get(slot).or(batch.last()).map(|id| id.0.clone());
+            variables.insert(format!("id{slot}"), json!(id));
+        }
+        variables.insert("first".to_owned(), json!(MAX_PAGE_SIZE));
+        variables.insert("nestedFirst".to_owned(), json!(NESTED_PAGE_SIZE));
+        variables.insert("boardItems".to_owned(), json!(BOARD_ITEMS_PAGE_SIZE));
+        variables.insert("duplicates".to_owned(), json!(true));
+        // Not one of the documents whose answer keeps its errors beside its data
+        // (`send_once`): a response carrying any GraphQL error — one at an alias's path
+        // included — is refused whole here, so no slot below is read from a part-answer.
+        let data = self
+            .graphql(graphql::ISSUE_RELATIONS, Value::Object(variables))
+            .await?;
+        let mut answers = Vec::with_capacity(batch.len());
+        for (slot, id) in batch.iter().enumerate() {
+            answers.push(self.relations_slot(&data, slot, id).await);
+        }
         Ok(answers)
+    }
+
+    /// The relations [`Self::relations_batch`]'s answer holds for `id` at `slot`.
+    async fn relations_slot(
+        &self,
+        data: &Value,
+        slot: usize,
+        id: &NativeId,
+    ) -> Result<Option<Relations>, SourceError> {
+        let node = data
+            .get(format!("i{slot}"))
+            .ok_or_else(|| SourceError::Malformed {
+                message: format!("GitHub answered a relations read with no item for {}", id.0),
+            })?;
+        if node.is_null() || optional_str(node, "__typename")? != Some("Issue") {
+            return Ok(None);
+        }
+        if required_str(node, "id")? != id.0 {
+            return Err(SourceError::Malformed {
+                message: format!(
+                    "GitHub answered the relations read of {} with issue {}",
+                    id.0,
+                    required_str(node, "id")?
+                ),
+            });
+        }
+        let Some(item) = self.resolve_issue(node).await? else {
+            return Ok(None);
+        };
+        if item.kind != BoardKind::Work(ItemKind::Task) {
+            return Ok(None);
+        }
+        let connection = node
+            .get("subIssues")
+            .ok_or_else(|| SourceError::Malformed {
+                message: format!("GitHub issue {} is missing subIssues", id.0),
+            })?;
+        let children = connection
+            .get("nodes")
+            .and_then(Value::as_array)
+            .ok_or_else(|| SourceError::Malformed {
+                message: format!("GitHub issue {} subIssues.nodes is not an array", id.0),
+            })?
+            .iter()
+            .map(|child| required_str(child, "id").map(|id| NativeId(id.to_owned())))
+            .collect::<Result<Vec<_>, _>>()?;
+        let more = connection
+            .pointer("/pageInfo/hasNextPage")
+            .and_then(Value::as_bool)
+            .ok_or_else(|| SourceError::Malformed {
+                message: format!("GitHub issue {} subIssues has no pageInfo", id.0),
+            })?;
+        Ok(Some(Relations {
+            parent: item.issue_parent.clone(),
+            task: item.task()?,
+            children,
+            children_complete: !more,
+        }))
     }
 
     /// [`TaskSource::set_parents`](onetaskgraph_plugin_api::TaskSource::set_parents): every child

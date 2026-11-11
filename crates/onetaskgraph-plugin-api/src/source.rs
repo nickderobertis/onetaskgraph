@@ -1204,18 +1204,20 @@ pub trait TaskSource: Send + Sync {
     /// every task with none and no children. A source whose backend reads many items in one
     /// request reads them together.
     ///
-    /// Defaulted to a refusal: a source that predates relations, or a peer over the plugin
-    /// protocol, holds none and strips no section, so a link is never written to it.
+    /// Each answer is its own: an id the source cannot read — one its backend refuses, or
+    /// answers malformed — carries that [`SourceError`] while every other id is answered, so
+    /// one bad id never costs a relation call the rest of its items. A failure that reaches
+    /// every id, a request that never answered among them, is every id's answer.
     ///
-    /// # Errors
-    ///
-    /// A [`SourceError`] when the source could not answer, or holds no relations.
+    /// Defaulted to a refusal of every id: a source that predates relations, or a peer over
+    /// the plugin protocol, holds none and strips no section, so a link is never written to
+    /// it.
     async fn read_relations(
         &self,
         ids: &[NativeId],
-    ) -> Result<Vec<Option<crate::Relations>>, SourceError> {
-        let _ = ids;
-        Err(crate::relationless(self.kind()))
+    ) -> Vec<Result<Option<crate::Relations>, SourceError>> {
+        let refused = crate::relationless(self.kind());
+        ids.iter().map(|_| Err(refused.clone())).collect()
     }
 
     /// Set or remove each child's parent, answering one [`ParentAnswer`](crate::ParentAnswer)

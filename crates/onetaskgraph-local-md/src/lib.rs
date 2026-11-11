@@ -1724,8 +1724,13 @@ impl TaskSource for LocalMdSource {
     async fn read_relations(
         &self,
         ids: &[NativeId],
-    ) -> Result<Vec<Option<onetaskgraph_plugin_api::Relations>>, SourceError> {
-        let records = self.parse_work_records(WorkKind::Task, &ProjectFilter::Any)?;
+    ) -> Vec<Result<Option<onetaskgraph_plugin_api::Relations>, SourceError>> {
+        // One read of the folder answers every id, so a folder that cannot be read is every
+        // id's answer; each id is then answered on its own.
+        let records = match self.parse_work_records(WorkKind::Task, &ProjectFilter::Any) {
+            Ok(records) => records,
+            Err(error) => return ids.iter().map(|_| Err(error.clone())).collect(),
+        };
         let parents: Vec<(NativeId, Option<NativeId>)> = records
             .iter()
             .map(|entry| (entry.common.id.clone(), entry.parent.clone()))
@@ -1734,12 +1739,13 @@ impl TaskSource for LocalMdSource {
             .into_iter()
             .map(|entry| (entry.common.id.clone(), entry))
             .collect();
-        Ok(ids
-            .iter()
+        ids.iter()
             .map(|id| {
-                let entry = by_id.remove(id)?;
+                let Some(entry) = by_id.remove(id) else {
+                    return Ok(None);
+                };
                 let parent = entry.parent.clone();
-                Some(onetaskgraph_plugin_api::Relations {
+                Ok(Some(onetaskgraph_plugin_api::Relations {
                     task: task(entry),
                     parent,
                     children: parents
@@ -1748,9 +1754,9 @@ impl TaskSource for LocalMdSource {
                         .map(|(child, _)| child.clone())
                         .collect(),
                     children_complete: true,
-                })
+                }))
             })
-            .collect())
+            .collect()
     }
 
     /// Each child's `parent:` front-matter entry written, or removed for none, leaving every

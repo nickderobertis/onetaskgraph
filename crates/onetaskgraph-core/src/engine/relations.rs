@@ -389,16 +389,13 @@ impl Engine {
         let mut read: BTreeMap<GlobalId, Relations> = BTreeMap::new();
         for (name, natives) in by_source(&wanted) {
             let source = self.built(&name)?;
-            let answers = source
-                .source()
-                .read_relations(&natives)
-                .await
-                .map_err(|error| source_failed(source, error))?;
+            let answers = source.source().read_relations(&natives).await;
             let answers = answers_each(source, &natives, answers)?;
             for (native, answer) in natives.into_iter().zip(answers) {
                 let id = GlobalId::new(name.clone(), native);
-                let relations =
-                    answer.ok_or_else(|| EngineError::NoSuchTask { id: id.to_string() })?;
+                let relations = answer
+                    .map_err(|error| source_failed(source, error))?
+                    .ok_or_else(|| EngineError::NoSuchTask { id: id.to_string() })?;
                 read.insert(id, relations);
             }
         }
@@ -584,26 +581,26 @@ impl Engine {
         for (name, natives) in by_source(ids) {
             let answers: Vec<Read> = match self.built(&name) {
                 Err(error) => natives.iter().map(|_| Err(error.to_string())).collect(),
-                Ok(source) => match source.source().read_relations(&natives).await {
-                    Err(error) => natives
+                // Each id is answered on its own, so one the source could not read is that
+                // id's error and never another's.
+                Ok(source) => match answers_each(
+                    source,
+                    &natives,
+                    source.source().read_relations(&natives).await,
+                ) {
+                    Err(error) => natives.iter().map(|_| Err(error.to_string())).collect(),
+                    Ok(answers) => natives
                         .iter()
-                        .map(|_| Err(format!("{name} could not read it: {error}")))
+                        .zip(answers)
+                        .map(|(native, answer)| match answer {
+                            Err(error) => Err(format!("{name} could not read it: {error}")),
+                            Ok(None) => Err(format!(
+                                "{name} holds no task {}",
+                                GlobalId::new(name.clone(), native.clone())
+                            )),
+                            Ok(Some(relations)) => Ok(relations),
+                        })
                         .collect(),
-                    Ok(answers) => match answers_each(source, &natives, answers) {
-                        Err(error) => natives.iter().map(|_| Err(error.to_string())).collect(),
-                        Ok(answers) => natives
-                            .iter()
-                            .zip(answers)
-                            .map(|(native, answer)| {
-                                answer.ok_or_else(|| {
-                                    format!(
-                                        "{name} holds no task {}",
-                                        GlobalId::new(name.clone(), native.clone())
-                                    )
-                                })
-                            })
-                            .collect(),
-                    },
                 },
             };
             for (native, answer) in natives.into_iter().zip(answers) {
@@ -1136,31 +1133,32 @@ fn by_source(ids: &BTreeSet<GlobalId>) -> BTreeMap<SourceName, Vec<NativeId>> {
     grouped
 }
 
-/// A relation read's answers held to one per id asked.
+/// A relation read's answers held to one per id asked — a count that differs failing every
+/// id, because no answer can then be told to be any one id's.
 fn answers_each(
     source: &super::ResolvedSource,
     asked: &[NativeId],
-    answers: Vec<Option<Relations>>,
-) -> Result<Vec<Option<Relations>>, EngineError> {
+    answers: Vec<Result<Option<Relations>, SourceError>>,
+) -> Result<Vec<Result<Option<Relations>, SourceError>>, EngineError> {
     if answers.len() == asked.len() {
         // Each answer is held to the task it was asked about, so a read never lends one task's
-        // content, links or version to another.
-        for (native, answer) in asked.iter().zip(&answers) {
-            if let Some(relations) = answer
-                && &relations.task.id != native
-            {
-                return Err(source_failed(
-                    source,
-                    SourceError::Malformed {
+        // content, links or version to another; one that names another task is that id's
+        // error alone.
+        return Ok(asked
+            .iter()
+            .zip(answers)
+            .map(|(native, answer)| match answer {
+                Ok(Some(relations)) if &relations.task.id != native => {
+                    Err(SourceError::Malformed {
                         message: format!(
                             "asked for the relations of {native}, it answered with those of {}",
                             relations.task.id
                         ),
-                    },
-                ));
-            }
-        }
-        return Ok(answers);
+                    })
+                }
+                answer => answer,
+            })
+            .collect());
     }
     Err(source_failed(
         source,

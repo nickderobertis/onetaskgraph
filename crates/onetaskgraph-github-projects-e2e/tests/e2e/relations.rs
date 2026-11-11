@@ -1649,3 +1649,52 @@ fn with_the_cache_on_a_link_removal_retires_its_from_end_s_entry() {
         shown.json
     );
 }
+
+#[test]
+fn an_id_github_cannot_resolve_is_that_items_answer_alone_and_every_other_item_is_written() {
+    // GitHub answers a read naming an id that resolves to no node with `null` at its alias and
+    // a `NOT_FOUND` error for the whole document. That id is its own item's answer: the read is
+    // made again an id at a time, and every other item of the same call is written as it would
+    // be had the bad id not been in it.
+    let mut extra = mirrored();
+    extra["sub_issues"] = json!("parent");
+    let board = Board::of(
+        ["A-1", "B-2", "C-3"]
+            .iter()
+            .map(|id| issue(id, None))
+            .collect(),
+        &extra,
+    );
+    board
+        .board
+        .answer_unresolvable_relation_reads_as_github_does();
+
+    let (added, served) = board.links(
+        "add-many",
+        &[("A-1", "NOPE", "caused-by"), ("B-2", "C-3", "caused-by")],
+    );
+    assert_eq!(outcomes(&added), ["error", "written"], "{:#}", added.json);
+    assert_eq!(added.code, Some(4), "an item's error still fails the call");
+    let reason = added.json["results"][0]["reason"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(reason.contains("board:NOPE"), "{reason}");
+    assert_eq!(fields_sent(&served, graphql::ADD_RELATES_TO), [1]);
+    assert_eq!(board.board.relates_to("B-2"), ["C-3"]);
+    assert!(board.board.relates_to("A-1").is_empty());
+
+    let (set, _) = board.parents(&[("NOPE", Some("A-1")), ("B-2", Some("A-1"))]);
+    assert_eq!(outcomes(&set)[1], "written", "{:#}", set.json);
+    assert_ne!(outcomes(&set)[0], "written", "{:#}", set.json);
+    assert_eq!(board.board.sub_issue_parent("B-2").as_deref(), Some("A-1"));
+
+    let (removed, _) = board.links(
+        "remove-many",
+        &[("A-1", "NOPE", "caused-by"), ("B-2", "C-3", "caused-by")],
+    );
+    assert_eq!(outcomes(&removed)[1], "written", "{:#}", removed.json);
+    assert!(board.board.relates_to("B-2").is_empty());
+    let read = board.relations(&["A-1", "B-2", "C-3"]);
+    assert_eq!(read[0]["children"], json!(["board:B-2"]));
+    assert!(links_of(&read[1]).is_empty() && links_of(&read[2]).is_empty());
+}

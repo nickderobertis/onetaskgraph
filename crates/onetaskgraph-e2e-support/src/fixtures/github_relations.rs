@@ -39,6 +39,10 @@ pub(super) struct Relations {
     timed_out: bool,
     /// Answer the next read of what issues relate to as though each had a further page.
     read_back_incomplete: bool,
+    /// Answer an id a relations read names that resolves to no node as GitHub does: `null` at
+    /// its alias beside a `NOT_FOUND` error naming the id, which GitHub sends for the whole
+    /// document.
+    unresolvable_named: bool,
 }
 
 impl Relations {
@@ -156,6 +160,13 @@ impl GitHubBoardFields {
         self.board.lock().unwrap().relations.read_back_incomplete = true;
     }
 
+    /// Answer a relations read naming an id that resolves to no node as GitHub answers it —
+    /// `null` at that alias beside a `NOT_FOUND` error saying it could not resolve the id —
+    /// rather than with the bare `null` every other journey's reads are answered with.
+    pub fn answer_unresolvable_relation_reads_as_github_does(&self) {
+        self.board.lock().unwrap().relations.unresolvable_named = true;
+    }
+
     /// The parent issue of `id`, by its sub-issue link.
     #[must_use]
     pub fn sub_issue_parent(&self, id: &str) -> Option<String> {
@@ -176,12 +187,21 @@ pub(super) fn answer(
     variables: &Value,
 ) -> Option<Value> {
     if query == graphql::ISSUE_RELATIONS {
-        let held = board.lock().unwrap();
+        let mut held = board.lock().unwrap();
         let first = usize::try_from(variables["first"].as_u64().expect("$first")).unwrap();
         let mut answered = serde_json::Map::new();
         for slot in 0..DETAIL_BATCH {
             let id = variables[format!("id{slot}")].clone();
             let mut node = held.detail_node(&id, &Value::Null, &json!(100), false);
+            if node.is_null() && held.relations.unresolvable_named {
+                let message = format!(
+                    "Could not resolve to a node with the global id of '{}'",
+                    id.as_str().unwrap_or_default()
+                );
+                held.owed_error_objects.push(
+                    json!({"type": "NOT_FOUND", "path": [format!("i{slot}")], "message": message}),
+                );
+            }
             if node["__typename"] == "Issue" {
                 let children = held.children_of(id.as_str().expect("an id"));
                 node["subIssues"] = json!({

@@ -110,9 +110,11 @@ async fn a_parent_write_answers_each_edge_on_its_own() {
     );
     let read = source
         .read_relations(&[NativeId("root".into()), NativeId("linked".into())])
-        .await
-        .unwrap();
-    let (root, linked) = (read[0].as_ref().unwrap(), read[1].as_ref().unwrap());
+        .await;
+    let (root, linked) = (
+        read[0].as_ref().unwrap().as_ref().unwrap(),
+        read[1].as_ref().unwrap().as_ref().unwrap(),
+    );
     assert!(root.children.is_empty() && linked.parent.is_none());
 }
 

@@ -88,19 +88,32 @@ impl LinearSource {
 
     /// Every one of `ids` read as one aliased [`graphql::ISSUE_PARENT_READ`] — `None` for an
     /// issue Linear does not hold, has trashed, or that is outside this source's project.
+    ///
+    /// Each answer is its own: an alias Linear refuses is answered on its own and the rest
+    /// read again, and one answered malformed or naming an issue by its identifier is that
+    /// id's error alone. A request that fails outright is every unanswered id's.
     pub(crate) async fn relations_read(
         &self,
         ids: &[NativeId],
-    ) -> Result<Vec<Option<Relations>>, SourceError> {
+    ) -> Vec<Result<Option<Relations>, SourceError>> {
         let mut read: Vec<Option<Result<Option<Read>, SourceError>>> =
             ids.iter().map(|_| None).collect();
         let mut pending: Vec<usize> = (0..ids.len()).collect();
         while !pending.is_empty() {
             let each: Vec<Value> = pending.iter().map(|at| json!({"id": ids[*at].0})).collect();
-            match self
+            let sent = match self
                 .send_aliased_each(graphql::ISSUE_PARENT_READ, &each)
-                .await?
+                .await
             {
+                Ok(sent) => sent,
+                Err(error) => {
+                    for at in pending.drain(..) {
+                        read[at] = Some(Err(error.clone()));
+                    }
+                    break;
+                }
+            };
+            match sent {
                 AliasedEach::Answered(values) => {
                     for (at, value) in pending.iter().zip(values) {
                         read[*at] = Some(value.and_then(|issue| {
@@ -201,6 +214,10 @@ impl LinearSource {
     /// [`graphql::ISSUE_PARENT_UPDATE`] document — a refused alias answered on its own and the
     /// rest sent together again, because Linear applies an aliased document of mutations whole
     /// or not at all.
+    ///
+    /// Each write is its own: a child or a parent the read could not answer for — refused,
+    /// malformed, or named by its identifier — fails that write alone, and every other write
+    /// of the call is decided and sent as if it had not been named.
     pub(crate) async fn parents_written(
         &self,
         writes: &[ParentWrite],
@@ -213,15 +230,20 @@ impl LinearSource {
                 }
             }
         }
-        let read = match self.relations_read(&wanted).await {
-            Ok(read) => read,
-            Err(error) => return writes.iter().map(|_| Err(error.clone())).collect(),
+        let read = self.relations_read(&wanted).await;
+        // Why a write naming `id` cannot be decided: the read's own error for it.
+        let unread = |id: &NativeId| {
+            wanted
+                .iter()
+                .position(|asked| asked == id)
+                .and_then(|at| read[at].as_ref().err())
         };
         let held = |id: &NativeId| {
             wanted
                 .iter()
                 .position(|asked| asked == id)
-                .and_then(|at| read[at].as_ref())
+                .and_then(|at| read[at].as_ref().ok())
+                .and_then(Option::as_ref)
         };
         let mut answers: Vec<Option<Result<ParentAnswer, SourceError>>> =
             writes.iter().map(|_| None).collect();
@@ -230,6 +252,13 @@ impl LinearSource {
         // alone and in order, decided on what the writes before it left.
         let mut later: Vec<usize> = Vec::new();
         for (at, write) in writes.iter().enumerate() {
+            if let Some(error) = std::iter::once(&write.child)
+                .chain(write.parent.as_ref())
+                .find_map(&unread)
+            {
+                answers[at] = Some(Err(error.clone()));
+                continue;
+            }
             if writes[..at]
                 .iter()
                 .any(|earlier| earlier.child == write.child)
@@ -498,34 +527,44 @@ impl LinearSource {
         &self,
         links: &[NativeLink],
     ) -> Vec<Result<(), SourceError>> {
-        let each: Vec<Value> = links
-            .iter()
-            .map(|link| json!({"id": link.from.0, "first": MAX_PAGE_SIZE, "after": null}))
-            .collect();
-        let read = match self
-            .send_aliased_each(graphql::ISSUE_LINK_RELATIONS, &each)
-            .await
-        {
-            Ok(AliasedEach::Answered(values)) => values,
-            Ok(AliasedEach::Refused(_, refusal)) => {
-                let error = refusal.into_error();
-                return links.iter().map(|_| Err(error.clone())).collect();
-            }
-            Err(error) => return links.iter().map(|_| Err(error.clone())).collect(),
-        };
         let mut answers: Vec<Option<Result<(), SourceError>>> =
             links.iter().map(|_| None).collect();
         let mut deleting: Vec<(usize, String)> = Vec::new();
-        for (at, (link, value)) in links.iter().zip(read).enumerate() {
-            // Each alias's answer held to the issue it asked for, so an answer about another
-            // issue never names a relation to delete.
-            match value.and_then(|issue| {
-                answered_for(&issue, &link.from)?;
-                related_between(&issue, &link.from, &link.to)
-            }) {
-                Ok(found) if found.is_empty() => answers[at] = Some(Ok(())),
-                Ok(found) => deleting.extend(found.into_iter().map(|id| (at, id))),
-                Err(error) => answers[at] = Some(Err(error)),
+        // An alias Linear refuses is that link's answer alone, and the rest are read again.
+        let mut reading: Vec<usize> = (0..links.len()).collect();
+        while !reading.is_empty() {
+            let each: Vec<Value> = reading
+                .iter()
+                .map(|at| json!({"id": links[*at].from.0, "first": MAX_PAGE_SIZE, "after": null}))
+                .collect();
+            match self
+                .send_aliased_each(graphql::ISSUE_LINK_RELATIONS, &each)
+                .await
+            {
+                Ok(AliasedEach::Answered(values)) => {
+                    for (at, value) in reading.drain(..).zip(values) {
+                        let link = &links[at];
+                        // Each alias's answer held to the issue it asked for, so an answer
+                        // about another issue never names a relation to delete.
+                        match value.and_then(|issue| {
+                            answered_for(&issue, &link.from)?;
+                            related_between(&issue, &link.from, &link.to)
+                        }) {
+                            Ok(found) if found.is_empty() => answers[at] = Some(Ok(())),
+                            Ok(found) => deleting.extend(found.into_iter().map(|id| (at, id))),
+                            Err(error) => answers[at] = Some(Err(error)),
+                        }
+                    }
+                }
+                Ok(AliasedEach::Refused(refused, refusal)) => {
+                    let at = reading.remove(refused);
+                    answers[at] = Some(Err(refusal.into_error()));
+                }
+                Err(error) => {
+                    for at in reading.drain(..) {
+                        answers[at] = Some(Err(error.clone()));
+                    }
+                }
             }
         }
         while !deleting.is_empty() {

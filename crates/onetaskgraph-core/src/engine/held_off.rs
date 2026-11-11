@@ -669,9 +669,15 @@ impl TaskSource for HeldOff {
     async fn read_relations(
         &self,
         ids: &[NativeId],
-    ) -> Result<Vec<Option<onetaskgraph_plugin_api::Relations>>, SourceError> {
-        self.refused()?;
-        self.noted(self.inner.read_relations(ids).await)
+    ) -> Vec<Result<Option<onetaskgraph_plugin_api::Relations>, SourceError>> {
+        if let Err(refused) = self.refused() {
+            return ids.iter().map(|_| Err(refused.clone())).collect();
+        }
+        let answers = self.inner.read_relations(ids).await;
+        answers
+            .into_iter()
+            .map(|answer| self.noted(answer))
+            .collect()
     }
 
     async fn set_parents(
@@ -1239,8 +1245,8 @@ mod tests {
         async fn read_relations(
             &self,
             ids: &[NativeId],
-        ) -> Result<Vec<Option<onetaskgraph_plugin_api::Relations>>, SourceError> {
-            self.next().map(|()| ids.iter().map(|_| None).collect())
+        ) -> Vec<Result<Option<onetaskgraph_plugin_api::Relations>, SourceError>> {
+            ids.iter().map(|_| self.next().map(|()| None)).collect()
         }
         async fn set_parents(
             &self,
@@ -1407,11 +1413,14 @@ mod tests {
         let id = NativeId::from("T-1");
         block_on(async {
             assert!(matches!(
-                source.read_relations(std::slice::from_ref(&id)).await,
-                Err(SourceError::RateLimited {
+                source
+                    .read_relations(std::slice::from_ref(&id))
+                    .await
+                    .as_slice(),
+                [Err(SourceError::RateLimited {
                     retry_after_seconds: Some(30),
                     ..
-                })
+                })]
             ));
             assert_eq!(calls.load(Atomic::SeqCst), 1, "the refusal itself was sent");
             clock.advance(10_000);
@@ -1432,7 +1441,8 @@ mod tests {
                 source
                     .read_relations(std::slice::from_ref(&id))
                     .await
-                    .is_err()
+                    .iter()
+                    .all(Result::is_err)
             );
             assert_eq!(
                 calls.load(Atomic::SeqCst),
@@ -1444,7 +1454,8 @@ mod tests {
                 source
                     .read_relations(std::slice::from_ref(&id))
                     .await
-                    .is_ok()
+                    .iter()
+                    .all(Result::is_ok)
             );
             assert_eq!(source.set_parents(&[write]).await.len(), 1);
             assert_eq!(calls.load(Atomic::SeqCst), 3, "reached again at the reset");

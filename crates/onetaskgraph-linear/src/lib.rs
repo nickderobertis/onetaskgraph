@@ -5525,7 +5525,7 @@ impl TaskSource for LinearSource {
     async fn read_relations(
         &self,
         ids: &[NativeId],
-    ) -> Result<Vec<Option<onetaskgraph_plugin_api::Relations>>, SourceError> {
+    ) -> Vec<Result<Option<onetaskgraph_plugin_api::Relations>, SourceError>> {
         self.relations_read(ids).await
     }
 

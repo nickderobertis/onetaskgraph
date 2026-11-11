@@ -1229,9 +1229,11 @@ impl TaskSource for InMemorySource {
     async fn read_relations(
         &self,
         ids: &[NativeId],
-    ) -> Result<Vec<Option<Relations>>, SourceError> {
-        let held = self.held()?;
-        Ok(ids.iter().map(|id| held.relations(id)).collect())
+    ) -> Vec<Result<Option<Relations>, SourceError>> {
+        match self.held() {
+            Ok(held) => ids.iter().map(|id| Ok(held.relations(id))).collect(),
+            Err(error) => ids.iter().map(|_| Err(error.clone())).collect(),
+        }
     }
 
     async fn set_parents(&self, writes: &[ParentWrite]) -> Vec<Result<ParentAnswer, SourceError>> {

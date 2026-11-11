@@ -172,17 +172,18 @@ impl TaskSource for Bent {
     async fn read_relations(
         &self,
         ids: &[NativeId],
-    ) -> Result<Vec<Option<Relations>>, SourceError> {
-        let mut answers: Vec<Option<Relations>> = ids.iter().map(|id| relations(&id.0)).collect();
+    ) -> Vec<Result<Option<Relations>, SourceError>> {
+        let mut answers: Vec<Result<Option<Relations>, SourceError>> =
+            ids.iter().map(|id| Ok(relations(&id.0))).collect();
         match self.0 {
             Answer::TooFew => {
                 answers.pop();
             }
-            Answer::TooMany => answers.push(relations("extra")),
+            Answer::TooMany => answers.push(Ok(relations("extra"))),
             Answer::Swapped => answers.reverse(),
             Answer::WrittenAsAnother => {}
         }
-        Ok(answers)
+        answers
     }
 
     async fn update_tasks(
