@@ -761,3 +761,53 @@ fn a_batched_create_linear_will_not_take_back_is_named_as_still_held() {
     assert_eq!(titled(&road, "Build the ledger"), 1, "still held, as named");
     assert_eq!(titled(&road, "Ship the ledger"), 0);
 }
+
+/// A batched create Linear applied whole and answered with one of its creates malformed takes
+/// back every create its answer names — the ones before that alias and the ones after it — and
+/// refuses saying a create it cannot name may stand, so the destination is inspected before the
+/// copy is run again.
+#[test]
+fn a_batched_create_answered_malformed_takes_back_every_create_it_can_name() {
+    let road = Road::of(PARALLEL);
+    road.author();
+    let workspace = &road.workspace.held;
+    let creates: &'static str = Box::leak(
+        onetaskgraph_linear::graphql::aliased(onetaskgraph_linear::graphql::ISSUE_CREATE, 3)
+            .into_boxed_str(),
+    );
+    // The middle create's payload answered with no issue.
+    workspace.bend_answers(
+        move |operation, _| operation == creates,
+        1,
+        |_, data| {
+            data["a1"]
+                .as_object_mut()
+                .expect("a payload")
+                .remove("issue");
+        },
+    );
+    let mut copy = road.sandbox.command();
+    copy.envs(road.workspace.clock.client_env(0))
+        .args([
+            "project",
+            "copy",
+            "plans:road",
+            "--documents",
+            "--to",
+            "team",
+            "--json",
+        ])
+        .write_stdin("");
+    let output = copy.assert().get_output().clone();
+    assert_ne!(output.status.code(), Some(0), "{}", stdout(&output));
+    let said = format!("{}{}", stdout(&output), crate::common::stderr(&output));
+    assert!(said.contains("missing issueCreate.issue"), "{said}");
+    assert!(said.contains("inspect"), "{said}");
+    let held: Vec<String> = ["Build the ledger", "Ship the ledger", "Test the ledger"]
+        .into_iter()
+        .filter(|title| titled(&road, title) == 1)
+        .map(str::to_owned)
+        .collect();
+    // The two the answer named are taken back; the one it did not name is what to inspect.
+    assert_eq!(held.len(), 1, "{held:?}: {said}");
+}

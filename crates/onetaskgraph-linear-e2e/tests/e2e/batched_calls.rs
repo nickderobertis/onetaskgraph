@@ -868,3 +868,89 @@ fn two_instances_of_one_tracker_read_its_vocabulary_once_across_two_writes() {
         .count();
     assert_eq!(resolutions, 1, "{:#?}", workspace.served_since(mark));
 }
+
+/// Two Linear sources over one team in one process share the ids of the labels their writes
+/// name: the first create looks both labels up in one request and the second looks up neither;
+/// a create Linear refuses drops what the tracker holds, so the next create, through the other
+/// instance, looks them up again rather than sending an id that may be what was refused.
+#[test]
+fn two_instances_of_one_tracker_share_label_ids_until_a_refused_write_drops_them() {
+    use onetaskgraph_core::{Body, TaskCreate};
+    let sandbox = Sandbox::new();
+    let held = json!({"tasks": writable(), "documents": [], "labels": [],
+                      "projects": [{"id": "P-1", "title": "Plans", "content": "The plans.",
+                                    "status": {"category": "todo", "name": "Todo"},
+                                    "labels": []}],
+                      "task_dependencies": [], "project_dependencies": []});
+    let (config, workspace) = linear_workspace(&sandbox, held);
+    let secrets = crate::linear_budget::secrets();
+    let mut sources = Vec::new();
+    let mut selection = Vec::new();
+    for name in ["east", "west"] {
+        let name = SourceName::new(name).unwrap();
+        let source = onetaskgraph_linear::Plugin
+            .build(&name, &config, &secrets)
+            .expect("the Linear source builds");
+        sources.push(ConfiguredSource::Ready(ResolvedSource::adopt(
+            name.clone(),
+            source,
+        )));
+        selection.push(name);
+    }
+    let engine = Engine::new(sources, selection);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a runtime");
+    let create = |source: &str, title: &str| TaskCreate {
+        source: SourceName::new(source).unwrap(),
+        project: onetaskgraph_plugin_api::NativeId::from("P-1"),
+        title: title.to_owned(),
+        body: Body::plain("A labelled task."),
+        status: None,
+        labels: vec!["triage".to_owned(), "ops".to_owned()],
+        repositories: Vec::new(),
+        depends_on: Vec::new(),
+        delivers: Vec::new(),
+        metadata: std::collections::BTreeMap::new(),
+        assets: Vec::new(),
+        classification: Default::default(),
+    };
+    let lookups = |mark: usize| -> usize {
+        workspace
+            .served_since(mark)
+            .iter()
+            .filter(|(query, _)| query.contains("issueLabels("))
+            .count()
+    };
+
+    let mark = workspace.served_count();
+    runtime
+        .block_on(engine.create_task(&create("east", "First")))
+        .expect("the first create lands");
+    assert_eq!(lookups(mark), 1, "both labels in one lookup");
+    let mark = workspace.served_count();
+    runtime
+        .block_on(engine.create_task(&create("west", "Second")))
+        .expect("the second create lands");
+    assert_eq!(lookups(mark), 0, "the other instance's ids are used");
+
+    workspace.refuse_creates_titled("Refused");
+    runtime
+        .block_on(engine.create_task(&create("west", "Refused")))
+        .expect_err("Linear refuses the create");
+    let mark = workspace.served_count();
+    let created = runtime
+        .block_on(engine.create_task(&create("east", "Third")))
+        .expect("the third create lands");
+    assert_eq!(lookups(mark), 1, "looked up again after the refusal");
+    let mut labels: Vec<String> = created
+        .task
+        .item
+        .labels
+        .iter()
+        .map(|label| label.name.clone())
+        .collect();
+    labels.sort();
+    assert_eq!(labels, ["ops", "triage"]);
+}

@@ -10,7 +10,7 @@ use onetaskgraph_github_projects::graphql;
 use serde_json::{Value, json};
 
 use crate::common::{Sandbox, stderr, stdout};
-use crate::fixtures::{GitHubBoardFields, github_projects_with_items};
+use crate::fixtures::{AliasAnswer, GitHubBoardFields, github_projects_with_items};
 
 /// One open issue on the board, at the `Status` option `status`.
 fn issue(id: &str, title: &str, body: &str, status: &str) -> Value {
@@ -826,4 +826,53 @@ fn a_later_update_of_one_ticket_is_held_against_what_the_earlier_one_left() {
             .is_some_and(|body| body.starts_with("U-0 settled")),
         "{body}"
     );
+}
+
+/// Two tickets updated together, the second's write answered as `answer` bends its `alias`: the
+/// second's update fails naming why and the first's lands; the second's issue update is sent
+/// only when its field write was answered whole.
+fn two_updates_with_one_answer_bent(alias: &'static str, answer: AliasAnswer) -> (Board, Answered) {
+    let board = ticket_board();
+    board.board.bend_batch_alias(alias, answer);
+    let batch = json!({"schema_version": 1, "updates": [
+        {"item": "board:U-0", "body": "U-0 moved", "status": "in-progress"},
+        {"item": "board:U-1", "body": "U-1 moved", "status": "in-progress"},
+    ]});
+    let answered = board.run(
+        &["task", "update-many", "board", "--input", "-", "--json"],
+        &batch.to_string(),
+    );
+    assert_eq!(answered.code, Some(4), "{}", answered.stderr);
+    let results = answered.json["results"].as_array().expect("results");
+    assert_eq!(results[0]["outcome"], "written", "{:#}", answered.json);
+    assert_eq!(results[1]["outcome"], "error", "{:#}", answered.json);
+    assert_eq!(board.board.status("U-0").as_deref(), Some("Doing"));
+    assert!(
+        board
+            .board
+            .body("U-0")
+            .as_str()
+            .is_some_and(|body| body.starts_with("U-0 moved"))
+    );
+    (board, answered)
+}
+
+#[test]
+fn a_field_write_answered_without_its_alias_fails_that_ticket_alone_and_sends_it_no_issue_update() {
+    let (board, answered) = two_updates_with_one_answer_bent("field1", AliasAnswer::Missing);
+    let reason = answered.json["results"][1]["reason"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(reason.contains("board:U-1"), "{reason}");
+    // The field write was made; the issue update behind it was never sent.
+    assert_eq!(board.board.body("U-1"), json!("ticket 1"));
+}
+
+#[test]
+fn an_issue_update_answered_for_another_issue_fails_that_ticket_alone() {
+    let (_, answered) = two_updates_with_one_answer_bent("update1", AliasAnswer::NamingAnother);
+    let reason = answered.json["results"][1]["reason"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(reason.contains("with another issue"), "{reason}");
 }

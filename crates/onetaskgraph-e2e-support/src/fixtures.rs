@@ -7507,14 +7507,26 @@ fn linear_serve(
                 request["query"].as_str().unwrap_or_default(),
             );
             let (status, response) = if let Some(singles) = aliased {
-                let answered = linear_aliased(
+                let mut answered = linear_aliased(
                     &singles,
                     &request,
                     recorded.as_ref(),
                     &mut state.lock().unwrap(),
                 );
-                // A batch applied whole and its answer then lost, as `lose_answer_once` asks.
                 let operation = request["query"].as_str().unwrap_or_default();
+                // A batch applied whole and answered as `bend_answers` asks.
+                if let Some(data) = answered.1.get_mut("data").filter(|data| !data.is_null()) {
+                    let variables = request.get("variables").cloned().unwrap_or(Value::Null);
+                    let mut bends = workspace.bends.lock().unwrap();
+                    if let Some(bend) = bends
+                        .iter_mut()
+                        .find(|bend| bend.times > 0 && (bend.matches)(operation, &variables))
+                    {
+                        bend.times -= 1;
+                        (bend.bend)(&variables, data);
+                    }
+                }
+                // A batch applied whole and its answer then lost, as `lose_answer_once` asks.
                 let mut lost = workspace.lost.lock().unwrap();
                 match lost.iter().position(|lost| *lost == operation) {
                     Some(at) if answered.1.get("errors").is_none() => {

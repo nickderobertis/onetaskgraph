@@ -564,13 +564,17 @@ impl LinearSource {
             if left.is_empty() {
                 return Err(error);
             }
-            return Err(SourceError::Refused {
-                message: format!(
-                    "{error}; Linear then refused to take back {}, which this write created and \
-                     which it still holds; next: delete {} before writing again",
-                    left.join(", "),
-                    if left.len() == 1 { "it" } else { "them" }
-                ),
+            let message = format!(
+                "{error}; Linear then refused to take back {}, which this write created and \
+                 which it still holds; next: delete {} before writing again",
+                left.join(", "),
+                if left.len() == 1 { "it" } else { "them" }
+            );
+            // A malformed answer stays one, so the caller still knows a create it cannot name
+            // may have landed.
+            return Err(match error {
+                SourceError::Malformed { .. } => SourceError::Malformed { message },
+                _ => SourceError::Refused { message },
             });
         }
         created
@@ -604,22 +608,47 @@ impl LinearSource {
                 .collect();
             match self.send_aliased(graphql::ISSUE_CREATE, &each).await? {
                 Aliased::Answered(values) => {
+                    // Linear applied the whole document, so every create in it that its answer
+                    // names is recorded to be taken back before any answer is refused as
+                    // malformed — one malformed answer leaves the others nameable.
+                    let mut landed = Vec::with_capacity(values.len());
+                    let mut malformed = None;
                     for ((at, create), value) in queued.drain(..).zip(values) {
                         let answered = json!({"issueCreate": value});
-                        let issue = super::mutation_payload(&answered, MutationRoot::IssueCreate)?
-                            .get("issue")
-                            .ok_or_else(|| SourceError::Malformed {
-                                message: "missing issueCreate.issue".to_owned(),
-                            })?;
-                        let id = super::created_as(
-                            NativeId(super::backend_id(issue, "id")?.into()),
-                            create.sent.as_ref(),
-                            "issue",
-                        )?;
+                        let named = super::mutation_payload(&answered, MutationRoot::IssueCreate)
+                            .and_then(|payload| {
+                                payload.get("issue").cloned().ok_or_else(|| {
+                                    SourceError::Malformed {
+                                        message: "missing issueCreate.issue".to_owned(),
+                                    }
+                                })
+                            })
+                            .and_then(|issue| {
+                                let id = super::created_as(
+                                    NativeId(super::backend_id(&issue, "id")?.into()),
+                                    create.sent.as_ref(),
+                                    "issue",
+                                )?;
+                                Ok((id, issue))
+                            });
+                        match named {
+                            Ok((id, issue)) => {
+                                created[at] = Some(id.clone());
+                                landed.push((id, issue, create));
+                            }
+                            Err(error) => {
+                                malformed.get_or_insert(error);
+                            }
+                        }
+                    }
+                    if let Some(error) = malformed {
+                        return Err(error);
+                    }
+                    for (id, issue, create) in landed {
                         self.hold_stored(
                             onetaskgraph_plugin_api::MetadataRecord::Task,
                             &id,
-                            issue,
+                            &issue,
                         )?;
                         let mut sent = create.variables["input"].clone();
                         if let Some(input) = sent.as_object_mut() {
@@ -630,9 +659,6 @@ impl LinearSource {
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner)
                             .insert(id.clone(), sent);
-                        // Recorded before its relations are written, so a refused relation
-                        // still has the issue taken back.
-                        created[at] = Some(id.clone());
                         self.write_relations(
                             &id,
                             &create.edges,
