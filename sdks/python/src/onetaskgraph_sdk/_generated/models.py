@@ -10,13 +10,16 @@ if TYPE_CHECKING:
     from .attestation_state import AttestationState as AttestationState
     from .attested import Attested as Attested
     from .author_kind import AuthorKind as AuthorKind
+    from .batch_outcome import BatchOutcome as BatchOutcome
     from .cache_cleared import CacheCleared as CacheCleared
     from .cache_use import CacheUse as CacheUse
     from .classification import Classification as Classification
     from .comment import Comment as Comment
     from .comment_activity import CommentActivity as CommentActivity
+    from .comment_batch import CommentBatch as CommentBatch
     from .comment_list import CommentList as CommentList
     from .comment_written import CommentWritten as CommentWritten
+    from .comments_added import CommentsAdded as CommentsAdded
     from .comments_since import CommentsSince as CommentsSince
     from .copy_action import CopyAction as CopyAction
     from .copy_link import CopyLink as CopyLink
@@ -33,6 +36,8 @@ if TYPE_CHECKING:
     from .expected_write import ExpectedWrite as ExpectedWrite
     from .failure_document import FailureDocument as FailureDocument
     from .fields_report import FieldsReport as FieldsReport
+    from .find_request import FindRequest as FindRequest
+    from .found_tasks import FoundTasks as FoundTasks
     from .global_id import GlobalId as GlobalId
     from .human_task_projected import HumanTaskProjected as HumanTaskProjected
     from .human_task_projection import HumanTaskProjection as HumanTaskProjection
@@ -90,10 +95,12 @@ if TYPE_CHECKING:
     from .task_ref import TaskRef as TaskRef
     from .task_status_set import TaskStatusSet as TaskStatusSet
     from .task_updated import TaskUpdated as TaskUpdated
+    from .tasks_updated import TasksUpdated as TasksUpdated
     from .template_answers import TemplateAnswers as TemplateAnswers
     from .template_provenance import TemplateProvenance as TemplateProvenance
     from .template_variable import TemplateVariable as TemplateVariable
     from .template_variables import TemplateVariables as TemplateVariables
+    from .update_batch import UpdateBatch as UpdateBatch
     from .updated_field import UpdatedField as UpdatedField
     from .variable_type import VariableType as VariableType
     from .void_reason import VoidReason as VoidReason
@@ -111,13 +118,16 @@ __all__ = [
     "AttestationState",
     "Attested",
     "AuthorKind",
+    "BatchOutcome",
     "CacheCleared",
     "CacheUse",
     "Classification",
     "Comment",
     "CommentActivity",
+    "CommentBatch",
     "CommentList",
     "CommentWritten",
+    "CommentsAdded",
     "CommentsSince",
     "CopyAction",
     "CopyLink",
@@ -134,6 +144,8 @@ __all__ = [
     "ExpectedWrite",
     "FailureDocument",
     "FieldsReport",
+    "FindRequest",
+    "FoundTasks",
     "GlobalId",
     "HumanTaskProjected",
     "HumanTaskProjection",
@@ -187,10 +199,12 @@ __all__ = [
     "TaskRef",
     "TaskStatusSet",
     "TaskUpdated",
+    "TasksUpdated",
     "TemplateAnswers",
     "TemplateProvenance",
     "TemplateVariable",
     "TemplateVariables",
+    "UpdateBatch",
     "UpdatedField",
     "VariableType",
     "VoidReason",
@@ -204,13 +218,16 @@ _MODULES: dict[str, tuple[str, str]] = {
     "AttestationState": ("attestation_state", "AttestationState"),
     "Attested": ("attested", "Attested"),
     "AuthorKind": ("author_kind", "AuthorKind"),
+    "BatchOutcome": ("batch_outcome", "BatchOutcome"),
     "CacheCleared": ("cache_cleared", "CacheCleared"),
     "CacheUse": ("cache_use", "CacheUse"),
     "Classification": ("classification", "Classification"),
     "Comment": ("comment", "Comment"),
     "CommentActivity": ("comment_activity", "CommentActivity"),
+    "CommentBatch": ("comment_batch", "CommentBatch"),
     "CommentList": ("comment_list", "CommentList"),
     "CommentWritten": ("comment_written", "CommentWritten"),
+    "CommentsAdded": ("comments_added", "CommentsAdded"),
     "CommentsSince": ("comments_since", "CommentsSince"),
     "CopyAction": ("copy_action", "CopyAction"),
     "CopyLink": ("copy_link", "CopyLink"),
@@ -227,6 +244,8 @@ _MODULES: dict[str, tuple[str, str]] = {
     "ExpectedWrite": ("expected_write", "ExpectedWrite"),
     "FailureDocument": ("failure_document", "FailureDocument"),
     "FieldsReport": ("fields_report", "FieldsReport"),
+    "FindRequest": ("find_request", "FindRequest"),
+    "FoundTasks": ("found_tasks", "FoundTasks"),
     "GlobalId": ("global_id", "GlobalId"),
     "HumanTaskProjected": ("human_task_projected", "HumanTaskProjected"),
     "HumanTaskProjection": ("human_task_projection", "HumanTaskProjection"),
@@ -280,10 +299,12 @@ _MODULES: dict[str, tuple[str, str]] = {
     "TaskRef": ("task_ref", "TaskRef"),
     "TaskStatusSet": ("task_status_set", "TaskStatusSet"),
     "TaskUpdated": ("task_updated", "TaskUpdated"),
+    "TasksUpdated": ("tasks_updated", "TasksUpdated"),
     "TemplateAnswers": ("template_answers", "TemplateAnswers"),
     "TemplateProvenance": ("template_provenance", "TemplateProvenance"),
     "TemplateVariable": ("template_variable", "TemplateVariable"),
     "TemplateVariables": ("template_variables", "TemplateVariables"),
+    "UpdateBatch": ("update_batch", "UpdateBatch"),
     "UpdatedField": ("updated_field", "UpdatedField"),
     "VariableType": ("variable_type", "VariableType"),
     "VoidReason": ("void_reason", "VoidReason"),

@@ -6,7 +6,9 @@ import { binaryCommands } from "./generated/commands.ts";
 import type {
   CacheCleared,
   Classification,
+  CommentBatch,
   CommentList,
+  CommentsAdded,
   CommentsSince,
   CommentWritten,
   CopyReport,
@@ -15,6 +17,8 @@ import type {
   EffectiveConfig,
   FailureDocument,
   FieldsReport,
+  FindRequest,
+  FoundTasks,
   HumanTaskProjected,
   IssuesCompleted,
   LocateReport,
@@ -49,9 +53,11 @@ import type {
   TaskDetails,
   TaskPrioritySet,
   TaskStatusSet,
+  TasksUpdated,
   TaskUpdated,
   TemplateAnswers,
   TemplateVariables,
+  UpdateBatch,
 } from "./generated/models.ts";
 import { SCHEMA_BUNDLE_VERSION } from "./generated/models.ts";
 import { runtimeSchemas } from "./generated/schemas.ts";
@@ -159,7 +165,13 @@ export type TaskCopyOptions = StatusCopyOptions &
   CopyQueryOptions &
   CopyConditionOptions &
   ExpectOptions &
-  HeldOptions & { create?: boolean; targetTask?: string };
+  // `ifVersion` holds the one counterpart of a one-id copy to a bare version, or each
+  // counterpart to its own version as `<ID>=<VERSION>`, one entry per id held.
+  Omit<HeldOptions, "ifVersion"> & {
+    create?: boolean;
+    targetTask?: string;
+    ifVersion?: string | string[];
+  };
 // A comment's body, given as text the client writes to the binary's standard input or as a
 // file the binary reads byte for byte — never as a word of the command line.
 export type CommentBodyOptions = ({ body: string } | { bodyFile: string }) &
@@ -234,6 +246,9 @@ export type TaskUpdateOptions = WriteOptions &
     dependsOn?: string[];
     // The repository origins the task names, replacing its list; `[]` clears it.
     repositories?: string[];
+    // Write only while the task holds one of these priorities — `none` for one with none; at
+    // any other nothing is written and the answer's `guard` says `held`.
+    whenPriority?: Priority[];
   };
 // A regenerate: the template to use in place of the recorded one, answers laid over the stored
 // base, `unset` names whose answer is dropped, and `dryRun` to write nothing.
@@ -322,6 +337,11 @@ export const commandResponseRoots: Readonly<Record<string, keyof typeof runtimeS
   "task attest": "Attested",
   "task attestation check": "AttestationCheck",
   "task update": "TaskUpdated",
+  // Many narrowed searches of one source, each answered under its own key across every page.
+  "task find": "FoundTasks",
+  // Many held updates and many comments of one source, each answered on its own.
+  "task update-many": "TasksUpdated",
+  "task comment add-many": "CommentsAdded",
   "project list": "QueryResponseOfQualifiedProject",
   "project show": "QueryResponseOfQualifiedProject",
   "project deps": "QueryResponseOfQualifiedEdge",
@@ -388,7 +408,9 @@ export const commandAlternateRoots: Readonly<
 // fails, and `sources route` reads configuration alone. `project graph` prints a graph or
 // nothing, and a graph lacking a private source it could not ask names it in `unanswered` and
 // exits 0, so it never exits 4. `task assets` reads one task from one source and
-// writes its assets whole or fails. A template verb reads no source at all. Of the verbs that create and regenerate from
+// writes its assets whole or fails. A template verb reads no source at all. A batch —
+// `task comment add-many`, `task update-many` — answers each item on its own and exits 4 when
+// any was not written, and `task find` exits 4 when a search's pages were cut short. Of the verbs that create and regenerate from
 // one, `task create` alone keeps what it delivers in step, so it alone can exit 4.
 const partialResponseCommands = new Set(
   Object.keys(commandResponseRoots).filter(
@@ -400,7 +422,7 @@ const partialResponseCommands = new Set(
       command !== "sources route" &&
       command !== "sources sanitize" &&
       command !== "project graph" &&
-      !command.startsWith("task comment ") &&
+      (!command.startsWith("task comment ") || command === "task comment add-many") &&
       !command.endsWith(" metadata set") &&
       !command.endsWith(" priority set") &&
       !command.endsWith(" content set") &&
@@ -597,6 +619,7 @@ export const taskUpdateOptionFlags: Readonly<Record<keyof TaskUpdateOptions, str
   sanitizeDryRun: "--sanitize-dry-run",
   expect: "--expect",
   ifVersion: "--if-version",
+  whenPriority: "--when-priority",
   // `[]` is sent as `--no-repositories`, which is how the list is cleared.
   repositories: "--repository",
 };
@@ -670,6 +693,9 @@ export function taskUpdateFlags(options: unknown): string[] {
     const origins = stringList(method, "repositories", options.repositories);
     if (origins.length === 0) args.push("--no-repositories");
     for (const origin of origins) args.push("--repository", origin);
+  }
+  for (const priority of stringList(method, "whenPriority", options.whenPriority)) {
+    args.push("--when-priority", priority);
   }
   args.push(...writePolicyFlags(method, options));
   return args;
@@ -1079,9 +1105,12 @@ export function taskCopyFlags(options: TaskCopyOptions): string[] {
       ? []
       : ["--target-task", stringOption("taskCopy", "targetTask", options.targetTask)]),
     ...expectFlags("taskCopy", options),
-    ...(options.ifVersion === undefined
-      ? []
-      : ["--if-version", stringOption("taskCopy", "ifVersion", options.ifVersion)]),
+    ...(typeof options.ifVersion === "string"
+      ? ["--if-version", options.ifVersion]
+      : stringList("taskCopy", "ifVersion", options.ifVersion).flatMap((held) => [
+          "--if-version",
+          held,
+        ])),
   ];
 }
 
@@ -2045,6 +2074,39 @@ export class OnetaskgraphClient {
   // references it by, and answer with the names written.
   taskAssets(id: string, outputDir: string): Promise<TaskAssetNames> {
     return this.run("task assets", [id, "--output-dir", outputDir]);
+  }
+  // Many narrowed searches of `source` in one call, each answered under its own key with every
+  // matching task across every page. The request is written to the binary's standard input.
+  taskFind(source: string, request: FindRequest): Promise<FoundTasks> {
+    return this.run(
+      "task find",
+      [source, "--queries", "-"],
+      jsonDocument(request, "taskFind", "request"),
+    );
+  }
+  // Many held updates of `source`'s tasks in one call, each answered on its own.
+  taskUpdateMany(
+    source: string,
+    batch: UpdateBatch,
+    options: WriteOptions & { sanitizeDryRun?: false } = {},
+  ): Promise<TasksUpdated> {
+    return this.run(
+      "task update-many",
+      [source, "--input", "-", ...writePolicyFlags("taskUpdateMany", options)],
+      jsonDocument(batch, "taskUpdateMany", "batch"),
+    );
+  }
+  // Many comments on `source`'s tasks in one call, each answered on its own.
+  taskCommentAddMany(
+    source: string,
+    batch: CommentBatch,
+    options: WriteOptions & { sanitizeDryRun?: false } = {},
+  ): Promise<CommentsAdded> {
+    return this.run(
+      "task comment add-many",
+      [source, "--input", "-", ...writePolicyFlags("taskCommentAddMany", options)],
+      jsonDocument(batch, "taskCommentAddMany", "batch"),
+    );
   }
   // Project one human task from the `HumanTaskProjection` request at `input`, a file path or
   // `-` for standard input: created once by its `item_id`, and settled once at a terminal state.

@@ -118,6 +118,9 @@ PARTIAL_WRITE_COMMANDS: frozenset[tuple[str, ...]] = frozenset(
         ("task", "comment", "add"),
         ("task", "comment", "edit"),
         ("task", "comment", "delete"),
+        # A batch answers each item on its own, and exits 4 when any was not written.
+        ("task", "comment", "add-many"),
+        ("task", "update-many"),
         ("task", "project-human"),
         ("sources", "fields"),
         ("sources", "status-options"),
@@ -137,6 +140,8 @@ NOT_PARTIAL_WRITE_COMMANDS: frozenset[tuple[str, ...]] = frozenset(
         ("task", "locate"),
         ("task", "comment", "list"),
         ("task", "comments"),
+        # A read: exit 4 says a search's pages were cut short, never that anything was written.
+        ("task", "find"),
         ("task", "answers"),
         ("task", "assets"),
         ("project", "list"),

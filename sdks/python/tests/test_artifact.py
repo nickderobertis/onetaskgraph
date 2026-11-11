@@ -293,7 +293,22 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     # read from the raw document and the roots from the validated one.
     bundle = generate.validate_schema_bundle(emitted_bundle)
 
-    assert emitted_bundle["version"] == 60
+    assert emitted_bundle["version"] == 61
+    # Version 61: the batch documents `task find`, `task update-many` and `task comment
+    # add-many` read and answer, and the priority guard `task update` reports.
+    assert {
+        "FindRequest",
+        "FoundTasks",
+        "UpdateBatch",
+        "TasksUpdated",
+        "CommentBatch",
+        "CommentsAdded",
+        "BatchOutcome",
+    } <= set(bundle["roots"])
+    assert "guard" in emitted_bundle["roots"]["TaskUpdated"]["properties"]
+    assert {"task find", "task update-many", "task comment add-many"} <= set(
+        emitted_bundle["commands"]
+    )
     # Version 59: a template variable's `schema`, the attestation roots, and a project
     # template's plan-graph members and the plan a dry run answers.
     assert "schema" in emitted_bundle["roots"]["TemplateVariable"]["properties"]
