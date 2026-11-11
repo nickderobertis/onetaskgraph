@@ -37,6 +37,8 @@ pub(super) struct Relations {
     cut_after: Option<usize>,
     /// The request being answered was cut short, and is to be answered 504.
     timed_out: bool,
+    /// Answer the next read of what issues relate to as though each had a further page.
+    read_back_incomplete: bool,
 }
 
 impl Relations {
@@ -148,6 +150,12 @@ impl GitHubBoardFields {
         self.board.lock().unwrap().relations.cut_after = Some(landed);
     }
 
+    /// Answer the next read of what issues relate to — the read a relation write whose answer
+    /// never arrived is followed by — with every connection saying it has a further page.
+    pub fn leave_next_relates_to_read_incomplete(&self) {
+        self.board.lock().unwrap().relations.read_back_incomplete = true;
+    }
+
     /// The parent issue of `id`, by its sub-issue link.
     #[must_use]
     pub fn sub_issue_parent(&self, id: &str) -> Option<String> {
@@ -187,7 +195,8 @@ pub(super) fn answer(
         return Some(Value::Object(answered));
     }
     if query == graphql::RELATES_TO_READS {
-        let held = board.lock().unwrap();
+        let mut held = board.lock().unwrap();
+        let incomplete = std::mem::take(&mut held.relations.read_back_incomplete);
         let mut answered = serde_json::Map::new();
         for slot in 0..DETAIL_BATCH {
             let id = variables[format!("id{slot}")].as_str().expect("an id");
@@ -196,7 +205,7 @@ pub(super) fn answer(
                 format!("r{slot}"),
                 json!({"id": id, "relatesTo": {
                     "nodes": related.iter().map(|other| json!({"id": other})).collect::<Vec<_>>(),
-                    "pageInfo": {"hasNextPage": false}}}),
+                    "pageInfo": {"hasNextPage": incomplete}}}),
             );
         }
         return Some(Value::Object(answered));

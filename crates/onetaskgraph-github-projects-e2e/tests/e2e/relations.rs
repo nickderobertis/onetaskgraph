@@ -1240,3 +1240,82 @@ fn a_removal_whose_second_end_is_refused_answers_partial_and_a_repeat_finishes_i
         assert!(!body.contains("onetaskgraph.links"), "{id}: {body}");
     }
 }
+
+#[test]
+fn a_read_back_that_cannot_establish_a_relation_leaves_the_link_unwritten_until_a_repeat() {
+    // A mirror document lands its one relation and is answered 504; the read-back that follows
+    // is answered incomplete, and on a second attempt with an error beside its alias. Neither
+    // establishes the relation, so the link is `error` and neither end's metadata or `## Links`
+    // moves; once the board answers normally, a repeat completes it.
+    let board = Board::of(vec![issue("A-1", None), issue("B-2", None)], &mirrored());
+    let bodies = |board: &Board| {
+        ["A-1", "B-2"].map(|id| {
+            board.board.item(id).unwrap()["body"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+    };
+    let before = bodies(&board);
+    for unreadable in ["incomplete", "an error beside its alias"] {
+        board.board.time_out_next_relation_write_after(1);
+        if unreadable == "incomplete" {
+            board.board.leave_next_relates_to_read_incomplete();
+        } else {
+            board
+                .board
+                .error_beside_alias_once("r0", "Something went wrong while executing your query");
+        }
+        let (cut, served) = board.links("add-many", &[("A-1", "B-2", "caused-by")]);
+        assert_eq!(outcomes(&cut), ["error"], "{unreadable}: {:#}", cut.json);
+        assert_eq!(cut.code, Some(4));
+        assert_eq!(sent(&served, graphql::RELATES_TO_READS), 1, "{unreadable}");
+        assert_eq!(bodies(&board), before, "{unreadable}: no end was written");
+        let read = board.relations(&["A-1", "B-2"]);
+        assert!(
+            read.iter().all(|item| item["links"] == json!([])),
+            "{read:#?}"
+        );
+    }
+    // The relation landed each time; the repeat sends it again and lands both ends.
+    assert_eq!(board.board.relates_to("A-1"), ["B-2"]);
+    let (repeat, served) = board.links("add-many", &[("A-1", "B-2", "caused-by")]);
+    assert_eq!(outcomes(&repeat), ["written"], "{:#}", repeat.json);
+    assert_eq!(fields_sent(&served, graphql::ADD_RELATES_TO), [1]);
+    let read = board.relations(&["A-1", "B-2"]);
+    assert_eq!(
+        links_of(&read[0]),
+        [link("caused-by", "out", "B-2", "present")]
+    );
+    assert_eq!(
+        links_of(&read[1]),
+        [link("caused-by", "in", "A-1", "present")]
+    );
+    assert!(links_section(&board.board, "A-1").contains("[Ticket B-2]("));
+}
+
+#[test]
+fn a_relations_read_answered_with_an_error_beside_an_alias_is_refused_never_a_whole_answer() {
+    let board = Board::of(
+        vec![issue("A-1", None), issue("B-2", Some("A-1"))],
+        &parent_source(),
+    );
+    board
+        .board
+        .error_beside_alias_once("i0", "Something went wrong while executing your query");
+    let (read, served) = board.measured(&["task", "relations", "board:A-1", "--json"], "");
+    assert_eq!(sent(&served, graphql::ISSUE_RELATIONS), 1);
+    assert_ne!(read.code, Some(0), "{:#}", read.json);
+    assert!(read.json.get("items").is_none(), "{:#}", read.json);
+    assert!(
+        read.stderr
+            .contains("Something went wrong while executing your query"),
+        "{}",
+        read.stderr
+    );
+    // Answered normally, the same read is whole.
+    assert_eq!(
+        board.relations(&["A-1"])[0]["children"],
+        json!(["board:B-2"])
+    );
+}

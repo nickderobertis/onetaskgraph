@@ -120,6 +120,9 @@ impl GitHubProjectsSource {
             variables.insert("nestedFirst".to_owned(), json!(NESTED_PAGE_SIZE));
             variables.insert("boardItems".to_owned(), json!(BOARD_ITEMS_PAGE_SIZE));
             variables.insert("duplicates".to_owned(), json!(true));
+            // Not one of the documents whose answer keeps its errors beside its data
+            // (`send_once`): a response carrying any GraphQL error — one at an alias's path
+            // included — is refused whole here, so no slot below is read from a part-answer.
             let data = self
                 .graphql(graphql::ISSUE_RELATIONS, Value::Object(variables))
                 .await?;
@@ -535,6 +538,8 @@ impl GitHubProjectsSource {
                 variables.insert(format!("id{slot}"), json!(id));
             }
             variables.insert("first".to_owned(), json!(MAX_PAGE_SIZE));
+            // As the relations read: a response carrying any GraphQL error is refused whole, so
+            // the read-back answers every link of it as unknown rather than as absent.
             let data = self
                 .graphql(graphql::RELATES_TO_READS, Value::Object(variables))
                 .await?;
