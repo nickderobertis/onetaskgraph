@@ -567,6 +567,7 @@ pub mod live_artifact;
 
 mod batch;
 mod origins;
+mod relations;
 mod shared;
 
 /// The plugin kind a `linear` source's `plugin:` field names.
@@ -924,9 +925,15 @@ pub mod graphql {
     /// Remove a comment.
     pub const COMMENT_DELETE: &str = "mutation($id:String!){ commentDelete(id:$id){success} }";
 
+    /// One issue as a relation read reads it: the task, its parent and a first page of its
+    /// children — and nothing else, because the selection is what moves a read's complexity.
+    pub const ISSUE_PARENT_READ: &str = "query($id:String!){ issue(id:$id){ id identifier title description url createdAt updatedAt archivedAt state{name type} priority labels{nodes{id name color}} project{id} parent{id} children(first:50){nodes{id} pageInfo{hasNextPage}} } }";
+    /// Set or remove one issue's parent — `parentId: null` removes it — reading the issue back.
+    pub const ISSUE_PARENT_UPDATE: &str = "mutation($id:String!,$input:IssueUpdateInput!){ issueUpdate(id:$id,input:$input){success issue{ id identifier title description descriptionState url createdAt updatedAt archivedAt state{name type} priority labels{nodes{id name color}} project{id} parent{id} }} }";
+
     /// The documents this source sends batched by [`composed`], each the single-root document it
     /// batches.
-    pub const BATCHED: [&str; 13] = [
+    pub const BATCHED: [&str; 17] = [
         ISSUE_CREATE,
         ISSUE_LABEL,
         PROJECT_LABEL,
@@ -940,6 +947,10 @@ pub mod graphql {
         PROJECT,
         PROJECT_DEPENDS_ON,
         DOCUMENT,
+        ISSUE_PARENT_READ,
+        ISSUE_PARENT_UPDATE,
+        ISSUE_RELATIONS,
+        ISSUE_RELATION_DELETE,
     ];
 
     /// `single` — a document of one root field, as this source sends it alone — `count` times
@@ -1118,6 +1129,10 @@ pub struct LinearConfig {
     /// no project is placed in it, and one naming another project is refused. Absent, the
     /// source reads and writes team-wide.
     project: Option<ProjectScope>,
+    /// The link types this source mirrors as Linear's own `related` issue relation, each as
+    /// `<type>: {"native": "related"}` — the one word a Linear source mirrors a link as. A type
+    /// not named here is kept in the store's metadata alone.
+    link_types: std::collections::BTreeMap<String, onetaskgraph_plugin_api::LinkTypeConfig>,
 }
 
 /// The id of one Linear project, which a scoped source holds alone.
@@ -1212,6 +1227,7 @@ impl Default for LinearConfig {
             endpoint: Endpoint(DEFAULT_ENDPOINT.into()),
             status_mapping: StatusMapping::default(),
             project: None,
+            link_types: std::collections::BTreeMap::new(),
         }
     }
 }
@@ -1858,6 +1874,8 @@ struct LinearSource {
     /// What [`TaskSource::read_ahead_origins_for_copy`] read, until the next write or
     /// [`TaskSource::end_command`]; see [`origins::OriginsAhead`].
     origins_ahead: std::sync::Mutex<origins::OriginsAhead>,
+    /// The link types this source mirrors as Linear's `related` relation.
+    link_types: onetaskgraph_plugin_api::LinkTypes,
 }
 
 /// One item's dependency read in one direction, as [`LinearSource::edges_versions`] keys it.
@@ -1879,6 +1897,17 @@ impl LinearSource {
                     .map(|(category, mapped)| (category, mapped.as_str())),
             )?;
         }
+        let link_types = onetaskgraph_plugin_api::LinkTypes::checked(
+            KIND,
+            &config.link_types,
+            &[relations::MIRRORED],
+        )
+        .map_err(|error| match error {
+            SourceError::Config { message } => SourceError::Config {
+                message: format!("source {name}: {message}"),
+            },
+            other => other,
+        })?;
         let key = secrets
             .get(&config.api_key_env.0)
             .filter(|v| !v.expose_secret().trim().is_empty())
@@ -1912,6 +1941,7 @@ impl LinearSource {
             body_markup: std::sync::OnceLock::new(),
             answered: std::sync::Mutex::new(std::collections::HashMap::new()),
             origins_ahead: std::sync::Mutex::new(origins::OriginsAhead::default()),
+            link_types,
         })
     }
 }
@@ -5446,6 +5476,38 @@ impl TaskSource for LinearSource {
     }
     /// Every issue read in one aliased read and every update that changes something sent in
     /// one aliased `issueUpdate` document — see the `batch` module for where one is sent alone.
+    async fn read_relations(
+        &self,
+        ids: &[NativeId],
+    ) -> Result<Vec<Option<onetaskgraph_plugin_api::Relations>>, SourceError> {
+        self.relations_read(ids).await
+    }
+
+    async fn set_parents(
+        &self,
+        writes: &[onetaskgraph_plugin_api::ParentWrite],
+    ) -> Vec<Result<onetaskgraph_plugin_api::ParentAnswer, SourceError>> {
+        self.parents_written(writes).await
+    }
+
+    fn link_types(&self) -> onetaskgraph_plugin_api::LinkTypes {
+        self.link_types.clone()
+    }
+
+    async fn add_native_links(
+        &self,
+        links: &[onetaskgraph_plugin_api::NativeLink],
+    ) -> Vec<Result<(), SourceError>> {
+        self.native_links_added(links).await
+    }
+
+    async fn remove_native_links(
+        &self,
+        links: &[onetaskgraph_plugin_api::NativeLink],
+    ) -> Vec<Result<(), SourceError>> {
+        self.native_links_removed(links).await
+    }
+
     async fn update_tasks(
         &self,
         updates: &[onetaskgraph_plugin_api::BatchUpdate],
@@ -6812,6 +6874,8 @@ fn map_task(
     // and reporting it there as well would hand a consumer two spellings of one list.
     let delivers = delivery_list(&mut metadata, TaskRef::DELIVERS_KEY, &id, source)?;
     let delivered_by = delivery_list(&mut metadata, TaskRef::DELIVERED_BY_KEY, &id, source)?;
+    // The `## Links` section the store renders beside an issue's links is not its content.
+    let content = onetaskgraph_plugin_api::read_content(content, &metadata);
     Ok(Task {
         version: change_token::task(v, spelling),
         id,

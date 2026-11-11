@@ -201,6 +201,8 @@ fn pinned_schema_checks_selected_fields_arguments_and_fixture_keys() {
                 "priority",
                 "labelIds",
                 "projectId",
+                // A parent written, or removed with null, by `task parent set-many`.
+                "parentId",
             ][..],
         ),
         (
@@ -329,6 +331,7 @@ fn pinned_schema_checks_selected_fields_arguments_and_fixture_keys() {
         (graphql::VIEWER, None),
         (graphql::ORGANIZATION, None),
         (graphql::ISSUE, None),
+        (graphql::ISSUE_PARENT_READ, None),
         (graphql::ISSUE_RESOLVED, None),
         (graphql::PROJECT, None),
         (graphql::ISSUES, Some(include_str!("fixtures/issues.json"))),
@@ -565,6 +568,8 @@ fn pinned_schema_names_every_write_operation_the_plugin_sends() {
         (graphql::PROJECT_RELATION_CREATE, true),
         (graphql::ISSUE_RELATION_DELETE, true),
         (graphql::PROJECT_RELATION_DELETE, true),
+        (graphql::ISSUE_PARENT_READ, false),
+        (graphql::ISSUE_PARENT_UPDATE, true),
         (graphql::ISSUE_DELETE, true),
         (graphql::PROJECT_DELETE, true),
         (graphql::DOCUMENT_CREATE, true),

@@ -180,6 +180,10 @@ type Issue {
   priority: Float!
   labels: IssueLabelConnection!
   project: Project
+  # The issue's parent and its children, as Linear's published schema declares them; spike
+  # `spike-relations` read both back from real Linear on 2026-11-08 (requests 66–96).
+  parent: Issue
+  children(first: Int, after: String): IssueConnection!
   relations(first: Int!, after: String): IssueRelationConnection!
   inverseRelations(first: Int!, after: String): IssueRelationConnection!
   comments(before: String, last: Int, first: Int): CommentConnection!
@@ -525,6 +529,8 @@ input IssueUpdateInput {
   priority: Int
   labelIds: [String!]
   projectId: String
+  # Set, moved and — with null — removed by spike `spike-relations` on 2026-11-08 (66, 70, 73).
+  parentId: String
 }
 input ProjectCreateInput {
   # The identifier, chosen by the caller, as Linear's published ProjectCreateInput documents it:
