@@ -147,6 +147,7 @@ pub struct CommentsAdded {
 }
 
 /// What became of one comment of a [`CommentBatch`].
+// llmlint: ignore[invalid_states_unrepresentable] The shape is the contract the task fixes literally — `{"item", "outcome", "comment", "current_version", "reason"}` with `outcome` a tag beside flat members — which other nodes of the plan build against; every result is made by `Engine::add_comments` or `comment_error` in this module, each setting the members its outcome carries and no other.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct CommentAddResult {
     /// The item as the batch named it.
@@ -233,6 +234,7 @@ pub struct TasksUpdated {
 }
 
 /// What became of one update of an [`UpdateBatch`].
+// llmlint: ignore[invalid_states_unrepresentable] As `CommentAddResult`: `{"item", "outcome", "version", "current_version", "reason"}` is the contract the task fixes literally, and every result is made by `Engine::update_tasks` or `update_error` in this module, each setting the members its outcome carries and no other.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct UpdateResult {
     /// The item as the batch named it.
@@ -292,6 +294,27 @@ impl FindAnswer {
             reason: Some(reason),
         }
     }
+}
+
+/// `answers`, a source's answer to a batched call of `asked` items, as exactly one answer per
+/// item: one left unanswered is that item's malformed answer, and an answer past the last item
+/// is dropped, both named.
+fn one_each<T>(
+    source: &SourceName,
+    asked: usize,
+    answers: Vec<Result<T, onetaskgraph_plugin_api::SourceError>>,
+) -> Vec<Result<T, onetaskgraph_plugin_api::SourceError>> {
+    let answered = answers.len();
+    let mut answers: Vec<_> = answers.into_iter().take(asked).collect();
+    while answers.len() < asked {
+        answers.push(Err(onetaskgraph_plugin_api::SourceError::Malformed {
+            message: format!(
+                "{source} answered {answered} of the {asked} items of one batched call, \
+                 leaving this one unanswered"
+            ),
+        }));
+    }
+    answers
 }
 
 /// A batch document of another schema version than this engine reads, refused whole.
@@ -438,7 +461,11 @@ impl Engine {
                     )
                 })
                 .collect();
-            let answered = resolved.source().query_tasks_batch(&asks).await;
+            let answered = one_each(
+                source,
+                asks.len(),
+                resolved.source().query_tasks_batch(&asks).await,
+            );
             for (at, answer) in walking.into_iter().zip(answered) {
                 let walk = &mut walks[at];
                 walk.pages += 1;
@@ -529,7 +556,11 @@ impl Engine {
         let answers = if writes.is_empty() {
             Vec::new()
         } else {
-            resolved.source().add_comments(&writes).await
+            one_each(
+                source,
+                writes.len(),
+                resolved.source().add_comments(&writes).await,
+            )
         };
         for ((at, written), answer) in sent.into_iter().zip(answers) {
             let item = batch.comments[at].item.clone();
@@ -637,7 +668,11 @@ impl Engine {
         let answers = if writes.is_empty() {
             Vec::new()
         } else {
-            resolved.source().update_tasks(&writes).await
+            one_each(
+                source,
+                writes.len(),
+                resolved.source().update_tasks(&writes).await,
+            )
         };
         for ((at, id, written), answer) in sent.into_iter().zip(answers) {
             let item = batch.updates[at].item.clone();

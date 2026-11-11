@@ -349,7 +349,6 @@ impl Cycle {
 
     /// Run the whole cycle, every call's measurement in order, by phase.
     fn measure(&self) -> Vec<(&'static str, Vec<Call>)> {
-        // batch
         let (find, versions) = self.find();
         assert_eq!(versions.len(), FOUND, "{versions:?}");
         let read = self.show_many(&self.found);
@@ -403,7 +402,6 @@ impl Cycle {
         let batch = vec![find, read, copy, add, update];
         self.board.pass_time(120);
 
-        // retry
         let (find, retried) = self.find();
         assert_eq!(retried.len(), FOUND + NEW, "{retried:?}");
         let read = self.show_many(&self.found);
@@ -436,7 +434,6 @@ impl Cycle {
         );
         let retry = vec![find, read, copy, add, update];
 
-        // pass
         let since = self.board.now();
         for proposal in self.proposals() {
             for n in 0..2 {
@@ -484,7 +481,6 @@ impl Cycle {
         let pass = vec![comments_read, verify, change];
         self.board.pass_time(120);
 
-        // repeated pass
         let (seen, comments_read) = self.comments_since(&watermark);
         assert_eq!(
             seen["comments"].as_array().expect("comments").len(),

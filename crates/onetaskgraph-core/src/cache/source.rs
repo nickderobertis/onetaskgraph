@@ -886,9 +886,6 @@ impl CachedSource {
         Ok(answered)
     }
 
-    /// Run one write naming `id`, every entry naming it taken out of service before anything is
-    /// sent — the write refused, sending nothing, when that cannot be done — and left
-    /// unserveable after it.
     /// Whether this cache answers a copy's read of `id` with no request: a task or a project
     /// only when it holds its forward edges too, which a copy reads of it next — where the token
     /// does not cover them, or the entry holds none, its edge reads would each be a request of
@@ -921,6 +918,9 @@ impl CachedSource {
         written
     }
 
+    /// Run one write naming `id`, every entry naming it taken out of service before anything is
+    /// sent — the write refused, sending nothing, when that cannot be done — and left
+    /// unserveable after it.
     async fn retiring<T>(
         &self,
         id: Option<&NativeId>,

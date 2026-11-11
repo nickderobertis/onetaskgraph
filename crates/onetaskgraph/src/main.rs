@@ -1961,13 +1961,24 @@ fn copy_versions(request: &CopyRequest, given: &[String]) -> Result<CopyHeld, Fa
     let ids = request.items.as_slice();
     let mut each = std::collections::HashMap::new();
     for value in given {
-        let named = value.split_once('=').and_then(|(id, version)| {
-            let id = id.parse::<GlobalId>().ok()?;
-            ids.contains(&id).then(|| (id, version.to_owned()))
-        });
+        let parsed = value
+            .split_once('=')
+            .and_then(|(id, version)| Some((id.parse::<GlobalId>().ok()?, version.to_owned())));
+        let named = parsed.clone().filter(|(id, _)| ids.contains(id));
         match named {
             Some((id, version)) => {
                 each.insert(id, version);
+            }
+            // A qualified id before the `=` names a task, and it is not one this copy copies.
+            None if let Some((id, _)) = parsed => {
+                return Err(Failure::decided(
+                    "if-version-one-task",
+                    format!(
+                        "--if-version {value}: {id} is not one of the ids this copy is given\n\
+                         next: name one of them before the `=`, or give a bare version beside \
+                         exactly one id."
+                    ),
+                ));
             }
             None if given.len() == 1 && ids.len() == 1 && request.items.query().is_none() => {
                 return Ok(CopyHeld::Whole(value.clone()));

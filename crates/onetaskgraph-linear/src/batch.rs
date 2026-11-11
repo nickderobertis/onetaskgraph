@@ -91,11 +91,19 @@ impl LinearSource {
             )
             .await?
         {
-            Ok(data) => Ok(Aliased::Answered(
-                (0..each.len())
-                    .map(|at| data.get(format!("a{at}")).cloned().unwrap_or(Value::Null))
-                    .collect(),
-            )),
+            Ok(data) => (0..each.len())
+                .map(|at| {
+                    data.get(format!("a{at}"))
+                        .cloned()
+                        .ok_or_else(|| SourceError::Malformed {
+                            message: format!(
+                                "Linear answered a batch of {} without alias a{at}",
+                                each.len()
+                            ),
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()
+                .map(Aliased::Answered),
             Err(refusal) => match refusal.alias() {
                 Some(at) if at < each.len() => Ok(Aliased::Refused(at, refusal)),
                 _ => Err(refusal.into_error()),

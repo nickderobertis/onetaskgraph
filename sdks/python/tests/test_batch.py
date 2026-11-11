@@ -14,6 +14,7 @@ import asyncio
 import json
 import os
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 
@@ -34,14 +35,24 @@ from onetaskgraph_sdk._generated.copy_report import (
     CopyOutcomeUpdated,
 )
 
+
+class Seeded(NamedTuple):
+    """One task of `plan` as the folder holds it before any call."""
+
+    title: str
+    status: str
+    priority: str
+    colour: str
+
+
 TASKS = {
-    "a": ("Alpha batch", "todo", "high", "red"),
-    "b": ("Bravo batch", "todo", "high", "red"),
-    "c": ("Charlie batch", "in-progress", "low", "blue"),
-    "d": ("Delta", "todo", "none", "red"),
-    "e": ("Echo batch", "done", "none", "green"),
+    "a": Seeded("Alpha batch", "todo", "high", "red"),
+    "b": Seeded("Bravo batch", "todo", "high", "red"),
+    "c": Seeded("Charlie batch", "in-progress", "low", "blue"),
+    "d": Seeded("Delta", "todo", "none", "red"),
+    "e": Seeded("Echo batch", "done", "none", "green"),
 }
-"""Each task of `plan`: its title, status, priority and `myapp.colour`."""
+"""Each task of `plan`, by its id."""
 
 
 @pytest.fixture
@@ -49,10 +60,10 @@ def store(tmp_path: Path) -> Path:
     """A folder `plan` holding five tasks and an empty folder `snap` to copy into."""
     tasks = tmp_path / "plan" / "tasks"
     tasks.mkdir(parents=True)
-    for name, (title, status, priority, colour) in TASKS.items():
+    for name, task in TASKS.items():
         (tasks / f"{name}.md").write_text(
-            f"---\ntitle: {title}\nstatus: {status}\npriority: {priority}\n"
-            f"metadata:\n  myapp.colour: {colour}\n---\nThe {name} body.\n",
+            f"---\ntitle: {task.title}\nstatus: {task.status}\npriority: {task.priority}\n"
+            f"metadata:\n  myapp.colour: {task.colour}\n---\nThe {name} body.\n",
             encoding="utf-8",
             newline="\n",
         )
@@ -142,7 +153,7 @@ def test_a_copy_holds_each_counterpart_to_its_own_version(binary: Path, store: P
     moved_to = version_of(client, counterparts["plan:b"])
     assert moved_to != read["plan:b"]
     for name in "abcd":
-        asyncio.run(client.task_update(f"plan:{name}", title=f"{TASKS[name][0]}, revised"))
+        asyncio.run(client.task_update(f"plan:{name}", title=f"{TASKS[name].title}, revised"))
 
     second = asyncio.run(
         client.task_copy(
@@ -155,7 +166,7 @@ def test_a_copy_holds_each_counterpart_to_its_own_version(binary: Path, store: P
     for written in ("plan:a", "plan:c", "plan:d"):
         assert isinstance(outcomes[written], CopyOutcomeUpdated), outcomes[written]
         title = asyncio.run(client.task_show(counterparts[written])).items[0].item.title
-        assert title == f"{TASKS[written.removeprefix('plan:')][0]}, revised"
+        assert title == f"{TASKS[written.removeprefix('plan:')].title}, revised"
     refused = outcomes["plan:b"]
     assert isinstance(refused, CopyOutcomeFailed)
     assert refused.error.kind == "version-moved"

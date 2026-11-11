@@ -5965,8 +5965,8 @@ impl Engine {
         let mut together: Vec<(SourceName, Vec<usize>)> = Vec::new();
         for (index, item) in planned.iter().enumerate() {
             // At a destination whose creates together carry the copy's record, a task depending
-            // on another of this copy is created on its own, after what it depends on, so its
-            // edges land with its create rather than in a second write.
+            // on another of this copy, or linking to one, is created on its own, after what it
+            // names, so its edges and links land with its create rather than in a second write.
             let whole = self
                 .writable(&item.to)
                 .is_ok_and(|destination| destination.source().records_created_together());
@@ -5974,7 +5974,10 @@ impl Engine {
                 && matches!(item.target, Target::Create)
                 && !item.skipped
                 && item.assets.is_empty()
-                && !(whole && planned.iter().any(|other| depends_on(item, other))))
+                && !(whole
+                    && planned
+                        .iter()
+                        .any(|other| depends_on(item, other) || body_links_to(item, other))))
             {
                 continue;
             }
@@ -11964,6 +11967,18 @@ fn targets_first(planned: Vec<Planned>, dependencies: bool) -> Vec<Planned> {
         .into_iter()
         .map(|index| slots[index].take().expect("each item taken once"))
         .collect()
+}
+
+/// Whether the planned `item`'s body links to the planned `other` — a link it can only finish
+/// once `other` is written.
+fn body_links_to(item: &Planned, other: &Planned) -> bool {
+    !std::ptr::eq(item, other)
+        && item
+            .links
+            .iter()
+            .chain(item.comment_links.iter().map(|(_, links, _)| links))
+            .flat_map(|links| &links.referents)
+            .any(|referent| referent.level == other.item.level() && referent.id == other.source)
 }
 
 /// Whether the planned `item` depends on the planned `other`: one of its edges names `other`'s

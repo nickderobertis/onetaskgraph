@@ -2093,14 +2093,6 @@ enum GqlErrorCode {
 struct Refusal(GqlError);
 
 impl Refusal {
-    /// Whether Linear refused because the issue the request addressed is not there.
-    ///
-    /// Linear answers a mutation addressing an id it does not hold with an errored response —
-    /// `Entity not found: Issue`, whose `userPresentableMessage` reads `Could not find
-    /// referenced Issue.` — rather than a null payload. Both spellings are recognised, so a
-    /// rewording of either one alone still reads as what it is; an entity of any other kind,
-    /// and anything else, is a refusal. The live capability journey sends this mutation
-    /// to a nonexistent issue and requires `None`, so changed service wording fails the lane.
     /// The index of the alias of an [`graphql::aliased`] document this refusal is about, when
     /// its path names one.
     fn alias(&self) -> Option<usize> {
@@ -2114,6 +2106,14 @@ impl Refusal {
             .ok()
     }
 
+    /// Whether Linear refused because the issue the request addressed is not there.
+    ///
+    /// Linear answers a mutation addressing an id it does not hold with an errored response —
+    /// `Entity not found: Issue`, whose `userPresentableMessage` reads `Could not find
+    /// referenced Issue.` — rather than a null payload. Both spellings are recognised, so a
+    /// rewording of either one alone still reads as what it is; an entity of any other kind,
+    /// and anything else, is a refusal. The live capability journey sends this mutation
+    /// to a nonexistent issue and requires `None`, so changed service wording fails the lane.
     fn entity_missing(&self) -> bool {
         self.missing(
             graphql::ISSUE_NOT_FOUND_MESSAGE,
@@ -2166,8 +2166,6 @@ impl Refusal {
     }
 }
 
-/// How [`LinearSource::answer_with`] reads a GraphQL error Linear sends under HTTP 400 that is no
-/// rate limit and no missing item.
 /// One targeted update composed for sending — see `LinearSource::compose_update`.
 struct Composed {
     /// The issue as it was read before the update.
@@ -2178,6 +2176,8 @@ struct Composed {
     relations: Option<Vec<DependencyEdge>>,
 }
 
+/// How [`LinearSource::answer_with`] reads a GraphQL error Linear sends under HTTP 400 that is no
+/// rate limit and no missing item.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Under400 {
     /// As the call failing, [`SourceError::Unavailable`] naming the status — what every read and

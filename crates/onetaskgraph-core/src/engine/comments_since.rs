@@ -166,11 +166,12 @@ impl Engine {
         };
         let mut comments = Vec::new();
         for (at, task) in matched.iter().enumerate() {
+            // Taken only when it is this task's page, whole: anything else is read on its own.
             let first = match firsts.get(at) {
                 Some(Ok(Some(TaskDetailRead {
+                    task: read,
                     comments: Some(Ok(Some(page))),
-                    ..
-                }))) if page.next.is_none() => Some(page.items.clone()),
+                }))) if page.next.is_none() && read.id == task.native => Some(page.items.clone()),
                 _ => None,
             };
             let held = match first {
