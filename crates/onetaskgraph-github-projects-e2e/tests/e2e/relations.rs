@@ -13,7 +13,7 @@ use onetaskgraph_github_projects::graphql;
 use serde_json::{Value, json};
 
 use crate::common::{Sandbox, stderr, stdout};
-use crate::fixtures::{GitHubBoardFields, document, github_projects_with_items};
+use crate::fixtures::{AliasAnswer, GitHubBoardFields, document, github_projects_with_items};
 
 /// One open issue on the board.
 pub(crate) fn issue(id: &str, parent: Option<&str>) -> Value {
@@ -288,6 +288,49 @@ fn a_parent_source_writes_a_three_level_chain_through_add_sub_issue_and_reads_it
         json!({"issueId": "A-1", "subIssueId": "C-3"})
     );
     assert_eq!(board.relations(&["C-3"])[0]["parent"], Value::Null);
+}
+
+#[test]
+fn a_parent_write_answered_about_another_issue_or_not_at_all_is_never_answered_written() {
+    let board = Board::of(
+        ["A-1", "B-2", "C-3", "D-4"]
+            .iter()
+            .map(|id| issue(id, None))
+            .collect(),
+        &parent_source(),
+    );
+    // GitHub answers each landed write naming another parent, another sub-issue, or nothing;
+    // the edge beside each is written as asked.
+    for (how, bent) in [
+        (AliasAnswer::NamingAnotherBlocker, "parent0"),
+        (AliasAnswer::NamingAnother, "parent0"),
+        (AliasAnswer::Missing, "parent0"),
+    ] {
+        board.board.bend_batch_alias(bent, how);
+        let (answered, served) = board.parents(&[("B-2", Some("A-1")), ("D-4", Some("C-3"))]);
+        assert_eq!(sent(&served, graphql::SET_PARENTS), 1, "{how:?}");
+        let results = answered.json["results"].as_array().expect("results");
+        assert_ne!(
+            results[0]["outcome"], "written",
+            "{how:?}: {}",
+            answered.json
+        );
+        assert_eq!(answered.code, Some(4), "{how:?}: {}", answered.stderr);
+        let reason = results[0]["reason"].as_str().unwrap_or_default();
+        if how == AliasAnswer::Missing {
+            assert!(reason.contains("answered nothing"), "{how:?}: {reason}");
+        } else {
+            assert!(reason.contains("another issue"), "{how:?}: {reason}");
+            assert!(reason.contains("B-2") && reason.contains("A-1"), "{reason}");
+        }
+        assert!(
+            ["written", "unchanged"].contains(&results[1]["outcome"].as_str().unwrap_or_default()),
+            "{how:?}: {}",
+            answered.json
+        );
+        // Undo what landed, so the next answer is bent over the same write.
+        board.parents(&[("B-2", None), ("D-4", None)]);
+    }
 }
 
 #[test]

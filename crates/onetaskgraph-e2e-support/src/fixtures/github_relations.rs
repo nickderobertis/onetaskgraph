@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use onetaskgraph_github_projects::{DETAIL_BATCH, RELATION_BATCH, graphql};
 use serde_json::{Value, json};
 
-use super::{GitHubBoard, GitHubBoardFields, github_answer};
+use super::{AliasAnswer, GitHubBoard, GitHubBoardFields, github_answer};
 
 /// GitHub's refusal of a sub-issue under a parent that already has one, without `replaceParent`.
 pub const ONE_PARENT: &str = "Sub issue may only have one parent";
@@ -243,7 +243,29 @@ pub(super) fn answer(
                     (graphql::REMOVE_SUB_ISSUE, "removeSubIssue")
                 };
                 let landed = github_answer(board, document, &json!({"input": input}));
-                answered.insert(alias, landed[root].clone());
+                let mut answer = landed[root].clone();
+                // A write `bend_batch_alias` names lands, and is answered malformed, once.
+                let bent = {
+                    let mut held = board.lock().unwrap();
+                    match held.bent_alias {
+                        Some((bent, how)) if bent == alias => {
+                            held.bent_alias = None;
+                            Some(how)
+                        }
+                        _ => None,
+                    }
+                };
+                match bent {
+                    Some(AliasAnswer::Missing) => continue,
+                    Some(AliasAnswer::NamingAnother) => {
+                        answer["subIssue"]["id"] = json!("ANOTHER-ITEM");
+                    }
+                    Some(AliasAnswer::NamingAnotherBlocker) => {
+                        answer["issue"]["id"] = json!("ANOTHER-ITEM");
+                    }
+                    None => {}
+                }
+                answered.insert(alias, answer);
             }
         }
         return Some(Value::Object(answered));

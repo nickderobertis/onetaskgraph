@@ -75,6 +75,13 @@ impl ParentOp {
             Self::Add { child, .. } | Self::Remove { child, .. } => child,
         }
     }
+
+    /// The issue the write adds `child` under or removes it from.
+    fn parent(&self) -> &NativeId {
+        match self {
+            Self::Add { parent, .. } | Self::Remove { parent, .. } => parent,
+        }
+    }
 }
 
 impl GitHubProjectsSource {
@@ -371,7 +378,7 @@ impl GitHubProjectsSource {
                     alias
                 }
             };
-            aliases.push((*at, alias, op.child().clone()));
+            aliases.push((*at, alias, op.child().clone(), op.parent().clone()));
         }
         let doing = "writing several issues' parents";
         let data = match self
@@ -382,24 +389,30 @@ impl GitHubProjectsSource {
             Err(error) => {
                 return aliases
                     .into_iter()
-                    .map(|(at, _, _)| (at, Err(error.clone())))
+                    .map(|(at, _, _, _)| (at, Err(error.clone())))
                     .collect();
             }
         };
         aliases
             .into_iter()
-            .map(|(at, alias, child)| {
+            .map(|(at, alias, child, parent)| {
                 let answer = match alias_answer(&data, &alias, doing) {
                     Err(error) => Err(error),
+                    // Written only when GitHub names both issues the write was about: the child,
+                    // and the parent it was added under or removed from.
                     Ok(Some(answered))
                         if answered.pointer("/subIssue/id").and_then(Value::as_str)
-                            == Some(child.0.as_str()) =>
+                            == Some(child.0.as_str())
+                            && answered.pointer("/issue/id").and_then(Value::as_str)
+                                == Some(parent.0.as_str()) =>
                     {
                         Ok(ParentAnswer::Written { version: None })
                     }
                     Ok(Some(_)) => Err(SourceError::Malformed {
                         message: format!(
-                            "GitHub answered {alias} while {doing} about another issue"
+                            "GitHub answered {alias} while {doing} about another issue than \
+                             {} under {}",
+                            child.0, parent.0
                         ),
                     }),
                     Ok(None) => {

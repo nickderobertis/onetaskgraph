@@ -3870,7 +3870,8 @@ pub enum AliasAnswer {
     Missing,
     /// With another item's id than the one its input named.
     NamingAnother,
-    /// With another issue than the one its input named as blocking, the blocked one right.
+    /// With another issue than the one its input named as blocking, the blocked one right — or,
+    /// for a sub-issue write, than the one it named as the parent, the sub-issue right.
     NamingAnotherBlocker,
 }
 
