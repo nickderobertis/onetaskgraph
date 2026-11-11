@@ -89,7 +89,10 @@ test("test-linux measures the pool maintenance on a release pull request alone, 
   assert.equal(evaluate(measuring.if, context("pull_request", "feature")), false);
   assert.ok(steps.indexOf(upload) > steps.indexOf(measuring), "the upload follows what it uploads");
   const testing = steps.findIndex((step) => step.run === "just ci-test-linux");
-  assert.ok(steps.indexOf(measuring) > testing, "it prunes a target directory the tests are done with");
+  assert.ok(
+    steps.indexOf(measuring) > testing,
+    "it prunes a target directory the tests are done with",
+  );
   assert.match(
     readFileSync(new URL("justfile", root), "utf8"),
     /onebudgetspec check pool-maintenance\/budgets\.yaml --label host --save-results target\/budget-results\/pool-maintenance-budget-results\.json/,
