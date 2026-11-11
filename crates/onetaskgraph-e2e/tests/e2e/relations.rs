@@ -929,3 +929,53 @@ fn a_parent_held_to_a_version_the_child_moved_past_answers_version_moved_writing
     );
     assert_eq!(store.relations(&["work:t2"])[0]["parent"], Value::Null);
 }
+
+#[test]
+fn a_source_hosted_over_the_plugin_protocol_refuses_every_relation_call_and_is_left_as_it_was() {
+    let store = Store::new();
+    let status = json!({"category": "todo", "name": "todo"});
+    let document = json!({"sources": {
+        "work": {"plugin": "local-md", "config": {"root": store.work}},
+        "hosted": {"plugin": "subprocess", "config": {
+            "command": onetaskgraph_e2e_support::binary(),
+            "args": ["plugin-serve", "in-memory"],
+            "settings": {
+                "capabilities": {"writes": "supported"},
+                "tasks": [
+                    {"id": "H-1", "title": "Hosted one", "labels": [], "status": status,
+                     "content": "The H-1 body."},
+                    {"id": "H-2", "title": "Hosted two", "labels": [], "status": status},
+                ],
+                "parents": {"H-2": "H-1"},
+            },
+        }},
+    }});
+    store
+        .sandbox
+        .project_document(&serde_json::to_string_pretty(&document).expect("JSON"));
+    let before = store.shown("hosted:H-1");
+
+    // The peer's own parents are never read across the protocol: the read is refused whole.
+    let read = store.exited(&["task", "relations", "hosted:H-2"], None, 1);
+    let said = read["failure"]["message"].as_str().unwrap_or_default();
+    assert!(said.contains("holds no relations"), "{read:#}");
+
+    let parents = store.parents(&json!([{"child": "hosted:H-1", "parent": "hosted:H-2"}]), 4);
+    assert_eq!(outcomes(&parents), ["error"]);
+    let links = store.links(
+        "add-many",
+        &json!([
+            {"from": "hosted:H-1", "to": "hosted:H-2", "type": "caused-by"},
+            {"from": "work:t1", "to": "hosted:H-1", "type": "caused-by"},
+        ]),
+        4,
+    );
+    assert_eq!(outcomes(&links), ["error", "error"]);
+    // Nothing reached either end: the hosted task reads as it did, and the folder's end of the
+    // second link was never written, because its other end could not be read.
+    assert_eq!(store.shown("hosted:H-1"), before);
+    assert_eq!(
+        store.file(&store.work, "t1"),
+        "---\ntitle: Root cause\nstatus: todo\n---\nThe t1 body.\n"
+    );
+}

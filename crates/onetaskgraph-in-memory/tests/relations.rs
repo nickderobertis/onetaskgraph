@@ -17,7 +17,7 @@ const LINE: &str = "**caused-by** → [Root](https://example.test/root) `memory:
 fn source() -> InMemorySource {
     let status = json!({"category": "todo", "name": "todo"});
     let config: InMemoryConfig = serde_json::from_value(json!({
-        "capabilities": {"writes": "supported"},
+        "capabilities": {"writes": "supported", "assets": "native"},
         "tasks": [
             {"id": "root", "title": "Root", "labels": [], "status": status},
             {"id": "linked", "title": "Linked", "labels": [], "status": status,
@@ -152,4 +152,54 @@ async fn a_parent_write_names_a_missing_task_a_moved_version_and_an_unchanged_pa
         })
     );
     assert_eq!(answers[3], Ok(ParentAnswer::Unchanged { version }));
+}
+
+#[tokio::test]
+async fn a_render_with_image_assets_keeps_a_linked_task_s_section_and_answers_without_it() {
+    let source = source();
+    let id = NativeId("linked".into());
+    let assets = onetaskgraph_plugin_api::AssetWrite {
+        assets: vec![onetaskgraph_plugin_api::AssetPayload::of(
+            onetaskgraph_plugin_api::AssetName::new("a.png").expect("an asset name"),
+            vec![0x89, b'P', b'N', b'G'],
+        )],
+        recorded_assets: None,
+    };
+    let written = source
+        .set_task_rendering_with_assets(
+            &id,
+            "![a](./a.png) rendered.",
+            &json!({"reference": "t"}),
+            &BTreeMap::new(),
+            &assets,
+        )
+        .await
+        .unwrap()
+        .expect("the task is held");
+    let content = read(&source, &id).await.content.expect("content");
+    assert!(content.ends_with(" rendered."), "{content}");
+    assert!(!content.contains("## Links"), "{content}");
+    assert!(
+        !written
+            .content
+            .as_deref()
+            .unwrap_or_default()
+            .contains("## Links"),
+        "{written:?}"
+    );
+    // The section is still stored: without the link's metadata the content reads whole.
+    let unlinked = TaskUpdate {
+        metadata_remove: std::iter::once(onetaskgraph_plugin_api::MetadataKey::links()).collect(),
+        ..TaskUpdate::default()
+    };
+    let bare = source.update_task(&id, &unlinked).await.unwrap().unwrap();
+    assert!(
+        bare.task
+            .content
+            .as_deref()
+            .unwrap_or_default()
+            .ends_with(&format!("## Links\n\n- {LINE}\n")),
+        "{:?}",
+        bare.task.content
+    );
 }

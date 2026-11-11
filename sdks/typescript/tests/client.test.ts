@@ -1027,6 +1027,10 @@ test("parents and typed links drive the real binary, each answered on its own", 
     // A JavaScript caller is not held to the types: the cast hands the method a number where an
     // id goes, so the check it makes at runtime, before the binary is started, is what is proven.
     expect(() => client.taskRelations([3 as unknown as string])).toThrow("ids");
+    // And a `complete` that is not a boolean is refused rather than read as asking for it.
+    expect(() =>
+      client.taskRelations(["work:T-1"], { complete: "false" as unknown as boolean }),
+    ).toThrow("complete");
   } finally {
     rmSync(relationsRoot, { recursive: true, force: true });
   }

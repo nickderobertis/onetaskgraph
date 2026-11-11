@@ -2150,7 +2150,7 @@ export class OnetaskgraphClient {
   taskRelations(ids: string[], options: { complete?: boolean } = {}): Promise<TaskRelations> {
     return this.run("task relations", [
       ...ids.map((id) => stringOption("taskRelations", "ids", id)),
-      ...(options.complete ? ["--complete"] : []),
+      ...(flagOption("taskRelations", "complete", options.complete) ? ["--complete"] : []),
     ]);
   }
   // Project one human task from the `HumanTaskProjection` request at `input`, a file path or
