@@ -150,7 +150,7 @@ struct Placed<'a> {
 
 /// The messages of every GraphQL error a response carried beside its data whose path begins at
 /// `alias`, or every error naming no alias at all — what refused the field `alias`.
-fn errors_at(data: &Value, alias: &str) -> Vec<String> {
+pub(super) fn errors_at(data: &Value, alias: &str) -> Vec<String> {
     data.get(ANSWER_ERRORS)
         .and_then(Value::as_array)
         .into_iter()
@@ -189,7 +189,7 @@ fn refused_alias(data: &Value, alias: &str, doing: &str) -> SourceError {
 /// `data`'s answer for `alias`: `None` when it is absent or null. One answered beside an error
 /// naming that alias is partial — and, for a write, may still have landed — so it is malformed,
 /// never taken as the alias's whole answer.
-fn alias_answer<'a>(
+pub(super) fn alias_answer<'a>(
     data: &'a Value,
     alias: &str,
     doing: &str,

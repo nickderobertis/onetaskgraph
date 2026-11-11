@@ -240,6 +240,7 @@ impl WrittenIds {
             delivered_by: Vec::new(),
             labels: Vec::new(),
             parent: self.parent,
+            issue_parent: None,
             origin: None,
             projected: std::collections::BTreeMap::new(),
             number: self.issue_number,

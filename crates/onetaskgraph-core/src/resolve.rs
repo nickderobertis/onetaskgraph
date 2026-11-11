@@ -164,6 +164,52 @@ pub fn validate_sources(config: &Config) -> Result<(), ConfigError> {
     for (name, source) in config.sources() {
         checked_plugin(name, source)?;
     }
+    one_meaning_per_board(config)
+}
+
+/// Refuse two `github-projects` sources naming one board with different `sub_issues`.
+///
+/// The two meanings answer differently for the same issues — one reads an issue with sub-issues
+/// as a project, the other as a task with children — and an edge written through either rewrites
+/// what the other reads, so a `parent` source needs a board of its own.
+fn one_meaning_per_board(config: &Config) -> Result<(), ConfigError> {
+    let mut boards: std::collections::BTreeMap<String, (SourceName, String)> =
+        std::collections::BTreeMap::new();
+    for (name, source) in config.sources() {
+        if source.plugin().as_str() != "github-projects" {
+            continue;
+        }
+        let Some(board) = source
+            .plugin()
+            .plugin()
+            .remote_identity(source.config())
+        else {
+            continue;
+        };
+        let meaning = source
+            .config()
+            .get("sub_issues")
+            .and_then(Value::as_str)
+            .unwrap_or("project")
+            .to_owned();
+        match boards.get(&board) {
+            Some((other, held)) if *held != meaning => {
+                return Err(ConfigError::setting(
+                    format!("sources.{name}.config.sub_issues"),
+                    format!(
+                        "sources {other} and {name} name one GitHub board, {other} with                          `sub_issues: {held}` and {name} with `sub_issues: {meaning}`; the two                          meanings read the same issues differently, and an edge written through                          either rewrites what the other reads"
+                    ),
+                    format!(
+                        "give the `sub_issues: parent` source a board of its own, or give {other}                          and {name} one `sub_issues`"
+                    ),
+                ));
+            }
+            Some(_) => {}
+            None => {
+                boards.insert(board, (name.clone(), meaning));
+            }
+        }
+    }
     Ok(())
 }
 

@@ -29,6 +29,8 @@ use std::{
 use crate::common::{Sandbox, SourceBoundary};
 use crate::loopback;
 
+mod github_relations;
+
 /// One row: a source kind, in one configuration, over the shared dataset.
 pub struct Row {
     /// The registry plugin kind this row stands for.
@@ -1341,6 +1343,9 @@ struct GitHubBoard {
     /// Items an aliased mutation naming them is refused for at its own path, once — each by its
     /// own id and its board item's.
     rejecting: Vec<(String, String)>,
+    /// The board's issues' relations: its `relates-to` pairs, and how its next relation write
+    /// is cut short (`github_relations`).
+    relations: github_relations::Relations,
 }
 
 /// Whether one request — its document and its variables — is one a [`BoardHook`] counts.
@@ -4034,6 +4039,7 @@ fn github_projects_board_at(
         truncating: Vec::new(),
         refusing_search_pages: Vec::new(),
         rejecting: Vec::new(),
+        relations: github_relations::Relations::default(),
     }));
     let mut owed_failures: Vec<&'static str> = fail_first.to_vec();
     let watched = Arc::clone(&board);
@@ -4279,6 +4285,15 @@ fn github_projects_board_at(
         if dropped {
             // Applied, and never answered: the caller cannot know which.
             return None;
+        }
+        if board.lock().unwrap().relations.timed_out() {
+            // Applied in part, and answered as GitHub's gateway answers a document it gave up
+            // waiting on: what landed is told by a read alone.
+            let body = r#"{"message":"We couldn't respond to your request in time."}"#;
+            return Some(format!(
+                "HTTP/1.1 504 Gateway Timeout\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            ));
         }
         let date = board
             .lock()
@@ -4617,6 +4632,9 @@ impl GitHubBoard {
 
 fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value) -> Value {
     board.lock().unwrap().settle_placements();
+    if let Some(answer) = github_relations::answer(board, query, variables) {
+        return answer;
+    }
     // One document with its project and the project's members: the document answered exactly
     // as a read of it by its id is, and its parent exactly as a listing of that project's
     // sub-issues carries it.

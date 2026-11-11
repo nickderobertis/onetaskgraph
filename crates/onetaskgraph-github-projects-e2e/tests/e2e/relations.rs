@@ -1,0 +1,718 @@
+//! Parents and typed links on a GitHub board, through the binary against the loopback board: a
+//! `sub_issues: parent` source's sub-issue links written with `addSubIssue` and read back as the
+//! parent relation, a default source keeping its projects and answering no parent, and links
+//! held in both endpoints' metadata beside a `## Links` section — mirrored as GitHub's own
+//! `relates-to` for a type `link_types` names, in documents of at most 30 aliased fields, each
+//! paced as one content creation, and answered from a read-back when GitHub's gateway gives up
+//! part way.
+//!
+//! Every journey drives its own fresh processes and asserts on what they print and on every
+//! request the board was sent.
+
+use onetaskgraph_github_projects::graphql;
+use serde_json::{Value, json};
+
+use crate::common::{Sandbox, stderr, stdout};
+use crate::fixtures::{GitHubBoardFields, document, github_projects_with_items};
+
+/// One open issue on the board.
+pub(crate) fn issue(id: &str, parent: Option<&str>) -> Value {
+    json!({"item":format!("ITEM-{id}"),"id":id,"type":"Issue","title":format!("Ticket {id}"),
+        "body":format!("about {id}"),"state":"OPEN","reason":null,"parent":parent,
+        "repo":"nickderobertis/onetaskgraph","status":"Todo","origin":"","labels":[]})
+}
+
+/// What one invocation answered.
+pub(crate) struct Answered {
+    pub(crate) code: Option<i32>,
+    pub(crate) json: Value,
+    pub(crate) stderr: String,
+}
+
+/// A board configured as one source, `board`, with `extra` laid over its configuration.
+pub(crate) struct Board {
+    pub(crate) sandbox: Sandbox,
+    pub(crate) board: GitHubBoardFields,
+}
+
+impl Board {
+    pub(crate) fn of(items: Vec<Value>, extra: &Value) -> Self {
+        let sandbox = Sandbox::new();
+        let (mut config, board) = github_projects_with_items(&sandbox, items);
+        for (key, value) in extra.as_object().expect("an object") {
+            config[key] = value.clone();
+        }
+        sandbox.project_document(&document(&json!({
+            "board": {"plugin": "github-projects", "config": config},
+        })));
+        Self { sandbox, board }
+    }
+
+    pub(crate) fn run(&self, arguments: &[&str], stdin: &str) -> Answered {
+        let output = self
+            .sandbox
+            .command()
+            .args(arguments)
+            .write_stdin(stdin)
+            .assert()
+            .get_output()
+            .clone();
+        Answered {
+            code: output.status.code(),
+            json: serde_json::from_str(&stdout(&output)).unwrap_or(Value::Null),
+            stderr: stderr(&output),
+        }
+    }
+
+    /// [`Self::run`], with every request the board served for it.
+    pub(crate) fn measured(
+        &self,
+        arguments: &[&str],
+        stdin: &str,
+    ) -> (Answered, Vec<(String, Value)>) {
+        let mark = self.board.served_count();
+        let answered = self.run(arguments, stdin);
+        (answered, self.board.served_since(mark))
+    }
+
+    /// `task parent set-many` of `edges`, each `(child, parent)`.
+    pub(crate) fn parents(
+        &self,
+        edges: &[(&str, Option<&str>)],
+    ) -> (Answered, Vec<(String, Value)>) {
+        let edges: Vec<Value> = edges
+            .iter()
+            .map(|(child, parent)| {
+                json!({"child": format!("board:{child}"),
+                       "parent": parent.map(|parent| format!("board:{parent}"))})
+            })
+            .collect();
+        self.measured(
+            &["task", "parent", "set-many", "--input", "-", "--json"],
+            &json!({"schema_version": 1, "edges": edges}).to_string(),
+        )
+    }
+
+    /// `task link add-many` or `remove-many` of `links`, each `(from, to, type)`.
+    pub(crate) fn links(
+        &self,
+        verb: &str,
+        links: &[(&str, &str, &str)],
+    ) -> (Answered, Vec<(String, Value)>) {
+        let links: Vec<Value> = links
+            .iter()
+            .map(|(from, to, kind)| {
+                json!({"from": format!("board:{from}"), "to": format!("board:{to}"), "type": kind})
+            })
+            .collect();
+        self.measured(
+            &["task", "link", verb, "--input", "-", "--json"],
+            &json!({"schema_version": 1, "links": links}).to_string(),
+        )
+    }
+
+    /// `task relations` of `ids`, in a fresh process, each item by its id.
+    pub(crate) fn relations(&self, ids: &[&str]) -> Vec<Value> {
+        let qualified: Vec<String> = ids.iter().map(|id| format!("board:{id}")).collect();
+        let mut arguments = vec!["task", "relations"];
+        arguments.extend(qualified.iter().map(String::as_str));
+        arguments.push("--json");
+        let read = self.run(&arguments, "");
+        assert_eq!(read.code, Some(0), "{}", read.stderr);
+        read.json["items"].as_array().expect("the items").clone()
+    }
+}
+
+/// The outcomes of a batch's results, in order.
+fn outcomes(answered: &Answered) -> Vec<String> {
+    answered.json["results"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no results: {:#} {}", answered.json, answered.stderr))
+        .iter()
+        .map(|result| result["outcome"].as_str().unwrap_or_default().to_owned())
+        .collect()
+}
+
+/// Each link an item holds, as `(type, direction, other, other_end)`.
+fn links_of(item: &Value) -> Vec<(String, String, String, String)> {
+    item["links"]
+        .as_array()
+        .expect("links")
+        .iter()
+        .map(|link| {
+            (
+                link["type"].as_str().unwrap().to_owned(),
+                link["direction"].as_str().unwrap().to_owned(),
+                link["other"].as_str().unwrap().to_owned(),
+                link["other_end"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect()
+}
+
+fn link(kind: &str, direction: &str, other: &str, end: &str) -> (String, String, String, String) {
+    (
+        kind.to_owned(),
+        direction.to_owned(),
+        format!("board:{other}"),
+        end.to_owned(),
+    )
+}
+
+/// How many requests of `served` sent `document`.
+fn sent(served: &[(String, Value)], document: &str) -> usize {
+    served.iter().filter(|(sent, _)| sent == document).count()
+}
+
+/// How many fields of `document` each request of `served` sending it sent, by its `send…`
+/// flags.
+fn fields_sent(served: &[(String, Value)], document: &str) -> Vec<usize> {
+    served
+        .iter()
+        .filter(|(sent, _)| sent == document)
+        .map(|(_, variables)| {
+            variables
+                .as_object()
+                .unwrap()
+                .iter()
+                .filter(|(name, value)| name.starts_with("send") && **value == json!(true))
+                .count()
+        })
+        .collect()
+}
+
+const PARENT: &str = r#"{"sub_issues": "parent"}"#;
+
+fn parent_source() -> Value {
+    serde_json::from_str(PARENT).unwrap()
+}
+
+#[test]
+fn a_parent_source_writes_a_three_level_chain_through_add_sub_issue_and_reads_it_from_either_end() {
+    let board = Board::of(
+        ["A-1", "B-2", "C-3"]
+            .iter()
+            .map(|id| issue(id, None))
+            .collect(),
+        &parent_source(),
+    );
+    let (written, served) = board.parents(&[("B-2", Some("A-1")), ("C-3", Some("B-2"))]);
+    assert_eq!(written.code, Some(0), "{}", written.stderr);
+    assert_eq!(outcomes(&written), ["written", "written"]);
+    assert_eq!(sent(&served, graphql::SET_PARENTS), 1, "one document");
+    let (_, variables) = served
+        .iter()
+        .find(|(sent, _)| sent == graphql::SET_PARENTS)
+        .unwrap();
+    assert_eq!(
+        variables["parent0"],
+        json!({"issueId": "A-1", "subIssueId": "B-2"})
+    );
+    assert_eq!(
+        variables["parent1"],
+        json!({"issueId": "B-2", "subIssueId": "C-3"})
+    );
+    assert_eq!(board.board.sub_issue_parent("C-3").as_deref(), Some("B-2"));
+
+    // An issue with sub-issues is a task here, never a project.
+    let listed = board.run(&["task", "list", "--json"], "");
+    let ids: Vec<&str> = listed.json["items"]
+        .as_array()
+        .expect("the tasks")
+        .iter()
+        .map(|item| item["id"].as_str().unwrap())
+        .collect();
+    for id in ["board:A-1", "board:B-2", "board:C-3"] {
+        assert!(ids.contains(&id), "{id} is a task: {ids:?}");
+    }
+    let projects = board.run(&["project", "list", "--json"], "");
+    let projects: Vec<&str> = projects.json["items"]
+        .as_array()
+        .expect("the projects")
+        .iter()
+        .map(|item| item["id"].as_str().unwrap())
+        .collect();
+    assert!(!projects.contains(&"board:A-1"), "{projects:?}");
+
+    // From the top, from the middle and from the bottom, each in a fresh process.
+    let top = &board.relations(&["A-1"])[0];
+    assert_eq!(top["parent"], Value::Null);
+    assert_eq!(top["children"], json!(["board:B-2"]));
+    assert_eq!(top["children_complete"], true);
+    let middle = &board.relations(&["B-2"])[0];
+    assert_eq!(middle["parent"], "board:A-1");
+    assert_eq!(middle["children"], json!(["board:C-3"]));
+    let bottom = &board.relations(&["C-3"])[0];
+    assert_eq!(bottom["parent"], "board:B-2");
+    assert_eq!(bottom["children"], json!([]));
+
+    // A re-parent replaces the parent it had; the same parent again writes nothing.
+    let (moved, served) = board.parents(&[("C-3", Some("A-1")), ("B-2", Some("A-1"))]);
+    assert_eq!(outcomes(&moved), ["written", "unchanged"]);
+    let (_, variables) = served
+        .iter()
+        .find(|(sent, _)| sent == graphql::SET_PARENTS)
+        .unwrap();
+    assert_eq!(
+        variables["parent0"],
+        json!({"issueId": "A-1", "subIssueId": "C-3", "replaceParent": true})
+    );
+    assert_eq!(fields_sent(&served, graphql::SET_PARENTS), [1]);
+    assert_eq!(board.relations(&["C-3"])[0]["parent"], "board:A-1");
+
+    // And a removal is `removeSubIssue` from the parent it has.
+    let (removed, served) = board.parents(&[("C-3", None)]);
+    assert_eq!(outcomes(&removed), ["written"]);
+    let (_, variables) = served
+        .iter()
+        .find(|(sent, _)| sent == graphql::SET_PARENTS)
+        .unwrap();
+    assert_eq!(variables["sendUnparent0"], true);
+    assert_eq!(
+        variables["unparent0"],
+        json!({"issueId": "A-1", "subIssueId": "C-3"})
+    );
+    assert_eq!(board.relations(&["C-3"])[0]["parent"], Value::Null);
+}
+
+#[test]
+fn a_project_write_to_a_parent_source_is_refused_naming_the_setting() {
+    let board = Board::of(
+        vec![issue("A-1", None), issue("B-2", Some("A-1"))],
+        &parent_source(),
+    );
+    let (refused, served) = board.measured(
+        &["project", "status", "set", "board:A-1", "done", "--json"],
+        "",
+    );
+    assert_ne!(refused.code, Some(0));
+    assert!(
+        refused.stderr.contains("sub_issues: parent"),
+        "{}",
+        refused.stderr
+    );
+    assert!(
+        served.iter().all(|(sent, _)| !sent.starts_with("mutation")),
+        "nothing was written"
+    );
+}
+
+#[test]
+fn a_default_source_keeps_its_projects_and_reports_a_member_as_no_parent_relation() {
+    let board = Board::of(
+        vec![issue("P-4", None), issue("T-5", Some("P-4"))],
+        &json!({}),
+    );
+    let projects = board.run(&["project", "list", "--json"], "");
+    assert!(
+        projects.json["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["id"] == "board:P-4"),
+        "{:#}",
+        projects.json
+    );
+    let member = &board.relations(&["T-5"])[0];
+    assert_eq!(member["parent"], Value::Null);
+    assert_eq!(member["children"], json!([]));
+    // A parent write is refused for that edge, naming the setting, and nothing is sent.
+    let (refused, served) = board.parents(&[("T-5", None)]);
+    assert_eq!(outcomes(&refused), ["error"]);
+    let reason = refused.json["results"][0]["reason"].as_str().unwrap();
+    assert!(reason.contains("sub_issues"), "{reason}");
+    assert_eq!(sent(&served, graphql::SET_PARENTS), 0);
+}
+
+#[test]
+fn a_destination_limit_refuses_that_edge_alone_in_github_s_own_words() {
+    // A chain of eight levels — a root and seven layers of sub-issues — is accepted, and a ninth
+    // level refused; a parent holding 100 sub-issues refuses a 101st; each beside an edge that
+    // lands.
+    let mut items: Vec<Value> = (0..=8).map(|n| issue(&format!("L-{n}"), None)).collect();
+    items.push(issue("P-4", None));
+    items.extend((0..100).map(|n| issue(&format!("K-{n}"), Some("P-4"))));
+    items.extend(["X-6", "Y-7", "Z-8"].iter().map(|id| issue(id, None)));
+    let board = Board::of(items, &parent_source());
+    let chain: Vec<(String, String)> = (1..=7)
+        .map(|n| (format!("L-{n}"), format!("L-{}", n - 1)))
+        .collect();
+    let edges: Vec<(&str, Option<&str>)> = chain
+        .iter()
+        .map(|(child, parent)| (child.as_str(), Some(parent.as_str())))
+        .collect();
+    let (chained, _) = board.parents(&edges);
+    assert_eq!(outcomes(&chained), vec!["written"; 7], "{:#}", chained.json);
+
+    let (limited, _) = board.parents(&[
+        ("L-8", Some("L-7")),
+        ("X-6", Some("P-4")),
+        ("Y-7", Some("Z-8")),
+    ]);
+    assert_eq!(
+        outcomes(&limited),
+        ["refused", "refused", "written"],
+        "{:#}",
+        limited.json
+    );
+    assert_eq!(limited.code, Some(4));
+    let reasons: Vec<&str> = limited.json["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|result| result["reason"].as_str().unwrap_or_default())
+        .collect();
+    assert!(
+        reasons[0].contains("You can't add more than 7 layers of sub-issues"),
+        "{}",
+        reasons[0]
+    );
+    assert!(
+        reasons[1].contains("Parent cannot have more than 100 sub-issues"),
+        "{}",
+        reasons[1]
+    );
+    assert_eq!(board.board.sub_issue_parent("L-8"), None);
+    assert_eq!(board.board.sub_issue_parent("X-6"), None);
+    assert_eq!(board.board.sub_issue_parent("Y-7").as_deref(), Some("Z-8"));
+    let full = &board.relations(&["P-4"])[0];
+    assert_eq!(full["children"].as_array().unwrap().len(), 100);
+    assert_eq!(full["children_complete"], true);
+
+    // A cycle is refused for that edge alone, too.
+    let (cycle, _) = board.parents(&[("L-0", Some("L-7")), ("Z-8", Some("X-6"))]);
+    assert_eq!(outcomes(&cycle), ["refused", "written"], "{:#}", cycle.json);
+    assert!(
+        cycle.json["results"][0]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("Sub issue may not create a circular dependency")
+    );
+}
+
+#[test]
+fn a_parent_write_held_to_a_version_the_child_moved_past_answers_version_moved_for_that_edge() {
+    let board = Board::of(
+        ["A-1", "B-2", "C-3"]
+            .iter()
+            .map(|id| issue(id, None))
+            .collect(),
+        &parent_source(),
+    );
+    let shown = board.run(&["task", "show", "board:B-2", "--json"], "");
+    let read = shown.json["items"][0]["item"]["version"]
+        .as_str()
+        .expect("a version")
+        .to_owned();
+    board.board.edit_body("B-2", "a person edited this");
+    let (moved, served) = board.measured(
+        &["task", "parent", "set-many", "--input", "-", "--json"],
+        &json!({"schema_version": 1, "edges": [
+            {"child": "board:B-2", "parent": "board:A-1", "if_version": read},
+            {"child": "board:C-3", "parent": "board:A-1"},
+        ]})
+        .to_string(),
+    );
+    assert_eq!(
+        outcomes(&moved),
+        ["version-moved", "written"],
+        "{:#}",
+        moved.json
+    );
+    assert_ne!(
+        moved.json["results"][0]["version"].as_str(),
+        Some(read.as_str())
+    );
+    assert_eq!(fields_sent(&served, graphql::SET_PARENTS), [1]);
+    assert_eq!(board.board.sub_issue_parent("B-2"), None);
+}
+
+const MIRRORED: &str =
+    r#"{"link_types": {"caused-by": {"native": "relates-to"}, "duplicate-of": {}}}"#;
+
+fn mirrored() -> Value {
+    serde_json::from_str(MIRRORED).unwrap()
+}
+
+#[test]
+fn a_mirrored_link_is_written_with_add_relates_to_beside_its_metadata_and_removed_from_both() {
+    let board = Board::of(
+        ["A-1", "B-2", "C-3"]
+            .iter()
+            .map(|id| issue(id, None))
+            .collect(),
+        &mirrored(),
+    );
+    let (added, served) = board.links(
+        "add-many",
+        &[("A-1", "B-2", "caused-by"), ("A-1", "C-3", "duplicate-of")],
+    );
+    assert_eq!(added.code, Some(0), "{}", added.stderr);
+    assert_eq!(outcomes(&added), ["written", "written"]);
+    // One relation, for the mirrored type alone.
+    assert_eq!(fields_sent(&served, graphql::ADD_RELATES_TO), [1]);
+    assert_eq!(board.board.relates_to("A-1"), ["B-2"]);
+    assert!(board.board.relates_to("C-3").is_empty());
+    // Each endpoint's metadata and `## Links` section, in its body.
+    let body = board.board.item("A-1").unwrap()["body"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(body.contains("## Links"), "{body}");
+    assert!(body.contains("onetaskgraph.links"), "{body}");
+    // Read back without the section.
+    let shown = board.run(&["task", "show", "board:A-1", "--json"], "");
+    assert_eq!(
+        shown.json["items"][0]["item"]["content"], "about A-1",
+        "{:#}",
+        shown.json
+    );
+
+    // Read from every endpoint in a fresh process, with its type and direction.
+    let read = board.relations(&["A-1", "B-2", "C-3"]);
+    assert_eq!(
+        links_of(&read[0]),
+        [
+            link("caused-by", "out", "B-2", "present"),
+            link("duplicate-of", "out", "C-3", "present")
+        ]
+    );
+    assert_eq!(
+        links_of(&read[1]),
+        [link("caused-by", "in", "A-1", "present")]
+    );
+    assert_eq!(
+        links_of(&read[2]),
+        [link("duplicate-of", "in", "A-1", "present")]
+    );
+
+    // A repeated add writes nothing.
+    let (again, served) = board.links("add-many", &[("A-1", "B-2", "caused-by")]);
+    assert_eq!(outcomes(&again), ["exists"]);
+    assert!(served.iter().all(|(sent, _)| !sent.starts_with("mutation")));
+
+    // Removed from both ends, and from the relationship panel; an unmirrored removal sends no
+    // native mutation.
+    let (removed, served) = board.links(
+        "remove-many",
+        &[("A-1", "B-2", "caused-by"), ("A-1", "C-3", "duplicate-of")],
+    );
+    assert_eq!(outcomes(&removed), ["written", "written"]);
+    assert_eq!(fields_sent(&served, graphql::REMOVE_RELATES_TO), [1]);
+    assert!(board.board.relates_to("A-1").is_empty());
+    let read = board.relations(&["A-1", "B-2", "C-3"]);
+    assert!(
+        read.iter().all(|item| item["links"] == json!([])),
+        "{read:#?}"
+    );
+    let (absent, served) = board.links("remove-many", &[("A-1", "B-2", "caused-by")]);
+    assert_eq!(outcomes(&absent), ["absent"]);
+    assert!(served.iter().all(|(sent, _)| !sent.starts_with("mutation")));
+}
+
+#[test]
+fn a_type_with_no_mirror_sends_no_native_mutation() {
+    let board = Board::of(vec![issue("A-1", None), issue("B-2", None)], &mirrored());
+    let (added, served) = board.links("add-many", &[("A-1", "B-2", "duplicate-of")]);
+    assert_eq!(outcomes(&added), ["written"]);
+    assert_eq!(sent(&served, graphql::ADD_RELATES_TO), 0);
+    assert!(board.board.relates_to("A-1").is_empty());
+    let read = board.relations(&["A-1", "B-2"]);
+    assert_eq!(
+        links_of(&read[0]),
+        [link("duplicate-of", "out", "B-2", "present")]
+    );
+    assert_eq!(
+        links_of(&read[1]),
+        [link("duplicate-of", "in", "A-1", "present")]
+    );
+}
+
+#[test]
+fn two_mirrored_links_between_one_pair_keep_the_native_relation_until_the_second_is_removed() {
+    let board = Board::of(
+        vec![issue("A-1", None), issue("B-2", None)],
+        &json!({"link_types": {"caused-by": {"native": "relates-to"},
+                               "related": {"native": "relates-to"}}}),
+    );
+    let (added, _) = board.links(
+        "add-many",
+        &[("A-1", "B-2", "caused-by"), ("B-2", "A-1", "related")],
+    );
+    assert_eq!(outcomes(&added), ["written", "written"]);
+    assert_eq!(board.board.relates_to("A-1"), ["B-2"]);
+    let (first, served) = board.links("remove-many", &[("A-1", "B-2", "caused-by")]);
+    assert_eq!(outcomes(&first), ["written"]);
+    assert_eq!(sent(&served, graphql::REMOVE_RELATES_TO), 0);
+    assert_eq!(
+        board.board.relates_to("A-1"),
+        ["B-2"],
+        "the pair still has a mirrored link"
+    );
+    let (second, served) = board.links("remove-many", &[("B-2", "A-1", "related")]);
+    assert_eq!(outcomes(&second), ["written"]);
+    assert_eq!(fields_sent(&served, graphql::REMOVE_RELATES_TO), [1]);
+    assert!(board.board.relates_to("A-1").is_empty());
+}
+
+#[test]
+fn an_end_a_whole_body_rewrite_lost_reads_missing_from_the_other_and_a_repeated_add_restores_it() {
+    let board = Board::of(vec![issue("A-1", None), issue("B-2", None)], &json!({}));
+    let (added, _) = board.links("add-many", &[("A-1", "B-2", "caused-by")]);
+    assert_eq!(outcomes(&added), ["written"]);
+    // A person rewrites B's whole body, taking its metadata slot with it.
+    board.board.edit_body("B-2", "rewritten by hand");
+    let read = board.relations(&["A-1", "B-2"]);
+    assert_eq!(
+        links_of(&read[0]),
+        [link("caused-by", "out", "B-2", "missing")]
+    );
+    assert_eq!(read[1]["links"], json!([]));
+    let alone = board.relations(&["A-1"]);
+    assert_eq!(
+        links_of(&alone[0]),
+        [link("caused-by", "out", "B-2", "unread")]
+    );
+    let (restored, _) = board.links("add-many", &[("A-1", "B-2", "caused-by")]);
+    assert_eq!(outcomes(&restored), ["written"]);
+    let read = board.relations(&["A-1", "B-2"]);
+    assert_eq!(
+        links_of(&read[0]),
+        [link("caused-by", "out", "B-2", "present")]
+    );
+    assert_eq!(
+        links_of(&read[1]),
+        [link("caused-by", "in", "A-1", "present")]
+    );
+    let shown = board.run(&["task", "show", "board:B-2", "--json"], "");
+    assert_eq!(
+        shown.json["items"][0]["item"]["content"],
+        "rewritten by hand"
+    );
+}
+
+#[test]
+fn a_link_whose_second_end_is_refused_answers_partial_and_a_repeat_completes_it() {
+    let board = Board::of(vec![issue("A-1", None), issue("B-2", None)], &json!({}));
+    board.board.reject_mutation_of("B-2");
+    let (partial, _) = board.links("add-many", &[("A-1", "B-2", "caused-by")]);
+    assert_eq!(outcomes(&partial), ["partial"], "{:#}", partial.json);
+    assert_eq!(partial.code, Some(4));
+    let reason = partial.json["results"][0]["reason"].as_str().unwrap();
+    assert!(reason.starts_with("board:A-1 landed"), "{reason}");
+    let read = board.relations(&["A-1", "B-2"]);
+    assert_eq!(
+        links_of(&read[0]),
+        [link("caused-by", "out", "B-2", "missing")]
+    );
+    let (completed, served) = board.links("add-many", &[("A-1", "B-2", "caused-by")]);
+    assert_eq!(outcomes(&completed), ["written"]);
+    // Only the end that had not landed is written.
+    let updates: usize = served
+        .iter()
+        .filter(|(sent, _)| sent.starts_with("mutation"))
+        .map(|(_, variables)| {
+            variables
+                .as_object()
+                .unwrap()
+                .iter()
+                .filter(|(name, value)| name.starts_with("sendUpdate") && **value == json!(true))
+                .count()
+                + usize::from(variables.get("input").is_some())
+        })
+        .sum();
+    assert_eq!(updates, 1, "{served:#?}");
+    let read = board.relations(&["A-1", "B-2"]);
+    assert_eq!(
+        links_of(&read[1]),
+        [link("caused-by", "in", "A-1", "present")]
+    );
+}
+
+#[test]
+fn a_mirror_batch_past_thirty_goes_in_documents_of_thirty_and_a_gateway_timeout_is_read_back() {
+    let mut items = vec![issue("A-1", None)];
+    items.extend((0..35).map(|n| issue(&format!("X-{n}"), None)));
+    let board = Board::of(items, &mirrored());
+    let others: Vec<String> = (0..35).map(|n| format!("X-{n}")).collect();
+    // The second document lands three of its five and is answered 504.
+    let first: Vec<(&str, &str, &str)> = others[..30]
+        .iter()
+        .map(|other| ("A-1", other.as_str(), "caused-by"))
+        .collect();
+    let (added, served) = board.links("add-many", &first);
+    assert_eq!(outcomes(&added), vec!["written"; 30]);
+    assert_eq!(fields_sent(&served, graphql::ADD_RELATES_TO), [30]);
+
+    board.board.time_out_next_relation_write_after(3);
+    let all: Vec<(&str, &str, &str)> = others
+        .iter()
+        .map(|other| ("A-1", other.as_str(), "caused-by"))
+        .collect();
+    let (cut, served) = board.links("add-many", &all);
+    let answered = outcomes(&cut);
+    assert_eq!(&answered[..30], vec!["exists"; 30]);
+    assert_eq!(
+        &answered[30..],
+        ["written", "written", "written", "error", "error"]
+    );
+    assert_eq!(fields_sent(&served, graphql::ADD_RELATES_TO), [5]);
+    assert_eq!(
+        sent(&served, graphql::RELATES_TO_READS),
+        1,
+        "read back once"
+    );
+    // What did not land is the only thing a repeat writes.
+    let (repeat, served) = board.links("add-many", &all);
+    let answered = outcomes(&repeat);
+    assert_eq!(
+        &answered[30..],
+        ["exists", "exists", "exists", "written", "written"]
+    );
+    let (_, variables) = served
+        .iter()
+        .find(|(sent, _)| sent == graphql::ADD_RELATES_TO)
+        .unwrap();
+    assert_eq!(fields_sent(&served, graphql::ADD_RELATES_TO), [2]);
+    assert_eq!(variables["relate0"]["relatedIssueId"], "X-33");
+    assert_eq!(variables["relate1"]["relatedIssueId"], "X-34");
+    assert_eq!(board.board.relates_to("A-1").len(), 35);
+}
+
+#[test]
+fn a_native_word_github_cannot_mirror_is_refused_at_load_naming_the_source_the_type_and_the_word() {
+    for word in ["blocks", "blocked-by", "duplicate", "similar", "frobs"] {
+        let board = Board::of(
+            vec![issue("A-1", None)],
+            &json!({"link_types": {"caused-by": {"native": word}}}),
+        );
+        let refused = board.run(&["task", "list", "--json"], "");
+        assert_ne!(refused.code, Some(0), "{word} was accepted");
+        for named in ["board", "caused-by", &format!("`{word}`")] {
+            assert!(refused.stderr.contains(named), "{word}: {}", refused.stderr);
+        }
+    }
+}
+
+#[test]
+fn two_sources_naming_one_board_with_different_sub_issues_are_refused_naming_both() {
+    let sandbox = Sandbox::new();
+    let (config, _board) = github_projects_with_items(&sandbox, vec![issue("A-1", None)]);
+    let mut children = config.clone();
+    children["sub_issues"] = json!("parent");
+    sandbox.project_document(&document(&json!({
+        "plans": {"plugin": "github-projects", "config": config},
+        "symptoms": {"plugin": "github-projects", "config": children},
+    })));
+    let output = sandbox
+        .command()
+        .args(["task", "list", "--json"])
+        .assert()
+        .get_output()
+        .clone();
+    assert_ne!(output.status.code(), Some(0));
+    let said = stderr(&output);
+    for named in ["plans", "symptoms", "sub_issues"] {
+        assert!(said.contains(named), "{said}");
+    }
+}
