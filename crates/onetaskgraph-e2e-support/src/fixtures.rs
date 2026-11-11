@@ -1107,6 +1107,8 @@ type IssueListingBend = Box<dyn Fn(&mut Value) + Send + Sync>;
 /// The board this fixture keeps, and everything a request may change on it.
 // llmlint: ignore[code_lands_in_the_domain_that_owns_it] The shared e2e harness is where the agreed e2e layout puts every loopback server, so no suite copies one: the journey-matrix table in this file builds each of its rows through both hosted plugins' loopbacks, and the engine's own suite drives both, so neither can live in one plugin's suite. Editing it re-selects every suite, as editing any shared harness does.
 struct GitHubBoard {
+    /// Every image uploaded to `POST /user-attachments/assets`, by the path its URL names.
+    attachments: std::collections::BTreeMap<String, Vec<u8>>,
     /// Issues `Repository.issues` does not list yet, by id: one GitHub committed and its
     /// listing has not caught up with.
     unlisted: Vec<Value>,
@@ -3953,6 +3955,7 @@ fn github_projects_board_at(
         project_visibility_retry_after: None,
         project_scope_withheld: false,
         repository_visibility: std::collections::BTreeMap::new(),
+        attachments: std::collections::BTreeMap::new(),
         repository_visibility_after: Vec::new(),
         hooks: Vec::new(),
         search_page_rows: None,
@@ -3972,7 +3975,8 @@ fn github_projects_board_at(
         board: Arc::clone(&board),
         connections: Arc::clone(&connections),
     };
-    loopback::serve(listener, Arc::clone(&connections), move |sent| {
+    let attached = Arc::clone(&board);
+    let mut answer = move |sent: &loopback::Request| -> Option<String> {
         let (line, request, token) = http_request_parts(sent);
         // The one REST read a write to a source declared private sends: the visibility of
         // the repository an issue lives in. Recorded beside the GraphQL documents, so a
@@ -4209,6 +4213,48 @@ fn github_projects_board_at(
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n{date}Content-Length: {}\r\n\r\n{body}",
             body.len()
         ))
+    };
+    let address = endpoint.trim_end_matches("/graphql").to_owned();
+    loopback::serve(listener, Arc::clone(&connections), move |sent| {
+        // An image upload, and the authenticated read of what it uploaded: the one exchange a
+        // copy carrying an asset onto the board sends beside its GraphQL and its repository read,
+        // and the read a copy out of the board makes of the image's bytes.
+        let line = sent.line().to_owned();
+        if line.starts_with("POST /user-attachments/assets?") {
+            let mut held = attached.lock().unwrap();
+            held.documents.push(line.clone());
+            held.variables.push(Value::Null);
+            held.tokens.push(sent.header("authorization").unwrap_or_default().to_owned());
+            held.arrivals.push(std::time::Instant::now());
+            let path = format!("/user-attachments/assets/{}", held.attachments.len() + 1);
+            held.attachments.insert(path.clone(), sent.body().to_vec());
+            let body = json!({"url": format!("{address}{path}")}).to_string();
+            return Some(
+                format!(
+                    "HTTP/1.1 201 Created\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                    body.len()
+                )
+                .into_bytes(),
+            );
+        }
+        if let Some(path) = line
+            .strip_prefix("GET ")
+            .and_then(|rest| rest.split_whitespace().next())
+            .filter(|path| path.starts_with("/user-attachments/assets/"))
+        {
+            let bytes = attached.lock().unwrap().attachments.get(path).cloned();
+            let Some(bytes) = bytes else {
+                return Some(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n".to_vec());
+            };
+            let mut reply = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: {}\r\n\r\n",
+                bytes.len()
+            )
+            .into_bytes();
+            reply.extend(bytes);
+            return Some(reply);
+        }
+        answer(sent).map(String::into_bytes)
     });
     (
         github_projects_block_at(&endpoint),
