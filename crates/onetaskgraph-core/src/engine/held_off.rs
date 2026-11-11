@@ -1452,6 +1452,74 @@ mod tests {
     }
 
     #[test]
+    fn a_native_link_write_that_named_a_reset_holds_off_every_native_link_write_until_it() {
+        let (source, calls, clock) = held(vec![limited(Some(30))]);
+        let configured = std::collections::BTreeMap::from([(
+            "caused-by".to_owned(),
+            serde_json::from_value::<onetaskgraph_plugin_api::LinkTypeConfig>(
+                serde_json::json!({"native": "related"}),
+            )
+            .expect("a link type"),
+        )]);
+        let types =
+            onetaskgraph_plugin_api::LinkTypes::checked("test", &configured, &["related"], &[])
+                .expect("a mirrored type");
+        let link = onetaskgraph_plugin_api::NativeLink {
+            from: NativeId::from("T-1"),
+            to: NativeId::from("T-2"),
+            native: types.native("caused-by").expect("its word").clone(),
+        };
+        block_on(async {
+            let added = source.add_native_links(std::slice::from_ref(&link)).await;
+            assert!(matches!(
+                added.as_slice(),
+                [Err(SourceError::RateLimited {
+                    retry_after_seconds: Some(30),
+                    ..
+                })]
+            ));
+            assert_eq!(calls.load(Atomic::SeqCst), 1, "the refusal itself was sent");
+            clock.advance(10_000);
+            // Neither an addition nor a removal is sent before the reset, each told how long.
+            for answers in [
+                source.add_native_links(std::slice::from_ref(&link)).await,
+                source
+                    .remove_native_links(std::slice::from_ref(&link))
+                    .await,
+            ] {
+                assert!(matches!(
+                    answers.as_slice(),
+                    [Err(SourceError::RateLimited {
+                        retry_after_seconds: Some(20),
+                        ..
+                    })]
+                ));
+            }
+            assert_eq!(
+                calls.load(Atomic::SeqCst),
+                1,
+                "nothing sent before the reset"
+            );
+            clock.advance(20_000);
+            assert!(
+                source
+                    .add_native_links(std::slice::from_ref(&link))
+                    .await
+                    .iter()
+                    .all(Result::is_ok)
+            );
+            assert!(
+                source
+                    .remove_native_links(std::slice::from_ref(&link))
+                    .await
+                    .iter()
+                    .all(Result::is_ok)
+            );
+            assert_eq!(calls.load(Atomic::SeqCst), 3, "reached again at the reset");
+        });
+    }
+
+    #[test]
     fn a_source_that_named_a_reset_is_sent_nothing_before_it_and_reached_after_it() {
         let (source, calls, clock) = held(vec![limited(Some(30))]);
         let id = NativeId::from("T-1");
