@@ -642,7 +642,10 @@ impl Engine {
     }
 
     /// The built source called `name`, when its tasks have comments it can write.
-    fn writable_comments(&self, name: &SourceName) -> Result<&ResolvedSource, EngineError> {
+    pub(super) fn writable_comments(
+        &self,
+        name: &SourceName,
+    ) -> Result<&ResolvedSource, EngineError> {
         let source = self.commented(name)?;
         if source.source().writes().is_supported() {
             return Ok(source);
@@ -862,7 +865,7 @@ fn failed(source: &ResolvedSource, error: SourceError) -> EngineError {
 
 /// `body` as a sanitisation passed it, refused — nothing written — when the replacement left
 /// it empty, which no source takes as a comment.
-fn rewritten_body(
+pub(super) fn rewritten_body(
     source: &ResolvedSource,
     rewrite: &super::boundary::Rewrite,
     body: &CommentBody,

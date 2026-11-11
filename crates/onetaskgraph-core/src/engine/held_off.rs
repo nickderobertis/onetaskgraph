@@ -399,6 +399,20 @@ impl TaskSource for HeldOff {
         self.noted(self.inner.query_tasks(query, page).await)
     }
 
+    async fn query_tasks_batch(
+        &self,
+        asks: &[(TaskQuery, PageRequest)],
+    ) -> Vec<Result<Page<Task>, SourceError>> {
+        if let Err(refused) = self.refused() {
+            return asks.iter().map(|_| Err(refused.clone())).collect();
+        }
+        let answers = self.inner.query_tasks_batch(asks).await;
+        answers
+            .into_iter()
+            .map(|answer| self.noted(answer))
+            .collect()
+    }
+
     // llmlint: ignore[changed_behavior_has_e2e] No engine caller of this listing exists on the base yet; the sanitize sweep, which adopts it next, exercises it end to end.
     async fn query_task_details(
         &self,
@@ -626,6 +640,20 @@ impl TaskSource for HeldOff {
         self.noted(self.held(id, self.inner.update_task(id, update)).await)
     }
 
+    async fn update_tasks(
+        &self,
+        updates: &[onetaskgraph_plugin_api::BatchUpdate],
+    ) -> Vec<Result<onetaskgraph_plugin_api::BatchAnswer<TaskUpdateOutcome>, SourceError>> {
+        if let Err(refused) = self.refused() {
+            return updates.iter().map(|_| Err(refused.clone())).collect();
+        }
+        let answers = self.inner.update_tasks(updates).await;
+        answers
+            .into_iter()
+            .map(|answer| self.noted(answer))
+            .collect()
+    }
+
     async fn set_project_status(
         &self,
         id: &NativeId,
@@ -728,6 +756,20 @@ impl TaskSource for HeldOff {
     ) -> Result<Option<Comment>, SourceError> {
         self.refused()?;
         self.noted(self.held(task, self.inner.add_comment(task, comment)).await)
+    }
+
+    async fn add_comments(
+        &self,
+        comments: &[onetaskgraph_plugin_api::BatchComment],
+    ) -> Vec<Result<onetaskgraph_plugin_api::BatchAnswer<Comment>, SourceError>> {
+        if let Err(refused) = self.refused() {
+            return comments.iter().map(|_| Err(refused.clone())).collect();
+        }
+        let answers = self.inner.add_comments(comments).await;
+        answers
+            .into_iter()
+            .map(|answer| self.noted(answer))
+            .collect()
     }
 
     async fn edit_comment(

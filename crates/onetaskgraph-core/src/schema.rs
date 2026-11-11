@@ -57,7 +57,7 @@ use crate::{
 /// that it moves whenever [`schema_bundle`] below emits a different document. The golden
 /// that holds it to that is `PUBLISHED_BUNDLES` in `tests/engine.rs`, which records every
 /// root's schema by digest from this version on.
-pub const SCHEMA_BUNDLE_VERSION: u32 = 60;
+pub const SCHEMA_BUNDLE_VERSION: u32 = 61;
 
 /// The same typed envelope the command line serializes, keeping the payload's root name.
 pub(crate) fn write_answer_schema<T: schemars::JsonSchema>() -> Schema {
@@ -257,6 +257,19 @@ pub fn schema_bundle() -> Value {
     roots.insert("TaskUpdated", write_answer_schema::<TaskUpdated>());
     roots.insert("UpdatedField", schema_for!(UpdatedField));
     roots.insert("TaskUpdateOutcome", schema_for!(TaskUpdateOutcome));
+
+    // The batched calls: what `task find`, `task comment add-many` and `task update-many` read,
+    // what each answers, and the outcome vocabulary a caller branches on per item.
+    roots.insert("FindRequest", schema_for!(crate::FindRequest));
+    roots.insert("FoundTasks", schema_for!(crate::FoundTasks));
+    roots.insert("CommentBatch", schema_for!(crate::CommentBatch));
+    roots.insert(
+        "CommentsAdded",
+        write_answer_schema::<crate::CommentsAdded>(),
+    );
+    roots.insert("UpdateBatch", schema_for!(crate::UpdateBatch));
+    roots.insert("TasksUpdated", write_answer_schema::<crate::TasksUpdated>());
+    roots.insert("BatchOutcome", schema_for!(crate::BatchOutcome));
 
     // What `task`, `project` and `document metadata set` answer with.
     roots.insert("MetadataSet", write_answer_schema::<MetadataSet>());

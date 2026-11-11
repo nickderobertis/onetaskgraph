@@ -78,7 +78,8 @@ silence. See the note on `Health` below for the one difference it carries delibe
   `MetadataMatch`, `ProjectFilter`, `PageRequest`, `Page`, `Cursor`; the capability types `Capabilities`,
   `Support`, `DependencySupport`; the write types `ItemWrite`, `WriteSupport`,
   `MetadataKey`, `MetadataRecord`, `WriteGuard` and `BodySize`; the targeted-update types `TaskUpdate`,
-  `TaskUpdateOutcome` and `UpdatedField`; the
+  `TaskUpdateOutcome` and `UpdatedField`; the batched-write types `BatchUpdate`,
+  `BatchComment` and `BatchAnswer`; the
   comment types `Comment`, `CommentBody`, `NewComment`, `CommentOrigin`, `CommentCopy`,
   `AuthorKind` and `TaskDetailRead`; the section types `StoredHeading`, `BodyMarkup` and `SharedBodyMarkup`; the
   metering types `Metering` and `Metered`; the `status_mapping` types `StatusMapping`,

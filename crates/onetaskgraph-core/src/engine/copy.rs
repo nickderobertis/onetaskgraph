@@ -134,6 +134,13 @@ pub struct CopyConditions {
     /// priority over it; at any other the counterpart keeps its own, and every other field is
     /// written as it would be. Empty sets no condition.
     pub priority: Vec<Priority>,
+    /// The version each named task's counterpart must be at for the copy to write it, keyed by
+    /// the qualified id the task is copied from — `task copy --if-version <ID>=<VERSION>`.
+    /// A counterpart at any other version is written nothing and answered `failed` as
+    /// `version-moved`, its `held.version` the version it is at, while every other item is
+    /// copied; a task this copy creates holds nothing, since there is no version for it to be
+    /// at. Empty holds nothing.
+    pub versions: HashMap<GlobalId, String>,
 }
 
 /// What a guarded copy found a counterpart's status at, and whether that met the condition.
@@ -2269,7 +2276,8 @@ impl Engine {
         let conditions = &request.conditions;
         if (!conditions.status.is_empty()
             || conditions.otherwise.is_some()
-            || !conditions.priority.is_empty())
+            || !conditions.priority.is_empty()
+            || !conditions.versions.is_empty())
             && request.scope != CopyScope::Tasks
         {
             return Err(EngineError::ConditionsNotTasks);
@@ -11097,7 +11105,10 @@ fn decide_conditions(
 ) -> HashMap<usize, EngineError> {
     let conditions = &request.conditions;
     let mut refused = HashMap::new();
-    if conditions.status.is_empty() && conditions.priority.is_empty() {
+    if conditions.status.is_empty()
+        && conditions.priority.is_empty()
+        && conditions.versions.is_empty()
+    {
         return refused;
     }
     for (index, item) in planned.iter_mut().enumerate() {
@@ -11112,6 +11123,28 @@ fn decide_conditions(
         let id = id.clone();
         let held_category = held.status.category;
         let held_priority = held.priority;
+        // A held version is decided first: an item it refuses is written nothing at all, so
+        // no other condition of it is decided.
+        if let Some(version) = conditions.versions.get(&item.source)
+            && held.version.as_deref() != Some(version.as_str())
+        {
+            let found = held.version.clone().unwrap_or_default();
+            refused.insert(
+                index,
+                EngineError::VersionMoved {
+                    id: GlobalId::new(item.to.clone(), id).to_string(),
+                    expected: version.clone(),
+                    held: Box::new(WriteResult {
+                        version: Some(found.clone()),
+                        parts: None,
+                        status: None,
+                        priority: None,
+                    }),
+                    found,
+                },
+            );
+            continue;
+        }
         if !conditions.priority.is_empty() {
             item.priority_condition = Some(PriorityCondition {
                 held: held_priority,

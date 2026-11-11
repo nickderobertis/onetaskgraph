@@ -889,6 +889,26 @@ impl CachedSource {
     /// Run one write naming `id`, every entry naming it taken out of service before anything is
     /// sent — the write refused, sending nothing, when that cannot be done — and left
     /// unserveable after it.
+    /// A batched write of `ids`, each answered on its own: every id's entries retired before it
+    /// is sent — an id that cannot be retired answered refused, and the batch not sent — and
+    /// invalidated after, whatever each came to.
+    async fn retiring_each<T>(
+        &self,
+        ids: &[&NativeId],
+        write: impl Future<Output = Vec<Result<T, SourceError>>>,
+    ) -> Vec<Result<T, SourceError>> {
+        for id in ids {
+            if let Err(error) = self.cache.retire_before_write(id) {
+                return ids.iter().map(|_| Err(error.clone())).collect();
+            }
+        }
+        let written = write.await;
+        for id in ids {
+            self.cache.invalidate(id);
+        }
+        written
+    }
+
     async fn retiring<T>(
         &self,
         id: Option<&NativeId>,
@@ -1242,6 +1262,21 @@ impl TaskSource for CachedSource {
         }
         drop(command);
         Ok(listed)
+    }
+
+    async fn query_tasks_batch(
+        &self,
+        asks: &[(TaskQuery, PageRequest)],
+    ) -> Vec<Result<Page<Task>, SourceError>> {
+        let answers = self.inner.query_tasks_batch(asks).await;
+        let mut command = self.cache.command();
+        for task in answers.iter().flatten().flat_map(|page| &page.items) {
+            if let Some(version) = &task.version {
+                command.listed.insert(task.id.clone(), version.clone());
+            }
+        }
+        drop(command);
+        answers
     }
 
     async fn query_projects(
@@ -1712,6 +1747,24 @@ impl TaskSource for CachedSource {
             Box::pin(self.inner.add_comment(task, comment))
         })
         .await
+    }
+
+    async fn add_comments(
+        &self,
+        comments: &[onetaskgraph_plugin_api::BatchComment],
+    ) -> Vec<Result<onetaskgraph_plugin_api::BatchAnswer<Comment>, SourceError>> {
+        let ids: Vec<&NativeId> = comments.iter().map(|each| &each.task).collect();
+        self.retiring_each(&ids, self.inner.add_comments(comments))
+            .await
+    }
+
+    async fn update_tasks(
+        &self,
+        updates: &[onetaskgraph_plugin_api::BatchUpdate],
+    ) -> Vec<Result<onetaskgraph_plugin_api::BatchAnswer<TaskUpdateOutcome>, SourceError>> {
+        let ids: Vec<&NativeId> = updates.iter().map(|each| &each.id).collect();
+        self.retiring_each(&ids, self.inner.update_tasks(updates))
+            .await
     }
 
     async fn edit_comment(

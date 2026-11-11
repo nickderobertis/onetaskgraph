@@ -443,6 +443,29 @@ pub enum TaskCommand {
     /// window (a search index's lag included), so a caller reading again from it never loses a
     /// comment the source had not yet shown; one read twice carries the same id and version.
     Comments(TaskCommentsArgs),
+    /// Run many narrowed searches of one source in one call, each answered under its own key
+    /// with every matching task across every page.
+    ///
+    /// Reads `{"schema_version": 1, "queries": [{"key", "text", "in", "metadata", "origin",
+    /// "status"}]}` and answers `{"schema_version": 1, "answers": [{"key", "items", "complete",
+    /// "reason"}]}`, `onetaskgraph schema`'s `FindRequest` and `FoundTasks`. A query narrowed
+    /// by none of `text`, `metadata` and `origin` is refused naming its key, and nothing is
+    /// read. The searches are asked together, in as few requests as the source can answer
+    /// them; a page the source refuses ends that search alone, answered `complete: false` with
+    /// a reason naming the page, and the command exits 4.
+    Find(TaskFindArgs),
+    /// Apply many held updates to tasks of one source in one call, each answered on its own.
+    ///
+    /// Reads `{"schema_version": 1, "updates": [{"item", "if_version", "title", "body",
+    /// "status", "priority", "when_priority", "metadata", "remove_metadata",
+    /// "repositories"}]}` — every member but `item` optional — and answers
+    /// `{"schema_version": 1, "results": [{"item", "outcome", "version", "current_version",
+    /// "reason"}]}`, `onetaskgraph schema`'s `UpdateBatch` and `TasksUpdated`. Each update is
+    /// one held write of every field it names: `written`, `held` when its priority guard
+    /// declines, `version-moved` when its task moved past `if_version`, or `error` naming why;
+    /// no item's failure writes or refuses another. Exits 4 when any is `version-moved` or
+    /// `error`.
+    UpdateMany(TaskBatchArgs),
     /// Set one task's status, and nothing else about it.
     ///
     /// Every task it delivers is kept in step with it afterwards, and each is reported.
@@ -555,6 +578,39 @@ pub struct TaskCommentsArgs {
     /// in `main` converts it with the next action a user needs.
     #[arg(long = "item", value_name = "ID")]
     pub item: Vec<String>,
+}
+
+/// `onetaskgraph task find`.
+#[derive(Debug, Args)]
+pub struct TaskFindArgs {
+    /// The configured source whose tasks are searched.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — as `TaskCommentsArgs::source`: a name
+    /// that cannot be a source name and one naming no configured source are the same typo, and
+    /// both owe the same next action.
+    #[arg(value_name = "SOURCE")]
+    pub source: String,
+
+    /// The file holding the `FindRequest`, or `-` for standard input.
+    #[arg(long, value_name = "FILE")]
+    pub queries: std::path::PathBuf,
+}
+
+/// `onetaskgraph task update-many` and `task comment add-many`.
+#[derive(Debug, Args)]
+pub struct TaskBatchArgs {
+    /// The configured source whose tasks are written.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — as `TaskCommentsArgs::source`.
+    #[arg(value_name = "SOURCE")]
+    pub source: String,
+
+    /// The file holding the batch, or `-` for standard input.
+    #[arg(long, value_name = "FILE")]
+    pub input: std::path::PathBuf,
+
+    #[command(flatten)]
+    pub term_scope: TermScopeArgs,
 }
 
 /// `onetaskgraph task project-human`.
@@ -964,6 +1020,13 @@ pub struct TaskUpdateArgs {
     /// Replace its repositories list with none.
     #[arg(long = "no-repositories")]
     pub no_repositories: bool,
+
+    /// Write the update only while the task holds this priority — `none` for a task with none.
+    /// Repeat for several. At any other, nothing of the update is written — none of its fields —
+    /// and the answer's `guard` says `held` with the priority the task holds; every field it
+    /// names is otherwise written together, in one write held to the version the guard read.
+    #[arg(long = "when-priority", value_name = "PRIORITY")]
+    pub when_priority: Vec<PriorityArg>,
 
     #[command(flatten)]
     pub expect: ExpectArgs,
@@ -1375,6 +1438,15 @@ pub enum CommentCommand {
     Edit(CommentEditArgs),
     /// Delete one comment from a task.
     Delete(CommentDeleteArgs),
+    /// Add many comments to tasks of one source in one call, each answered on its own.
+    ///
+    /// Reads `{"schema_version": 1, "comments": [{"item", "body", "if_version"}]}` and answers
+    /// `{"schema_version": 1, "results": [{"item", "outcome", "comment", "current_version",
+    /// "reason"}]}`, `onetaskgraph schema`'s `CommentBatch` and `CommentsAdded`: `written` with
+    /// the comment's id, URL and version, `version-moved` when its task moved past
+    /// `if_version`, or `error` naming why; no comment's failure writes or refuses another.
+    /// Exits 4 when any is not written.
+    AddMany(TaskBatchArgs),
 }
 
 /// `onetaskgraph task comment add`.
@@ -2291,8 +2363,19 @@ pub struct TaskCopyArgs {
     #[command(flatten)]
     pub expect: ExpectArgs,
 
-    #[command(flatten)]
-    pub held: IfVersionArgs,
+    /// Write a task's counterpart only while it is at this version, as a read of it reported
+    /// it. Given as `<ID>=<VERSION>`, it holds the task copied from the qualified `<ID>`, and is
+    /// repeated for several: a counterpart at another version is written nothing and answered
+    /// `failed` as `version-moved`, its `held.version` the version it is at, while every other
+    /// task is copied, and the command exits 4. Given as a bare `<VERSION>` beside exactly one
+    /// id, the whole copy is refused as `version-moved` instead. A counterpart the copy creates
+    /// holds nothing.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — a version is the source's own opaque
+    /// token, and which id each names is read in `main` against the ids given, refusing one
+    /// naming none of them before anything is read.
+    #[arg(long = "if-version", value_name = "[ID=]VERSION")]
+    pub if_version: Vec<String>,
     #[command(flatten)]
     pub copy: CopyArgs,
 }

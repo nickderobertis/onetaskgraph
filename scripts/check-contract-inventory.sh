@@ -87,6 +87,16 @@ EXCEPTIONS = {
         "a free function, not one of the contract's types — the one check of the lowercase "
         "hex SHA-256 spelling `asset_sha256` produces, which reading a recorded upload applies"
     ),
+    "version_at": (
+        "a free function, not one of the contract's types — the one comparison of a task's "
+        "version with the one a batched write is held to, in the source's own order of its "
+        "tokens, so the defaults and every override hold a version alike"
+    ),
+    "decided_on": (
+        "a free function, not one of the contract's types — the one decision of a batched "
+        "write's hold and priority guard on the source's own read, which a source batching "
+        "its reads applies exactly as the defaults do"
+    ),
     "SIMULATED_CLOCK_VARIABLE": (
         "a const, not one of the contract's types — the name of the variable that selects the "
         "simulated `Clock`, spelled once for the binary that reads it and the harness that "
