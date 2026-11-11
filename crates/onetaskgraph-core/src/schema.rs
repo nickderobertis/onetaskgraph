@@ -57,7 +57,7 @@ use crate::{
 /// that it moves whenever [`schema_bundle`] below emits a different document. The golden
 /// that holds it to that is `PUBLISHED_BUNDLES` in `tests/engine.rs`, which records every
 /// root's schema by digest from this version on.
-pub const SCHEMA_BUNDLE_VERSION: u32 = 62;
+pub const SCHEMA_BUNDLE_VERSION: u32 = 63;
 
 /// The same typed envelope the command line serializes, keeping the payload's root name.
 pub(crate) fn write_answer_schema<T: schemars::JsonSchema>() -> Schema {
@@ -248,6 +248,10 @@ pub fn schema_bundle() -> Value {
 
     // What `task priority set` and `task content set` answer with.
     roots.insert("TaskPrioritySet", write_answer_schema::<TaskPrioritySet>());
+    roots.insert(
+        "TaskAssigneeSet",
+        write_answer_schema::<crate::TaskAssigneeSet>(),
+    );
     roots.insert("TaskContentSet", write_answer_schema::<TaskContentSet>());
 
     // The targeted update: what a caller names, what `task update` answers with and the

@@ -432,6 +432,24 @@ pub fn priority_set(set: &TaskPrioritySet) -> String {
     columns(&rows)
 }
 
+/// What `task assignee set` came to: the task, and every person it is assigned to after the
+/// write — `none` when nobody.
+pub fn assignee_set(set: &onetaskgraph_core::TaskAssigneeSet) -> String {
+    columns(&[
+        vec!["id:".to_owned(), set.id.to_string()],
+        vec!["assignees:".to_owned(), people(&set.assignees)],
+    ])
+}
+
+/// People, as a line names them: `none` for nobody.
+fn people(assignees: &[String]) -> String {
+    if assignees.is_empty() {
+        "none".to_owned()
+    } else {
+        assignees.join(", ")
+    }
+}
+
 /// What `task comments --since` found: each comment, oldest first, under the task it is on,
 /// and the watermark to read from next.
 pub fn comments_since(listed: &onetaskgraph_core::CommentsSince) -> String {
@@ -818,6 +836,10 @@ pub fn task_detail(task: &Qualified<Task>) -> String {
     // as, and a line saying so on each of them would say nothing.
     if item.priority != Priority::None {
         fields.push(("priority", wire(&item.priority)));
+    }
+    // Only for a source that holds assignees: every other prints the lines it always did.
+    if let Some(assignees) = &item.assignees {
+        fields.push(("assignees", people(assignees)));
     }
     fields.push((
         "project",

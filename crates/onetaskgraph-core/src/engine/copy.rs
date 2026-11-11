@@ -10506,6 +10506,14 @@ fn changes(
     {
         return true;
     }
+    // An assignee the copy writes is decided against the destination as read, whatever the
+    // record says: a guard met over an assignee somebody else set is a change the record
+    // never saw.
+    if let (Item::Task(held), Item::Task(outgoing)) = (&held.item, &outgoing)
+        && !writes_held_assignees(held, outgoing)
+    {
+        return true;
+    }
     if recorded_unchanged(item, held, &outgoing, edges, destination.name(), covers) {
         return false;
     }
@@ -12495,6 +12503,9 @@ fn same(held: &Item, outgoing: &Item, destination: &SourceName) -> bool {
                     == record::digest_metadata(&outgoing.metadata)
                 && held.repositories == outgoing.repositories
                 && held.classification == outgoing.classification
+                // Assignees only where the copy writes them: one it leaves alone is the
+                // destination's own, whatever it holds.
+                && writes_held_assignees(held, outgoing)
         }
         (Item::Project(held), Item::Project(outgoing)) => {
             held.title == outgoing.title
@@ -12517,6 +12528,13 @@ fn same(held: &Item, outgoing: &Item, destination: &SourceName) -> bool {
         }
         _ => false,
     }
+}
+
+/// Whether `held` already holds the assignees `outgoing` writes — always, when it writes none.
+fn writes_held_assignees(held: &Task, outgoing: &Task) -> bool {
+    outgoing.assignees.as_ref().is_none_or(|written| {
+        super::assignees::same_people(written, held.assignees.as_deref().unwrap_or_default())
+    })
 }
 
 /// Whether the destination's forward edges already say what this copy would write.

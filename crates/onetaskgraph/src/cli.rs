@@ -506,6 +506,13 @@ pub enum TaskCommand {
         #[command(subcommand)]
         command: PriorityCommand,
     },
+    /// Set the one person a task is assigned to, and nothing else about it.
+    ///
+    /// Only for a source whose configuration sets `assignees: true`.
+    Assignee {
+        #[command(subcommand)]
+        command: AssigneeCommand,
+    },
     /// Replace one task's content, and nothing else about it.
     ///
     /// Content is not status: no task it delivers is re-evaluated.
@@ -827,6 +834,13 @@ pub struct TaskCreateArgs {
     #[arg(long = "delivers", value_name = "ID")]
     pub delivers: Vec<String>,
 
+    /// The one person it is assigned to, as its source names a person — a GitHub login, a
+    /// Linear display name, the string as given in a folder or in memory. Taken at most once,
+    /// and only by a source whose configuration sets `assignees: true`; without it the task is
+    /// created unassigned.
+    #[arg(long = "assignee", value_name = "PERSON")]
+    pub assignee: Option<String>,
+
     #[command(flatten)]
     pub assets: AssetArgs,
 }
@@ -1146,6 +1160,36 @@ pub struct PrioritySetArgs {
 
     #[command(flatten)]
     pub expect: ExpectArgs,
+
+    #[command(flatten)]
+    pub held: IfVersionArgs,
+
+    #[command(flatten)]
+    pub term_scope: TermScopeArgs,
+}
+
+/// What `onetaskgraph task assignee` can do.
+#[derive(Debug, Subcommand)]
+pub enum AssigneeCommand {
+    /// Assign one task to one person, replacing every person it held — or, naming none, to
+    /// nobody — and nothing else about it.
+    Set(AssigneeSetArgs),
+}
+
+/// `onetaskgraph task assignee set`.
+#[derive(Debug, Args)]
+pub struct AssigneeSetArgs {
+    /// The task's qualified id, `<source>:<native-id>`.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — as `StatusSetArgs::id`.
+    #[arg(value_name = "ID")]
+    pub id: String,
+
+    /// The person to assign it to, as its source names a person — a GitHub login, a Linear
+    /// display name, the string as given in a folder or in memory. Left out, the task is
+    /// unassigned. Every person it held before is replaced.
+    #[arg(value_name = "PERSON")]
+    pub person: Option<String>,
 
     #[command(flatten)]
     pub held: IfVersionArgs,
@@ -2389,6 +2433,18 @@ pub struct TaskCopyArgs {
     /// takes the source's priority.
     #[arg(long = "when-destination-priority", value_name = "PRIORITY")]
     pub when_destination_priority: Vec<PriorityArg>,
+
+    /// Write the source's assignee over an existing destination task's only while the
+    /// destination task is assigned to exactly these people; repeat for each, or name `none`
+    /// alone for a task assigned to nobody. Holding any other set, the destination task keeps
+    /// its own, and every other field is written as without this flag; without it an existing
+    /// task's assignees are never written. Each updated task's outcome carries
+    /// `assignee_condition`.
+    ///
+    /// Decided on the copy's own read of the destination task, so it adds no request; a create
+    /// takes the source's assignee. Only for a destination that opted in to assignees.
+    #[arg(long = "when-destination-assignees", value_name = "PERSON|none")]
+    pub when_destination_assignees: Vec<String>,
 
     /// The qualified ids to copy, `<source>:<native-id>` — or none, and the narrowing below
     /// names the tasks instead.

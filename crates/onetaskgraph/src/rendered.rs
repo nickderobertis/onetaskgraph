@@ -59,7 +59,7 @@ pub(crate) async fn create_task(
             metadata: item.metadata,
             assets,
             classification: classification(args.item.classification),
-            assignee: None,
+            assignee: args.assignee.clone(),
         })
         .await
         .map_err(|error| Failure::from(&error))?;

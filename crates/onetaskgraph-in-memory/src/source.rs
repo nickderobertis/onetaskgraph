@@ -198,6 +198,8 @@ fn served_at(sha256: &str, name: &AssetName) -> String {
 #[derive(Debug)]
 pub struct InMemorySource {
     capabilities: CapabilityConfig,
+    /// Whether this source's configuration opted in to assignees.
+    assignees: bool,
     held: Mutex<Held>,
 }
 
@@ -213,10 +215,19 @@ impl InMemorySource {
             .validate()
             .map_err(|message| SourceError::Config { message })?;
         LinkTypes::checked(KIND, &config.link_types, &[], &[])?;
+        let assignees = config.assignees;
+        let mut tasks = config.tasks;
+        // Opted in, a task configured without assignees is held unassigned.
+        if assignees {
+            for task in &mut tasks {
+                task.assignees.get_or_insert_with(Vec::new);
+            }
+        }
         Ok(Self {
             capabilities: config.capabilities,
+            assignees,
             held: Mutex::new(Held {
-                tasks: config.tasks,
+                tasks,
                 projects: config.projects,
                 documents: config.documents,
                 comments: config.comments,
@@ -481,7 +492,14 @@ impl TaskSource for InMemorySource {
     }
 
     fn capabilities(&self) -> Capabilities {
-        Capabilities::from(self.declared())
+        Capabilities {
+            assignees: if self.assignees {
+                onetaskgraph_plugin_api::Support::Native
+            } else {
+                onetaskgraph_plugin_api::Support::Unsupported
+            },
+            ..Capabilities::from(self.declared())
+        }
     }
 
     /// A held write is checked and made under the one mutex over this source's work: see
@@ -649,6 +667,9 @@ impl TaskSource for InMemorySource {
         if write.item.priority != Priority::None && !self.declared().priority.is_native() {
             return Err(unwritable_field(KIND, "priority"));
         }
+        if write.item.assignees.is_some() && !self.assignees {
+            return Err(unwritable_field(KIND, "assignees"));
+        }
         let near = write.target.as_ref().unwrap_or(&write.item.id);
         listed("delivers", near, &write.item.delivers)?;
         listed("delivered_by", near, &write.item.delivered_by)?;
@@ -668,11 +689,18 @@ impl TaskSource for InMemorySource {
                         &write.item.metadata,
                     )
                 });
+                // A write naming no assignees leaves the task's as they are.
+                let assignees = write
+                    .item
+                    .assignees
+                    .clone()
+                    .or_else(|| held.tasks[position].assignees.clone());
                 held.tasks[position] = Task {
                     id: target.clone(),
                     key: None,
                     version: None,
                     content,
+                    assignees,
                     ..write.item.clone()
                 };
                 target.clone()
@@ -683,6 +711,12 @@ impl TaskSource for InMemorySource {
                     id: id.clone(),
                     key: None,
                     version: None,
+                    // Opted in, a task created naming no assignees is unassigned.
+                    assignees: write
+                        .item
+                        .assignees
+                        .clone()
+                        .or_else(|| self.assignees.then(Vec::new)),
                     ..write.item.clone()
                 });
                 id
@@ -1148,6 +1182,9 @@ impl TaskSource for InMemorySource {
             && !self.declared().priority.is_native()
         {
             return Err(unwritable_field(KIND, "priority"));
+        }
+        if update.assignees.is_some() && !self.assignees {
+            return Err(unwritable_field(KIND, "assignees"));
         }
         if let Some(delivers) = &update.delivers {
             listed("delivers", id, delivers)?;
