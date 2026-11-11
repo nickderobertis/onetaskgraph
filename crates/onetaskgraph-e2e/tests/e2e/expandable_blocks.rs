@@ -1088,7 +1088,7 @@ const TASK: &str = "Build the form.
 </details>
 ";
 
-/// The project's description.
+/// A project description holding a block with a list and code.
 const PROJECT: &str = "The plan.
 
 <details>
@@ -1266,11 +1266,9 @@ fn a_chain_through_a_board_and_linear_gives_back_the_authored_document_and_no_re
             "the board's {key} is the authored body"
         );
     }
-    // The last hop, through Linear.
     for (key, body) in bodies {
         let content = at_last[key].content(&sandbox);
         let (authored, last) = (by_asset(body, &names), by_asset(&content, &names));
-        // Every block's structure lines and summary, byte for byte.
         let structure = |text: &str| -> Vec<String> {
             text.lines()
                 .filter(|line| {
@@ -1284,20 +1282,19 @@ fn a_chain_through_a_board_and_linear_gives_back_the_authored_document_and_no_re
             structure(&authored),
             "{key}: every block's lines"
         );
-        // Every image kept.
         assert_eq!(
             last.matches("](asset:").count(),
             authored.matches("](asset:").count(),
             "{key}: every image reference is kept:\n{last}"
         );
-        // Once: every line that differs is accounted for by one recorded Linear normalization.
+        // Proven twice: line by line against the recorded normalizations, then as rendered
+        // HTML, which a recorded-looking line that changes meaning cannot pass.
         for hunk in hunks(&authored, &last) {
             assert!(
                 accounting_entry(&hunk).is_some(),
                 "{key}: {hunk:?} is no recorded Linear normalization:\n{last}"
             );
         }
-        // Twice: the two render to the same HTML.
         assert_eq!(html(&last), html(&authored), "{key}: renders as authored");
     }
 
