@@ -172,6 +172,7 @@ pub fn validate_sources(config: &Config) -> Result<(), ConfigError> {
 /// The two meanings answer differently for the same issues — one reads an issue with sub-issues
 /// as a project, the other as a task with children — and an edge written through either rewrites
 /// what the other reads, so a `parent` source needs a board of its own.
+// llmlint: ignore[code_lands_in_the_domain_that_owns_it] The refusal is about two configured sources at once, and a plugin is built from its own `config` block alone, so no GitHub Projects code can see the other source; moving it behind a plugin hook would change the `SourcePlugin` contract every plugin implements (AGENTS.md: keep the api crate still) to answer what one comparison of two blocks the engine already holds answers here, read through the plugin's own `remote_identity`.
 fn one_meaning_per_board(config: &Config) -> Result<(), ConfigError> {
     let mut boards: std::collections::BTreeMap<String, (SourceName, String)> =
         std::collections::BTreeMap::new();

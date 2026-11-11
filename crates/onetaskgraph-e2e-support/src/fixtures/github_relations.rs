@@ -28,6 +28,7 @@ const LAYERS: usize = 7;
 const CHILDREN: usize = 100;
 
 /// The board's `relates-to` pairs, and how its next relation write is cut short.
+// llmlint: ignore[code_lands_in_the_domain_that_owns_it] This is the loopback GitHub board's own state, and AGENTS.md places every loopback server and its state in `onetaskgraph-e2e-support` once, shared by the suites that drive it, rather than in a plugin or a suite of its own; it extends `GitHubBoard`, whose private fields only a module of `fixtures` can reach.
 #[derive(Default)]
 pub(super) struct Relations {
     /// Every `relates-to` pair, each spelled once in the order it was added.

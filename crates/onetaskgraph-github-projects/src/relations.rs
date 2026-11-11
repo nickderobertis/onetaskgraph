@@ -26,6 +26,15 @@ use onetaskgraph_plugin_api::ItemKind;
 /// The one native word a link type may be mirrored as on a GitHub board.
 pub(crate) const RELATES_TO: &str = "relates-to";
 
+/// Which way a native `relates-to` write goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum NativeWrite {
+    /// `addRelatesTo`: afterwards the pair is related.
+    Add,
+    /// `removeRelatesTo`: afterwards the pair is not.
+    Remove,
+}
+
 /// One parent write, as it goes out.
 enum ParentOp {
     /// `addSubIssue` of `child` under `parent`, replacing the parent it has when `replace`.
@@ -205,47 +214,74 @@ impl GitHubProjectsSource {
                     .map(|item| (id, item))
             })
             .collect();
-        let mut ops: Vec<(usize, ParentOp)> = Vec::new();
+        // The writes of one child go in batch order, one a round: each later one is decided on
+        // what the one before it left — a refused edge leaving the parent it found, a written one
+        // leaving its own and a version nothing read — and never sent beside it, because one
+        // document runs its `addSubIssue` fields before its `removeSubIssue` ones.
+        let mut rounds: Vec<Vec<usize>> = Vec::new();
+        let mut seen: BTreeMap<&NativeId, usize> = BTreeMap::new();
         for (at, write) in writes.iter().enumerate() {
-            let Some(child) = held.get_mut(&write.child) else {
-                answers[at] = Some(Ok(ParentAnswer::Missing {
-                    what: write.child.clone(),
-                }));
-                continue;
-            };
-            let version = child.version();
-            if let Some(expected) = &write.if_version
-                && !version_at(self, version.as_deref(), expected)
-            {
-                answers[at] = Some(Ok(ParentAnswer::VersionMoved { found: version }));
-                continue;
+            let round = seen.entry(&write.child).or_insert(0);
+            if rounds.len() <= *round {
+                rounds.push(Vec::new());
             }
-            if child.issue_parent == write.parent {
-                answers[at] = Some(Ok(ParentAnswer::Unchanged { version }));
-                continue;
-            }
-            let op = match (&write.parent, &child.issue_parent) {
-                (Some(parent), current) => ParentOp::Add {
-                    parent: parent.clone(),
-                    child: write.child.clone(),
-                    replace: current.is_some(),
-                },
-                (None, Some(current)) => ParentOp::Remove {
-                    parent: current.clone(),
-                    child: write.child.clone(),
-                },
-                (None, None) => unreachable!("an unchanged parent was answered above"),
-            };
-            // A later write of the same child in this call is decided on this one.
-            child.issue_parent.clone_from(&write.parent);
-            ops.push((at, op));
+            rounds[*round].push(at);
+            *round += 1;
         }
-        for chunk in ops.chunks(RELATION_BATCH) {
-            for (at, answer) in self.send_parents(chunk).await {
-                answers[at] = Some(answer);
+        // Each child's version as last known: as read, and unknown once this call wrote it.
+        let mut versions: BTreeMap<NativeId, Option<String>> = held
+            .iter()
+            .map(|(id, item)| (id.clone(), item.version()))
+            .collect();
+        for round in rounds {
+            let mut ops: Vec<(usize, ParentOp)> = Vec::new();
+            for at in round {
+                let write = &writes[at];
+                let Some(child) = held.get(&write.child) else {
+                    answers[at] = Some(Ok(ParentAnswer::Missing {
+                        what: write.child.clone(),
+                    }));
+                    continue;
+                };
+                let version = versions.get(&write.child).cloned().flatten();
+                if let Some(expected) = &write.if_version
+                    && !version_at(self, version.as_deref(), expected)
+                {
+                    answers[at] = Some(Ok(ParentAnswer::VersionMoved { found: version }));
+                    continue;
+                }
+                if child.issue_parent == write.parent {
+                    answers[at] = Some(Ok(ParentAnswer::Unchanged { version }));
+                    continue;
+                }
+                let op = match (&write.parent, &child.issue_parent) {
+                    (Some(parent), current) => ParentOp::Add {
+                        parent: parent.clone(),
+                        child: write.child.clone(),
+                        replace: current.is_some(),
+                    },
+                    (None, Some(current)) => ParentOp::Remove {
+                        parent: current.clone(),
+                        child: write.child.clone(),
+                    },
+                    (None, None) => unreachable!("an unchanged parent was answered above"),
+                };
+                ops.push((at, op));
             }
-            for (_, op) in chunk {
-                let _ = self.forget(op.child());
+            for chunk in ops.chunks(RELATION_BATCH) {
+                for (at, answer) in self.send_parents(chunk).await {
+                    let write = &writes[at];
+                    if matches!(answer, Ok(ParentAnswer::Written { .. }))
+                        && let Some(child) = held.get_mut(&write.child)
+                    {
+                        child.issue_parent.clone_from(&write.parent);
+                        versions.insert(write.child.clone(), None);
+                    }
+                    answers[at] = Some(answer);
+                }
+                for (_, op) in chunk {
+                    let _ = self.forget(op.child());
+                }
             }
         }
         answers
@@ -368,11 +404,11 @@ impl GitHubProjectsSource {
     pub(super) async fn native_links(
         &self,
         links: &[NativeLink],
-        adding: bool,
+        write: NativeWrite,
     ) -> Vec<Result<(), SourceError>> {
         let mut answers = Vec::with_capacity(links.len());
         for chunk in links.chunks(RELATION_BATCH) {
-            answers.extend(self.send_native_links(chunk, adding).await);
+            answers.extend(self.send_native_links(chunk, write).await);
         }
         answers
     }
@@ -380,7 +416,7 @@ impl GitHubProjectsSource {
     async fn send_native_links(
         &self,
         chunk: &[NativeLink],
-        adding: bool,
+        write: NativeWrite,
     ) -> Vec<Result<(), SourceError>> {
         let Some(first) = chunk.first() else {
             return Vec::new();
@@ -394,7 +430,7 @@ impl GitHubProjectsSource {
             };
             return chunk.iter().map(|_| Err(refused.clone())).collect();
         }
-        let (document, prefix, doing) = if adding {
+        let (document, prefix, doing) = if write == NativeWrite::Add {
             (
                 graphql::ADD_RELATES_TO,
                 "relate",
@@ -421,8 +457,24 @@ impl GitHubProjectsSource {
             Ok(data) => (0..chunk.len())
                 .map(|slot| {
                     let alias = format!("{prefix}{slot}");
+                    let link = &chunk[slot];
                     match alias_answer(data, &alias, doing) {
-                        Ok(Some(_)) => Ok(()),
+                        // An answer about another pair says nothing of this one.
+                        Ok(Some(answered))
+                            if answered.pointer("/issue/id").and_then(Value::as_str)
+                                == Some(link.from.0.as_str())
+                                && answered.pointer("/relatedIssue/id").and_then(Value::as_str)
+                                    == Some(link.to.0.as_str()) =>
+                        {
+                            Ok(())
+                        }
+                        Ok(Some(_)) => Err(SourceError::Malformed {
+                            message: format!(
+                                "GitHub answered {alias} while {doing} about another pair than \
+                                 {} and {}",
+                                link.from.0, link.to.0
+                            ),
+                        }),
                         Ok(None) => Err(SourceError::Refused {
                             message: format!(
                                 "GitHub refused {alias} while {doing}: {}",
@@ -438,7 +490,9 @@ impl GitHubProjectsSource {
             return answers;
         }
         // What is still in doubt is answered from what GitHub holds now: a relation that is
-        // there was added, and one that is not was removed, whatever the answer said.
+        // there was added, and one that is not was removed, whatever the answer said — and only
+        // where the read-back establishes it: an issue it could not read whole leaves its links
+        // as they were answered.
         let doubted: Vec<usize> = (0..chunk.len())
             .filter(|at| answers[*at].is_err())
             .collect();
@@ -453,21 +507,26 @@ impl GitHubProjectsSource {
         };
         for at in doubted {
             let link = &chunk[at];
-            let holds = related
-                .get(&link.from)
-                .is_some_and(|others| others.contains(&link.to));
-            if holds == adding {
-                answers[at] = Ok(());
+            match related.get(&link.from) {
+                Some(Ok(others)) => {
+                    if others.contains(&link.to) == (write == NativeWrite::Add) {
+                        answers[at] = Ok(());
+                    }
+                }
+                Some(Err(error)) => answers[at] = Err(error.clone()),
+                None => {}
             }
         }
         answers
     }
 
-    /// What each of `ids` relates to, read in [`graphql::RELATES_TO_READS`] documents.
+    /// What each of `ids` relates to, read in [`graphql::RELATES_TO_READS`] documents — an issue
+    /// whose connection is missing, malformed or longer than one page answered as an error, never
+    /// as relating to nothing.
     async fn relates_to(
         &self,
         ids: &[NativeId],
-    ) -> Result<BTreeMap<NativeId, Vec<NativeId>>, SourceError> {
+    ) -> Result<BTreeMap<NativeId, Result<Vec<NativeId>, SourceError>>, SourceError> {
         let mut related = BTreeMap::new();
         for batch in ids.chunks(DETAIL_BATCH) {
             let mut variables = Map::new();
@@ -480,22 +539,50 @@ impl GitHubProjectsSource {
                 .graphql(graphql::RELATES_TO_READS, Value::Object(variables))
                 .await?;
             for (slot, id) in batch.iter().enumerate() {
-                let others = data
-                    .pointer(&format!("/r{slot}/relatesTo/nodes"))
-                    .and_then(Value::as_array)
-                    .map(|nodes| {
-                        nodes
-                            .iter()
-                            .filter_map(|node| node.get("id").and_then(Value::as_str))
-                            .map(|other| NativeId(other.to_owned()))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                related.insert(id.clone(), others);
+                related.insert(id.clone(), related_ids(&data, slot, id));
             }
         }
         Ok(related)
     }
+}
+
+/// The ids alias `r<slot>` of a [`graphql::RELATES_TO_READS`] answer says `id` relates to, or why
+/// that answer establishes nothing.
+fn related_ids(data: &Value, slot: usize, id: &NativeId) -> Result<Vec<NativeId>, SourceError> {
+    let malformed = |why: &str| SourceError::Malformed {
+        message: format!(
+            "GitHub's read of what {} relates to {why}, so whether the relation is there is not \
+             known; next: run the call again",
+            id.0
+        ),
+    };
+    let node = data
+        .get(format!("r{slot}"))
+        .filter(|node| !node.is_null())
+        .ok_or_else(|| malformed("answered no issue"))?;
+    if node.get("id").and_then(Value::as_str) != Some(id.0.as_str()) {
+        return Err(malformed("answered about another issue"));
+    }
+    let connection = node
+        .get("relatesTo")
+        .ok_or_else(|| malformed("has no relatesTo"))?;
+    if connection.pointer("/pageInfo/hasNextPage") != Some(&Value::Bool(false)) {
+        return Err(malformed(
+            "is longer than one page, or says nothing of its end",
+        ));
+    }
+    connection
+        .get("nodes")
+        .and_then(Value::as_array)
+        .ok_or_else(|| malformed("has no list of nodes"))?
+        .iter()
+        .map(|node| {
+            node.get("id")
+                .and_then(Value::as_str)
+                .map(|other| NativeId(other.to_owned()))
+                .ok_or_else(|| malformed("holds a node with no id"))
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -515,5 +602,47 @@ mod tests {
         let charge =
             crate::pacing::Charge::graphql(graphql::ADD_RELATES_TO, &Value::Object(variables));
         assert_eq!(charge.creations, 30);
+    }
+
+    #[test]
+    fn a_read_back_that_cannot_establish_what_an_issue_relates_to_is_an_error_never_absence() {
+        let id = NativeId("A".into());
+        let whole = json!({"r0": {"id": "A", "relatesTo": {"nodes": [{"id": "B"}],
+                                                            "pageInfo": {"hasNextPage": false}}}});
+        assert_eq!(related_ids(&whole, 0, &id).unwrap(), [NativeId("B".into())]);
+        for (answer, why) in [
+            (json!({}), "answered no issue"),
+            (json!({"r0": null}), "answered no issue"),
+            (
+                json!({"r0": {"id": "Z", "relatesTo": {"nodes": [],
+                "pageInfo": {"hasNextPage": false}}}}),
+                "another issue",
+            ),
+            (json!({"r0": {"id": "A"}}), "has no relatesTo"),
+            (
+                json!({"r0": {"id": "A", "relatesTo": {"nodes": [],
+                "pageInfo": {"hasNextPage": true}}}}),
+                "longer than one page",
+            ),
+            (
+                json!({"r0": {"id": "A", "relatesTo": {"nodes": []}}}),
+                "longer than one page",
+            ),
+            (
+                json!({"r0": {"id": "A", "relatesTo": {
+                "pageInfo": {"hasNextPage": false}}}}),
+                "no list of nodes",
+            ),
+            (
+                json!({"r0": {"id": "A", "relatesTo": {"nodes": [{"name": "B"}],
+                "pageInfo": {"hasNextPage": false}}}}),
+                "a node with no id",
+            ),
+        ] {
+            let Err(SourceError::Malformed { message }) = related_ids(&answer, 0, &id) else {
+                panic!("{answer} was read as an answer");
+            };
+            assert!(message.contains(why), "{message}");
+        }
     }
 }

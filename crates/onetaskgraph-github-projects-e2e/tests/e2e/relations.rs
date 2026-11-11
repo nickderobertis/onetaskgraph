@@ -37,13 +37,27 @@ pub(crate) struct Board {
 
 impl Board {
     pub(crate) fn of(items: Vec<Value>, extra: &Value) -> Self {
+        Self::with_source(items, extra, &json!({}))
+    }
+
+    /// [`Self::of`], with `source` laid over the source's own block — its `cache`, say — and a
+    /// folder of Markdown beside it as `notes`.
+    pub(crate) fn with_source(items: Vec<Value>, extra: &Value, source: &Value) -> Self {
         let sandbox = Sandbox::new();
         let (mut config, board) = github_projects_with_items(&sandbox, items);
         for (key, value) in extra.as_object().expect("an object") {
             config[key] = value.clone();
         }
+        let notes = sandbox.subdirectory("notes");
+        std::fs::create_dir_all(notes.join("tasks")).expect("the folder");
+        let mut block = json!({"plugin": "github-projects", "config": config});
+        for (key, value) in source.as_object().expect("an object") {
+            block[key] = value.clone();
+        }
         sandbox.project_document(&document(&json!({
-            "board": {"plugin": "github-projects", "config": config},
+            "board": block,
+            "notes": {"plugin": "local-md", "config": {"root": notes,
+                "status_mapping": {"Todo": "todo"}}},
         })));
         Self { sandbox, board }
     }
@@ -52,6 +66,7 @@ impl Board {
         let output = self
             .sandbox
             .command()
+            .env("XDG_CACHE_HOME", self.sandbox.subdirectory("cache-home"))
             .args(arguments)
             .write_stdin(stdin)
             .assert()
@@ -921,4 +936,267 @@ fn every_content_write_of_a_linked_task_keeps_its_links_section() {
         links_of(&items[0]),
         [link("caused-by", "out", "B-2", "present")]
     );
+}
+
+#[test]
+fn the_edges_of_one_child_apply_in_batch_order_each_decided_on_what_the_one_before_left() {
+    let board = Board::of(
+        ["A-1", "B-2", "C-3", "D-4"]
+            .iter()
+            .map(|id| issue(id, None))
+            .collect(),
+        &parent_source(),
+    );
+    let (set, _) = board.parents(&[("C-3", Some("A-1")), ("D-4", Some("C-3"))]);
+    assert_eq!(outcomes(&set), ["written", "written"]);
+
+    // A removal then an addition: the addition is sent after the removal landed, as a plain
+    // `addSubIssue` — beside it in one document, GitHub would run the addition first and refuse
+    // it, the child still under its parent.
+    let (moved, served) = board.parents(&[("C-3", None), ("C-3", Some("B-2"))]);
+    assert_eq!(outcomes(&moved), ["written", "written"], "{:#}", moved.json);
+    let documents: Vec<&Value> = served
+        .iter()
+        .filter(|(sent, _)| sent == graphql::SET_PARENTS)
+        .map(|(_, variables)| variables)
+        .collect();
+    assert_eq!(documents.len(), 2, "one round each");
+    assert_eq!(documents[0]["sendUnparent0"], true);
+    assert_eq!(
+        documents[1]["parent0"],
+        json!({"issueId": "B-2", "subIssueId": "C-3"})
+    );
+    assert_eq!(board.board.sub_issue_parent("C-3").as_deref(), Some("B-2"));
+
+    // A refused edge leaves the parent it found, and the next edge of that child is decided on
+    // it: naming that parent again writes nothing.
+    let (refused, served) = board.parents(&[("C-3", Some("D-4")), ("C-3", Some("B-2"))]);
+    assert_eq!(
+        outcomes(&refused),
+        ["refused", "unchanged"],
+        "{:#}",
+        refused.json
+    );
+    assert_eq!(fields_sent(&served, graphql::SET_PARENTS), [1]);
+
+    // A later edge held to the version the child was read at finds it moved by the earlier one.
+    let shown = board.run(&["task", "show", "board:C-3", "--json"], "");
+    let read = shown.json["items"][0]["item"]["version"]
+        .as_str()
+        .expect("a version")
+        .to_owned();
+    let (held, _) = board.measured(
+        &["task", "parent", "set-many", "--input", "-", "--json"],
+        &json!({"schema_version": 1, "edges": [
+            {"child": "board:C-3", "parent": "board:A-1"},
+            {"child": "board:C-3", "parent": "board:B-2", "if_version": read},
+        ]})
+        .to_string(),
+    );
+    assert_eq!(
+        outcomes(&held),
+        ["written", "version-moved"],
+        "{:#}",
+        held.json
+    );
+    assert_eq!(board.board.sub_issue_parent("C-3").as_deref(), Some("A-1"));
+}
+
+/// A template rendering one line of text.
+const NOTE: &str = "---\nonetaskgraph_template: 1\nvariables:\n  note:\n    description: What \
+                    changed\n    type: string\n---\n# Notes\n{{ note }}\n";
+
+#[test]
+fn a_render_of_a_linked_task_keeps_its_links_section() {
+    let board = Board::of(vec![issue("B-2", None)], &mirrored());
+    let template = board.sandbox.project().join("note.md");
+    std::fs::write(&template, NOTE).unwrap();
+    let template = template.display().to_string();
+    let created = board.run(
+        &[
+            "task",
+            "create",
+            "board",
+            "--project",
+            "board:P-1",
+            "--title",
+            "Rendered",
+            "--template",
+            &template,
+            "--var",
+            "note=first",
+            "--no-interactive",
+            "--json",
+        ],
+        "",
+    );
+    assert_eq!(created.code, Some(0), "{}", created.stderr);
+    let id = created.json["items"][0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the created id: {:#}", created.json))
+        .to_owned();
+    let native = id.trim_start_matches("board:").to_owned();
+    let (added, _) = board.links("add-many", &[(&native, "B-2", "caused-by")]);
+    assert_eq!(outcomes(&added), ["written"], "{:#}", added.json);
+    let section = links_section(&board.board, &native);
+    assert!(section.contains("[Ticket B-2]("), "{section}");
+
+    let rendered = board.run(
+        &[
+            "task",
+            "render",
+            &id,
+            "--var",
+            "note=second",
+            "--no-interactive",
+            "--json",
+        ],
+        "",
+    );
+    assert_eq!(rendered.code, Some(0), "{}", rendered.stderr);
+    let body = board.board.item(&native).unwrap()["body"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(body.contains("second") && !body.contains("first"), "{body}");
+    assert_eq!(links_section(&board.board, &native), section);
+    let shown = board.run(&["task", "show", &id, "--json"], "");
+    let content = shown.json["items"][0]["item"]["content"].as_str().unwrap();
+    assert!(!content.contains("## Links"), "{content}");
+    assert_eq!(
+        links_of(&board.relations(&[&native, "B-2"])[0]),
+        [link("caused-by", "out", "B-2", "present")]
+    );
+}
+
+#[test]
+fn a_copy_over_a_linked_counterpart_keeps_its_links_section() {
+    let board = Board::of(vec![issue("B-2", None)], &mirrored());
+    let notes = board.sandbox.subdirectory("notes");
+    let file = notes.join("tasks/N-1.md");
+    std::fs::write(
+        &file,
+        "---\ntitle: Noted\nstatus: Todo\n---\nFirst words.\n",
+    )
+    .unwrap();
+    let copy = || {
+        board.run(
+            &["task", "copy", "notes:N-1", "--to", "board", "--json"],
+            "",
+        )
+    };
+    let first = copy();
+    assert_eq!(first.code, Some(0), "{}", first.stderr);
+    let id = first.json["items"][0]["destination"]
+        .as_str()
+        .or_else(|| first.json["items"][0]["result"]["id"].as_str())
+        .unwrap_or_else(|| panic!("the counterpart: {:#}", first.json))
+        .to_owned();
+    let native = id.trim_start_matches("board:").to_owned();
+    let (added, _) = board.links("add-many", &[(&native, "B-2", "caused-by")]);
+    assert_eq!(outcomes(&added), ["written"], "{:#}", added.json);
+    let section = links_section(&board.board, &native);
+    assert!(section.contains("[Ticket B-2]("), "{section}");
+
+    std::fs::write(
+        &file,
+        "---\ntitle: Noted\nstatus: Todo\n---\nSecond words.\n",
+    )
+    .unwrap();
+    let second = copy();
+    assert_eq!(second.code, Some(0), "{}", second.stderr);
+    assert_eq!(
+        second.json["items"][0]["action"], "updated",
+        "{:#}",
+        second.json
+    );
+    let body = board.board.item(&native).unwrap()["body"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(body.starts_with("Second words."), "{body}");
+    assert_eq!(links_section(&board.board, &native), section);
+    let shown = board.run(&["task", "show", &id, "--json"], "");
+    assert_eq!(shown.json["items"][0]["item"]["content"], "Second words.");
+    assert_eq!(
+        links_of(&board.relations(&[&native, "B-2"])[0]),
+        [link("caused-by", "out", "B-2", "present")]
+    );
+}
+
+#[test]
+fn with_the_cache_on_relations_reach_the_board_and_relation_writes_retire_the_entries_they_move() {
+    let board = Board::with_source(
+        ["A-1", "B-2", "C-3"]
+            .iter()
+            .map(|id| issue(id, None))
+            .collect(),
+        &json!({"sub_issues": "parent",
+                "link_types": {"caused-by": {"native": "relates-to"}}}),
+        &json!({"cache": {"enabled": true}}),
+    );
+    // A relation read is never served from the cache, a pinned entry held or not.
+    let held = filled(&board, "B-2");
+    for _ in 0..2 {
+        let (read, served) = board.measured(&["task", "relations", "board:B-2", "--json"], "");
+        assert_eq!(read.code, Some(0), "{}", read.stderr);
+        assert_eq!(sent(&served, graphql::ISSUE_RELATIONS), 1, "{served:?}");
+    }
+    // A parent write takes the child's entry out of service: the pinned read after it is the
+    // board's.
+    let (set, _) = board.parents(&[("B-2", Some("A-1"))]);
+    assert_eq!(outcomes(&set), ["written"]);
+    let (shown, served) = pinned_show(&board, "B-2", &held);
+    assert_eq!(shown.code, Some(0), "{}", shown.stderr);
+    assert!(
+        !served.is_empty(),
+        "the pinned read after the write reached the board"
+    );
+
+    // A mirrored link write takes its from-end's entry out of service.
+    let from = filled(&board, "C-3");
+    let (added, _) = board.links("add-many", &[("C-3", "A-1", "caused-by")]);
+    assert_eq!(outcomes(&added), ["written"]);
+    let (shown, served) = pinned_show(&board, "C-3", &from);
+    assert!(
+        !served.is_empty(),
+        "the pinned read after the write reached the board"
+    );
+    assert_eq!(
+        shown.json["items"][0]["item"]["metadata"]["onetaskgraph.links"][0]["other"], "board:A-1",
+        "{:#}",
+        shown.json
+    );
+}
+
+/// `task show` of the board task `id`, pinned to `version`, with every request it sent.
+fn pinned_show(board: &Board, id: &str, version: &str) -> (Answered, Vec<(String, Value)>) {
+    board.measured(
+        &[
+            "task",
+            "show",
+            &format!("board:{id}"),
+            "--pin",
+            version,
+            "--json",
+        ],
+        "",
+    )
+}
+
+/// Fill the cache entry of the board task `id` by a read pinned to the version an unpinned
+/// read answered, hold it to serving the next such read, and answer that version.
+fn filled(board: &Board, id: &str) -> String {
+    let shown = board.run(&["task", "show", &format!("board:{id}"), "--json"], "");
+    let version = shown.json["items"][0]["item"]["version"]
+        .as_str()
+        .expect("a version")
+        .to_owned();
+    pinned_show(board, id, &version);
+    let (_, served) = pinned_show(board, id, &version);
+    assert!(
+        served.is_empty(),
+        "{id}'s entry serves a pinned read: {served:?}"
+    );
+    version
 }

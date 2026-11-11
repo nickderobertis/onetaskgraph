@@ -15508,14 +15508,15 @@ impl TaskSource for GitHubProjectsSource {
         &self,
         links: &[onetaskgraph_plugin_api::NativeLink],
     ) -> Vec<Result<(), SourceError>> {
-        self.native_links(links, true).await
+        self.native_links(links, relations::NativeWrite::Add).await
     }
 
     async fn remove_native_links(
         &self,
         links: &[onetaskgraph_plugin_api::NativeLink],
     ) -> Vec<Result<(), SourceError>> {
-        self.native_links(links, false).await
+        self.native_links(links, relations::NativeWrite::Remove)
+            .await
     }
 
     async fn update_tasks(
