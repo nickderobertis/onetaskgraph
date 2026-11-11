@@ -426,6 +426,7 @@ def observe() -> int:
     failed = [check for check in run.checks if not check.held]
     print(f"{len(run.checks) - len(failed)} of {len(run.checks)} checks held; observations: {out / 'observations.json'}")
     return 1 if failed or run.cleanup_failures else 0
+# llmlint: ignore-end[changed_behavior_has_e2e]
 
 
 if __name__ == "__main__":
