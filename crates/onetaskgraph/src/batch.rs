@@ -20,7 +20,11 @@ use crate::{EXIT_OK, EXIT_PARTIAL, EXIT_USAGE, emit, engine, rendering, usable_s
 
 /// The document at `path`, or on standard input for `-`, as `T` — refused before any source is
 /// started when it cannot be read or is not one.
-fn document<T: DeserializeOwned>(path: &Path, flag: &str, name: &str) -> Result<T, Failure> {
+pub(crate) fn document<T: DeserializeOwned>(
+    path: &Path,
+    flag: &str,
+    name: &str,
+) -> Result<T, Failure> {
     let (bytes, from) = if path.as_os_str() == "-" {
         let mut bytes = Vec::new();
         io::Read::read_to_end(&mut io::stdin().lock(), &mut bytes).map_err(|error| {

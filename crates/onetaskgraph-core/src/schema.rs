@@ -57,7 +57,7 @@ use crate::{
 /// that it moves whenever [`schema_bundle`] below emits a different document. The golden
 /// that holds it to that is `PUBLISHED_BUNDLES` in `tests/engine.rs`, which records every
 /// root's schema by digest from this version on.
-pub const SCHEMA_BUNDLE_VERSION: u32 = 61;
+pub const SCHEMA_BUNDLE_VERSION: u32 = 62;
 
 /// The same typed envelope the command line serializes, keeping the payload's root name.
 pub(crate) fn write_answer_schema<T: schemars::JsonSchema>() -> Schema {
@@ -260,6 +260,7 @@ pub fn schema_bundle() -> Value {
 
     // llmlint: ignore[code_lands_in_the_domain_that_owns_it] As the projection domain's line above: every root is registered here beside the append-only version golden, and this one line takes the batched calls' own list, which that domain declares.
     roots.extend(crate::engine::batch::schemas());
+    roots.extend(crate::engine::relations::schemas());
 
     // What `task`, `project` and `document metadata set` answer with.
     roots.insert("MetadataSet", write_answer_schema::<MetadataSet>());

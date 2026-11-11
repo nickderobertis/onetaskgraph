@@ -1194,6 +1194,80 @@ pub trait TaskSource: Send + Sync {
         crate::batch::update_each(self, updates).await
     }
 
+    /// Each task's relations — its parent, its children and, in its metadata, its links — one
+    /// answer per id in the order given, `None` for an id this source holds no task under.
+    ///
+    /// Each [`Relations::task`](crate::Relations::task) is the task exactly as
+    /// [`get_task`](Self::get_task) answers it, its `## Links` section stripped
+    /// ([`read_content`](crate::read_content)); a source that holds no parent relation — or,
+    /// like a GitHub board read with sub-issues as projects, gives it another meaning — answers
+    /// every task with none and no children. A source whose backend reads many items in one
+    /// request reads them together.
+    ///
+    /// Defaulted to a refusal: a source that predates relations, or a peer over the plugin
+    /// protocol, holds none and strips no section, so a link is never written to it.
+    ///
+    /// # Errors
+    ///
+    /// A [`SourceError`] when the source could not answer, or holds no relations.
+    async fn read_relations(
+        &self,
+        ids: &[NativeId],
+    ) -> Result<Vec<Option<crate::Relations>>, SourceError> {
+        let _ = ids;
+        Err(crate::relationless(self.kind()))
+    }
+
+    /// Set or remove each child's parent, answering one [`ParentAnswer`](crate::ParentAnswer)
+    /// per write in the order given.
+    ///
+    /// Each write is its own: one held to a version the child has moved past, one naming a
+    /// missing task, and one the destination refuses — a cycle, or a limit on children or depth
+    /// — is that write's answer alone, and every other write goes on. A child already under the
+    /// parent named is answered `Unchanged` and nothing is sent for it.
+    ///
+    /// Defaulted to refusing every write, for a source that holds no parent relation.
+    async fn set_parents(
+        &self,
+        writes: &[crate::ParentWrite],
+    ) -> Vec<Result<crate::ParentAnswer, SourceError>> {
+        writes
+            .iter()
+            .map(|_| Err(crate::relationless(self.kind())))
+            .collect()
+    }
+
+    /// The link types this source mirrors as its own relation, each with its native word, as
+    /// its `link_types` configuration names them. Defaulted to none.
+    fn link_types(&self) -> crate::LinkTypes {
+        crate::LinkTypes::default()
+    }
+
+    /// Add each native relation mirroring a link — idempotently, so adding one that is already
+    /// there is no change — answering one result per relation in the order given.
+    ///
+    /// The engine asks this only for a link type [`link_types`](Self::link_types) names, and
+    /// only between two tasks of this source. Defaulted to refusing each.
+    async fn add_native_links(&self, links: &[crate::NativeLink]) -> Vec<Result<(), SourceError>> {
+        links
+            .iter()
+            .map(|_| Err(crate::relationless(self.kind())))
+            .collect()
+    }
+
+    /// Remove each native relation mirroring a link — one that is not there is no change —
+    /// answering one result per relation in the order given. The engine asks only once no
+    /// mirrored link between that pair remains. Defaulted to refusing each.
+    async fn remove_native_links(
+        &self,
+        links: &[crate::NativeLink],
+    ) -> Vec<Result<(), SourceError>> {
+        links
+            .iter()
+            .map(|_| Err(crate::relationless(self.kind())))
+            .collect()
+    }
+
     /// Set one key of the metadata of one project this source holds, on exactly the terms of
     /// [`set_task_metadata`](Self::set_task_metadata).
     ///

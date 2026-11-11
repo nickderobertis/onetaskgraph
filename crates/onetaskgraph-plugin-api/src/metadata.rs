@@ -188,6 +188,17 @@ impl MetadataKey {
         Self(Self::COPIES_KEY.to_owned())
     }
 
+    /// [`TaskLink::METADATA_KEY`](crate::TaskLink::METADATA_KEY), as the key the engine's link
+    /// verbs write an endpoint's links under.
+    ///
+    /// Not a way round [`Self::new`] for a caller: nothing a person types names it, and the one
+    /// write that sends it is the link verbs' targeted update of an endpoint.
+    #[must_use]
+    // llmlint: ignore[invalid_states_unrepresentable] The same seam as `copies`: a key type of its own would change the targeted update every plugin implements, which this crate keeps still (AGENTS.md); `new`, deserialization, the command line and both SDKs refuse the key.
+    pub fn links() -> Self {
+        Self(crate::TaskLink::METADATA_KEY.to_owned())
+    }
+
     /// [`Self::ATTESTATIONS_KEY`], as the key the engine's `attest` verbs write it under.
     ///
     /// Not a way round [`Self::new`] for a caller: nothing a person types names it, and the one

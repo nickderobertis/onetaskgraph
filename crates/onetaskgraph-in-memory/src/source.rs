@@ -8,11 +8,12 @@ use onetaskgraph_plugin_api::{
     Asset, AssetName, AssetPayload, AssetUpload, AssetUploads, AssetWrite, AssetsWritten,
     Capabilities, Comment, CommentBody, CommentOrigin, Cursor, DependencyEdge, DependencyEndpoint,
     DependencySupport, Direction, Document, DocumentQuery, Health, HeldVersion, ItemKind,
-    ItemWrite, Label, MetadataKey, NativeId, NewComment, Page, PageRequest, Priority, Project,
-    ProjectFilter, ProjectQuery, SecretResolver, SourceError, SourceName, SourcePlugin, Status,
-    StatusCategory, Task, TaskQuery, TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome,
-    TextFields, TextQuery, UpdatedField, Visibility, WriteSupport, WriteTarget, asset_sha256,
-    assetless, commentless, documentless, serve_asset_references, unwritable, unwritable_field,
+    ItemWrite, Label, LinkTypes, MetadataKey, NativeId, NewComment, Page, PageRequest,
+    ParentAnswer, ParentWrite, Priority, Project, ProjectFilter, ProjectQuery, Relations,
+    SecretResolver, SourceError, SourceName, SourcePlugin, Status, StatusCategory, Task, TaskQuery,
+    TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome, TextFields, TextQuery, UpdatedField,
+    Visibility, WriteSupport, WriteTarget, asset_sha256, assetless, commentless, documentless,
+    read_content, serve_asset_references, unwritable, unwritable_field,
 };
 use schemars::{Schema, schema_for};
 
@@ -74,6 +75,8 @@ struct Held {
     labels: Vec<Label>,
     task_dependencies: Vec<DependencyEdge>,
     project_dependencies: Vec<DependencyEdge>,
+    /// Each task's parent, by the child's id.
+    parents: BTreeMap<NativeId, NativeId>,
     /// Every record's image assets, each beside the record it belongs to.
     assets: Vec<HeldAsset>,
     /// Every asset's bytes this source was ever sent, by SHA-256: what it serves at each URL.
@@ -104,17 +107,43 @@ impl Held {
             .iter()
             .filter(|edge| edge.from == task.id)
             .collect();
-        let bytes = serde_json::to_vec(&(fields, comments, edges))
-            .expect("a task, its comments and its edges serialise");
+        // A parent moves the token; a task with none is spelled exactly as before parents
+        // existed, so its token is unchanged.
+        let bytes = match self.parents.get(&task.id) {
+            None => serde_json::to_vec(&(fields, comments, edges)),
+            Some(parent) => serde_json::to_vec(&(fields, comments, edges, parent)),
+        }
+        .expect("a task, its comments and its edges serialise");
         format!("{VERSION_PREFIX}{}", asset_sha256(&bytes))
     }
 
-    /// `task`, carrying the token this source gives it.
+    /// `task`, carrying the token this source gives it, and its content as a read answers it —
+    /// the `## Links` section the engine rendered stripped.
     fn versioned(&self, task: Task) -> Task {
+        let version = Some(self.version_of(&task));
+        let content = read_content(task.content, &task.metadata);
         Task {
-            version: Some(self.version_of(&task)),
+            version,
+            content,
             ..task
         }
+    }
+
+    /// The relations of the task `id`, as this source holds them.
+    fn relations(&self, id: &NativeId) -> Option<Relations> {
+        let task = self.tasks.iter().find(|task| &task.id == id)?.clone();
+        let children = self
+            .parents
+            .iter()
+            .filter(|(_, parent)| *parent == id)
+            .map(|(child, _)| child.clone())
+            .collect();
+        Some(Relations {
+            task: self.versioned(task),
+            parent: self.parents.get(id).cloned(),
+            children,
+            children_complete: true,
+        })
     }
 }
 
@@ -183,6 +212,7 @@ impl InMemorySource {
         config
             .validate()
             .map_err(|message| SourceError::Config { message })?;
+        LinkTypes::checked(KIND, &config.link_types, &[])?;
         Ok(Self {
             capabilities: config.capabilities,
             held: Mutex::new(Held {
@@ -193,6 +223,7 @@ impl InMemorySource {
                 labels: config.labels,
                 task_dependencies: config.task_dependencies,
                 project_dependencies: config.project_dependencies,
+                parents: config.parents,
                 assets: Vec::new(),
                 blobs: BTreeMap::new(),
             }),
@@ -1176,6 +1207,25 @@ impl TaskSource for InMemorySource {
             }))
     }
 
+    async fn read_relations(
+        &self,
+        ids: &[NativeId],
+    ) -> Result<Vec<Option<Relations>>, SourceError> {
+        let held = self.held()?;
+        Ok(ids.iter().map(|id| held.relations(id)).collect())
+    }
+
+    async fn set_parents(&self, writes: &[ParentWrite]) -> Vec<Result<ParentAnswer, SourceError>> {
+        let mut held = match self.held() {
+            Ok(held) => held,
+            Err(error) => return writes.iter().map(|_| Err(error.clone())).collect(),
+        };
+        writes
+            .iter()
+            .map(|write| Ok(held.set_parent(write)))
+            .collect()
+    }
+
     async fn delete_task(&self, id: &NativeId) -> Result<(), SourceError> {
         self.deletable(id)?;
         let mut held = self.held()?;
@@ -1628,6 +1678,73 @@ fn rooted(depends_on: &[DependencyEdge], near: &NativeId, kind: ItemKind) -> Vec
 /// A write says what an item depends on now, so an edge the copy no longer carries is one
 /// the source no longer has — leaving it would make a second copy of an item whose
 /// dependency was removed keep depending on it.
+impl Held {
+    /// One parent write, decided and made on what this source holds.
+    fn set_parent(&mut self, write: &ParentWrite) -> ParentAnswer {
+        let Some(child) = self.tasks.iter().find(|task| task.id == write.child) else {
+            return ParentAnswer::Missing {
+                what: write.child.clone(),
+            };
+        };
+        let version = self.version_of(child);
+        if let Some(expected) = &write.if_version
+            && expected != &version
+        {
+            return ParentAnswer::VersionMoved {
+                found: Some(version),
+            };
+        }
+        if self.parents.get(&write.child) == write.parent.as_ref() {
+            return ParentAnswer::Unchanged {
+                version: Some(version),
+            };
+        }
+        if let Some(parent) = &write.parent {
+            if !self.tasks.iter().any(|task| &task.id == parent) {
+                return ParentAnswer::Missing {
+                    what: parent.clone(),
+                };
+            }
+            if let Some(reason) = cycle(&self.parents, &write.child, parent) {
+                return ParentAnswer::Refused { reason };
+            }
+            self.parents.insert(write.child.clone(), parent.clone());
+        } else {
+            self.parents.remove(&write.child);
+        }
+        let version = self
+            .tasks
+            .iter()
+            .find(|task| task.id == write.child)
+            .map(|task| self.version_of(task));
+        ParentAnswer::Written { version }
+    }
+}
+
+/// Why making `parent` the parent of `child` would close a cycle, or `None` when it would not:
+/// `parent` is `child` itself or already one of its descendants.
+fn cycle(
+    parents: &BTreeMap<NativeId, NativeId>,
+    child: &NativeId,
+    parent: &NativeId,
+) -> Option<String> {
+    let mut at = Some(parent);
+    let mut seen = std::collections::BTreeSet::new();
+    while let Some(ancestor) = at {
+        if ancestor == child {
+            return Some(format!(
+                "making {parent} the parent of {child} would be a cycle: {parent} is {child} or \
+                 already under it"
+            ));
+        }
+        if !seen.insert(ancestor.clone()) {
+            break;
+        }
+        at = parents.get(ancestor);
+    }
+    None
+}
+
 fn replace_edges(held: &mut Vec<DependencyEdge>, near: &NativeId, edges: Vec<DependencyEdge>) {
     held.retain(|edge| &edge.from != near);
     held.extend(edges);

@@ -243,6 +243,7 @@ fn cause(error: &EngineError) -> (String, Option<SourceName>, Option<&SourceErro
         EngineError::ItemOutsideSource { .. } => ("item-outside-source".to_owned(), None, None),
         EngineError::BatchDocument { .. } => ("invalid-batch".to_owned(), None, None),
         EngineError::UnnarrowedQuery { .. } => ("unnarrowed-query".to_owned(), None, None),
+        EngineError::RelationsIncomplete { .. } => ("relations-incomplete".to_owned(), None, None),
         EngineError::VersionMoved { .. } => ("version-moved".to_owned(), None, None),
         EngineError::PlanMember { error, .. } => cause(error),
         EngineError::NoComments { name, .. } | EngineError::CommentlessDestination { name, .. } => {

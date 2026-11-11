@@ -666,6 +666,60 @@ impl TaskSource for HeldOff {
             .collect()
     }
 
+    async fn read_relations(
+        &self,
+        ids: &[NativeId],
+    ) -> Result<Vec<Option<onetaskgraph_plugin_api::Relations>>, SourceError> {
+        self.refused()?;
+        self.noted(self.inner.read_relations(ids).await)
+    }
+
+    async fn set_parents(
+        &self,
+        writes: &[onetaskgraph_plugin_api::ParentWrite],
+    ) -> Vec<Result<onetaskgraph_plugin_api::ParentAnswer, SourceError>> {
+        if let Err(refused) = self.refused() {
+            return writes.iter().map(|_| Err(refused.clone())).collect();
+        }
+        let answers = self.inner.set_parents(writes).await;
+        answers
+            .into_iter()
+            .map(|answer| self.noted(answer))
+            .collect()
+    }
+
+    fn link_types(&self) -> onetaskgraph_plugin_api::LinkTypes {
+        self.inner.link_types()
+    }
+
+    async fn add_native_links(
+        &self,
+        links: &[onetaskgraph_plugin_api::NativeLink],
+    ) -> Vec<Result<(), SourceError>> {
+        if let Err(refused) = self.refused() {
+            return links.iter().map(|_| Err(refused.clone())).collect();
+        }
+        let answers = self.inner.add_native_links(links).await;
+        answers
+            .into_iter()
+            .map(|answer| self.noted(answer))
+            .collect()
+    }
+
+    async fn remove_native_links(
+        &self,
+        links: &[onetaskgraph_plugin_api::NativeLink],
+    ) -> Vec<Result<(), SourceError>> {
+        if let Err(refused) = self.refused() {
+            return links.iter().map(|_| Err(refused.clone())).collect();
+        }
+        let answers = self.inner.remove_native_links(links).await;
+        answers
+            .into_iter()
+            .map(|answer| self.noted(answer))
+            .collect()
+    }
+
     async fn set_project_status(
         &self,
         id: &NativeId,

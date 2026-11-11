@@ -2,11 +2,12 @@
 
 use onetaskgraph_plugin_api::{
     Capabilities, Comment, DependencyEdge, DependencyEndpoint, DependencyKind, DependencySupport,
-    Document, ItemKind, Label, NativeId, Priority, Project, Support, Task, TaskRef, WriteSupport,
+    Document, ItemKind, Label, LinkTypeConfig, NativeId, Priority, Project, Support, Task, TaskRef,
+    WriteSupport,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, de::Error as _};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU32;
 
 /// Everything an in-memory source serves, plus what it claims it can do.
@@ -48,6 +49,11 @@ pub struct InMemoryConfig {
     /// local Markdown document's `depends_on` takes its level from the document.
     #[serde(deserialize_with = "project_edges")]
     pub project_dependencies: Vec<DependencyEdge>,
+    /// Each task's parent, a task of this source, by the child's id.
+    pub parents: BTreeMap<NativeId, NativeId>,
+    /// The link types this source would mirror natively — none, as it has no relation of its
+    /// own: a type naming a `native` word is refused when the source is built.
+    pub link_types: BTreeMap<String, LinkTypeConfig>,
 }
 
 /// One comment, and the task it is on.

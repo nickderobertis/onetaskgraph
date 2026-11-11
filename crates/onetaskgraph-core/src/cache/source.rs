@@ -1819,6 +1819,55 @@ impl TaskSource for CachedSource {
         .await
     }
 
+    /// Never served from the cache: a relation read reaches the source every time, so no
+    /// pinned token can be answered with relations older than it.
+    async fn read_relations(
+        &self,
+        ids: &[NativeId],
+    ) -> Result<Vec<Option<onetaskgraph_plugin_api::Relations>>, SourceError> {
+        self.inner.read_relations(ids).await
+    }
+
+    async fn set_parents(
+        &self,
+        writes: &[onetaskgraph_plugin_api::ParentWrite],
+    ) -> Vec<Result<onetaskgraph_plugin_api::ParentAnswer, SourceError>> {
+        self.retiring_each(
+            writes,
+            |each| &each.child,
+            |sent| async move { self.inner.set_parents(&sent).await },
+        )
+        .await
+    }
+
+    fn link_types(&self) -> onetaskgraph_plugin_api::LinkTypes {
+        self.inner.link_types()
+    }
+
+    async fn add_native_links(
+        &self,
+        links: &[onetaskgraph_plugin_api::NativeLink],
+    ) -> Vec<Result<(), SourceError>> {
+        self.retiring_each(
+            links,
+            |each| &each.from,
+            |sent| async move { self.inner.add_native_links(&sent).await },
+        )
+        .await
+    }
+
+    async fn remove_native_links(
+        &self,
+        links: &[onetaskgraph_plugin_api::NativeLink],
+    ) -> Vec<Result<(), SourceError>> {
+        self.retiring_each(
+            links,
+            |each| &each.from,
+            |sent| async move { self.inner.remove_native_links(&sent).await },
+        )
+        .await
+    }
+
     async fn edit_comment(
         &self,
         task: &NativeId,

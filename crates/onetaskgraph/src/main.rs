@@ -8,6 +8,7 @@
 mod attest;
 mod batch;
 mod cli;
+mod relations;
 mod render;
 mod rendered;
 mod template;
@@ -40,9 +41,10 @@ use serde::Serialize;
 use crate::cli::{
     AttestationCommand, CacheCommand, Cli, Command, CommentCommand, ConfigCommand, ContentCommand,
     CopyArgs, DependencyArgs, DocumentCommand, DocumentFilterArgs, ExpectArgs, FilterArgs,
-    GraphFormat, LabelCommand, MetadataCommand, MetadataSetArgs, PageArgs, PriorityCommand,
-    ProjectAttestationCommand, ProjectCommand, ProjectStatusCommand, SelectionArgs, ShowArgs,
-    SourcesCommand, StatusCommand, TaskAssetsArgs, TaskCommand,
+    GraphFormat, LabelCommand, LinkCommand, MetadataCommand, MetadataSetArgs, PageArgs,
+    ParentCommand, PriorityCommand, ProjectAttestationCommand, ProjectCommand,
+    ProjectStatusCommand, SelectionArgs, ShowArgs, SourcesCommand, StatusCommand, TaskAssetsArgs,
+    TaskCommand,
 };
 
 /// Everything asked for was answered, by every source asked. Nothing else exits `0`. A
@@ -617,6 +619,28 @@ async fn run_inner(
         Command::Task {
             command: TaskCommand::UpdateMany(args),
         } => batch::update_many(out, loaded, args).await,
+        Command::Task {
+            command:
+                TaskCommand::Parent {
+                    command: ParentCommand::SetMany(args),
+                },
+        } => relations::set_many(out, loaded, args).await,
+        Command::Task {
+            command: TaskCommand::Link { command },
+        } => match command {
+            LinkCommand::AddMany(args) => relations::links(out, loaded, args, true).await,
+            LinkCommand::RemoveMany(args) => relations::links(out, loaded, args, false).await,
+        },
+        Command::Task {
+            command: TaskCommand::Relations(args),
+        } => {
+            let ids = args
+                .ids
+                .iter()
+                .map(|id| qualified(id))
+                .collect::<Result<Vec<_>, _>>()?;
+            relations::read(out, loaded, &ids, args.complete).await
+        }
 
         Command::Task {
             command: TaskCommand::Comments(args),

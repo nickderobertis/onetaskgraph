@@ -79,7 +79,8 @@ silence. See the note on `Health` below for the one difference it carries delibe
   `Support`, `DependencySupport`; the write types `ItemWrite`, `WriteSupport`,
   `MetadataKey`, `MetadataRecord`, `WriteGuard` and `BodySize`; the targeted-update types `TaskUpdate`,
   `TaskUpdateOutcome` and `UpdatedField`; the batched-write types `BatchUpdate`,
-  `BatchComment` and `BatchAnswer`; the
+  `BatchComment` and `BatchAnswer`; the relation types `Relations`, `ParentWrite`,
+  `ParentAnswer`, `TaskLink`, `LinkDirection`, `NativeLink`, `LinkTypes` and `LinkTypeConfig`; the
   comment types `Comment`, `CommentBody`, `NewComment`, `CommentOrigin`, `CommentCopy`,
   `AuthorKind` and `TaskDetailRead`; the section types `StoredHeading`, `BodyMarkup` and `SharedBodyMarkup`; the
   metering types `Metering` and `Metered`; the `status_mapping` types `StatusMapping`,
