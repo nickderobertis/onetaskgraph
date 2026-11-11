@@ -203,6 +203,24 @@ test("a tree only a merged branch held, never main's own, runs Rust coverage", (
   assert.equal(coverage(merge, releaseOnMerge).rust_coverage, "skip");
 });
 
+function projectNamed(project) {
+  const files = execFileSync("git", ["ls-files", "*project.json"], {
+    cwd: fileURLToPath(root),
+    encoding: "utf8",
+  })
+    .split("\n")
+    .filter(Boolean);
+  const definition = files
+    .map((file) => JSON.parse(read(file)))
+    .find((candidate) => candidate.name === project);
+  assert.ok(definition, `${project}: a project.json names it`);
+  return definition;
+}
+const recordsTelemetryUnderCoverage = (project) =>
+  (projectNamed(project).targets?.coverage?.outputs ?? []).some((output) =>
+    output.includes("/target/debug/telemetry/"),
+  );
+
 test("the release coverage switch keeps functional and SDK tasks and omits only Rust coverage telemetry consumers", () => {
   const select = (skip) => {
     const result = spawnSync("bash", ["scripts/ci-job.sh", "test-linux", "--select-only"], {
@@ -231,6 +249,7 @@ test("the release coverage switch keeps functional and SDK tasks and omits only 
   const normal = select("0");
   const release = select("1");
   const budgets = [
+    "onetaskgraph-e2e:budgets",
     "onetaskgraph-github-projects-e2e:budgets",
     "onetaskgraph-linear-e2e:budgets",
     "onetaskgraph-live-janitor:budgets",
@@ -252,13 +271,65 @@ test("the release coverage switch keeps functional and SDK tasks and omits only 
     "scripts:distribution-check",
   ])
     assert.ok(release.includes(task), `${task}: still selected on release`);
+  // test-linux runs budgets without their dependencies, so a budget whose telemetry its
+  // project's `coverage` records has nothing to read unless that coverage runs beside it. A
+  // release tree went red once such a budget was added and the switch still selected it.
+  for (const [mode, selected] of [
+    ["normal", normal],
+    ["release", release],
+  ])
+    for (const task of selected.filter((name) => name.endsWith(":budgets"))) {
+      const project = task.slice(0, -":budgets".length);
+      if (recordsTelemetryUnderCoverage(project))
+        assert.ok(
+          selected.includes(`${project}:coverage`),
+          `${task}: selected on ${mode} without ${project}:coverage, which records its telemetry`,
+        );
+    }
   const omitted = normal.filter((task) => !release.includes(task));
   assert.ok(omitted.length > budgets.length);
   for (const task of omitted)
     assert.ok(
-      budgets.includes(task) || /:(coverage|coverage-build|test-uncovered)$/.test(task),
+      budgets.includes(task) ||
+        /:(coverage|coverage-build|test-uncovered)$/.test(task) ||
+        // A test-in-coverage crate's `test` is in the plan only as its budget's dependency,
+        // which test-linux never runs, so it goes with that budget.
+        (task.endsWith(":test") &&
+          budgets.includes(task.replace(/:test$/, ":budgets")) &&
+          projectNamed(task.replace(/:test$/, "")).tags?.includes("test-in-coverage:crate")),
       `${task}: functional work was omitted`,
     );
+});
+
+test("a crate definition the switch cannot read stops the release job, naming the file", () => {
+  // Reading which budgets to leave out comes before any Nx call, so a tree holding only the
+  // script, the toolchain link and the crate definitions reaches it.
+  const tree = mkdtempSync(resolve(scratchRoot, "release-shortcut-definitions-"));
+  try {
+    mkdirSync(resolve(tree, "scripts"));
+    writeFileSync(resolve(tree, "scripts/ci-job.sh"), read("scripts/ci-job.sh"));
+    symlinkSync(resolve(fileURLToPath(root), "node_modules"), resolve(tree, "node_modules"), "dir");
+    const definition = (outputs) =>
+      `${JSON.stringify({ name: "recorder", targets: { budgets: {}, coverage: { outputs } } })}\n`;
+    mkdirSync(resolve(tree, "crates/recorder"), { recursive: true });
+    for (const [outputs, problem] of [
+      ["{workspaceRoot}/target/debug/telemetry/recorder/*.json", "not a list of strings"],
+      [[7], "not a list of strings"],
+    ]) {
+      writeFileSync(resolve(tree, "crates/recorder/project.json"), definition(outputs));
+      const result = spawnSync("bash", ["scripts/ci-job.sh", "test-linux", "--select-only"], {
+        cwd: tree,
+        env: { ...fixtureEnvironment(), ONETASKGRAPH_SKIP_RUST_COVERAGE: "1" },
+        encoding: "utf8",
+      });
+      assert.equal(result.status, 1, result.stdout + result.stderr);
+      assert.match(result.stderr, /ci-job: crates\/recorder\/project\.json: TypeError/);
+      assert.match(result.stderr, new RegExp(problem));
+      assert.match(result.stderr, /could not read which budgets Rust coverage records/);
+    }
+  } finally {
+    rmSync(tree, { recursive: true, force: true });
+  }
 });
 
 test("the coverage switch refuses malformed values and use on an uninstrumented OS leg", () => {

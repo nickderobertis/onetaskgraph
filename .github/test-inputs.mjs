@@ -90,6 +90,9 @@ export const nxCoverageReadSetFiles = [".github/nx-policy/tests/coverage-read-se
 export const nxCoverageSpawnedBinaryFiles = [
   ".github/nx-policy/tests/coverage-spawned-binary.test.mjs",
 ];
+export const nxBudgetTelemetryReplayFiles = [
+  ".github/nx-policy/tests/budget-telemetry-replay.test.mjs",
+];
 
 export const policyJourneyFiles = [
   ".github/policy/tests/boundaries.test.mjs",

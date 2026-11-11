@@ -119,7 +119,8 @@
         "nx-hashes",
         "coverage-units",
         "coverage-read-set",
-        "coverage-spawned-binary"
+        "coverage-spawned-binary",
+        "budget-telemetry-replay"
       ]
     },
     "nx-inputs": {
@@ -230,6 +231,32 @@
         }
       ],
       "outputs": []
+    },
+    "budget-telemetry-replay": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["bootstrap"],
+      "options": {
+        "command": "node --test .github/nx-policy/tests/budget-telemetry-replay.test.mjs"
+      },
+      "cache": true,
+      "inputs": [
+        "versionFreeNpm",
+        "versionFreeCargo",
+        "{workspaceRoot}/.tool-versions",
+        {
+          "runtime": "node -p process.platform"
+        },
+        "{projectRoot}/tests/budget-telemetry-replay.test.mjs",
+        "{projectRoot}/tests/fixtures/coverage-harness.mjs",
+        "{workspaceRoot}/.github/fixture-environment.mjs",
+        "{workspaceRoot}/.github/test-setup.mjs",
+        "{workspaceRoot}/nx.json",
+        "{workspaceRoot}/crates/onetaskgraph/project.json",
+        "{workspaceRoot}/crates/onetaskgraph-e2e/**/*",
+        "{workspaceRoot}/crates/onetaskgraph-e2e-support/**/*"
+      ],
+      "outputs": [],
+      "//": "Cached on what decides its result: Nx's configuration, the two project definitions the replay runs (the e2e suite's, whose `test` outputs and `budgets` are under test, and the build it waits on), the budget, its reader and the recorder, and the onebudgetspec and Cargo pins. The reader's executable also links the engine, which its report never reaches, so an engine edit does not re-run this, nor does any other project's definition."
     }
   },
   "//": "Workspace-wide Nx input contracts have their own project so project-definition edits select these checks without selecting the CD or sidecar journeys."
