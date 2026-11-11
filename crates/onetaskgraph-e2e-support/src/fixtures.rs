@@ -7430,7 +7430,6 @@ pub fn linear_per_item(served: &[(String, Value)]) -> Vec<(String, Value)> {
 /// observed on the sandbox team on 2026-11-11: each alias as its document alone answers it, in
 /// order, and the first one refused ends the answer with no `data` and one error at that alias's
 /// path, the whole document applied as one write — nothing of any alias before or after it lands.
-
 fn linear_aliased(
     singles: &[&str],
     request: &Value,
