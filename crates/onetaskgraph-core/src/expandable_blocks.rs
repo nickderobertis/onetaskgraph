@@ -73,12 +73,7 @@ impl ExpandableForm {
     pub fn written(self, authored: &str) -> String {
         match self {
             Self::LocalMd | Self::GithubProjects => authored.to_owned(),
-            Self::Linear => rewritten(authored, &authored_regions(authored), |region| {
-                let block = region.block.as_ref()?;
-                let section = linear_section(block)?;
-                (authored_block(&section_parts(&section)?)? == *block)
-                    .then(|| section.render(region.ending))
-            }),
+            Self::Linear => linear_written(authored, &std::collections::HashSet::new()),
         }
     }
 
@@ -103,7 +98,7 @@ impl ExpandableForm {
     #[must_use]
     pub fn markup(self) -> Option<SharedBodyMarkup> {
         match self {
-            Self::Linear => Some(Arc::new(LinearSections)),
+            Self::Linear => Some(Arc::new(LinearSections::default())),
             Self::LocalMd | Self::GithubProjects => None,
         }
     }
@@ -559,16 +554,65 @@ fn authored_block(section: &Section) -> Option<Block> {
     (summary_markup(&block.summary).is_some()).then_some(block)
 }
 
+/// `authored` with every authored block written as a Linear section — but for a block whose
+/// whole text is in `literal`, which is carried as it stands.
+fn linear_written(authored: &str, literal: &std::collections::HashSet<String>) -> String {
+    let lines = lines(authored);
+    rewritten(authored, &authored_regions(authored), |region| {
+        let block = region.block.as_ref()?;
+        if literal.contains(&region_text(&lines, region)) {
+            return None;
+        }
+        let section = linear_section(block)?;
+        (authored_block(&section_parts(&section)?)? == *block)
+            .then(|| section.render(region.ending))
+    })
+}
+
+/// The text of `region` of `lines`, its last line's break left off.
+fn region_text(lines: &[Line<'_>], region: &Region) -> String {
+    joined(&lines[region.lines.0..=region.lines.1])
+}
+
 /// Linear's collapsible sections, as the Linear source applies them to every body it sends and
 /// receives.
-struct LinearSections;
+///
+/// What Linear stores of a body it was sent can hold a block in the authored form as literal text:
+/// a shape the authored form does not recognise — `<details>` straight followed by a list, say —
+/// that Linear's own rewrite sets apart with the blank line the form wants, so it reads back as an
+/// authored block though Linear shows it as paragraphs. Written back as it reads, as a copy's
+/// follow-up writes what the destination stored, it would be translated into a section the author
+/// never wrote. So each block a read finds held as literal text is remembered by its text, for
+/// as long as this source lives, and a later write carries it as it stands: a body read from
+/// Linear and written back is what Linear stored.
+#[derive(Default)]
+struct LinearSections {
+    /// The text of every block in the authored form a read found Linear holding as literal text.
+    literal: std::sync::Mutex<std::collections::HashSet<String>>,
+}
 
 impl BodyMarkup for LinearSections {
     fn written(&self, content: &str) -> String {
-        ExpandableForm::Linear.written(content)
+        let literal = self
+            .literal
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        linear_written(content, &literal)
     }
 
     fn read(&self, content: &str) -> String {
+        let lines = lines(content);
+        let held: Vec<String> = authored_regions(content)
+            .iter()
+            .filter(|region| region.block.is_some())
+            .map(|region| region_text(&lines, region))
+            .collect();
+        if !held.is_empty() {
+            self.literal
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .extend(held);
+        }
         ExpandableForm::Linear.read(content)
     }
 }
@@ -649,6 +693,26 @@ mod tests {
             let expandable = ExpandableForm::for_kind(kind).and_then(ExpandableForm::markup);
             assert!(section.is_none() || expandable.is_none(), "{kind}");
         }
+    }
+
+    /// A block Linear holds as literal text reads back as it is stored, and is written back so,
+    /// though its text is in the authored form: Linear rewrote a shape that was not.
+    #[test]
+    fn a_block_linear_holds_as_literal_text_is_written_back_as_it_was_stored() {
+        let markup = ExpandableForm::Linear.markup().expect("Linear's markup");
+        let literal =
+            "Before.\n\n<details>\n<summary>Held as text</summary>\n\n* a list\n\n</details>";
+        let read = markup.read(literal);
+        assert_eq!(read, literal);
+        assert_eq!(
+            markup.written(&format!("{read}\n\nA slot.")),
+            format!("{literal}\n\nA slot.")
+        );
+        // Another block, never read as text, is written as a section still.
+        assert_eq!(
+            markup.written("<details>\n<summary>New</summary>\n\nBody.\n\n</details>"),
+            "+++ New\n\nBody.\n\n+++"
+        );
     }
 
     #[test]
