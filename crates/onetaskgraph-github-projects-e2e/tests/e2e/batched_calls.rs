@@ -968,3 +968,32 @@ fn a_batched_write_answered_beside_an_error_naming_it_is_reported_as_possibly_do
         );
     }
 }
+
+#[test]
+fn a_batched_priority_clear_lands_and_one_answered_missing_fails_that_ticket_alone() {
+    let board = ticket_board();
+    // U-2 holds `Low`; give U-1 the same, so the batch clears two.
+    board.board.assign_priority("U-1", Some("Low"));
+    board.board.bend_batch_alias("clear1", AliasAnswer::Missing);
+    let batch = json!({"schema_version": 1, "updates": [
+        {"item": "board:U-1", "priority": "none"},
+        {"item": "board:U-2", "priority": "none"},
+    ]});
+    let answered = board.run(
+        &["task", "update-many", "board", "--input", "-", "--json"],
+        &batch.to_string(),
+    );
+    assert_eq!(answered.code, Some(4), "{}", answered.stderr);
+    let outcomes: Vec<&str> = answered.json["results"]
+        .as_array()
+        .expect("results")
+        .iter()
+        .map(|result| result["outcome"].as_str().expect("an outcome"))
+        .collect();
+    assert_eq!(outcomes, ["written", "error"], "{:#}", answered.json);
+    assert_eq!(board.board.priority("U-1"), None, "the first clear landed");
+    let reason = answered.json["results"][1]["reason"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(reason.contains("clear1"), "{reason}");
+}
