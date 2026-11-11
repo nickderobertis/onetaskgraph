@@ -14,7 +14,7 @@ import asyncio
 import json
 import os
 from pathlib import Path
-from typing import NamedTuple
+from typing import Any, NamedTuple, cast
 
 import pytest
 
@@ -305,3 +305,24 @@ def test_a_guarded_update_writes_every_field_only_while_its_guard_holds(
     assert item.content == "Guarded.\n"
     assert item.priority.value == "low"
     assert item.metadata is not None and item.metadata["myapp.colour"] == "black"
+
+
+def test_a_request_that_is_no_document_is_refused_before_any_binary_is_started(
+    store: Path,
+) -> None:
+    """A request neither its model nor a mapping is refused before any binary is started."""
+    # A stand-in binary that leaves a mark if it is ever started.
+    marker = store / "started"
+    stand_in = store / "stand-in"
+    stand_in.write_text(f"#!/bin/sh\ntouch '{marker}'\nexit 1\n", encoding="utf-8")
+    stand_in.chmod(0o755)
+    client = client_at(stand_in, store)
+    # Each argument is what an untyped caller could pass, so the static types are set aside.
+    wrong_model = FindRequest.model_validate({"schema_version": 1, "queries": []})
+    with pytest.raises(TypeError, match="the request is a int"):
+        asyncio.run(client.task_find("plan", cast("Any", 42)))
+    with pytest.raises(TypeError, match="the request is a list"):
+        asyncio.run(client.task_update_many("plan", cast("Any", ["not", "a", "document"])))
+    with pytest.raises(TypeError, match="the request is a FindRequest"):
+        asyncio.run(client.task_comment_add_many("plan", cast("Any", wrong_model)))
+    assert not marker.exists(), "no binary was started"

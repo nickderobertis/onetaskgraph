@@ -654,13 +654,13 @@ impl LinearSource {
         .enumerate()
         .collect();
         composed?;
-        let mut created: Vec<Option<NativeId>> = writes.iter().map(|_| None).collect();
-        let outcome = self.send_queued(&mut queued, &mut created).await;
+        let mut landed: Vec<Option<NativeId>> = writes.iter().map(|_| None).collect();
+        let outcome = self.send_queued(&mut queued, &mut landed).await;
         if let Err(error) = outcome {
             // The caller is never handed these ids, so one Linear will not take back is named
             // here or by nobody — as the default `write_tasks` names it.
             let mut left: Vec<&str> = Vec::new();
-            for id in created.iter().flatten() {
+            for id in landed.iter().flatten() {
                 if <Self as onetaskgraph_plugin_api::TaskSource>::delete_task(self, id)
                     .await
                     .is_err()
@@ -672,8 +672,8 @@ impl LinearSource {
                 return Err(error);
             }
             let message = format!(
-                "{error}; Linear then refused to take back {}, which this write created and \
-                 which it still holds; next: delete {} before writing again",
+                "{error}; Linear then refused to take back {}, which this write created or \
+                 brought in step and which it still holds; next: delete {} before writing again",
                 left.join(", "),
                 if left.len() == 1 { "it" } else { "them" }
             );
@@ -684,7 +684,7 @@ impl LinearSource {
                 _ => SourceError::Refused { message },
             });
         }
-        created
+        landed
             .into_iter()
             .map(|id| {
                 id.ok_or_else(|| SourceError::Malformed {
@@ -694,16 +694,18 @@ impl LinearSource {
             .collect()
     }
 
-    /// Send every queued create, recording each one's id in `created` at its index.
+    /// Send every queued create, recording at its index in `landed` the id of the issue it
+    /// left — one it created, or one an earlier attempt made under its id and this write
+    /// brought in step — so a write that cannot finish takes each back.
     async fn send_queued(
         &self,
         queued: &mut Vec<(usize, QueuedCreate)>,
-        created: &mut [Option<NativeId>],
+        landed: &mut [Option<NativeId>],
     ) -> Result<(), SourceError> {
         while !queued.is_empty() {
             if queued.len() == 1 {
                 let (at, alone) = queued.remove(0);
-                created[at] = Some(
+                landed[at] = Some(
                     <Self as onetaskgraph_plugin_api::TaskSource>::write_task(self, &alone.write)
                         .await?,
                 );
@@ -719,7 +721,7 @@ impl LinearSource {
                     // Linear applied the whole document, so every create in it that its answer
                     // names is recorded to be taken back before any answer is refused as
                     // malformed — one malformed answer leaves the others nameable.
-                    let mut landed = Vec::with_capacity(values.len());
+                    let mut answered = Vec::with_capacity(values.len());
                     let mut malformed = None;
                     for ((at, create), value) in queued.drain(..).zip(values) {
                         let named = value
@@ -745,8 +747,8 @@ impl LinearSource {
                             });
                         match named {
                             Ok((id, issue)) => {
-                                created[at] = Some(id.clone());
-                                landed.push((id, issue, create));
+                                landed[at] = Some(id.clone());
+                                answered.push((id, issue, create));
                             }
                             Err(error) => {
                                 malformed.get_or_insert(error);
@@ -756,7 +758,7 @@ impl LinearSource {
                     if let Some(error) = malformed {
                         return Err(error);
                     }
-                    for (id, issue, create) in landed {
+                    for (id, issue, create) in answered {
                         self.hold_stored(
                             onetaskgraph_plugin_api::MetadataRecord::Task,
                             &id,
@@ -783,7 +785,7 @@ impl LinearSource {
                 AliasedEach::Refused(refused, _) => {
                     // Nothing of the document landed: that one on its own, the rest together.
                     let (at, alone) = queued.remove(refused);
-                    created[at] = Some(
+                    landed[at] = Some(
                         <Self as onetaskgraph_plugin_api::TaskSource>::write_task(
                             self,
                             &alone.write,
