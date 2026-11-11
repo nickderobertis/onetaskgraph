@@ -149,21 +149,23 @@ pub struct CommentsAdded {
 }
 
 /// What became of one comment of a [`CommentBatch`].
-// llmlint: ignore[invalid_states_unrepresentable] The shape is the contract the task fixes literally — `{"item", "outcome", "comment", "current_version", "reason"}` with `outcome` a tag beside flat members — which other nodes of the plan build against; every result is made by `Engine::add_comments` or `comment_error` in this module, each setting the members its outcome carries and no other.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct CommentAddResult {
+    // llmlint: ignore-block[invalid_states_unrepresentable] The shape is the contract the task fixes literally — `{"item", "outcome", "comment", "current_version", "reason"}` with `outcome` a tag beside flat members — which other nodes of the plan build against; every result is made by `Engine::add_comments` or `comment_error` in this module, each setting the members its outcome carries and no other.
     /// The item as the batch named it.
     pub item: String,
     /// What became of it.
     pub outcome: BatchOutcome,
     /// The comment written — `null` unless `outcome` is `written`.
     pub comment: Option<AddedComment>,
-    /// The version the task is at — present when `outcome` is `version-moved`.
+    /// The version the task is at — present when `outcome` is `version-moved` and the source
+    /// can name it, which it cannot just after another write of this batch moved the task.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_version: Option<String>,
     /// Why it was not written — present when `outcome` is `error`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    // llmlint: ignore-end[invalid_states_unrepresentable]
 }
 
 /// One comment a batch wrote.
@@ -236,9 +238,9 @@ pub struct TasksUpdated {
 }
 
 /// What became of one update of an [`UpdateBatch`].
-// llmlint: ignore[invalid_states_unrepresentable] As `CommentAddResult`: `{"item", "outcome", "version", "current_version", "reason"}` is the contract the task fixes literally, and every result is made by `Engine::update_tasks` or `update_error` in this module, each setting the members its outcome carries and no other.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct UpdateResult {
+    // llmlint: ignore-block[invalid_states_unrepresentable] As `CommentAddResult`: `{"item", "outcome", "version", "current_version", "reason"}` is the contract the task fixes literally, and every result is made by `Engine::update_tasks` or `update_error` in this module, each setting the members its outcome carries and no other.
     /// The item as the batch named it.
     pub item: String,
     /// What became of it.
@@ -247,13 +249,15 @@ pub struct UpdateResult {
     /// write's own answers determine it, as `task update`'s `result.version` is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
-    /// The version the task is at — present when `outcome` is `version-moved`.
+    /// The version the task is at — present when `outcome` is `version-moved` and the source
+    /// can name it, which it cannot just after another write of this batch moved the task.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_version: Option<String>,
     /// Why it is answered `error` — present when `outcome` is `error`: that it was not written,
     /// or that it was and keeping the tasks it delivers in step then failed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    // llmlint: ignore-end[invalid_states_unrepresentable]
 }
 
 /// What became of one item of a batched write.

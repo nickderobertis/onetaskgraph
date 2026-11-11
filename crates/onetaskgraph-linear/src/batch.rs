@@ -490,7 +490,8 @@ impl LinearSource {
             }
         }
         // A held comment on an issue an earlier comment of this batch names is decided only
-        // once that one is answered: a comment moves its issue's version.
+        // once that one is answered, on a read made then: whether a comment moves its issue's
+        // version is the version's own — a `lin1` token counts comments, `updatedAt` does not.
         let mut wanted: Vec<usize> = Vec::new();
         let mut later: Vec<usize> = Vec::new();
         for at in (0..comments.len()).filter(|at| answers[*at].is_none()) {
@@ -590,17 +591,7 @@ impl LinearSource {
             }
         }
         for at in later {
-            let each = &comments[at];
-            let moved = (0..at).any(|earlier| {
-                comments[earlier].task == each.task
-                    && matches!(answers[earlier], Some(Ok(BatchAnswer::Written(_))))
-            });
-            answers[at] = Some(if moved {
-                // The earlier comment moved the issue past the version this one is held to.
-                Ok(BatchAnswer::VersionMoved { found: None })
-            } else {
-                self.comment_after(each).await
-            });
+            answers[at] = Some(self.comment_after(&comments[at]).await);
         }
         answers
             .into_iter()

@@ -2202,7 +2202,7 @@ export const runtimeSchemas = {
             ]
           },
           "current_version": {
-            "description": "The version the task is at — present when `outcome` is `version-moved`.",
+            "description": "The version the task is at — present when `outcome` is `version-moved` and the source\ncan name it, which it cannot just after another write of this batch moved the task.",
             "type": [
               "string",
               "null"
@@ -31003,7 +31003,7 @@ export const runtimeSchemas = {
             ]
           },
           "current_version": {
-            "description": "The version the task is at — present when `outcome` is `version-moved`.",
+            "description": "The version the task is at — present when `outcome` is `version-moved` and the source\ncan name it, which it cannot just after another write of this batch moved the task.",
             "type": [
               "string",
               "null"

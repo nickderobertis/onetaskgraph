@@ -1134,7 +1134,10 @@ fn a_batched_write_answered_without_an_alias_fails_that_item_alone_saying_it_may
 }
 
 #[test]
-fn a_second_comment_held_to_the_version_the_first_moved_is_refused() {
+fn a_second_held_comment_on_one_issue_is_decided_on_the_version_the_first_left() {
+    // On a Linear source with no cache a comment does not move its issue's `updatedAt`
+    // version, so a second comment held to it still lands; another writer's edit in between
+    // moves it, and the comment after that edit is refused.
     let team = Team::holding(writable(), false);
     let version = team.version("team:U-1");
     let comments = team.batch(
@@ -1146,19 +1149,7 @@ fn a_second_comment_held_to_the_version_the_first_moved_is_refused() {
         ]}),
     );
     let ran = team.run(&["task", "comment", "add-many", "team", "--input", &comments]);
-    assert_eq!(ran.code, Some(4), "{}", ran.json);
-    let outcomes: Vec<&str> = ran.json["results"]
-        .as_array()
-        .expect("results")
-        .iter()
-        .map(|result| result["outcome"].as_str().expect("an outcome"))
-        .collect();
-    assert_eq!(
-        outcomes,
-        ["written", "version-moved", "written"],
-        "{}",
-        ran.json
-    );
+    assert_eq!(ran.code, Some(0), "{}", ran.json);
     let listed = team.ok(&["task", "comment", "list", "team:U-1"]);
     let bodies: Vec<&str> = listed.json["comments"]
         .as_array()
@@ -1166,5 +1157,30 @@ fn a_second_comment_held_to_the_version_the_first_moved_is_refused() {
         .iter()
         .filter_map(|comment| comment["body"].as_str())
         .collect();
-    assert_eq!(bodies, ["First."]);
+    assert_eq!(bodies, ["First.", "Second."]);
+
+    // The second is decided on a read made after the first was sent: an edit landing between
+    // the batch's first read and that one refuses it.
+    let version = team.version("team:U-3");
+    team.workspace.after_request(
+        |document, _| document.trim_start().starts_with("mutation"),
+        0,
+        |workspace| workspace.retitle("tasks", "U-3", "Another writer's title"),
+    );
+    let comments = team.batch(
+        "again.json",
+        &json!({"schema_version": 1, "comments": [
+            {"item": "team:U-3", "body": "First.", "if_version": version},
+            {"item": "team:U-3", "body": "Second.", "if_version": version},
+        ]}),
+    );
+    let ran = team.run(&["task", "comment", "add-many", "team", "--input", &comments]);
+    assert_eq!(ran.code, Some(4), "{}", ran.json);
+    let outcomes: Vec<&str> = ran.json["results"]
+        .as_array()
+        .expect("results")
+        .iter()
+        .map(|result| result["outcome"].as_str().expect("an outcome"))
+        .collect();
+    assert_eq!(outcomes, ["written", "version-moved"], "{}", ran.json);
 }

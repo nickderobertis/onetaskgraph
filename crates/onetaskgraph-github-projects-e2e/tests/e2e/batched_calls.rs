@@ -23,6 +23,8 @@ struct Board {
     sandbox: Sandbox,
     board: GitHubBoardFields,
     notes: PathBuf,
+    /// The `board` source's configuration, for a journey that builds the plugin itself.
+    config: Value,
 }
 
 /// What one invocation answered: its exit code, its JSON and its standard error.
@@ -41,7 +43,7 @@ impl Board {
         sandbox.project_document(
             &serde_json::to_string_pretty(&json!({
                 "sources": {
-                    "board": {"plugin": "github-projects", "config": config},
+                    "board": {"plugin": "github-projects", "config": config.clone()},
                     "notes": {"plugin": "local-md", "config": {"root": notes,
                         "status_mapping": {"Todo": "todo", "Doing": "in-progress"}}},
                 },
@@ -52,6 +54,7 @@ impl Board {
             sandbox,
             board,
             notes,
+            config,
         }
     }
 
@@ -1097,4 +1100,64 @@ fn a_find_wider_than_one_request_is_split_across_requests_answering_every_query(
         assert!(searches <= onetaskgraph_github_projects::SEARCH_BATCH);
         assert!(lookups <= onetaskgraph_github_projects::SEARCH_BATCH_ORIGINS);
     }
+}
+
+/// The fixture board's token, for a journey that builds the plugin itself.
+struct FixtureToken;
+
+impl onetaskgraph_plugin_api::SecretResolver for FixtureToken {
+    fn get(&self, variable: &str) -> Option<secrecy::SecretString> {
+        (variable == "GITHUB_PROJECTS_FIXTURE_TOKEN").then(|| "test-token".into())
+    }
+}
+
+/// A comment batch carries no author through the command line, so a Rust caller handing the
+/// plugin one is what reaches this: that comment is refused before anything is sent for it,
+/// and its neighbour lands.
+#[test]
+fn a_batched_comment_handed_an_author_is_refused_alone_and_its_neighbour_lands() {
+    use onetaskgraph_plugin_api::{
+        BatchAnswer, BatchComment, CommentBody, NativeId, NewComment, SourceName, SourcePlugin as _,
+    };
+    let board = ticket_board();
+    let source = onetaskgraph_github_projects::Plugin
+        .build(
+            &SourceName::new("board").unwrap(),
+            &board.config,
+            &FixtureToken,
+        )
+        .expect("the plugin builds");
+    let comment = |author: Option<&str>, body: &str| BatchComment {
+        task: NativeId("U-0".to_owned()),
+        comment: NewComment {
+            body: CommentBody::new(body).expect("a body"),
+            author: author.map(str::to_owned),
+        },
+        if_version: None,
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a runtime");
+    let answers = runtime
+        .block_on(source.add_comments(&[comment(Some("Ada"), "Signed."), comment(None, "Plain.")]));
+    assert!(
+        matches!(&answers[0], Err(onetaskgraph_plugin_api::SourceError::Refused { message })
+            if message.contains("\"Ada\"")),
+        "{:?}",
+        answers[0]
+    );
+    assert!(
+        matches!(&answers[1], Ok(BatchAnswer::Written(_))),
+        "{:?}",
+        answers[1]
+    );
+    let listed = board.run(&["task", "comment", "list", "board:U-0", "--json"], "");
+    let bodies: Vec<&str> = listed.json["comments"]
+        .as_array()
+        .expect("comments")
+        .iter()
+        .filter_map(|comment| comment["body"].as_str())
+        .collect();
+    assert_eq!(bodies, ["Plain."]);
 }

@@ -73,7 +73,7 @@ class CommentAddResult(BaseModel):
     current_version: Annotated[
         str | None,
         Field(
-            description="The version the task is at — present when `outcome` is `version-moved`."
+            description="The version the task is at — present when `outcome` is `version-moved` and the source\ncan name it, which it cannot just after another write of this batch moved the task."
         ),
     ] = None
     reason: Annotated[

@@ -7798,3 +7798,40 @@ async fn an_issue_read_in_one_command_is_no_write_context_in_the_next() {
         "no context outlives its command"
     );
 }
+
+#[tokio::test]
+async fn a_batched_comment_handed_an_author_is_refused_alone_and_its_neighbour_lands() {
+    let (endpoint, wire) = response_server(vec![
+        held_issue("i1"),
+        serde_json::json!({"commentCreate":{"success":true,
+            "comment":comment_node("c7", "plain", "2026-08-01T12:00:00Z")}}),
+    ]);
+    let comment = |author: Option<&str>, body: &str| onetaskgraph_plugin_api::BatchComment {
+        task: "i1".into(),
+        comment: NewComment {
+            body: CommentBody::new(body).unwrap(),
+            author: author.map(str::to_owned),
+        },
+        if_version: None,
+    };
+    let answers = writable_source(&endpoint)
+        .add_comments(&[comment(Some("grace"), "signed"), comment(None, "plain")])
+        .await;
+    assert!(
+        matches!(&answers[0], Err(SourceError::Refused { message })
+            if message.contains("grace") && message.contains("API key")),
+        "{:?}",
+        answers[0]
+    );
+    assert!(
+        matches!(
+            &answers[1],
+            Ok(onetaskgraph_plugin_api::BatchAnswer::Written(comment)) if comment.body == "plain"
+        ),
+        "{:?}",
+        answers[1]
+    );
+    let sent: Vec<String> = wire.try_iter().collect();
+    assert_eq!(sent.len(), 2, "one read and the one comment: {sent:?}");
+    assert!(!sent.iter().any(|request| request.contains("signed")));
+}

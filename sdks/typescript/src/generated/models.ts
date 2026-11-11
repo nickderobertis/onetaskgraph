@@ -1385,7 +1385,8 @@ outcome: ("written" | "held" | "version-moved" | "error")
  */
 comment?: (AddedComment | null)
 /**
- * The version the task is at — present when `outcome` is `version-moved`.
+ * The version the task is at — present when `outcome` is `version-moved` and the source
+ * can name it, which it cannot just after another write of this batch moved the task.
  */
 current_version?: (string | null)
 /**
@@ -17682,7 +17683,8 @@ outcome: ("written" | "held" | "version-moved" | "error")
  */
 version?: (string | null)
 /**
- * The version the task is at — present when `outcome` is `version-moved`.
+ * The version the task is at — present when `outcome` is `version-moved` and the source
+ * can name it, which it cannot just after another write of this batch moved the task.
  */
 current_version?: (string | null)
 /**
