@@ -4,7 +4,8 @@
 //! from either end, a cycle and a destination limit refusing their edge alone, a held version
 //! moved; a link mirrored as Linear's `related` relation beside its metadata and removed from
 //! both, one with no mirror sending no native write, a native relation kept until the last
-//! mirrored link between its pair goes, an end a whole-body rewrite lost reported and restored,
+//! mirrored link between its pair goes, an end a whole-body rewrite lost reported and restored —
+//! its native relation too, after a dependency rewrite of that end deleted it —
 //! an endpoint's write refused answered `partial` and completed by repeating the call, Linear's
 //! `*` bullets read back without the section, and each word a Linear source cannot mirror a link
 //! as refused at load.
@@ -596,6 +597,48 @@ fn a_mirrored_link_is_no_dependency_and_a_dependency_rewrite_leaves_its_relation
     assert_eq!(
         links_of(&items[1]),
         [link("caused-by", "in", "R-0", "present")]
+    );
+}
+
+#[test]
+fn a_dependency_rewrite_of_an_end_a_whole_body_rewrite_stripped_is_repaired_by_repeating_the_add() {
+    let team = Team::configured(4, &json!({"caused-by": {"native": "related"}}));
+    let added = team.links("add-many", &[("R-0", "R-1", "caused-by")]);
+    assert_eq!(outcomes(&added), ["written"], "{}", added.json);
+    assert_eq!(team.workspace.related_pairs().len(), 1);
+
+    // A person rewrites R-0's whole description, and its metadata slot goes with it: R-0 no
+    // longer holds the link, so its dependency rewrite may take the `related` relation as one
+    // of its own ordinary edges.
+    team.workspace.edit_description("R-0", "Rewritten by hand.");
+    let rewritten = team.ok(&["task", "update", "team:R-0", "--depends-on", "team:R-3"]);
+    assert_eq!(rewritten.count(graphql::ISSUE_RELATION_DELETE), 1);
+    assert!(team.workspace.related_pairs().is_empty());
+    let items = team.relations(&["R-0", "R-1"]);
+    assert!(links_of(&items[0]).is_empty(), "{}", items[0]);
+    assert_eq!(
+        links_of(&items[1]),
+        [link("caused-by", "in", "R-0", "missing")]
+    );
+
+    // Repeating the add restores R-0's link and the native relation between the pair.
+    let restored = team.links("add-many", &[("R-0", "R-1", "caused-by")]);
+    assert_eq!(outcomes(&restored), ["written"], "{}", restored.json);
+    let pairs = team.workspace.related_pairs();
+    assert_eq!(pairs, [("R-0".to_owned(), "R-1".to_owned())], "{pairs:?}");
+    let items = team.relations(&["R-0", "R-1"]);
+    assert_eq!(
+        links_of(&items[0]),
+        [link("caused-by", "out", "R-1", "present")]
+    );
+    assert_eq!(
+        links_of(&items[1]),
+        [link("caused-by", "in", "R-0", "present")]
+    );
+    let forward = team.ok(&["task", "deps", "team:R-0"]);
+    assert_eq!(
+        far_ends(&forward, "R-0"),
+        [("R-3".to_owned(), "blocks".to_owned())]
     );
 }
 
