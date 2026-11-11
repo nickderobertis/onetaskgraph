@@ -1024,6 +1024,18 @@ test("parents and typed links drive the real binary, each answered on its own", 
       links: [{ from: "work:T-3", to: "work:T-1", type: "caused-by" }],
     });
     expect(removed.results.map((result) => result.outcome)).toEqual(["written"]);
+    // An edge leaving `parent` out is refused, writing nothing; `null` alone removes the parent.
+    const omitted = { schema_version: 1, edges: [{ child: "work:T-2" }] } as unknown as Parameters<
+      typeof client.taskParentSetMany
+    >[0];
+    await expect(client.taskParentSetMany(omitted)).rejects.toThrow("missing field `parent`");
+    expect((await client.taskRelations(["work:T-2"])).items[0]?.parent).toBe("work:T-1");
+    const unparented = await client.taskParentSetMany({
+      schema_version: 1,
+      edges: [{ child: "work:T-2", parent: null }],
+    });
+    expect(unparented.results.map((result) => result.outcome)).toEqual(["written"]);
+    expect((await client.taskRelations(["work:T-2"])).items[0]?.parent).toBeNull();
     // A JavaScript caller is not held to the types: the cast hands the method a number where an
     // id goes, so the check it makes at runtime, before the binary is started, is what is proven.
     expect(() => client.taskRelations([3 as unknown as string])).toThrow("ids");

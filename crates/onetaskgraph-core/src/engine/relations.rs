@@ -55,10 +55,30 @@ pub struct ParentEdge {
     /// child's parent. Required: an edge leaving it out is refused rather than read as a removal.
     // llmlint: ignore[invalid_states_unrepresentable] As `child`.
     #[serde(deserialize_with = "nullable")]
+    #[schemars(with = "RequiredNullable")]
     pub parent: Option<String>,
     /// The version the child must be at for anything to be written, as a read reported it.
     #[serde(default)]
     pub if_version: Option<String>,
+}
+
+/// The schema of [`ParentEdge::parent`]: a string or `null`, and required — which a derive over
+/// `Option<String>` would publish as optional, so both SDKs' models would read an edge leaving
+/// it out as a removal the deserializer refuses.
+struct RequiredNullable;
+
+impl JsonSchema for RequiredNullable {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "RequiredNullable".into()
+    }
+
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({"type": ["string", "null"]})
+    }
 }
 
 /// What `task parent set-many` answers: one result per edge, in the order given.

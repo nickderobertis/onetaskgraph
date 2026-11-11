@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from functools import cache
 from typing import TYPE_CHECKING, Literal, overload
 
-from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
+from pydantic import BaseModel, JsonValue, RootModel, TypeAdapter, ValidationError
 
 from . import models as _models
 
@@ -175,7 +175,8 @@ def _document(method: str, model: type[BaseModel], document: object) -> str:
 
     Taken as its model, or as a mapping validated to it here, so a malformed member is
     refused before the binary is started, naming the member; written by its wire names,
-    leaving out every member that is `None`, which the binary reads as absent.
+    leaving out every member that is `None`, which the binary reads as absent — but for a
+    member it requires, which it reads as `null`.
     """
     match document:
         case BaseModel() if isinstance(document, model):
@@ -193,7 +194,42 @@ def _document(method: str, model: type[BaseModel], document: object) -> str:
                 "a mapping of its members"
             )
             raise TypeError(message)
-    return checked.model_dump_json(by_alias=True, exclude_none=True)
+    dumped = checked.model_dump(mode="json", by_alias=True, exclude_none=True)
+    written = _required_nulls(checked, dumped)
+    compact = (",", ":")
+    return json.dumps(written, allow_nan=False, ensure_ascii=False, separators=compact)
+
+
+def _required_nulls(value: object, dumped: object) -> object:
+    """`dumped`, with every required member of `value` that is `None` written as `null`.
+
+    `exclude_none` leaves out every `None`, which the binary reads as absent; a member it
+    requires and reads `null` in — a parent edge's `parent`, whose `null` removes the
+    parent — would then be refused as missing rather than read as what it says.
+    """
+    if isinstance(value, RootModel):
+        return _required_nulls(value.root, dumped)
+    if isinstance(value, BaseModel) and isinstance(dumped, dict):
+        for name, field in type(value).model_fields.items():
+            key = field.serialization_alias or field.alias or name
+            member = getattr(value, name)
+            if member is None:
+                if field.is_required():
+                    dumped[key] = None
+            elif key in dumped:
+                dumped[key] = _required_nulls(member, dumped[key])
+        return dumped
+    if isinstance(value, list | tuple) and isinstance(dumped, list):
+        if len(value) != len(dumped):
+            return dumped
+        pairs = zip(value, dumped, strict=True)
+        return [_required_nulls(item, out) for item, out in pairs]
+    if isinstance(value, Mapping) and isinstance(dumped, dict):
+        for key, item in value.items():
+            if isinstance(key, str) and key in dumped:
+                dumped[key] = _required_nulls(item, dumped[key])
+        return dumped
+    return dumped
 
 
 def _string_or_strings(

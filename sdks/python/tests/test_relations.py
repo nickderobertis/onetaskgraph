@@ -172,3 +172,27 @@ def test_links_are_added_read_from_both_ends_and_removed(binary: Path, store: Pa
 
     with pytest.raises(TypeError, match="not a LinkBatch"):
         asyncio.run(client.task_link_add_many({"schema_version": 1, "links": [{"form": "x"}]}))
+
+
+def test_an_edge_must_name_its_parent_and_null_alone_removes_it(binary: Path, store: Path) -> None:
+    """An edge leaving `parent` out is refused before the binary runs; `None` removes it."""
+    client = client_at(binary, store)
+    set_one = {"schema_version": 1, "edges": [{"child": "work:t2", "parent": "work:t1"}]}
+    asyncio.run(client.task_parent_set_many(set_one))
+
+    with pytest.raises(ValueError, match="parent"):
+        ParentBatch.model_validate({"schema_version": 1, "edges": [{"child": "work:t2"}]})
+    with pytest.raises(TypeError, match="not a ParentBatch"):
+        asyncio.run(
+            client.task_parent_set_many({"schema_version": 1, "edges": [{"child": "work:t2"}]})
+        )
+    kept = asyncio.run(client.task_relations(["work:t2"]))
+    assert kept.items[0].parent is not None and kept.items[0].parent.root == "work:t1"
+
+    removed = asyncio.run(
+        client.task_parent_set_many(
+            {"schema_version": 1, "edges": [{"child": "work:t2", "parent": None}]}
+        )
+    )
+    assert [result.outcome for result in removed.results] == [ParentOutcome.ParentOutcomeWritten]
+    assert asyncio.run(client.task_relations(["work:t2"])).items[0].parent is None

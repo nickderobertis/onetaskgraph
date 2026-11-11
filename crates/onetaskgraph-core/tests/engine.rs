@@ -4050,8 +4050,9 @@ const FORTY_SIXTH_BUNDLE_BESIDE: [(&str, u64); 8] = [
     ("plugin_config/subprocess", 0x9be55eaf44b8f5aa),
 ];
 
-/// Version 62 adds the relation calls' roots; `parents` to the in-memory configuration, `link_types`
-/// to every plugin's but the subprocess one, and `sub_issues` to the GitHub Projects one.
+/// Version 62 adds the relation calls' roots, a parent edge's `parent` required and nullable;
+/// `parents` to the in-memory configuration, `link_types` to every plugin's but the subprocess
+/// one, and `sub_issues` to the GitHub Projects one.
 const SIXTY_SECOND_BUNDLE_BESIDE: [(&str, u64); 8] = [
     ("binary/FieldsReport", 0x29439ba93e5e343a),
     ("binary/StatusNamesReport", 0x2fffbb3b0308719d),
@@ -7272,7 +7273,7 @@ const SIXTY_SECOND_BUNDLE_SHAPE: [(&str, u64); 170] = [
     ("PageOfTask", 0x999e022251984937),
     ("PageRequest", 0x6c7be3975028b78c),
     ("PageToken", 0xc685683af2c78c39),
-    ("ParentBatch", 0x2fd7712d88224ee8),
+    ("ParentBatch", 0xc75b915f0cffebec),
     ("ParentOutcome", 0x174952d4ef2c0c4e),
     ("ParentsSet", 0xfeeba078b330a062),
     ("Placement", 0xe5c1c0857f3cbaeb),

@@ -14531,7 +14531,8 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
         },
         "additionalProperties": false,
         "required": [
-          "child"
+          "child",
+          "parent"
         ]
       }
     }
