@@ -115,6 +115,19 @@ EXCEPTIONS = {
         "a free function, not one of the contract's types — the renderer `strip_links_section` "
         "is the exact inverse of"
     ),
+    "relinked": (
+        "a free function, not one of the contract's types — how every source re-renders an "
+        "item's `## Links` section on a content write, spelled once so no two plugins render it "
+        "differently"
+    ),
+    "link_line": (
+        "a free function, not one of the contract's types — the `## Links` line `relinked` "
+        "writes for a link no stored line shows"
+    ),
+    "arrow": (
+        "a free function, not one of the contract's types — the arrow a `## Links` line shows "
+        "a link's direction with"
+    ),
     "LINKS_HEADING": (
         "a constant, not one of the contract's types — the heading the `## Links` section is "
         "rendered and recognised under"

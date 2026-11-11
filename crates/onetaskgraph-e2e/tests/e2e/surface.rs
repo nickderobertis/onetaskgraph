@@ -304,7 +304,13 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
 
     assert_eq!(bundle["version"], 62);
     // Version 62: the relation calls' documents and outcomes.
-    for root in ["ParentBatch", "ParentsSet", "LinkBatch", "LinksWritten", "TaskRelations"] {
+    for root in [
+        "ParentBatch",
+        "ParentsSet",
+        "LinkBatch",
+        "LinksWritten",
+        "TaskRelations",
+    ] {
         assert!(bundle["roots"][root].is_object(), "{root} is a root");
     }
     assert!(bundle["roots"]["HumanTaskProjection"].is_object());

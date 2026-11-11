@@ -318,6 +318,68 @@ pub fn read_content(content: Option<String>, metadata: &BTreeMap<String, Value>)
     }
 }
 
+/// The `## Links` line of `link` when nothing better is known of its other end: its type, its
+/// direction, and the other end's qualified id.
+#[must_use]
+pub fn link_line(link: &TaskLink) -> String {
+    format!(
+        "**{}** {} `{}`",
+        link.link_type,
+        arrow(link.direction),
+        link.other
+    )
+}
+
+/// The arrow a `## Links` line shows a direction with.
+#[must_use]
+pub const fn arrow(direction: LinkDirection) -> &'static str {
+    match direction {
+        LinkDirection::Out => "→",
+        LinkDirection::In => "←",
+    }
+}
+
+/// `content` as a write of an item holding `metadata` stores it: with its `## Links` section
+/// re-rendered from the links `metadata` holds, so a content write never drops what a person
+/// sees of them.
+///
+/// Each link keeps the line `stored` — the content as the source stores it now, its section
+/// included — already shows it with, so its other end's title and address survive; a link the
+/// stored section does not show gets [`link_line`]. `content` already ending in a section — a
+/// link write's own — is answered unchanged, and so is any content of an item holding no
+/// links, so a write of an item that never had one is exactly what it was.
+#[must_use]
+pub fn relinked(content: &str, stored: Option<&str>, metadata: &BTreeMap<String, Value>) -> String {
+    let Ok(links) = TaskLink::held(metadata) else {
+        return content.to_owned();
+    };
+    if links.is_empty() || strip_links_section(content).len() != content.len() {
+        return content.to_owned();
+    }
+    let shown: Vec<&str> = stored
+        .map(|stored| {
+            let kept = strip_links_section(stored).len();
+            stored[kept..]
+                .lines()
+                .map(str::trim)
+                .filter_map(|line| line.strip_prefix("- ").or_else(|| line.strip_prefix("* ")))
+                .collect()
+        })
+        .unwrap_or_default();
+    let bullets: Vec<String> = links
+        .iter()
+        .map(|link| {
+            let typed = format!("**{}** {} ", link.link_type, arrow(link.direction));
+            let named = format!("`{}`", link.other);
+            shown
+                .iter()
+                .find(|line| line.starts_with(&typed) && line.ends_with(&named))
+                .map_or_else(|| link_line(link), |line| (*line).to_owned())
+        })
+        .collect();
+    with_links_section(content, &bullets)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -420,5 +482,47 @@ mod tests {
         );
         metadata.insert(TaskLink::METADATA_KEY.to_owned(), serde_json::json!("x"));
         assert!(TaskLink::held(&metadata).is_err());
+    }
+
+    fn holding(links: serde_json::Value) -> BTreeMap<String, Value> {
+        BTreeMap::from([(TaskLink::METADATA_KEY.to_owned(), links)])
+    }
+
+    #[test]
+    fn a_content_write_re_renders_the_section_keeping_each_stored_line() {
+        let metadata = holding(serde_json::json!([
+            {"type": "caused-by", "direction": "out", "other": "s:b"},
+            {"type": "relates", "direction": "in", "other": "t:c"},
+        ]));
+        let stored = with_links_section("Old", &bullets());
+        let written = relinked("New", Some(&stored), &metadata);
+        assert_eq!(
+            written,
+            with_links_section(
+                "New",
+                &[
+                    "**caused-by** → [B](https://example.test/b) `s:b`".to_owned(),
+                    "**relates** ← `t:c`".to_owned(),
+                ]
+            )
+        );
+        assert_eq!(strip_links_section(&written), "New");
+        // Linear's `*` bullets are the same lines.
+        let starred = stored.replace("\n- ", "\n* ");
+        assert_eq!(relinked("New", Some(&starred), &metadata), written);
+    }
+
+    #[test]
+    fn content_carrying_a_section_or_of_an_item_with_no_links_is_written_as_given() {
+        let metadata = holding(serde_json::json!([
+            {"type": "caused-by", "direction": "out", "other": "s:b"}
+        ]));
+        let composed = with_links_section("Body", &bullets());
+        assert_eq!(relinked(&composed, None, &metadata), composed);
+        assert_eq!(relinked("Body", Some(&composed), &BTreeMap::new()), "Body");
+        assert_eq!(
+            relinked("Body", None, &metadata),
+            with_links_section("Body", &["**caused-by** → `s:b`".to_owned()])
+        );
     }
 }

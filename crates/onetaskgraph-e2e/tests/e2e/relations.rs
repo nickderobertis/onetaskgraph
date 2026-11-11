@@ -127,7 +127,7 @@ impl Store {
             .clone()
     }
 
-    fn file(&self, root: &PathBuf, native: &str) -> String {
+    fn file(&self, root: &std::path::Path, native: &str) -> String {
         std::fs::read_to_string(root.join("tasks").join(format!("{native}.md")))
             .expect("a task file")
     }
@@ -180,10 +180,7 @@ fn a_two_level_chain_is_read_back_and_a_re_parent_moves_one_edge() {
         0,
     );
     assert_eq!(outcomes(&written), ["written", "written", "written"]);
-    assert!(
-        written["results"][0]["version"].is_string(),
-        "{written:#}"
-    );
+    assert!(written["results"][0]["version"].is_string(), "{written:#}");
     // The file holds the parent beside everything it held, and nothing else moved.
     assert_eq!(
         store.file(&store.work, "t3"),
@@ -518,4 +515,108 @@ fn a_task_holding_no_relation_is_stored_and_read_exactly_as_before_relations_exi
         serde_json::to_string_pretty(&shown).expect("JSON") + "\n",
         include_str!("fixtures/relations/unrelated-in-memory.json"),
     );
+}
+
+/// The `## Links` section of a task file — its heading and every line after it.
+fn section(file: &str) -> &str {
+    file.find("## Links\n").map_or("", |at| &file[at..])
+}
+
+#[test]
+fn every_content_write_of_a_linked_task_keeps_its_links_section() {
+    let store = Store::new();
+    store.links(
+        "add-many",
+        &json!([{"from": "work:t2", "to": "work:t1", "type": "caused-by"}]),
+        0,
+    );
+    let rendered = section(&store.file(&store.work, "t2")).to_owned();
+    assert!(rendered.contains("[Root cause]("), "{rendered}");
+
+    // `task content set`: the new content, then the very section the link write rendered.
+    let body = store.sandbox.project().join("body.md");
+    std::fs::write(&body, "Rewritten by content set.").expect("a body");
+    let path = body.to_str().expect("a path");
+    store.exited(
+        &["task", "content", "set", "work:t2", "--file", path],
+        None,
+        0,
+    );
+    let file = store.file(&store.work, "t2");
+    assert!(
+        file.contains("Rewritten by content set.\n\n## Links\n"),
+        "{file}"
+    );
+    assert_eq!(section(&file), rendered);
+    assert_eq!(
+        store.shown("work:t2")["content"],
+        json!("Rewritten by content set.")
+    );
+
+    // `task update --body-file`: the same.
+    std::fs::write(&body, "Rewritten by update.").expect("a body");
+    store.exited(&["task", "update", "work:t2", "--body-file", path], None, 0);
+    let file = store.file(&store.work, "t2");
+    assert_eq!(section(&file), rendered);
+    assert_eq!(
+        store.shown("work:t2")["content"],
+        json!("Rewritten by update.")
+    );
+    // And the link still reads from both ends.
+    let items = store.relations(&["work:t1", "work:t2"]);
+    assert_eq!(
+        links_of(&items[1]),
+        [link("caused-by", "out", "work:t1", "present")]
+    );
+}
+
+#[test]
+fn a_copy_over_a_parented_linked_counterpart_keeps_its_parent_and_its_section() {
+    let store = Store::new();
+    let first = store.exited(
+        &["task", "copy", "work:t1", "work:t2", "--to", "copies"],
+        None,
+        0,
+    );
+    let landed: Vec<String> = first["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .map(|item| {
+            item["destination"]
+                .as_str()
+                .unwrap_or_else(|| panic!("each lands: {first:#}"))
+                .to_owned()
+        })
+        .collect();
+    let (one, two) = (&landed[0], &landed[1]);
+    store.parents(&json!([{"child": two, "parent": one}]), 0);
+    store.links(
+        "add-many",
+        &json!([{"from": two, "to": one, "type": "caused-by"}]),
+        0,
+    );
+    let copies = store.sandbox.project().join("copies");
+    let native = two.split_once(':').expect("qualified").1;
+    let rendered = section(&store.file(&copies, native)).to_owned();
+    assert!(!rendered.is_empty());
+
+    // The source changes and is copied again over its counterpart.
+    store.exited(
+        &["task", "update", "work:t2", "--title", "Symptom, revised"],
+        None,
+        0,
+    );
+    let again = store.exited(&["task", "copy", "work:t2", "--to", "copies"], None, 0);
+    assert_eq!(again["items"][0]["destination"], json!(two), "{again:#}");
+    let file = store.file(&copies, native);
+    assert!(file.contains("title: Symptom, revised"), "{file}");
+    assert_eq!(section(&file), rendered);
+    let items = store.relations(&[two]);
+    assert_eq!(items[0]["parent"], json!(one));
+    assert_eq!(
+        links_of(&items[0]),
+        [link("caused-by", "out", one, "unread")]
+    );
+    assert_eq!(store.shown(two)["content"], json!("The t2 body."));
 }

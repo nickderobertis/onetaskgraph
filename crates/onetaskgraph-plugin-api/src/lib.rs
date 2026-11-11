@@ -69,7 +69,8 @@ pub use query::{
 };
 pub use relation::{
     LINKS_HEADING, LinkDirection, LinkTypeConfig, LinkTypes, NativeLink, ParentAnswer, ParentWrite,
-    Relations, TaskLink, read_content, relationless, strip_links_section, with_links_section,
+    Relations, TaskLink, arrow, link_line, read_content, relationless, relinked,
+    strip_links_section, with_links_section,
 };
 pub use section::{BodyMarkup, SharedBodyMarkup, StoredHeading};
 pub use source::{Health, SecretResolver, SourcePlugin, TaskSource};

@@ -1629,6 +1629,7 @@ impl TaskSource for LocalMdSource {
                 depends_on: &write.depends_on,
                 delivers: &task.delivers,
                 delivered_by: &task.delivered_by,
+                parent: None,
                 fields: Fields {
                     id: &task.id,
                     title: &task.title,
@@ -1932,7 +1933,16 @@ impl TaskSource for LocalMdSource {
             // The content as stored, its `## Links` section included, so a write naming the
             // content a link write composed is compared with — and replaces — all of it.
             let before = stored_task(entry);
-            let wanted = update.applied_to(&before);
+            let mut wanted = update.applied_to(&before);
+            // A content write keeps what a person sees of the task's links: its `## Links`
+            // section, re-rendered from the links it holds once written.
+            if let Some(content) = &update.content {
+                wanted.content = Some(onetaskgraph_plugin_api::relinked(
+                    content,
+                    before.content.as_deref(),
+                    &wanted.metadata,
+                ));
+            }
             let edges = update.depends_on.as_ref().map(|edges| {
                 edges
                     .iter()
@@ -2194,6 +2204,18 @@ impl TaskSource for LocalMdSource {
         answers: &BTreeMap<String, serde_json::Value>,
     ) -> Result<Option<()>, SourceError> {
         self.held(Some(id), async {
+            // A rendering replaces the content, and keeps the task's `## Links` section.
+            let content = &match self.locate(Kind::Task, id)? {
+                Some(path) => {
+                    let stored = stored_task(self.parse(WorkKind::Task, &path)?);
+                    onetaskgraph_plugin_api::relinked(
+                        content,
+                        stored.content.as_deref(),
+                        &stored.metadata,
+                    )
+                }
+                None => content.to_owned(),
+            };
             self.set_rendering(
                 Kind::Task,
                 id,
@@ -2208,7 +2230,10 @@ impl TaskSource for LocalMdSource {
                         .map(unversioned)
                 },
                 |task, content, provenance| {
-                    task.content = (!content.is_empty()).then(|| content.to_owned());
+                    task.content = onetaskgraph_plugin_api::read_content(
+                        (!content.is_empty()).then(|| content.to_owned()),
+                        &task.metadata,
+                    );
                     task.metadata
                         .insert(MetadataKey::TEMPLATE_KEY.to_owned(), provenance.clone());
                 },
@@ -3575,6 +3600,8 @@ enum Outgoing<'a> {
         delivers: &'a [TaskRef],
         /// Empty for a project.
         delivered_by: &'a [TaskRef],
+        /// The task's parent, kept from the file a write replaces; `None` for a project.
+        parent: Option<&'a NativeId>,
         fields: Fields<'a>,
     },
     /// A document, which takes part in no dependency graph and has no status.
@@ -3657,6 +3684,9 @@ struct WrittenFrontMatter {
     labels: Vec<WrittenLabel>,
     #[serde(skip_serializing_if = "Option::is_none")]
     project: Option<String>,
+    /// A task's parent; absent for none, so a task without one is written as it always was.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parent: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     depends_on: Vec<WrittenDependency>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
@@ -3865,7 +3895,8 @@ impl LocalMdSource {
         answers: Option<&BTreeMap<String, serde_json::Value>>,
     ) -> Result<(), SourceError> {
         let read = match kind {
-            Kind::Task => task(self.parse_text(WorkKind::Task, path, text)?).content,
+            // As stored, its `## Links` section included, which is what was written.
+            Kind::Task => stored_task(self.parse_text(WorkKind::Task, path, text)?).content,
             Kind::Document => self.parse_document_text(path, text)?.content,
             Kind::Project => self.parse_text(WorkKind::Project, path, text)?.common.body,
         };
@@ -4038,6 +4069,24 @@ impl LocalMdSource {
         ] {
             self.representable_list(field, near, list)?;
         }
+        // A write replacing a task's file keeps what no copy carries: its parent, and its
+        // `## Links` section re-rendered from the links it holds.
+        // A file that cannot be read keeps nothing: the write below reports why it cannot land.
+        let existing = write
+            .target
+            .as_ref()
+            .and_then(|target| self.locate(Kind::Task, target).ok().flatten())
+            .and_then(|path| self.parse(WorkKind::Task, &path).ok());
+        let parent = existing.as_ref().and_then(|entry| entry.parent.clone());
+        let content = task.content.as_deref().map(|content| {
+            onetaskgraph_plugin_api::relinked(
+                content,
+                existing
+                    .as_ref()
+                    .and_then(|entry| entry.common.body.as_deref()),
+                &task.metadata,
+            )
+        });
         self.write_entry(
             write.target.as_ref(),
             answers,
@@ -4048,10 +4097,11 @@ impl LocalMdSource {
                 depends_on: &write.depends_on,
                 delivers: &task.delivers,
                 delivered_by: &task.delivered_by,
+                parent: parent.as_ref(),
                 fields: Fields {
                     id: &task.id,
                     title: &task.title,
-                    content: task.content.as_deref(),
+                    content: content.as_deref(),
                     labels: &task.labels,
                     project: task.project.as_ref(),
                     metadata: &task.metadata,
@@ -4080,6 +4130,7 @@ impl LocalMdSource {
                 depends_on: &write.depends_on,
                 delivers: &[],
                 delivered_by: &[],
+                parent: None,
                 fields: Fields {
                     id: &project.id,
                     title: &project.title,
@@ -4524,7 +4575,11 @@ impl LocalMdSource {
     /// [`set_task_content`](TaskSource::set_task_content) states.
     fn replace_content(&self, path: &Path, content: &str) -> Result<(), SourceError> {
         let text = Self::read_text(path)?;
-        let edited = self.content_edited(path, &text, content)?;
+        // The task's `## Links` section, re-rendered from the links it holds, stays with it.
+        let stored = stored_task(self.parse_text(WorkKind::Task, path, &text)?);
+        let content =
+            onetaskgraph_plugin_api::relinked(content, stored.content.as_deref(), &stored.metadata);
+        let edited = self.content_edited(path, &text, &content)?;
         if edited == text {
             return Ok(());
         }
@@ -4624,13 +4679,14 @@ impl LocalMdSource {
                 ..
             }
         );
-        let (status, priority, depends_on, delivers, delivered_by) = match outgoing {
+        let (status, priority, depends_on, delivers, delivered_by, parent) = match outgoing {
             Outgoing::Work {
                 status,
                 priority,
                 depends_on,
                 delivers,
                 delivered_by,
+                parent,
                 ..
             } => (
                 Some(*status),
@@ -4638,6 +4694,7 @@ impl LocalMdSource {
                 *depends_on,
                 *delivers,
                 *delivered_by,
+                *parent,
             ),
             Outgoing::Document { .. } => (
                 None,
@@ -4645,6 +4702,7 @@ impl LocalMdSource {
                 [].as_slice(),
                 [].as_slice(),
                 [].as_slice(),
+                None,
             ),
         };
         // A status named by its category's own word, which this folder's mapping does not read
@@ -4702,6 +4760,7 @@ impl LocalMdSource {
                 })
                 .collect(),
             project: outgoing.project.map(|id| id.0.clone()),
+            parent: parent.map(|id| id.0.clone()),
             depends_on: depends_on.iter().map(WrittenDependency::of).collect(),
             metadata: outgoing.metadata.clone(),
             repositories: outgoing
