@@ -23,7 +23,8 @@ struct Store {
 
 impl Store {
     /// Folders `work` (four tasks) and `other` (one task), an empty folder `copies`, and an
-    /// in-memory source `memory` whose `m2` is seeded under `m1`.
+    /// in-memory source `memory` whose `m4` is seeded under `m2` under `m1`, linked `caused-by`
+    /// to `m5` at both ends, and linked to `m1` at its own end alone.
     fn new() -> Self {
         let sandbox = Sandbox::new();
         let work = sandbox.subdirectory("work");
@@ -73,8 +74,17 @@ impl Store {
                          "status": status("todo")},
                         {"id": "m3", "title": "Memory other", "labels": [],
                          "content": "Unrelated.", "status": status("todo")},
+                        {"id": "m4", "title": "Memory grandchild", "labels": [],
+                         "status": status("todo"),
+                         "metadata": {"onetaskgraph.links": [
+                             {"type": "caused-by", "direction": "out", "other": "memory:m1"},
+                             {"type": "caused-by", "direction": "out", "other": "memory:m5"}]}},
+                        {"id": "m5", "title": "Memory cause", "labels": [],
+                         "status": status("todo"),
+                         "metadata": {"onetaskgraph.links": [
+                             {"type": "caused-by", "direction": "in", "other": "memory:m4"}]}},
                     ],
-                    "parents": {"m2": "m1"},
+                    "parents": {"m2": "m1", "m4": "m2"},
                 }},
             },
         });
@@ -458,6 +468,57 @@ fn an_in_memory_source_reads_its_seeded_parent_and_answers_its_writes() {
         "{}",
         store.file(&store.work, "t1")
     );
+}
+
+#[test]
+fn an_in_memory_source_reads_its_seeded_chain_and_links_from_either_end_and_answers_repeats() {
+    let store = Store::new();
+    let items = store.relations(&["memory:m1", "memory:m2", "memory:m4", "memory:m5"]);
+    // The two-level chain, from either end.
+    assert_eq!(items[0]["parent"], Value::Null);
+    assert_eq!(items[0]["children"], json!(["memory:m2"]));
+    assert_eq!(items[1]["parent"], json!("memory:m1"));
+    assert_eq!(items[1]["children"], json!(["memory:m4"]));
+    assert_eq!(items[2]["parent"], json!("memory:m2"));
+    // m4 holds a link to m5 that m5 holds too, and one to m1 that m1 does not.
+    assert_eq!(
+        links_of(&items[2]),
+        [
+            link("caused-by", "out", "memory:m1", "missing"),
+            link("caused-by", "out", "memory:m5", "present"),
+        ]
+    );
+    assert!(links_of(&items[0]).is_empty(), "{}", items[0]);
+    assert_eq!(
+        links_of(&items[3]),
+        [link("caused-by", "in", "memory:m4", "present")]
+    );
+
+    // A re-parent of the grandchild answers its new parent.
+    let moved = store.parents(&json!([{"child": "memory:m4", "parent": "memory:m1"}]), 0);
+    assert_eq!(outcomes(&moved), ["written"]);
+    assert_eq!(moved["results"][0]["parent"], json!("memory:m1"));
+
+    // The link both ends hold answers `exists`, and the one m1 lacks is restored at m1.
+    let added = store.links(
+        "add-many",
+        &json!([
+            {"from": "memory:m4", "to": "memory:m5", "type": "caused-by"},
+            {"from": "memory:m4", "to": "memory:m1", "type": "caused-by"},
+        ]),
+        0,
+    );
+    assert_eq!(outcomes(&added), ["exists", "written"], "{added}");
+    // A link neither end holds answers `absent`, beside one that is removed.
+    let removed = store.links(
+        "remove-many",
+        &json!([
+            {"from": "memory:m4", "to": "memory:m3", "type": "caused-by"},
+            {"from": "memory:m4", "to": "memory:m5", "type": "caused-by"},
+        ]),
+        0,
+    );
+    assert_eq!(outcomes(&removed), ["absent", "written"], "{removed}");
 }
 
 #[test]
