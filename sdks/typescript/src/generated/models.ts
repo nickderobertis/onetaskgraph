@@ -12365,7 +12365,10 @@ type: string
  */
 direction: ("out" | "in")
 /**
- * The other item's qualified id.
+ * One item, qualified by the source it came from.
+ *
+ * Rendered `<source>:<native>` and parsed by splitting on the **first** colon,
+ * so a native id may contain colons freely.
  */
 other: string
 /**
@@ -16728,7 +16731,10 @@ type: string
  */
 direction: ("out" | "in")
 /**
- * The other item's qualified id.
+ * One item, qualified by the source it came from.
+ *
+ * Rendered `<source>:<native>` and parsed by splitting on the **first** colon,
+ * so a native id may contain colons freely.
  */
 other: string
 /**

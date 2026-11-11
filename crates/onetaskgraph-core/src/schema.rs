@@ -260,6 +260,7 @@ pub fn schema_bundle() -> Value {
 
     // llmlint: ignore[code_lands_in_the_domain_that_owns_it] As the projection domain's line above: every root is registered here beside the append-only version golden, and this one line takes the batched calls' own list, which that domain declares.
     roots.extend(crate::engine::batch::schemas());
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] As the batched calls' line above: every root is registered here beside the append-only version golden, and this one line takes the relation calls' own list, which that domain declares.
     roots.extend(crate::engine::relations::schemas());
 
     // What `task`, `project` and `document metadata set` answer with.

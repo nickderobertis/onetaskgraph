@@ -33,7 +33,7 @@ class OtherEnd(StrEnum):
 class ReadLink(BaseModel):
     type: Annotated[str, Field(description="The link's type name.")]
     direction: Annotated[LinkDirection, Field(description="Which end of the link this item is.")]
-    other: Annotated[str, Field(description="The other item's qualified id.")]
+    other: Annotated[GlobalId, Field(description="The other item's qualified id.")]
     other_end: Annotated[
         OtherEnd,
         Field(

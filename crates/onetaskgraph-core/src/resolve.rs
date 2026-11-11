@@ -180,11 +180,7 @@ fn one_meaning_per_board(config: &Config) -> Result<(), ConfigError> {
         if source.plugin().as_str() != "github-projects" {
             continue;
         }
-        let Some(board) = source
-            .plugin()
-            .plugin()
-            .remote_identity(source.config())
-        else {
+        let Some(board) = source.plugin().plugin().remote_identity(source.config()) else {
             continue;
         };
         let meaning = source

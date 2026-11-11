@@ -146,7 +146,8 @@ def test_links_are_added_read_from_both_ends_and_removed(binary: Path, store: Pa
     relations = asyncio.run(client.task_relations(["work:t1", "work:t2", "other:o1"]))
     links = {
         item.item.root: [
-            (link.type, link.direction.value, link.other, link.other_end) for link in item.links
+            (link.type, link.direction.value, link.other.root, link.other_end)
+            for link in item.links
         ]
         for item in relations.items
     }

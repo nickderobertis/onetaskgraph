@@ -628,8 +628,12 @@ async fn run_inner(
         Command::Task {
             command: TaskCommand::Link { command },
         } => match command {
-            LinkCommand::AddMany(args) => relations::links(out, loaded, args, true).await,
-            LinkCommand::RemoveMany(args) => relations::links(out, loaded, args, false).await,
+            LinkCommand::AddMany(args) => {
+                relations::links(out, loaded, args, onetaskgraph_core::LinkOp::Add).await
+            }
+            LinkCommand::RemoveMany(args) => {
+                relations::links(out, loaded, args, onetaskgraph_core::LinkOp::Remove).await
+            }
         },
         Command::Task {
             command: TaskCommand::Relations(args),

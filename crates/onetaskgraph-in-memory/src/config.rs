@@ -306,6 +306,33 @@ impl InMemoryConfig {
             }
         }
 
+        // Each parent names two tasks of this source, and no chain of them returns to its start.
+        for (child, parent) in &self.parents {
+            for (role, id) in [("child", child), ("parent", parent)] {
+                if !task_ids.contains(id) {
+                    problems.push(format!(
+                        "parents names {id} as a {role}, which is no task of this source; a \
+                         parent and its child are both tasks this source serves"
+                    ));
+                }
+            }
+            let mut at = Some(parent);
+            let mut steps = 0;
+            while let Some(ancestor) = at {
+                if ancestor == child {
+                    problems.push(format!(
+                        "parents makes {child} its own ancestor through {parent}, which is a \
+                         cycle; a parent chain ends at a task with no parent"
+                    ));
+                    break;
+                }
+                steps += 1;
+                if steps > self.parents.len() {
+                    break;
+                }
+                at = self.parents.get(ancestor);
+            }
+        }
         if problems.is_empty() {
             Ok(())
         } else {

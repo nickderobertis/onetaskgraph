@@ -3973,7 +3973,8 @@ const PUBLISHED_BUNDLES: &[(u32, Published)] = &[
             roots: &SIXTY_FIRST_BUNDLE_SHAPE,
             beside: &FIFTY_FIRST_BUNDLE_BESIDE,
         },
-    ),    (
+    ),
+    (
         62,
         Published::Whole {
             roots: &SIXTY_SECOND_BUNDLE_SHAPE,
@@ -7298,10 +7299,10 @@ const SIXTY_SECOND_BUNDLE_SHAPE: [(&str, u64); 170] = [
     ("QueryResponseOfQualifiedProject", 0x92693456fe29b5e8),
     ("QueryResponseOfQualifiedTask", 0xf0a04aa1edb48505),
     ("QueryResponseOfSearchHit", 0xa9f72507502b6a47),
-    ("ReadLink", 0xead01fb3bd9f78ff),
+    ("ReadLink", 0x1ca0f4e863b88ae8),
     ("ReconcileOutcome", 0x851ed8d412ed8c36),
     ("Regenerated", 0x1a37992cf7c8df7b),
-    ("RelationsItem", 0x46af5c5df6dea562),
+    ("RelationsItem", 0xf1ad82ad5f5c9b47),
     ("RenderedTemplate", 0x08d378ba8134d8d5),
     ("Repository", 0x98147ade92ced0f0),
     ("RepositoryVisibility", 0x97913706150bdd17),
@@ -7337,7 +7338,7 @@ const SIXTY_SECOND_BUNDLE_SHAPE: [(&str, u64); 170] = [
     ("TaskPrioritySet", 0x48d8fdaa8fca9da4),
     ("TaskQuery", 0x0efc24a7b89f2422),
     ("TaskRef", 0xad8ce2508e0797c7),
-    ("TaskRelations", 0xf0718b1d6cc7739b),
+    ("TaskRelations", 0xfe40f812590c8062),
     ("TaskStatusSet", 0xa66923b462f897bc),
     ("TaskUpdate", 0x36714bdce96c5c3c),
     ("TaskUpdateOutcome", 0xe6fda7657d974d23),

@@ -8,7 +8,7 @@
 use std::io::Write;
 
 use onetaskgraph_core::{
-    Failure, GlobalId, LinkBatch, LinksWritten, Loaded, OtherEnd, ParentBatch, ParentsSet,
+    Failure, GlobalId, LinkBatch, LinkOp, LinksWritten, Loaded, OtherEnd, ParentBatch, ParentsSet,
     TaskRelations,
 };
 use onetaskgraph_plugin_api::LinkDirection;
@@ -44,14 +44,13 @@ pub(crate) async fn links(
     out: &mut impl Write,
     loaded: &Loaded,
     args: &RelationBatchArgs,
-    adding: bool,
+    op: LinkOp,
 ) -> Result<u8, Failure> {
     let batch: LinkBatch = document(&args.input, "--input", "LinkBatch")?;
     let engine = engine(loaded);
-    let written = if adding {
-        engine.add_links(&batch).await
-    } else {
-        engine.remove_links(&batch).await
+    let written = match op {
+        LinkOp::Add => engine.add_links(&batch).await,
+        LinkOp::Remove => engine.remove_links(&batch).await,
     }
     .map_err(|error| Failure::from(&error))?;
     let rendered = rendering(loaded, &written, links_text, "the links")?;

@@ -94,9 +94,9 @@ pub use engine::{
     SweepRequests, Uncovered,
 };
 pub use engine::{
-    LinkBatch, LinkItem, LinkOutcome, LinkResult, LinksWritten, OtherEnd, ParentBatch, ParentEdge,
-    ParentOutcome, ParentResult, ParentsSet, RELATIONS_SCHEMA_VERSION, ReadLink, RelationsItem,
-    TaskRelations,
+    LinkBatch, LinkItem, LinkOp, LinkOutcome, LinkResult, LinksWritten, OtherEnd, ParentBatch,
+    ParentEdge, ParentOutcome, ParentResult, ParentsSet, RELATIONS_SCHEMA_VERSION, ReadLink,
+    RelationsItem, TaskRelations,
 };
 pub use environment::Environment;
 pub use failure::{Failure, FailureClass, FailureDocument, classify};

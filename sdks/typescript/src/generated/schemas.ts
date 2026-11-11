@@ -21460,7 +21460,7 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
       },
       "other": {
         "description": "The other item's qualified id.",
-        "type": "string"
+        "$ref": "#/$defs/GlobalId"
       },
       "other_end": {
         "description": "Whether the other end holds this link too: `present` or `missing` when the other item\nis among the ids asked, and `unread` otherwise.",
@@ -21488,6 +21488,10 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "const": "in"
           }
         ]
+      },
+      "GlobalId": {
+        "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
+        "type": "string"
       },
       "OtherEnd": {
         "description": "Whether a link's other end holds it too.",
@@ -21870,7 +21874,7 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
           },
           "other": {
             "description": "The other item's qualified id.",
-            "type": "string"
+            "$ref": "#/$defs/GlobalId"
           },
           "other_end": {
             "description": "Whether the other end holds this link too: `present` or `missing` when the other item\nis among the ids asked, and `unread` otherwise.",
@@ -29755,7 +29759,7 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
           },
           "other": {
             "description": "The other item's qualified id.",
-            "type": "string"
+            "$ref": "#/$defs/GlobalId"
           },
           "other_end": {
             "description": "Whether the other end holds this link too: `present` or `missing` when the other item\nis among the ids asked, and `unread` otherwise.",

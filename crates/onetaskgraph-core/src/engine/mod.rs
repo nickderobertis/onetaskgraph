@@ -116,9 +116,9 @@ pub use metadata::MetadataSet;
 pub use narrow::{GuardOutcome, PriorityGuard, TaskContentSet, TaskPrioritySet};
 pub use plan_graph::{PlanCreated, PlanMember, PlannedMember, PlannedProject};
 pub use relations::{
-    LinkBatch, LinkItem, LinkOutcome, LinkResult, LinksWritten, OtherEnd, ParentBatch, ParentEdge,
-    ParentOutcome, ParentResult, ParentsSet, RELATIONS_SCHEMA_VERSION, ReadLink, RelationsItem,
-    TaskRelations,
+    LinkBatch, LinkItem, LinkOp, LinkOutcome, LinkResult, LinksWritten, OtherEnd, ParentBatch,
+    ParentEdge, ParentOutcome, ParentResult, ParentsSet, RELATIONS_SCHEMA_VERSION, ReadLink,
+    RelationsItem, TaskRelations,
 };
 pub use rendered::{
     Body, DocumentCreate, ProjectCreate, Regenerated, Regeneration, RenderRequest, RenderTemplate,

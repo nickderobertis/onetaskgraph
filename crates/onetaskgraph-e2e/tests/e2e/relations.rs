@@ -517,9 +517,19 @@ fn a_task_holding_no_relation_is_stored_and_read_exactly_as_before_relations_exi
     );
 }
 
-/// The `## Links` section of a task file — its heading and every line after it.
+/// The `## Links` section of a task file — its heading and every line after it, up to the
+/// stored answers block or the comments section when the file has one.
 fn section(file: &str) -> &str {
-    file.find("## Links\n").map_or("", |at| &file[at..])
+    let Some(start) = file.find("## Links\n") else {
+        return "";
+    };
+    let rest = &file[start..];
+    let end = ["<!-- onetaskgraph:", "## Comments"]
+        .iter()
+        .filter_map(|marker| rest.find(marker))
+        .min()
+        .unwrap_or(rest.len());
+    rest[..end].trim_end()
 }
 
 #[test]
@@ -619,4 +629,253 @@ fn a_copy_over_a_parented_linked_counterpart_keeps_its_parent_and_its_section() 
         [link("caused-by", "out", one, "unread")]
     );
     assert_eq!(store.shown(two)["content"], json!("The t2 body."));
+}
+
+#[test]
+fn the_text_renderings_name_each_item_and_what_became_of_it() {
+    let store = Store::new();
+    let text = |arguments: &[&str], input: &str, code: i32| {
+        let mut command = store.sandbox.command();
+        command.args(arguments);
+        command.write_stdin(input);
+        let output = command.assert().get_output().clone();
+        assert_eq!(output.status.code(), Some(code), "{}", stderr(&output));
+        stdout(&output)
+    };
+    let parents = text(
+        &["task", "parent", "set-many", "--input", "-"],
+        &json!({"schema_version": 1, "edges": [
+            {"child": "work:t2", "parent": "work:t1"},
+            {"child": "work:t3", "parent": "other:o1"},
+        ]})
+        .to_string(),
+        4,
+    );
+    let lines: Vec<&str> = parents.lines().collect();
+    assert!(
+        lines[0].starts_with("work:t2 → work:t1  written  version "),
+        "{parents}"
+    );
+    assert!(
+        lines[1].starts_with("work:t3 → other:o1  refused  "),
+        "{parents}"
+    );
+    let links = text(
+        &["task", "link", "add-many", "--input", "-"],
+        &json!({"schema_version": 1, "links": [
+            {"from": "work:t3", "to": "work:t1", "type": "caused-by"},
+        ]})
+        .to_string(),
+        0,
+    );
+    assert_eq!(links.trim_end(), "work:t3 -[caused-by]-> work:t1  written");
+    let relations = text(&["task", "relations", "work:t1", "work:t2"], "", 0);
+    assert_eq!(
+        relations,
+        "work:t1\n  parent: (none)\n  children: work:t2\n  caused-by ← work:t3  (other end \
+         unread)\nwork:t2\n  parent: work:t1\n  children: (none)\n"
+    );
+}
+
+#[test]
+fn every_malformed_input_is_refused_naming_it_and_the_rest_of_the_call_goes_on() {
+    let store = Store::new();
+    // A document of another schema version is refused whole, writing nothing.
+    let refused = store.exited(
+        &["task", "link", "add-many", "--input", "-"],
+        Some(&json!({"schema_version": 2, "links": []}).to_string()),
+        1,
+    );
+    assert_eq!(
+        refused["failure"]["kind"],
+        json!("invalid-batch"),
+        "{refused:#}"
+    );
+    let refused = store.exited(
+        &["task", "parent", "set-many", "--input", "-"],
+        Some(&json!({"schema_version": 2, "edges": []}).to_string()),
+        1,
+    );
+    assert_eq!(
+        refused["failure"]["kind"],
+        json!("invalid-batch"),
+        "{refused:#}"
+    );
+
+    // Each malformed edge and link is its own error, beside one that is written.
+    let edges = store.parents(
+        &json!([
+            {"child": "t1", "parent": "work:t2"},
+            {"child": "work:t1", "parent": "work"},
+            {"child": "work:nowhere", "parent": "work:t1"},
+            {"child": "work:t1", "parent": "work:nowhere"},
+            {"child": "elsewhere:t1", "parent": "elsewhere:t2"},
+            {"child": "work:t2", "parent": "work:t1"},
+        ]),
+        4,
+    );
+    assert_eq!(
+        outcomes(&edges),
+        ["error", "error", "error", "error", "error", "written"]
+    );
+    let reason = |answer: &Value, at: usize| {
+        answer["results"][at]["reason"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned()
+    };
+    assert!(reason(&edges, 0).contains("\"t1\""), "{edges:#}");
+    assert!(reason(&edges, 2).contains("work:nowhere"), "{edges:#}");
+    assert!(reason(&edges, 3).contains("work:nowhere"), "{edges:#}");
+    assert!(reason(&edges, 4).contains("elsewhere"), "{edges:#}");
+
+    let links = store.links(
+        "add-many",
+        &json!([
+            {"from": "work:t1", "to": "work:t1", "type": "x"},
+            {"from": "work:t1", "to": "work:t2", "type": "  "},
+            {"from": "work:t1", "to": "work:nowhere", "type": "x"},
+            {"from": "elsewhere:t1", "to": "work:t2", "type": "x"},
+            {"from": "t1", "to": "work:t2", "type": "x"},
+            {"from": "work:t3", "to": "work:t4", "type": "x"},
+        ]),
+        4,
+    );
+    assert_eq!(
+        outcomes(&links),
+        ["error", "error", "error", "error", "error", "written"]
+    );
+    assert!(reason(&links, 0).contains("itself"), "{links:#}");
+    assert!(reason(&links, 1).contains("names no type"), "{links:#}");
+    assert!(reason(&links, 2).contains("work:nowhere"), "{links:#}");
+    assert!(reason(&links, 3).contains("elsewhere"), "{links:#}");
+
+    // Links a person spoiled in a task's front matter are refused by name, never read as links.
+    std::fs::write(
+        store.work.join("tasks").join("t4.md"),
+        "---\ntitle: Another symptom\nstatus: todo\nmetadata:\n  \"onetaskgraph.links\": \
+         [{\"type\": \"x\", \"direction\": \"in\", \"other\": \"t3\"}]\n---\nThe t4 body.\n",
+    )
+    .expect("a spoiled file");
+    let spoiled = store.exited(&["task", "relations", "work:t4"], None, 1);
+    let message = spoiled["failure"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("work:t4") && message.contains("\"t3\""),
+        "{spoiled:#}"
+    );
+    let blocked = store.links(
+        "remove-many",
+        &json!([{"from": "work:t3", "to": "work:t4", "type": "x"}]),
+        4,
+    );
+    assert_eq!(outcomes(&blocked), ["error"]);
+    assert!(reason(&blocked, 0).contains("work:t4"), "{blocked:#}");
+}
+
+#[test]
+fn an_in_memory_parents_map_naming_no_task_or_closing_a_cycle_is_refused_at_load() {
+    let store = Store::new();
+    let status = json!({"category": "todo", "name": "todo"});
+    for (parents, named) in [
+        (json!({"m1": "ghost"}), "ghost"),
+        (json!({"m1": "m2", "m2": "m1"}), "cycle"),
+    ] {
+        let document = json!({"sources": {"memory": {"plugin": "in-memory", "config": {
+            "tasks": [
+                {"id": "m1", "title": "One", "labels": [], "status": status},
+                {"id": "m2", "title": "Two", "labels": [], "status": status},
+            ],
+            "parents": parents,
+        }}}});
+        store
+            .sandbox
+            .project_document(&serde_json::to_string_pretty(&document).expect("JSON"));
+        let output = store.run(&["task", "relations", "memory:m1"], None);
+        assert_ne!(output.status.code(), Some(0));
+        let said = format!("{}{}", stdout(&output), stderr(&output));
+        assert!(said.contains("parents") && said.contains(named), "{said}");
+    }
+}
+
+#[test]
+fn a_render_of_a_linked_task_keeps_its_links_section() {
+    let store = Store::new();
+    let template = store.sandbox.project().join("task-template.md");
+    std::fs::write(
+        &template,
+        "---\nonetaskgraph_template: 1\nvariables:\n  goal: {description: the goal}\n---\n\
+         Aim: {{ goal }}\n",
+    )
+    .expect("a template");
+    let template = template.to_str().expect("a path");
+    std::fs::create_dir_all(store.work.join("projects")).expect("the project folder");
+    std::fs::write(
+        store.work.join("projects").join("P-1.md"),
+        "---\ntitle: Plan\nstatus: todo\n---\n",
+    )
+    .expect("a project");
+    let created = store.exited(
+        &[
+            "task",
+            "create",
+            "work",
+            "--project",
+            "P-1",
+            "--title",
+            "Rendered",
+            "--template",
+            template,
+            "--var",
+            "goal=first",
+            "--no-interactive",
+        ],
+        None,
+        0,
+    );
+    let id = created["items"][0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the create answers its id: {created:#}"))
+        .to_owned();
+    store.links(
+        "add-many",
+        &json!([{"from": id, "to": "work:t1", "type": "caused-by"}]),
+        0,
+    );
+    let native = id.split_once(':').expect("qualified").1;
+    let rendered = section(&store.file(&store.work, native)).to_owned();
+    assert!(rendered.contains("[Root cause]("), "{rendered}");
+
+    store.exited(
+        &[
+            "task",
+            "render",
+            &id,
+            "--var",
+            "goal=second",
+            "--no-interactive",
+        ],
+        None,
+        0,
+    );
+    let file = store.file(&store.work, native);
+    assert!(file.contains("Aim: second"), "{file}");
+    assert_eq!(section(&file), rendered);
+    let shown = store.shown(&id);
+    assert_eq!(shown["content"], json!("Aim: second\n"));
+    // The rendering's digest is of the content a read answers, so the render is no hand edit.
+    let digest = shown["metadata"]["onetaskgraph.template"]["body_digest"].clone();
+    assert!(digest.is_string(), "{shown:#}");
+    let again = store.exited(
+        &[
+            "task",
+            "render",
+            &id,
+            "--var",
+            "goal=second",
+            "--no-interactive",
+        ],
+        None,
+        0,
+    );
+    assert_eq!(store.file(&store.work, native), file, "{again:#}");
 }

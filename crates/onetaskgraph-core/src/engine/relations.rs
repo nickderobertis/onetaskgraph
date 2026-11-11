@@ -135,6 +135,7 @@ pub struct LinkItem {
     // llmlint: ignore[invalid_states_unrepresentable] As `from`.
     pub to: String,
     /// The link's type name.
+    // llmlint: ignore[invalid_states_unrepresentable] As `from`: read as text so an empty name is that link's own `error`; `checked_link` turns it into a `LinkTypeName` before anything is read.
     #[serde(rename = "type")]
     pub link_type: String,
 }
@@ -228,12 +229,13 @@ pub struct RelationsItem {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ReadLink {
     /// The link's type name.
+    // llmlint: ignore[invalid_states_unrepresentable] The type name as the endpoint stores it under the contract's `TaskLink`, whose `type` is the caller's own word; a stored name this engine never wrote is reported as stored rather than refused, because a read writes nothing and answers what each end holds.
     #[serde(rename = "type")]
     pub link_type: String,
     /// Which end of the link this item is.
     pub direction: LinkDirection,
     /// The other item's qualified id.
-    pub other: String,
+    pub other: GlobalId,
     /// Whether the other end holds this link too: `present` or `missing` when the other item
     /// is among the ids asked, and `unread` otherwise.
     pub other_end: OtherEnd,
@@ -306,11 +308,31 @@ struct Endpoint {
     after: Vec<TaskLink>,
 }
 
+/// Whether a link call adds its links or removes them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkOp {
+    /// `task link add-many`.
+    Add,
+    /// `task link remove-many`.
+    Remove,
+}
+
+/// A link type name a call has checked: never empty, and without surrounding whitespace.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LinkTypeName(String);
+
+impl LinkTypeName {
+    fn new(name: &str) -> Option<Self> {
+        let name = name.trim();
+        (!name.is_empty()).then(|| Self(name.to_owned()))
+    }
+}
+
 /// One link of a call, checked.
 struct Planned {
     from: GlobalId,
     to: GlobalId,
-    link_type: String,
+    link_type: LinkTypeName,
 }
 
 /// What a link call decided before anything is written.
@@ -359,23 +381,16 @@ impl Engine {
         let mut incomplete = Vec::new();
         for id in ids {
             let relations = &read[id];
-            let held = TaskLink::held(&relations.task.metadata).map_err(|why| {
+            let held = stored_links(id, &relations.task.metadata).map_err(|why| {
                 EngineError::SourceFailed {
                     name: id.source.to_string(),
-                    error: SourceError::Malformed {
-                        message: format!("{id}: {why}"),
-                    },
+                    error: SourceError::Malformed { message: why },
                 }
             })?;
             let links = held
                 .into_iter()
-                .map(|link| {
-                    let other_end = match link
-                        .other
-                        .parse::<GlobalId>()
-                        .ok()
-                        .and_then(|other| read.get(&other))
-                    {
+                .map(|(link, other)| {
+                    let other_end = match read.get(&other) {
                         None => OtherEnd::Unread,
                         Some(other) => {
                             let mirror = TaskLink {
@@ -396,7 +411,7 @@ impl Engine {
                     ReadLink {
                         link_type: link.link_type,
                         direction: link.direction,
-                        other: link.other,
+                        other,
                         other_end,
                     }
                 })
@@ -524,7 +539,7 @@ impl Engine {
     /// [`EngineError::BatchDocument`] for a batch of another schema version.
     pub async fn add_links(&self, batch: &LinkBatch) -> Result<LinksWritten, EngineError> {
         check_version("the link batch", batch.schema_version)?;
-        self.write_links(batch, true).await
+        self.write_links(batch, LinkOp::Add).await
     }
 
     /// Remove every link `batch` names, each answered on its own in the order given.
@@ -534,7 +549,7 @@ impl Engine {
     /// [`EngineError::BatchDocument`] for a batch of another schema version.
     pub async fn remove_links(&self, batch: &LinkBatch) -> Result<LinksWritten, EngineError> {
         check_version("the link batch", batch.schema_version)?;
-        self.write_links(batch, false).await
+        self.write_links(batch, LinkOp::Remove).await
     }
 
     /// The relations of every id in `ids`, read in one call per source; an id a source cannot
@@ -576,7 +591,7 @@ impl Engine {
     async fn write_links(
         &self,
         batch: &LinkBatch,
-        adding: bool,
+        op: LinkOp,
     ) -> Result<LinksWritten, EngineError> {
         let mut results: Vec<Option<LinkResult>> = batch.links.iter().map(|_| None).collect();
         let mut planned: Vec<(usize, Planned)> = Vec::new();
@@ -605,8 +620,11 @@ impl Engine {
         let mut unusable: BTreeMap<GlobalId, String> = BTreeMap::new();
         for (id, answer) in std::mem::take(&mut read) {
             match answer.and_then(|relations| {
-                let held = TaskLink::held(&relations.task.metadata)
-                    .map_err(|why| format!("{id} cannot be linked: {why}"))?;
+                let held = stored_links(&id, &relations.task.metadata)
+                    .map_err(|why| format!("{id} cannot be linked: {why}"))?
+                    .into_iter()
+                    .map(|(link, _)| link)
+                    .collect::<Vec<_>>();
                 Ok((relations, held))
             }) {
                 Ok((relations, held)) => {
@@ -644,8 +662,8 @@ impl Engine {
         }
         // Mirror first: a native relation the destination refuses leaves that link unwritten
         // in metadata too, so repeating the call tries it again.
-        let mut decisions = plan(&mut endpoints, &usable, adding);
-        let native_failed = self.mirror(&endpoints, &usable, &decisions, adding).await;
+        let mut decisions = plan(&mut endpoints, &usable, op);
+        let native_failed = self.mirror(&endpoints, &usable, &decisions, op).await;
         if !native_failed.is_empty() {
             for endpoint in endpoints.values_mut() {
                 endpoint.after = endpoint.before.clone();
@@ -654,7 +672,7 @@ impl Engine {
                 .into_iter()
                 .filter(|(at, _)| !native_failed.contains_key(at))
                 .collect();
-            decisions = plan(&mut endpoints, &kept, adding);
+            decisions = plan(&mut endpoints, &kept, op);
             for (at, why) in &native_failed {
                 results[*at] = Some(link_result(
                     &batch.links[*at],
@@ -740,7 +758,7 @@ impl Engine {
         endpoints: &BTreeMap<GlobalId, Endpoint>,
         usable: &[(usize, Planned)],
         decisions: &BTreeMap<usize, Decision>,
-        adding: bool,
+        op: LinkOp,
     ) -> BTreeMap<usize, String> {
         // By source: each unordered pair once, with the word it is mirrored as and the links
         // of this call that need it.
@@ -756,11 +774,11 @@ impl Engine {
                 continue;
             };
             let types = source.source().link_types();
-            let Some(word) = types.native(&link.link_type) else {
+            let Some(word) = types.native(&link.link_type.0) else {
                 continue;
             };
             let pair = ordered(&link.from, &link.to);
-            if !adding {
+            if op == LinkOp::Remove {
                 // Removed only with the last mirrored link between the pair.
                 let remains = [&link.from, &link.to].into_iter().any(|end| {
                     endpoints.get(end).is_some_and(|endpoint| {
@@ -807,7 +825,7 @@ impl Engine {
                     }
                 })
                 .collect();
-            let answers = if adding {
+            let answers = if op == LinkOp::Add {
                 source.source().add_native_links(&sent).await
             } else {
                 source.source().remove_native_links(&sent).await
@@ -945,17 +963,17 @@ impl Engine {
 fn plan(
     endpoints: &mut BTreeMap<GlobalId, Endpoint>,
     links: &[(usize, Planned)],
-    adding: bool,
+    op: LinkOp,
 ) -> BTreeMap<usize, Decision> {
     let mut decisions = BTreeMap::new();
     for (at, link) in links {
         let out = TaskLink {
-            link_type: link.link_type.clone(),
+            link_type: link.link_type.0.clone(),
             direction: LinkDirection::Out,
             other: link.to.to_string(),
         };
         let inward = TaskLink {
-            link_type: link.link_type.clone(),
+            link_type: link.link_type.0.clone(),
             direction: LinkDirection::In,
             other: link.from.to_string(),
         };
@@ -965,10 +983,10 @@ fn plan(
                 continue;
             };
             let holds = endpoint.after.contains(entry);
-            if adding && !holds {
+            if op == LinkOp::Add && !holds {
                 endpoint.after.push(entry.clone());
                 needed.push(id.clone());
-            } else if !adding && holds {
+            } else if op == LinkOp::Remove && holds {
                 endpoint.after.retain(|held| held != entry);
                 needed.push(id.clone());
             } else if endpoint.before.contains(entry) != holds {
@@ -978,7 +996,7 @@ fn plan(
         }
         let decision = if needed.is_empty() {
             Decision::Answered(
-                if adding {
+                if op == LinkOp::Add {
                     LinkOutcome::Exists
                 } else {
                     LinkOutcome::Absent
@@ -1019,6 +1037,26 @@ fn bullet(link: &TaskLink, other: Option<&Relations>) -> String {
         ),
         None => format!("**{}** {arrow} {title} `{}`", link.link_type, link.other),
     }
+}
+
+/// The links `metadata` holds, each beside its other end as a qualified id — or why they cannot
+/// be read: a value that is not a list of links, or a link whose other end is no qualified id,
+/// refused naming `id` rather than read as a link to nothing.
+fn stored_links(
+    id: &GlobalId,
+    metadata: &BTreeMap<String, serde_json::Value>,
+) -> Result<Vec<(TaskLink, GlobalId)>, String> {
+    TaskLink::held(metadata)
+        .map_err(|why| format!("{id}: {why}"))?
+        .into_iter()
+        .map(|link| match link.other.parse::<GlobalId>() {
+            Ok(other) => Ok((link, other)),
+            Err(error) => Err(format!(
+                "{id} holds a `{}` link whose other end {:?} is not a qualified id: {error}",
+                link.link_type, link.other
+            )),
+        })
+        .collect()
 }
 
 /// The direction the other end of a link holds it in.
@@ -1112,17 +1150,16 @@ fn checked_edge(edge: &ParentEdge) -> Result<(SourceName, ParentWrite), (ParentO
 fn checked_link(item: &LinkItem) -> Result<Planned, String> {
     let from = qualified(&item.from, "the link's from")?;
     let to = qualified(&item.to, "the link's to")?;
-    let link_type = item.link_type.trim();
-    if link_type.is_empty() {
+    let Some(link_type) = LinkTypeName::new(&item.link_type) else {
         return Err(format!("the link from {from} to {to} names no type"));
-    }
+    };
     if from == to {
         return Err(format!("{from} cannot be linked to itself"));
     }
     Ok(Planned {
         from,
         to,
-        link_type: link_type.to_owned(),
+        link_type,
     })
 }
 
