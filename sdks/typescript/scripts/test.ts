@@ -1,5 +1,5 @@
 import { type ChildProcessByStdio, spawn } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import type { Readable } from "node:stream";
@@ -19,11 +19,12 @@ function report(status: number | null, signal: NodeJS.Signals | null, error?: Er
   );
 }
 
-async function run(args: string[], cwd = packageRoot) {
+async function run(args: string[], cwd = packageRoot, env: NodeJS.ProcessEnv = process.env) {
   let child: ChildProcessByStdio<null, Readable, Readable>;
   try {
     child = spawn("bun", ["test", `--timeout=${HANG_TIMEOUT_MS}`, ...args], {
       cwd,
+      env,
       stdio: ["ignore", "pipe", "pipe"],
     });
   } catch (error) {
@@ -65,14 +66,67 @@ async function requireResult(
   expectedStatus: number,
   args: string[],
   cwd = packageRoot,
+  env: NodeJS.ProcessEnv = process.env,
 ) {
-  const result = await run(args, cwd);
-  if (result.status !== expectedStatus) {
+  const result = await run(args, cwd, env);
+  if (result.status !== expectedStatus || result.signal !== null) {
     throw new Error(
-      `${label}: expected exit ${expectedStatus}, got ${result.status}\n${result.stdout}\n${result.stderr}`,
+      `${label}: expected exit ${expectedStatus}, got ${result.status} (signal ${result.signal}); read the runner's output below for the failing test, then re-run \`bun scripts/test.ts ${args.join(" ")}\` from sdks/typescript\n${result.stdout}\n${result.stderr}`,
     );
   }
   return `${result.stdout}\n${result.stderr}`;
+}
+
+// One test case of a fixture as the runner itself reported it in its JUnit report, rather than
+// as its human summary reads: its name and the type of the failure it recorded, if any.
+type ReportedCase = { name: string; failure: string | null };
+
+function reportedCases(report: string): ReportedCase[] {
+  const xml = readFileSync(report, "utf8");
+  return [...xml.matchAll(/<testcase\b([^>]*?)(?:\/>|>([\s\S]*?)<\/testcase>)/g)].map(
+    ([, attributes, body]) => ({
+      name: unescapeXml(/\bname="([^"]*)"/.exec(attributes)?.[1] ?? ""),
+      failure: body?.match(/<failure\b[^>]*?\btype="([^"]*)"/)?.[1] ?? null,
+    }),
+  );
+}
+
+function unescapeXml(text: string) {
+  return text
+    .replaceAll("&quot;", '"')
+    .replaceAll("&apos;", "'")
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&amp;", "&");
+}
+
+// A fixture's run: under the shared timeout, reporting to a JUnit file the assertions read, and
+// with GITHUB_ACTIONS cleared, so the stuck fixture's expected timeout is not written into the
+// CI run as an error annotation — it read as this suite failing while the suite passed.
+async function runFixture(
+  label: string,
+  expectedStatus: number,
+  fixture: string,
+  fixtures: string,
+) {
+  const report = resolve(fixtures, `${label.replaceAll(" ", "-")}.junit.xml`);
+  const output = await requireResult(
+    label,
+    expectedStatus,
+    ["--reporter=junit", `--reporter-outfile=${report}`, fixture],
+    fixtures,
+    {
+      ...process.env,
+      GITHUB_ACTIONS: "",
+      STARTED_AT: resolve(fixtures, `${label.replaceAll(" ", "-")}.started`),
+    },
+  );
+  if (!existsSync(report)) {
+    throw new Error(
+      `${label}: the runner wrote no JUnit report at ${report}; check that this bun (\`bun --version\`) still accepts --reporter=junit --reporter-outfile, and read its output below\n${output}`,
+    );
+  }
+  return { cases: reportedCases(report), output };
 }
 
 const args = process.argv.slice(2);
@@ -109,23 +163,39 @@ test("a delayed subprocess succeeds", async () => {
 });
 `,
     );
-    const passed = await requireResult("delayed subprocess", 0, [delayed], fixtures);
-    if (!/1 pass/.test(passed) || !/0 fail/.test(passed)) {
-      throw new Error(`delayed subprocess did not pass\n${passed}`);
+    const passed = await runFixture("delayed subprocess", 0, delayed, fixtures);
+    const expectedPass = [{ name: "a delayed subprocess succeeds", failure: null }];
+    if (JSON.stringify(passed.cases) !== JSON.stringify(expectedPass)) {
+      throw new Error(
+        `delayed subprocess did not pass: the runner reported ${JSON.stringify(passed.cases)}; on a TimeoutError check that \`--timeout=${HANG_TIMEOUT_MS}\` still reaches \`bun test\` in run(), otherwise fix the failure the output below names, then re-run \`bun scripts/test.ts\` from sdks/typescript\n${passed.output}`,
+      );
     }
 
+    // The stuck test records that its body began, then never settles; what ends it has to be the
+    // runner's own timeout, reported as that test's TimeoutError, with the runner exiting by
+    // itself (status 1, no signal) rather than being killed.
     const stuck = resolve(fixtures, "stuck.test.ts");
     writeFileSync(
       stuck,
       `import { test } from "bun:test";
+import { writeFileSync } from "node:fs";
 test("a stuck test is terminated", async () => {
+  writeFileSync(process.env.STARTED_AT ?? "", "started");
   await new Promise(() => { setInterval(() => {}, 1000); });
 });
 `,
     );
-    const refused = await requireResult("stuck test", 1, [stuck], fixtures);
-    if (!refused.includes(`timed out after ${HANG_TIMEOUT_MS}ms`) || !/1 fail/.test(refused)) {
-      throw new Error(`stuck test was not terminated by the shared timeout\n${refused}`);
+    const refused = await runFixture("stuck test", 1, stuck, fixtures);
+    if (!existsSync(resolve(fixtures, "stuck-test.started"))) {
+      throw new Error(
+        `the stuck test's body never began, so nothing was stuck; read the runner's output below for why the fixture did not load or run\n${refused.output}`,
+      );
+    }
+    const expectedTimeout = [{ name: "a stuck test is terminated", failure: "TimeoutError" }];
+    if (JSON.stringify(refused.cases) !== JSON.stringify(expectedTimeout)) {
+      throw new Error(
+        `stuck test was not terminated by the shared timeout: the runner reported ${JSON.stringify(refused.cases)} where it owes one TimeoutError; check that \`--timeout=${HANG_TIMEOUT_MS}\` still reaches \`bun test\` in run(), and read the output below\n${refused.output}`,
+      );
     }
     process.stdout.write(
       "Shared timeout: delayed subprocess passed; stuck test timed out; both copy journeys passed.\n",

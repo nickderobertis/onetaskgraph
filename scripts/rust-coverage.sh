@@ -160,7 +160,9 @@ print("\n".join(package["name"] for package in packages))
   exit 1
 fi
 
-if ! printf '%s\n' "$members" | grep -qxF -- "$CRATE"; then
+# A here-string, not a pipe: `grep -q` exits at the match, and a printf still writing
+# behind it takes SIGPIPE, which pipefail reports as this crate being no member.
+if ! grep -qxF -- "$CRATE" <<<"$members"; then
   echo "rust-coverage: $CRATE is not a member of this Cargo workspace. Members:" >&2
   printf '  %s\n' $members >&2
   echo "rust-coverage: re-run with one of those names, or with --report." >&2

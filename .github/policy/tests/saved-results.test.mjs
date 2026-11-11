@@ -81,21 +81,30 @@ test("test-linux uploads what its targets saved however the job ended, on every 
   assert.equal(evaluate(upload.if, context("pull_request", "feature")), true);
 });
 
-test("lint uploads its one step's results on a release pull request and on no other", () => {
-  const { steps } = ci().jobs.lint;
-  const [upload, ...more] = uploads({ steps });
-  assert.deepEqual(more, []);
-  assert.equal(upload.with.name, "budget-check-results-lint");
-  assert.equal(upload.with.path, "target/budget-results/");
+test("test-linux measures the pool maintenance on a release pull request alone, before its one upload", () => {
+  const { steps } = ci().jobs["test-linux"];
+  const [upload] = uploads({ steps });
   const measuring = steps.find((step) => step.run === "just pool-maintenance-budget");
   assert.equal(evaluate(measuring.if, context("pull_request", "release-plz-2026-11-07")), true);
   assert.equal(evaluate(measuring.if, context("pull_request", "feature")), false);
-  assert.equal(evaluate(upload.if, context("pull_request", "release-plz-2026-11-07")), true);
-  assert.equal(evaluate(upload.if, context("pull_request", "feature")), false);
   assert.ok(steps.indexOf(upload) > steps.indexOf(measuring), "the upload follows what it uploads");
+  const testing = steps.findIndex((step) => step.run === "just ci-test-linux");
+  assert.ok(
+    steps.indexOf(measuring) > testing,
+    "it prunes a target directory the tests are done with",
+  );
   assert.match(
     readFileSync(new URL("justfile", root), "utf8"),
     /onebudgetspec check pool-maintenance\/budgets\.yaml --label host --save-results target\/budget-results\/pool-maintenance-budget-results\.json/,
+  );
+});
+
+test("lint measures no pool maintenance and uploads no saved results", () => {
+  const { steps } = ci().jobs.lint;
+  assert.deepEqual(uploads({ steps }), []);
+  assert.equal(
+    steps.some((step) => String(step.run ?? "").includes("pool-maintenance")),
+    false,
   );
 });
 

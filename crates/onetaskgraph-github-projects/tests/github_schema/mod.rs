@@ -64,7 +64,7 @@ pub const SCHEMA: &str = include_str!("../fixtures/github-schema.docs.graphql");
 const NESTING_LIMIT: usize = 200;
 
 /// The protocol `validate.mjs` speaks, sent in each connection's hello; it is `PROTOCOL` there.
-const PROTOCOL: u64 = 1;
+const PROTOCOL: u64 = 2;
 
 /// How many times a request is put to a server before the check gives up: a server stops when it
 /// is stale or idle, so a request in flight then is sent again to the one started after it.
@@ -113,6 +113,29 @@ fn shared_rendezvous() -> PathBuf {
 struct Connection {
     reader: BufReader<TcpStream>,
     writer: TcpStream,
+    /// Whether the server answered its hello ready, so that a `bye` is read as one rather than
+    /// as a hello in a protocol it does not speak.
+    greeted: bool,
+}
+
+impl Drop for Connection {
+    fn drop(&mut self) {
+        if self.greeted {
+            leave(&self.writer);
+        }
+    }
+}
+
+/// Leaves a greeted connection to the server the way every client here does: `{"bye": true}`,
+/// then both directions shut down. The server counts the connection gone on the `bye` alone, so
+/// its idle stop does not wait on the connection's close reaching it — which on Windows it did
+/// not always do, leaving a server serving with no client left. The shutdown ends the
+/// connection for every handle to it, a duplicate another process holds included, where closing
+/// one handle ends nothing while another is open. Best effort: a server already gone has
+/// nothing to be told.
+pub fn leave(stream: &TcpStream) {
+    let _ = (&*stream).write_all(b"{\"bye\":true}\n");
+    let _ = stream.shutdown(std::net::Shutdown::Both);
 }
 
 impl Connection {
@@ -126,10 +149,14 @@ impl Connection {
         let mut connection = Self {
             reader: BufReader::new(writer.try_clone()?),
             writer,
+            greeted: false,
         };
         let ready = connection.exchange(&json!({ "hello": PROTOCOL }).to_string())?;
         match ready["schema_sha256"].as_str() {
-            Some(digest) if ready["ready"] == json!(true) => Ok((connection, digest.to_owned())),
+            Some(digest) if ready["ready"] == json!(true) => {
+                connection.greeted = true;
+                Ok((connection, digest.to_owned()))
+            }
             _ => Err(io::Error::other(format!("the server answered {ready}"))),
         }
     }

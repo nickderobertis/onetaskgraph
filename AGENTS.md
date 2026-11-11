@@ -1754,8 +1754,8 @@ however they ended, on every pull request and push to main; `.github/reporting` 
 and `report-job:test`, the journeys that drive it. **A pull request's rows are saved results.** Each
 `budgets` target `test-linux` runs passes `--save-results target/budget-results/<project>-budget-results.json`
 (the name is what `.github/nx-policy` holds a cached output to) and declares it in its Nx `outputs`
-where it is cached; `test-linux` uploads the directory as `budget-check-results-test-linux` and the
-`lint` job's release-only `just pool-maintenance-budget` as `budget-check-results-lint`. The other
+where it is cached; `test-linux` uploads the directory as `budget-check-results-test-linux`, with
+the release-only `just pool-maintenance-budget` it runs after its tests among them. The other
 platforms run the same targets and upload nothing, so each figure stays a Linux figure.
 `onetaskgraph-ci-check-time` and `onetaskgraph-ci-job-count` read the pull request's own run through
 the figures script. **A push to main runs no test job:** each row takes the merged pull request's
@@ -1871,6 +1871,10 @@ reads unavailable until the re-copy of create-repo's fix, which falls back to th
   Shared script copies stay byte-identical to their upstream pins.
   `biome.json` excludes exactly the two upstream-owned JavaScript copies; the comment and
   exact-path digest map in `.github/cache-policy/tests/cache.test.mjs` hold their byte identity.
+  It also excludes the captured Linear fixtures in `crates/onetaskgraph-e2e-support/fixtures/expandable_blocks/`,
+  which their README holds byte for byte. `workspace:format-check` keys on every file type biome
+  reads under the paths it formats: with only `project.json` files in its key it replayed a pass
+  over those fixtures until a cache miss turned main's lint red.
   `.github/nx-policy` owns the cached platform/output checks and the uncached real-Nx hash
   matrix over the workspace input contracts and a fixed git baseline. Semantic manifest inputs
   use `nx-version-free-inputs.mjs`; format checks and linters that read their text retain raw

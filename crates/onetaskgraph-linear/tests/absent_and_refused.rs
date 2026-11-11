@@ -8,6 +8,11 @@
 //! absent on every read path — plain, cached and for a write — and a create Linear refuses
 //! fails with that create's own refusal, never with what the look for an earlier attempt's
 //! item answered.
+//!
+//! The same loopback answers a page resumed from a cursor with Linear's `cursor not found`, as
+//! the live capability journey met it: a walk in pages of one reads each such page again, on
+//! the source's clock, and reaches every row exactly once and in order; a cursor Linear never
+//! recognises is refused naming it, after the bounded rereads.
 
 use onetaskgraph_plugin_api::{
     Document, ItemWrite, MetadataKey, MetadataRecord, NativeId, PageRequest, Project,
@@ -15,6 +20,7 @@ use onetaskgraph_plugin_api::{
 };
 use serde_json::{Value, json};
 use std::{
+    collections::HashMap,
     io::{Read, Write},
     net::{TcpListener, TcpStream},
     sync::{Arc, Mutex},
@@ -1046,5 +1052,356 @@ async fn an_update_of_a_status_and_a_title_reads_an_absent_issue_as_absent() {
             vec![graphql::ISSUE_RESOLVED.to_owned()],
             "HTTP {status}"
         );
+    }
+}
+
+/// Linear's refusal of a page asked for after (or before) `cursor`, as the live capability
+/// journey met it, in `spelling`.
+fn cursor_not_found(cursor: &str, spelling: Spelling) -> Value {
+    let message = match spelling {
+        Spelling::PresentableOnly => "Lookup failed for the requested page".to_owned(),
+        _ => graphql::CURSOR_NOT_FOUND_MESSAGE.to_owned(),
+    };
+    let mut error = json!({"message": message});
+    if !matches!(spelling, Spelling::MessageOnly) {
+        error["extensions"] = json!({"code":"INPUT_ERROR","statusCode":400,
+            "type":"invalid input","userError":true,
+            "userPresentableMessage":
+                format!("{} '{cursor}'.", graphql::CURSOR_NOT_FOUND_PRESENTABLE)});
+    }
+    json!({"data":null,"errors":[error]})
+}
+
+/// A clock whose every wait completes at once, keeping each one and its cause.
+#[derive(Default)]
+struct Waits(Mutex<Vec<(std::time::Duration, String)>>);
+
+impl Waits {
+    fn taken(&self) -> Vec<(std::time::Duration, String)> {
+        self.0.lock().unwrap().clone()
+    }
+}
+
+impl onetaskgraph_plugin_api::Clock for Waits {
+    fn now(&self) -> std::time::Duration {
+        self.0.lock().unwrap().iter().map(|(wait, _)| *wait).sum()
+    }
+    fn sleep(
+        &self,
+        duration: std::time::Duration,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>> {
+        self.0.lock().unwrap().push((duration, String::new()));
+        Box::pin(std::future::ready(()))
+    }
+    fn sleep_because(
+        &self,
+        duration: std::time::Duration,
+        cause: onetaskgraph_plugin_api::WaitCause,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>> {
+        self.0
+            .lock()
+            .unwrap()
+            .push((duration, format!("{cause:?}")));
+        Box::pin(std::future::ready(()))
+    }
+}
+
+/// The waits a page refused `times` times for its cursor takes before it is answered: each on
+/// the source's clock, under its cause, doubling from half a second.
+fn rereads(times: u32) -> Vec<(std::time::Duration, String)> {
+    (0..times)
+        .map(|n| {
+            (
+                std::time::Duration::from_millis(500) * 2_u32.pow(n),
+                "WaitCause(\"linear-cursor-lag\")".to_owned(),
+            )
+        })
+        .collect()
+}
+
+/// What the loopback answers the `nth` request (from 0) for a page named by `cursor` (`None` for
+/// a first page) before it answers the page itself, if anything.
+type Interference = dyn Fn(Option<&str>, usize) -> Option<Answer> + Send + Sync;
+
+/// A page request as the loopback counts it: its document and the cursor it names, if any.
+type PageAsked = (String, Option<String>);
+
+/// A loopback holding three issues, each with three comments, listing one issue per page after
+/// a cursor and one comment per page before one, as Linear does — each cursor the id of the row
+/// the page before ended on — and asking `interfere` first about every page request.
+fn workspace(interfere: Box<Interference>) -> (String, Arc<Mutex<Vec<String>>>) {
+    let asked: Arc<Mutex<HashMap<PageAsked, usize>>> = Arc::default();
+    loopback(move |query, variables| {
+        if query == graphql::RESOLUTION {
+            return (200, resolution());
+        }
+        let issues = query == graphql::ISSUES;
+        if !issues && query != graphql::ISSUE_COMMENTS {
+            return (400, json!({"errors":[{"message":"unexpected request"}]}));
+        }
+        let cursor = variables[if issues { "after" } else { "before" }].as_str();
+        let nth = {
+            let mut asked = asked.lock().unwrap();
+            let count = asked
+                .entry((query.to_owned(), cursor.map(str::to_owned)))
+                .or_default();
+            *count += 1;
+            *count - 1
+        };
+        if let Some(answer) = interfere(cursor, nth) {
+            return answer;
+        }
+        if issues {
+            let ids = ["I-1", "I-2", "I-3"];
+            let from = cursor.map_or(0, |cursor| {
+                ids.iter()
+                    .position(|id| *id == cursor)
+                    .expect("an issued cursor")
+                    + 1
+            });
+            let nodes: Vec<Value> = ids[from..]
+                .iter()
+                .take(variables["first"].as_u64().unwrap_or(50) as usize)
+                .map(|id| {
+                    json!({"id":id,"identifier":format!("ENG-{id}"),"title":format!("Issue {id}"),
+                        "description":null,"url":null,"createdAt":null,"updatedAt":null,
+                        "project":null,"state":{"name":"Todo","type":"unstarted"},"priority":0,
+                        "labels":{"nodes":[]}})
+                })
+                .collect();
+            let more = from + nodes.len() < ids.len();
+            let last = nodes.last().map(|node| node["id"].clone());
+            return (
+                200,
+                json!({"data":{"issues":{"nodes":nodes,
+                    "pageInfo":{"hasNextPage":more,"endCursor":last}}}}),
+            );
+        }
+        // Oldest first as Linear holds them; a page is the `last` rows before the cursor.
+        let ids = ["C-1", "C-2", "C-3"];
+        let to = cursor.map_or(ids.len(), |cursor| {
+            ids.iter()
+                .position(|id| *id == cursor)
+                .expect("an issued cursor")
+        });
+        let last = variables["last"].as_u64().unwrap_or(50) as usize;
+        let from = to.saturating_sub(last);
+        let nodes: Vec<Value> = ids[from..to]
+            .iter()
+            .enumerate()
+            .map(|(at, id)| {
+                let time = format!("2026-11-11T00:00:0{}Z", from + at);
+                json!({"id":id,"body":format!("comment {id}"),"url":null,"createdAt":time,
+                    "updatedAt":time,"user":{"displayName":"Ada"}})
+            })
+            .collect();
+        let first = nodes.first().map(|node| node["id"].clone());
+        (
+            200,
+            json!({"data":{"issue":{"archivedAt":null,"comments":{"nodes":nodes,
+                "pageInfo":{"hasPreviousPage":from > 0,"startCursor":first}}}}}),
+        )
+    })
+}
+
+fn source_on(endpoint: &str, clock: Arc<Waits>) -> Box<dyn TaskSource> {
+    onetaskgraph_linear::Plugin
+        .build_with_clock(
+            &SourceName::new("work").unwrap(),
+            &json!({"endpoint":endpoint,"team":"ENG",
+                "status_mapping":{"todo":"Todo","in-progress":"In Progress","done":"Done"}}),
+            &Secrets,
+            clock,
+        )
+        .unwrap()
+}
+
+/// Every issue's id, walking the source's task listing in pages of one from its first page.
+async fn walk_issues(source: &dyn TaskSource) -> Result<Vec<String>, SourceError> {
+    let (mut walked, mut cursor) = (Vec::new(), None);
+    loop {
+        let page = source
+            .query_tasks(
+                &onetaskgraph_plugin_api::TaskQuery::default(),
+                &PageRequest { cursor, limit: 1 },
+            )
+            .await?;
+        assert!(page.items.len() <= 1, "a page of one");
+        walked.extend(page.items.into_iter().map(|task| task.id.0));
+        match page.next {
+            Some(next) => cursor = Some(next),
+            None => return Ok(walked),
+        }
+    }
+}
+
+/// Every comment's id of issue I-1, walking its comments in pages of one from the newest page.
+async fn walk_comments(source: &dyn TaskSource) -> Result<Vec<String>, SourceError> {
+    let (mut walked, mut cursor) = (Vec::new(), None);
+    loop {
+        let page = source
+            .task_comments(&NativeId::from("I-1"), &PageRequest { cursor, limit: 1 })
+            .await?
+            .expect("the issue is held");
+        assert!(page.items.len() <= 1, "a page of one");
+        walked.extend(page.items.into_iter().map(|comment| comment.id.0));
+        match page.next {
+            Some(next) => cursor = Some(next),
+            None => return Ok(walked),
+        }
+    }
+}
+
+fn sent_of(sent: &Mutex<Vec<String>>, document: &str) -> usize {
+    sent.lock()
+        .unwrap()
+        .iter()
+        .filter(|query| *query == document)
+        .count()
+}
+
+/// A resumed page refused twice for its cursor, in any of its spellings and under either
+/// status, and then answered.
+fn lags_twice(status: u16, spelling: Spelling) -> Box<Interference> {
+    Box::new(move |cursor, nth| {
+        cursor
+            .filter(|_| nth < 2)
+            .map(|cursor| (status, cursor_not_found(cursor, spelling)))
+    })
+}
+
+#[tokio::test]
+async fn a_walk_whose_cursor_linear_cannot_place_yet_reads_that_page_again_and_reaches_every_row_once()
+ {
+    for status in STATUSES {
+        for spelling in [
+            Spelling::Both,
+            Spelling::MessageOnly,
+            Spelling::PresentableOnly,
+        ] {
+            let at = format!("HTTP {status}, spelled {spelling:?}");
+            let (endpoint, sent) = workspace(lags_twice(status, spelling));
+            let clock = Arc::new(Waits::default());
+            let source = source_on(&endpoint, Arc::clone(&clock));
+            let walked = walk_issues(source.as_ref())
+                .await
+                .unwrap_or_else(|error| panic!("{at}: the walk failed: {error}"));
+            assert_eq!(walked, ["I-1", "I-2", "I-3"], "{at}");
+            // The first page, and two resumed pages each refused twice and then answered.
+            assert_eq!(sent_of(&sent, graphql::ISSUES), 1 + 2 * 3, "{at}");
+            assert_eq!(clock.taken(), [rereads(2), rereads(2)].concat(), "{at}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_comment_walk_before_a_cursor_linear_cannot_place_yet_reads_that_page_again() {
+    for status in STATUSES {
+        let (endpoint, _) = workspace(Box::new(|_, _| None));
+        let unhindered = walk_comments(source_on(&endpoint, Arc::default()).as_ref())
+            .await
+            .expect("the walk with no refusal");
+        assert_eq!(unhindered.len(), 3, "every comment, once");
+
+        let (endpoint, sent) = workspace(lags_twice(status, Spelling::Both));
+        let clock = Arc::new(Waits::default());
+        let walked = walk_comments(source_on(&endpoint, Arc::clone(&clock)).as_ref())
+            .await
+            .unwrap_or_else(|error| panic!("HTTP {status}: the walk failed: {error}"));
+        assert_eq!(walked, unhindered, "HTTP {status}");
+        assert_eq!(
+            sent_of(&sent, graphql::ISSUE_COMMENTS),
+            1 + 2 * 3,
+            "HTTP {status}"
+        );
+        assert_eq!(
+            clock.taken(),
+            [rereads(2), rereads(2)].concat(),
+            "HTTP {status}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_cursor_linear_never_places_is_refused_naming_it_after_the_bounded_rereads() {
+    for status in STATUSES {
+        let (endpoint, sent) = workspace(Box::new(move |cursor, _| {
+            cursor.map(|cursor| (status, cursor_not_found(cursor, Spelling::Both)))
+        }));
+        let clock = Arc::new(Waits::default());
+        let refused = walk_issues(source_on(&endpoint, Arc::clone(&clock)).as_ref())
+            .await
+            .expect_err("a cursor Linear never places is refused");
+        let SourceError::Refused { message } = &refused else {
+            panic!("HTTP {status}: refused as {refused:?}");
+        };
+        assert!(
+            message.contains("on 5 reads of it")
+                && message.contains("Could not find cursor 'I-1'")
+                && message.ends_with("start the walk again from its first page"),
+            "HTTP {status}: {message}"
+        );
+        assert_eq!(sent_of(&sent, graphql::ISSUES), 1 + 5, "HTTP {status}");
+        assert_eq!(clock.taken(), rereads(4), "HTTP {status}");
+    }
+}
+
+#[tokio::test]
+async fn only_a_resumed_page_is_read_again_and_any_other_failure_ends_the_rereads_as_itself() {
+    // A first page names no cursor, so a `cursor not found` there is Linear's refusal as it
+    // stands, read once.
+    let (endpoint, sent) = workspace(Box::new(|cursor, _| {
+        cursor
+            .is_none()
+            .then(|| (200, cursor_not_found("none", Spelling::Both)))
+    }));
+    let clock = Arc::new(Waits::default());
+    let refused = walk_issues(source_on(&endpoint, Arc::clone(&clock)).as_ref())
+        .await
+        .expect_err("the first page is refused");
+    assert!(
+        matches!(&refused, SourceError::Refused { message } if message.starts_with("cursor not found")),
+        "{refused:?}"
+    );
+    assert_eq!(sent_of(&sent, graphql::ISSUES), 1);
+    assert!(clock.taken().is_empty(), "a first page is never waited for");
+
+    // A resumed page refused once for its cursor and then for something else, or failing to
+    // arrive at all, ends with that failure: nothing after it is read again.
+    let validation = json!({"data":null,"errors":[{"message":"Argument Validation Error",
+        "extensions":{"code":"INPUT_ERROR","userPresentableMessage":"first must be positive"}}]});
+    for (then, expected) in [
+        ((200, validation), "a refusal of its own"),
+        (
+            (500, json!({"errors":[{"message":"internal"}]})),
+            "an unavailable Linear",
+        ),
+    ] {
+        let then = Arc::new(then);
+        let (endpoint, sent) = workspace(Box::new(move |cursor, nth| {
+            let cursor = cursor?;
+            Some(if nth == 0 {
+                (200, cursor_not_found(cursor, Spelling::Both))
+            } else {
+                (*then).clone()
+            })
+        }));
+        let clock = Arc::new(Waits::default());
+        let failed = walk_issues(source_on(&endpoint, Arc::clone(&clock)).as_ref())
+            .await
+            .expect_err(expected);
+        match expected {
+            "a refusal of its own" => assert!(
+                matches!(&failed, SourceError::Refused { message }
+                    if message.starts_with("Argument Validation Error: first must be positive")),
+                "{failed:?}"
+            ),
+            _ => assert!(
+                matches!(&failed, SourceError::Unavailable { message } if message.contains("HTTP 500")),
+                "{failed:?}"
+            ),
+        }
+        assert_eq!(sent_of(&sent, graphql::ISSUES), 1 + 2, "{expected}");
+        assert_eq!(clock.taken(), rereads(1), "{expected}");
     }
 }

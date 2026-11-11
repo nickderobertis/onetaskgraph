@@ -221,21 +221,6 @@ jobs:
           key: prune-superseded-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.prune-superseded }}-${{ hashFiles('rust-toolchain.toml') }}
       - name: Format, lint and type-check the affected projects, generated code and the supply chain, and run the distribution journey
         run: just ci-lint
-      # The release pull request alone: the pass-time budget of the pool maintenance
-      # onevcs.toml declares. lint owns this additional policy budget on Linux,
-      # already bootstrapped with the pinned pruner. Kept: it adds this budget's run to a release
-      # and skips no test elsewhere, so result replay has nothing here to take over.
-      - name: Pool-maintenance pass-time budget on the release pull request
-        if: startsWith(github.head_ref, 'release-plz-')
-        run: just pool-maintenance-budget
-      # That step's results, for the `budgets` job's report: no other step of this job saves any.
-      - uses: actions/upload-artifact@v7
-        if: always() && startsWith(github.head_ref, 'release-plz-')
-        with:
-          name: budget-check-results-lint
-          path: target/budget-results/
-          if-no-files-found: ignore
-          retention-days: 7
       - name: Install oneharness and llmlint
         run: |
           just setup-llmlint
@@ -458,6 +443,12 @@ jobs:
           ONETASKGRAPH_LIVE_REQUIRED: ${{ github.event.pull_request.head.repo.fork && '0' || '1' }}
         # llmlint: ignore[external_service_suite_stays_out_of_the_affected_tier] These suites run only when their own plugin changed, which is the edge; AGENTS.md records why an edge of their own was removed.
         run: just ci-test-linux
+      # The release pull request alone: after this job's tests, because the pool maintenance
+      # prunes and rebuilds the target directory they use, and not in lint, where beside the
+      # distribution journey it ran that job past its timeout.
+      - name: Pool-maintenance pass-time budget on the release pull request
+        if: startsWith(github.head_ref, 'release-plz-')
+        run: just pool-maintenance-budget
       # A cancelled run's live journeys die before their own cleanup, leaving their board
       # copies, scratch issues and pool leases behind. On cancellation this job, the one that
       # carries the credentials, removes exactly this run attempt's and opens no session; the
@@ -484,7 +475,7 @@ jobs:
           LINEAR_WRITE_TEAM: ${{ vars.LINEAR_WRITE_TEAM }}
         run: cargo run --locked -p onetaskgraph-live-janitor -- --linear --release-leases target/linear-leases
       # What this job's `budgets` targets saved, a replayed Nx cache hit's restored file included,
-      # for the `budgets` job's report. Linux alone: each figure stays one platform's.
+      # and on a release pull request the pool-maintenance step's, for the `budgets` job's report. Linux alone: each figure stays one platform's.
       - uses: actions/upload-artifact@v7
         if: always()
         with:

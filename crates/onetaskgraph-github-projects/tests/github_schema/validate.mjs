@@ -13,7 +13,8 @@
 // for other processes to find; each connection opens with `{"hello": PROTOCOL}`, answered with
 // the ready line — or `{"stale": "<why>"}` when this file, the schema or the tarball has changed
 // since it started or the protocol differs, after which it stops so a current one can start —
-// and its later lines are requests. It stops once no connection has been open for `IDLE_MS`.
+// and its later lines are requests, until `{"bye": true}`, after which it counts that connection
+// gone and closes it. It stops once no connection has been open for `IDLE_MS`.
 //
 // graphql-js is imported from the pinned tarball beside this file (see `mod.rs` for why).
 
@@ -209,6 +210,17 @@ try {
   fail(`the schema at ${schemaPath} does not build: ${error}`);
 }
 
+// Whether a request line is the client's `{"bye": true}`: it is leaving, and the connection is
+// gone whatever its close does after it.
+const saysBye = (line) => {
+  try {
+    const parsed = JSON.parse(line);
+    return parsed !== null && typeof parsed === "object" && parsed.bye === true;
+  } catch {
+    return false;
+  }
+};
+
 const refusal = (message) => ({ errors: [{ message }] });
 
 // Each GraphQL error as a response carries it (§7.1.2): its message and, where it stands in
@@ -305,7 +317,7 @@ function answerLine(line) {
 
 // The protocol `mod.rs` speaks; it sends this in its hello, so a client and a server built from
 // different revisions of the two files cannot answer each other.
-const PROTOCOL = 1;
+const PROTOCOL = 2;
 function serve(directory) {
   const endpoint = join(directory, "endpoint.json");
   // What this server was built from. A change to any of them makes it stale.
@@ -377,16 +389,30 @@ function serve(directory) {
     said(`connection opened: ${open} open`);
     clearTimeout(idle);
     socket.setNoDelay(true);
-    socket.on("error", (error) => said(`connection error: ${error}`));
-    socket.on("close", () => {
+    // Counted gone once, at the first sign: on Windows a client's close did not always reach
+    // this server, which then never stopped, so the client's `bye` — data, which does arrive —
+    // counts too.
+    let counted = true;
+    const gone = (why) => {
+      if (!counted) return;
+      counted = false;
       open -= 1;
-      said(`connection closed: ${open} open`);
+      said(`connection closed (${why}): ${open} open`);
+      socket.destroy();
       quiet();
-    });
+    };
+    socket.on("end", () => gone("end"));
+    socket.on("error", (error) => gone(`error: ${error}`));
+    socket.on("close", () => gone("close"));
     let greeted = false;
     const send = (value) => socket.write(`${JSON.stringify(value)}\n`);
     createInterface({ input: socket, crlfDelay: Infinity }).on("line", (line) => {
+      if (!counted) return;
       if (greeted) {
+        if (saysBye(line)) {
+          gone("bye");
+          return;
+        }
         send(answerLine(line));
         return;
       }

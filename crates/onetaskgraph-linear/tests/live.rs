@@ -593,6 +593,9 @@ async fn drive_every_declared_capability(
     // a pair read once the index has caught up rather than over two reads that raced it.
     let walk = "a walk in pages of one over this run's own three issues";
     settled_walk(LINEAR_INDEX, source, &scoped(), 10, walk, &all_three).await?;
+    // The refusal a page after a cursor Linear cannot find is answered with, in both of the
+    // spellings the source reads it by, so a rewording of either fails here.
+    stale_cursor_is_refused_as_the_source_reads_it(run).await?;
 
     // `max_page_size`: the source clamps a limit one above its declared ceiling to that
     // ceiling instead of passing it on, so the read succeeds rather than being refused
@@ -644,6 +647,40 @@ async fn drive_every_declared_capability(
         (&title(11), &label(&only_label)),
     )
     .await
+}
+
+/// One page of issues asked for after a cursor naming nothing Linear holds, answered with the
+/// `cursor not found` refusal [`graphql::CURSOR_NOT_FOUND_MESSAGE`] and
+/// [`graphql::CURSOR_NOT_FOUND_PRESENTABLE`] spell — the drift gate for both. One request, sent
+/// raw so it is not read again the way the source reads a page again.
+async fn stale_cursor_is_refused_as_the_source_reads_it(run: &LiveRun) -> Result<(), String> {
+    const NOTHING: &str = "00000000-0000-4000-8000-000000000000";
+    let body: Value = reqwest::Client::new()
+        .post(&run.endpoint)
+        .header("Authorization", &run.key)
+        .json(&json!({"query": onetaskgraph_linear::graphql::ISSUES,
+            "variables": {"first": 1, "after": NOTHING}}))
+        .send()
+        .await
+        .map_err(|error| format!("the stale-cursor probe was not answered: {error}"))?
+        .json()
+        .await
+        .map_err(|error| format!("the stale-cursor probe's answer is not JSON: {error}"))?;
+    let error = &body["errors"][0];
+    let presentable = error["extensions"]["userPresentableMessage"]
+        .as_str()
+        .unwrap_or_default();
+    ensure!(
+        error["message"].as_str() == Some(onetaskgraph_linear::graphql::CURSOR_NOT_FOUND_MESSAGE)
+            && presentable.starts_with(&format!(
+                "{} '{NOTHING}'",
+                onetaskgraph_linear::graphql::CURSOR_NOT_FOUND_PRESENTABLE
+            )),
+        "Linear answered a page after a cursor it does not hold with {body}, which the Linear \
+         source no longer reads as a stale cursor: update graphql::CURSOR_NOT_FOUND_MESSAGE and \
+         CURSOR_NOT_FOUND_PRESENTABLE to what it says"
+    );
+    Ok(())
 }
 
 /// The common document-mode entry used by the real capability lane and HTTP replay.
