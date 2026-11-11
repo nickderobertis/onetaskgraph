@@ -389,12 +389,9 @@ function serve(directory) {
     said(`connection opened: ${open} open`);
     clearTimeout(idle);
     socket.setNoDelay(true);
-    // A connection is gone at the first sign of it: the client's `bye`, its end of the stream,
-    // an error, or the socket closing — counted once, whichever comes first. Counting on `close`
-    // alone left a Windows server serving forever: a client's close there did not always reach
-    // it, so one connection stayed open in its count after every client had gone (runs
-    // 42996982590, 43001415572). The client's `bye` is data, which arrives however the
-    // connection's own close does; a client that ends without one is counted by the rest.
+    // Counted gone once, at the first sign: on Windows a client's close did not always reach
+    // this server, which then never stopped, so the client's `bye` — data, which does arrive —
+    // counts too.
     let counted = true;
     const gone = (why) => {
       if (!counted) return;

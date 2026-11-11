@@ -1786,7 +1786,6 @@ pub async fn status_names(
 /// waits, so no other read's requests or time change.
 const STALE_CURSOR_REREADS: u32 = 4;
 const STALE_CURSOR_PAUSE: std::time::Duration = std::time::Duration::from_millis(500);
-/// The cause those pauses are taken under, on this source's clock.
 const STALE_CURSOR_WAIT: onetaskgraph_plugin_api::WaitCause =
     onetaskgraph_plugin_api::WaitCause::new("linear-cursor-lag");
 
@@ -2287,12 +2286,9 @@ impl LinearSource {
                 .await?
                 .map_err(|refusal| refusal.into_error());
         }
-        // A page resumed from a cursor Linear cannot place yet is read again, the same page
-        // after the same cursor, on this source's clock: the cursor is the id of the row the
-        // last page ended on, and a replica behind the one that answered that page does not
-        // hold the row yet (see [`graphql::CURSOR_NOT_FOUND_MESSAGE`]). Nothing restarts the
-        // walk from its first page, which could hand the caller a row twice; a cursor still not
-        // found after [`STALE_CURSOR_REREADS`] reads again is refused, naming it.
+        // The same page after the same cursor is read again (see
+        // [`graphql::CURSOR_NOT_FOUND_MESSAGE`]) rather than the walk restarted from its first
+        // page, which would hand the caller rows it already has.
         let mut pause = STALE_CURSOR_PAUSE;
         let mut reread = 0;
         loop {

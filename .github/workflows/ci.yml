@@ -446,11 +446,10 @@ jobs:
       # The release pull request alone: the pass-time budget of the pool maintenance
       # onevcs.toml declares, after this job's tests, so the target directory it prunes and builds
       # twice is idle. test-linux owns this additional policy budget on Linux, already bootstrapped
-      # with the pinned pruner, and the upload below carries its results with the targets'. It ran
-      # in lint until the distribution journey joined that job (#3971): on a release whose lint
-      # missed the cache the two, one after the other, ran lint past its timeout (runs
-      # 43017788604 and 43027479734). Kept: it adds this budget's run to a release and skips no
-      # test elsewhere, so result replay has nothing here to take over.
+      # with the pinned pruner, and the upload below carries its results with the targets'. Not in
+      # lint: beside the distribution journey there it runs that job past its timeout. Kept: it
+      # adds this budget's run to a release and skips no test elsewhere, so result replay has
+      # nothing here to take over.
       - name: Pool-maintenance pass-time budget on the release pull request
         if: startsWith(github.head_ref, 'release-plz-')
         run: just pool-maintenance-budget

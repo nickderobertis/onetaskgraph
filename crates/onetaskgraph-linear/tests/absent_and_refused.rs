@@ -1252,7 +1252,6 @@ async fn walk_comments(source: &dyn TaskSource) -> Result<Vec<String>, SourceErr
     }
 }
 
-/// How many requests of `document` the loopback was sent.
 fn sent_of(sent: &Mutex<Vec<String>>, document: &str) -> usize {
     sent.lock()
         .unwrap()
