@@ -1591,8 +1591,9 @@ them do; this is the inventory of what is owed, not a status board.
      `task link add-many` and `remove-many` record a link at both ends — across two sources too —
      read with its type and direction, `exists` on a repeated add and `absent` on a second
      removal, its `## Links` section in the file and never in the content a read answers, a lost
-     end read `missing` and restored by repeating the add; a copy of a linked child carries
-     neither; and a task holding no relation is stored as before relations existed.
+     end read `missing` and restored by repeating the add; `task content set`, `task update` and
+     a copy over a linked task keep its section, the copy its parent too; a copy of a linked
+     child carries neither; and a task holding no relation is stored as before relations existed.
 162. On a GitHub board under `sub_issues: parent` an issue with sub-issues is a task whose child
      `task relations` reports, written through `addSubIssue`, eight levels and a hundred children
      accepted and the next refused alone; a project write there is refused naming the setting,
@@ -1603,7 +1604,9 @@ them do; this is the inventory of what is owed, not a status board.
      relation kept until the last mirrored link between a pair goes; an unmirrored type sends no
      native mutation; a three-level chain and both kinds of link read from either end in a fresh
      process; a version moved answers `version-moved`, an end made to fail `partial`, completed by
-     repeating; a native word that is not the destination's — `blocks`, `blocked-by`,
+     repeating; a content set and an update of a linked task keep its section; on Linear a
+     mirrored link is no `related` dependency and survives a `depends_on` rewrite; a native word
+     that is not the destination's — `blocks`, `blocked-by`,
      `duplicate`, `similar` or unknown — is refused at load naming the source, type and word; and
      a task holding no relation is written byte for byte as before.
 164. On a GitHub board a mirror batch of more than 30 links goes in documents of at most 30

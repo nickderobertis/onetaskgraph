@@ -495,7 +495,11 @@ the reserved `onetaskgraph.links`, a list of `{"type", "direction": "out"|"in", 
 content, one line per link naming its type and linking the other task. Every read strips that
 section, so content round-trips; a `## Links` heading followed by anything but bullets is a
 person's and is left alone, and Linear's `*` bullets and changed blank lines are still the
-section. All of one task's links in a call go in one write. A copy carries neither a parent nor
+section. Every write of a linked task's content — `task content set`, `task update`, a render,
+a copy over it — re-renders the section from the links the task holds, keeping each line it
+already showed; a copy over a Linear issue, which has no stored text at hand to keep a line
+from, writes each line from the link itself. All of one task's links in a call go in one
+write. A copy carries neither a parent nor
 links, and never the `onetaskgraph.links` key.
 
 **A native mirror is opt-in per type.** A source's `link_types` maps a type to the destination's
@@ -515,7 +519,9 @@ sources:
 `relates-to` on GitHub (`addRelatesTo`) and `related` on Linear (`issueRelationCreate`) are the
 only words. Neither destination stores a type name and both relations are symmetric, so the type
 and the direction live only in the metadata, and several mirrored links between one pair share
-one native relation, removed only with the last of them. `blocks`, `blocked-by` and every other
+one native relation, removed only with the last of them. On Linear that relation is the same
+kind a `related` dependency is stored as, so a task's own mirrored link is left out of its
+`task deps` and never removed by a `depends_on` rewrite. `blocks`, `blocked-by` and every other
 word are refused when the configuration loads, naming the source, the type and the word, because
 `depends_on` already means blocking. **A duplicate link has no native mirror**: `duplicate` and
 `similar` are refused too, because a native duplicate closes the issue on GitHub and moves it to
