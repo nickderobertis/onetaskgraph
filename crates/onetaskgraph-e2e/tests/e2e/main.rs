@@ -37,6 +37,10 @@ mod assets;
 // are the engine's, and the copy they survive crosses plugins, so no one plugin crate's edge is
 // narrower.
 mod attestations;
+// The batched store calls — `task find`, `task update-many`, `task comment add-many`, a copy
+// held per item and a priority-guarded update — over a folder of Markdown and an in-memory
+// source, with no credential and no network.
+mod batch;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No credential and no network:
 // every journey drives the binary against folders of Markdown and the released onevcs
 // boundary commands over an onevcs home this run owns, holding synthetic identities, in a few
