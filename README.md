@@ -1755,6 +1755,91 @@ rendering's `body_digest` is restamped exactly as a copied document's is, so a r
 its answers still reproduces the pre-copy content. A repeat copy of an unchanged project writes
 nothing, because what it compares is the translated body.
 
+### Expandable blocks
+
+A copy writes an **expandable block** — collapsed until a reader opens it — in each destination's
+own form, in the content of every task, project and document it writes and in each comment a
+`--comments` copy carries, and every read gives it back in the authored form. So a body read
+through the store is the body as authored, and a rendering's `body_digest`, a copy's record of
+itself and an unchanged repeat copy are unaffected.
+
+**The authored form.** In a record held in a folder of Markdown, an expandable block is exactly
+these lines, outside any fenced code block and not indented:
+
+```text
+<details>
+<summary>SUMMARY</summary>
+
+BODY
+
+</details>
+```
+
+- `<details>` stands alone on its line, with no attribute.
+- The `<summary>` line holds SUMMARY whole: non-empty, on one line, writing `&`, `<` and `>` as
+  `&amp;`, `&lt;` and `&gt;`. Its only inline markup is HTML: `<code>TEXT</code>` and
+  `<strong>TEXT</strong>`, neither nested in the other, TEXT holding no tag, no backtick and no
+  `*`. A `<summary>` line is HTML, so GitHub and a local viewer show backtick code and `**bold**`
+  in it as literal backticks and asterisks.
+- One blank line, then BODY — one or more lines of Markdown: paragraphs, lists, fenced code,
+  tables, images, headings — then one blank line, then `</details>` alone on its line. GitHub
+  renders Markdown inside a block only with these blank lines.
+- Blocks do not nest. The authored form carries no destination markup; a destination's own
+  form is the copy's to write and to read back.
+
+**Each destination's form.** Each form is one entry of `ExpandableForm` in `onetaskgraph-core`'s
+`expandable_blocks` module, the one place a destination's form is decided: it writes the form
+from the authored one and parses it back.
+
+| Destination | An expandable block |
+| --- | --- |
+| A folder of Markdown | the authored form, byte for byte |
+| A GitHub Projects issue | the authored form, byte for byte; the anchor line the source writes before a heading reaches one inside a block's body too |
+| A Linear issue, project, document or comment | `+++ LSUMMARY` alone on its line, a blank line, BODY, a blank line, `+++` alone on its line |
+
+LSUMMARY is SUMMARY with each `<code>TEXT</code>` written `` `TEXT` ``, each `<strong>TEXT</strong>`
+written `**TEXT**`, and `&amp;`, `&lt;` and `&gt;` written as the characters they stand for,
+which is how Linear stores them. Reading back reverses it: a backtick span becomes `<code>…</code>`,
+a `**…**` span `<strong>…</strong>`, and every `&`, `<` and `>` of the text is escaped again. A
+`+++` section a person made in Linear reads back as an authored block. The copy writes `+++`,
+never Linear's editor shortcut `>>>`, which closes every open section at once when nested. Linear
+normalizes the content inside a section as it normalizes any other ("Writing to a destination
+that rewrites Markdown", above).
+
+**What is carried as it stands.** Nothing but the authored form is translated. These reach a
+folder of Markdown and a GitHub issue byte for byte, and Linear as sent, subject only to Linear's
+own normalization:
+
+- `<details open>`, or `<details>` with any other attribute;
+- a block missing either blank line;
+- a block inside a fenced code block, or indented;
+- a block nested in another, the outer one with it;
+- a summary holding any other tag;
+- a block whose Linear form would not read back as itself: a summary whose text holds a literal
+  backtick or `*`, which Linear would read as a code or strong mark, a raw `&`, `<` or `>`, or a
+  space at either end; and a block written with carriage returns, which Linear does not keep.
+
+Linear stores each such block as literal paragraphs with its body expanded, as it stores every
+`<details>` block. Its own rewrite can give such a block the blank line it lacked, so that it reads
+back in the authored form; the Linear source remembers every block it read back as literal text
+and writes it back as it was stored, so a copy's follow-up never turns it into a section. A
+plugin served over the stdio protocol has no expandable form: it is sent the authored form.
+
+**What the Linear form rests on.** What Linear stores for each form sent is recorded, not
+predicted: spike `spike-expandable-blocks` wrote every form to team `TES2` through the API and
+recorded what Linear stored, and that recording is committed unchanged in
+`crates/onetaskgraph-e2e-support/fixtures/expandable_blocks/` — every record sent and stored,
+its editor state, and every change Linear made. The loopback Linear the journeys copy into is
+held to storing each recorded record exactly so, and a chain of copies through Linear is
+accounted for line by line against those changes. Linear entities in a block's *body* are
+decoded as they are anywhere else in a body: one of the recorded normalizations. It rests too on
+what the credentialed live check `scripts/live-expandable-blocks.py`, run by hand, observes of the
+real trackers: a project copied to a copy of board #1 stores every block in the authored form, and
+copied on from the board to team `TES2` stores each as `+++ LSUMMARY` … `+++`, a
+`collapsible_section` node of the record's editor state whose `collapsible_heading` holds the
+summary, with every body construct inside it, and reads back through the store in the authored
+form.
+
 ### Image assets
 
 A task or a document carries pictures — a before-and-after screenshot in a design document,

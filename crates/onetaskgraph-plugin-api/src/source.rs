@@ -735,8 +735,8 @@ pub trait TaskSource: Send + Sync {
         None
     }
 
-    /// Hand this source the markup its bodies carry for a reader to address their headings:
-    /// see [`crate::BodyMarkup`]. Called once, by the engine, as it builds the source.
+    /// Hand this source the markup its bodies carry — for a reader to address their headings,
+    /// or for a block to be expandable there: see [`crate::BodyMarkup`]. Called once, by the engine, as it builds the source.
     /// Defaulted to ignoring it, which a source whose backend needs no such markup does.
     fn attach_body_markup(&self, markup: crate::SharedBodyMarkup) {
         let _ = markup;

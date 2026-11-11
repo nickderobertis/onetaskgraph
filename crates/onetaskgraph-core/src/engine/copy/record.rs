@@ -10,7 +10,8 @@
 //!   comments, and absent after one that did not;
 //! - [`MetadataKey::COPIED_DESTINATION_VERSION_KEY`] — a digest of the destination item as the
 //!   copy left it, over every member a copy writes and, after a `--comments` copy, over its
-//!   comments, the three keys themselves left out. It says whether anybody changed the
+//!   comments, the three keys themselves left out, and the links a later copy out of the item
+//!   records on it (`onetaskgraph.copies`, `onetaskgraph.copy_locations`) left out too. It says whether anybody changed the
 //!   **destination** item since, its title, status and edges included. It is taken over the
 //!   content the destination reported storing, so it is what a read of the item digests to
 //!   even where the destination rewrote the Markdown it was sent.
@@ -214,13 +215,13 @@ pub(super) fn digest(
 }
 
 /// Whether a copy may skip a task whose source gives `version` and whose destination
-/// counterpart holds `metadata` and digests, as read now, to `now` — the comments in it when
-/// the copy carries them.
+/// counterpart holds `metadata` and digests, as read now, to one of `now` — the comments in it
+/// when the copy carries them; see [`digests_of`] for why there are two.
 pub(super) fn skips(
     version: Option<&str>,
     with_comments: bool,
     metadata: &BTreeMap<String, Value>,
-    now: &Sha256Digest,
+    now: &[Sha256Digest],
 ) -> bool {
     let Some(version) = version else {
         return false;
@@ -233,13 +234,55 @@ pub(super) fn skips(
         && metadata
             .get(MetadataKey::COPIED_DESTINATION_VERSION_KEY)
             .and_then(Value::as_str)
-            == Some(now.as_str())
+            .is_some_and(|recorded| now.iter().any(|now| now.as_str() == recorded))
 }
+
+/// The keys a later copy *out of* an item writes onto it once it has landed elsewhere — its
+/// links to that copy. No copy into the item writes them: it carries the ones the item holds as
+/// they are.
+const LINK_KEYS: [&str; 2] = [MetadataKey::COPIES_KEY, MetadataKey::COPY_LOCATIONS_KEY];
 
 /// The digest of a destination item as a read returns it, on the terms of [`digest`] for a task:
 /// a project over its fields and forward edges, a document over its fields — every member a
-/// copy writes, none of the destination's own, and the three keys left out.
+/// copy writes, none of the destination's own, the three keys left out, and the links a later
+/// copy out of the item records on it ([`LINK_KEYS`]) left out too, so that copy recording them
+/// leaves the record of the copy into it true.
 pub(super) fn digest_of(
+    item: &Item,
+    edges: &[DependencyEdge],
+    comments: Option<Vec<Value>>,
+    destination: &SourceName,
+) -> Sha256Digest {
+    let mut item = item.clone();
+    let metadata = match &mut item {
+        Item::Task(task) => &mut task.metadata,
+        Item::Project(project) => &mut project.metadata,
+        Item::Document(document) => &mut document.metadata,
+    };
+    for key in LINK_KEYS {
+        metadata.remove(key);
+    }
+    linked_digest_of(&item, edges, comments, destination)
+}
+
+// llmlint: ignore[changed_behavior_has_e2e] A record stamped over the links can only have been written by an earlier release's binary, which no journey has to run; seeding one by hand would mean restating this digest in the journey and comparing the engine with itself. The unit test `links_a_later_copy_records_leave_a_record_current_whichever_way_it_was_stamped` holds both stamps against `holds`, and the copy-skip journey `a_later_copy_out_of_a_copied_item_leaves_the_copy_into_it_writing_nothing_on_a_repeat` drives the canonical half through the binary.
+/// Every digest a record a copy left on `item` may hold of it, as read now: [`digest_of`], and
+/// the digest over the links as well, which a record stamped before the links were left out
+/// holds — so a record an earlier release left reads as current and costs no rewrite.
+pub(super) fn digests_of(
+    item: &Item,
+    edges: &[DependencyEdge],
+    comments: Option<Vec<Value>>,
+    destination: &SourceName,
+) -> [Sha256Digest; 2] {
+    [
+        digest_of(item, edges, comments.clone(), destination),
+        linked_digest_of(item, edges, comments, destination),
+    ]
+}
+
+/// [`digest_of`], the links among the metadata digested.
+fn linked_digest_of(
     item: &Item,
     edges: &[DependencyEdge],
     comments: Option<Vec<Value>>,
@@ -431,7 +474,79 @@ pub(super) fn holds(
     metadata: &BTreeMap<String, Value>,
     version: &str,
     with_comments: bool,
-    now: &Sha256Digest,
+    now: &[Sha256Digest],
 ) -> bool {
     skips(Some(version), with_comments, metadata, now)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use onetaskgraph_plugin_api::{Classification, Document, MetadataKey, NativeId, SourceName};
+    use serde_json::{Value, json};
+
+    use super::{Item, digest_of, digests_of, holds};
+
+    /// A document a copy landed, holding `metadata`.
+    fn landed(metadata: BTreeMap<String, Value>) -> Item {
+        Item::Document(Box::new(Document {
+            version: None,
+            id: NativeId::from("d-1"),
+            title: "Design".to_owned(),
+            content: Some("The design.".to_owned()),
+            project: None,
+            labels: Vec::new(),
+            url: None,
+            location: None,
+            created_at: None,
+            updated_at: None,
+            metadata,
+            repositories: Vec::new(),
+            classification: Classification::default(),
+        }))
+    }
+
+    /// The links a later copy out of an item records there move no digest of it, and a record
+    /// an earlier release stamped over them still reads as current.
+    #[test]
+    fn links_a_later_copy_records_leave_a_record_current_whichever_way_it_was_stamped() {
+        let destination = SourceName::new("dst").expect("a source name");
+        let bare = landed(BTreeMap::new());
+        let linked = landed(BTreeMap::from([
+            (
+                MetadataKey::COPIES_KEY.to_owned(),
+                json!({"last": "last:d-1"}),
+            ),
+            (
+                MetadataKey::COPY_LOCATIONS_KEY.to_owned(),
+                json!({"last": {"id": "last:d-1", "location": {"path": "/d-1.md"}}}),
+            ),
+        ]));
+        let stamped = digest_of(&bare, &[], None, &destination);
+        assert_eq!(digest_of(&linked, &[], None, &destination), stamped);
+        let now = digests_of(&linked, &[], None, &destination);
+        let record = |digest: &str| {
+            BTreeMap::from([
+                (
+                    MetadataKey::COPIED_VERSION_KEY.to_owned(),
+                    Value::String("v1".to_owned()),
+                ),
+                (
+                    MetadataKey::COPIED_DESTINATION_VERSION_KEY.to_owned(),
+                    Value::String(digest.to_owned()),
+                ),
+            ])
+        };
+        assert!(holds(&record(stamped.as_str()), "v1", false, &now));
+        // Stamped over the links, as before they were left out.
+        assert!(holds(&record(now[1].as_str()), "v1", false, &now));
+        // Anything else is an edit at the destination.
+        let edited = landed(BTreeMap::from([(
+            "team.owner".to_owned(),
+            json!("someone"),
+        )]));
+        let other = digest_of(&edited, &[], None, &destination);
+        assert!(!holds(&record(other.as_str()), "v1", false, &now));
+    }
 }

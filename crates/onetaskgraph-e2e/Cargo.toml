@@ -33,6 +33,9 @@ onetaskgraph-github-projects.workspace = true
 onetaskgraph-linear.workspace = true
 onetaskgraph-plugin-api.workspace = true
 predicates.workspace = true
+# The expandable-blocks chain journey compares two documents as one CommonMark/GFM renderer
+# renders them to HTML.
+pulldown-cmark = { workspace = true, features = ["html"] }
 # Compiles onebudgetspec's own id pattern, which the runner holds its budget id to.
 regex.workspace = true
 serde_json.workspace = true

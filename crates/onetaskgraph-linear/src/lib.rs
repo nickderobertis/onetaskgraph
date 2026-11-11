@@ -1848,6 +1848,10 @@ struct LinearSource {
             Vec<onetaskgraph_plugin_api::StoredHeading>,
         >,
     >,
+    /// The markup the engine handed this source for its bodies — Linear's collapsible sections —
+    /// applied to every long form and comment body this source sends and receives; see
+    /// [`TaskSource::attach_body_markup`] and [`marked`].
+    body_markup: std::sync::OnceLock<onetaskgraph_plugin_api::SharedBodyMarkup>,
     /// What each item this instance wrote holds, as its latest write's own answer said — what
     /// [`TaskSource::written_task`] and [`TaskSource::written_version`] answer.
     answered: std::sync::Mutex<std::collections::HashMap<(MetadataRecord, NativeId), Answered>>,
@@ -1905,6 +1909,7 @@ impl LinearSource {
             edges_ahead: std::sync::Mutex::new(std::collections::HashMap::new()),
             locations: std::sync::Mutex::new(std::collections::HashMap::new()),
             headings: std::sync::Mutex::new(std::collections::HashMap::new()),
+            body_markup: std::sync::OnceLock::new(),
             answered: std::sync::Mutex::new(std::collections::HashMap::new()),
             origins_ahead: std::sync::Mutex::new(origins::OriginsAhead::default()),
         })
@@ -2432,15 +2437,26 @@ impl LinearSource {
             self.forget_origins_ahead(false);
             self.forget_ahead();
         }
-        match self
+        // Every body crosses here, so this is the one place the engine's markup is applied: each
+        // one sent is written in it, and each one answered read back out of it.
+        let markup = self.body_markup.get();
+        let variables = match markup {
+            Some(markup) => marked(variables, &|body| markup.written(body)),
+            None => variables,
+        };
+        let answered = self
             .answer_using(
                 self.client.get_or_init(reqwest::Client::new),
                 query,
                 variables,
                 under_400,
             )
-            .await
-        {
+            .await;
+        let answered = match (answered, markup) {
+            (Ok(Ok(data)), Some(markup)) => Ok(Ok(marked(data, &|body| markup.read(body)))),
+            (answered, _) => answered,
+        };
+        match answered {
             Err(SourceError::RateLimited {
                 retry_after_seconds,
                 ..
@@ -4200,6 +4216,10 @@ impl TaskSource for LinearSource {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&(record, id.clone()))
             .cloned()
+    }
+    /// Applied in [`LinearSource::answer_with`], the one place every request and answer passes.
+    fn attach_body_markup(&self, markup: onetaskgraph_plugin_api::SharedBodyMarkup) {
+        let _ = self.body_markup.set(markup);
     }
     /// The content the latest write of the item selected in its own answer, the metadata slot
     /// and its separator removed; see the ruling on what Linear stores.
@@ -7359,6 +7379,36 @@ fn slot_text(metadata: &std::collections::BTreeMap<String, Value>) -> Result<Str
         "{METADATA_OPEN_SPAN}{}{METADATA_CLOSE_SPAN}",
         slot_json(metadata)?
     ))
+}
+
+/// The members a body travels under in a request's variables and an answer's data: an issue's
+/// `description`, a project's and a document's `content`, and a comment's `body`.
+const BODY_MEMBERS: [&str; 3] = ["description", "content", "body"];
+
+/// `value` with `apply` applied to every string held under one of [`BODY_MEMBERS`], at any depth.
+/// A member holding anything but a string — a filter on a description, say — is walked into and
+/// otherwise left as it is.
+fn marked(value: Value, apply: &dyn Fn(&str) -> String) -> Value {
+    match value {
+        Value::Object(object) => Value::Object(
+            object
+                .into_iter()
+                .map(|(key, held)| {
+                    let held = match held {
+                        Value::String(body) if BODY_MEMBERS.contains(&key.as_str()) => {
+                            Value::String(apply(&body))
+                        }
+                        other => marked(other, apply),
+                    };
+                    (key, held)
+                })
+                .collect(),
+        ),
+        Value::Array(items) => {
+            Value::Array(items.into_iter().map(|item| marked(item, apply)).collect())
+        }
+        other => other,
+    }
 }
 
 /// Where the trailing metadata slot of `description` is: the byte its opening marker starts

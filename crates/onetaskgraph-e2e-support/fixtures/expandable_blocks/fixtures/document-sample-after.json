@@ -1,0 +1,1541 @@
+{
+  "fixture": "document-sample-after",
+  "record": "document b3323532aee1",
+  "record_id": "917802ab-ce5b-4a8a-8503-d04c825a6289",
+  "kind": "document",
+  "team": "TES2",
+  "captured": "2026-11-10",
+  "title": "Expandable-blocks spike 20261111-003454: design-document sample, new layout",
+  "note": "Written through Linear's GraphQL API by the expandable-blocks spike harness. The record's URL is left out: it names the workspace.",
+  "state_field": "contentState",
+  "sent_markdown": "# Design: preview a copy before it writes (sample, new layout)\n\n## What\n\nAdd a way to see what `onetaskgraph copy` would write before it writes anything, so a person can check a plan's copy to a board without touching the board.\n\n## Why\n\nA copy that lands wrong on a shared board is noticed by everyone and undone by hand. Seeing the outcome first makes the copy safe to try.\n\n## Architecture\n\n### Copy planner — `nickderobertis/onetaskgraph`\n\nThe planner already reads both ends before it writes. A preview stops after the plan and prints it.\n\n#### The preview report is the copy report\n\n**Reversibility: high cost** — other tools parse the report, so its shape cannot change once released.\n\nA preview prints exactly the report a real copy prints, with every write marked as not made. Nothing else is added to the report, so a tool that reads a copy's report reads a preview's without change.\n\n+++ Examples\n\nThe prose example: copying a project with two tasks into a board that holds one of them reports one task as `would-create` and one as `would-update`, and the board is left as it was.\n\n```json\n{\"items\": [\n  {\"source\": \"notes:T1\", \"outcome\": \"would-create\"},\n  {\"source\": \"notes:T2\", \"outcome\": \"would-update\", \"destination\": \"board:I_42\"}\n]}\n```\n\n+++\n\n**Reversible:**\n\n+++ Adds a `--dry-run` flag to `copy`\n\nThe flag is `--dry-run`, the name every other verb of the command line already uses for a run that writes nothing.\n\n+++\n\n+++ Prints items in the order the copy would write them\n\nItems are printed in the order the copy would write them, so the preview reads as a script of the copy.\n\n+++\n\n+++ Exits `4` when any item would be refused\n\nA preview exits `0` when the copy would succeed and `4` when any item would be refused, the same codes the copy itself uses.\n\n+++\n\n## Planned tasks\n\n![Dependency graph of the plan's tasks](https://uploads.linear.app/d8b4a4c3-5fea-4568-9fdc-e08b7b8ab846/27250c16-28d7-4fd1-8a84-c1c22ccd8d0f/04247dca-c6f1-43b4-8f3d-62eec47adea3)\n\n+++ Task table\n\n| Task | Unit | What it delivers | Depends on | Where it lives |\n| --- | --- | --- | --- | --- |\n| `preview-report` | Copy planner | The report a preview prints | none | `nickderobertis/onetaskgraph` |\n| `preview-flag` | Copy planner | The `--dry-run` flag on `copy` | `preview-report` | `nickderobertis/onetaskgraph` |\n| `preview-exit` | Copy planner | The preview's exit codes | `preview-report` | `nickderobertis/onetaskgraph` |\n| `preview-adopt` | Orchestrator | The planning flow previews every copy | `preview-flag`, `preview-exit` | `nickderobertis/ai-orchestrator` |\n\n+++\n",
+  "stored_markdown": "# Design: preview a copy before it writes (sample, new layout)\n\n## What\n\nAdd a way to see what `onetaskgraph copy` would write before it writes anything, so a person can check a plan's copy to a board without touching the board.\n\n## Why\n\nA copy that lands wrong on a shared board is noticed by everyone and undone by hand. Seeing the outcome first makes the copy safe to try.\n\n## Architecture\n\n### Copy planner — `nickderobertis/onetaskgraph`\n\nThe planner already reads both ends before it writes. A preview stops after the plan and prints it.\n\n#### The preview report is the copy report\n\n**Reversibility: high cost** — other tools parse the report, so its shape cannot change once released.\n\nA preview prints exactly the report a real copy prints, with every write marked as not made. Nothing else is added to the report, so a tool that reads a copy's report reads a preview's without change.\n\n+++ Examples\n\nThe prose example: copying a project with two tasks into a board that holds one of them reports one task as `would-create` and one as `would-update`, and the board is left as it was.\n\n```json\n{\"items\": [\n  {\"source\": \"notes:T1\", \"outcome\": \"would-create\"},\n  {\"source\": \"notes:T2\", \"outcome\": \"would-update\", \"destination\": \"board:I_42\"}\n]}\n```\n\n+++\n\n**Reversible:**\n\n+++ Adds a `--dry-run` flag to `copy`\n\nThe flag is `--dry-run`, the name every other verb of the command line already uses for a run that writes nothing.\n\n+++\n\n+++ Prints items in the order the copy would write them\n\nItems are printed in the order the copy would write them, so the preview reads as a script of the copy.\n\n+++\n\n+++ Exits `4` when any item would be refused\n\nA preview exits `0` when the copy would succeed and `4` when any item would be refused, the same codes the copy itself uses.\n\n+++\n\n## Planned tasks\n\n![Dependency graph of the plan's tasks](https://uploads.linear.app/d8b4a4c3-5fea-4568-9fdc-e08b7b8ab846/27250c16-28d7-4fd1-8a84-c1c22ccd8d0f/04247dca-c6f1-43b4-8f3d-62eec47adea3)\n\n+++ Task table\n\n| Task | Unit | What it delivers | Depends on | Where it lives |\n| -- | -- | -- | -- | -- |\n| `preview-report` | Copy planner | The report a preview prints | none | `nickderobertis/onetaskgraph` |\n| `preview-flag` | Copy planner | The `--dry-run` flag on `copy` | `preview-report` | `nickderobertis/onetaskgraph` |\n| `preview-exit` | Copy planner | The preview's exit codes | `preview-report` | `nickderobertis/onetaskgraph` |\n| `preview-adopt` | Orchestrator | The planning flow previews every copy | `preview-flag`, `preview-exit` | `nickderobertis/ai-orchestrator` |\n\n+++",
+  "stored_state": "AecD7ova9QgABwELcHJvc2VtaXJyb3IDB2hlYWRpbmcHAO6L2vUIAAYGAO6L2vUIAQthdHRyaWJ1dGlvbkR7InVzZXJJZCI6ImI3NjA3YjIxLTE2MzEtNDM1ZS05MmQ4LWQ2YTY1Mjg2ZmY3NyIsImFjdG9yVHlwZSI6InVzZXIifYTui9r1CAI8RGVzaWduOiBwcmV2aWV3IGEgY29weSBiZWZvcmUgaXQgd3JpdGVzIChzYW1wbGUsIG5ldyBsYXlvdXQphu6L2vUIPgthdHRyaWJ1dGlvbgRudWxsKADui9r1CAAFbGV2ZWwBfQEoAO6L2vUIAAJpZAF3JGQxYzMxZmQxLTg5NzMtNDRjZC1hZGUyLTAxNjU4NTYxNmVlYofui9r1CAADB2hlYWRpbmcHAO6L2vUIQgYGAO6L2vUIQwthdHRyaWJ1dGlvbkR7InVzZXJJZCI6ImI3NjA3YjIxLTE2MzEtNDM1ZS05MmQ4LWQ2YTY1Mjg2ZmY3NyIsImFjdG9yVHlwZSI6InVzZXIifYTui9r1CEQEV2hhdIbui9r1CEgLYXR0cmlidXRpb24EbnVsbCgA7ova9QhCBWxldmVsAX0CKADui9r1CEICaWQBdyRhNmFhMzAzMi1jNzJjLTRhZDctOGI5MC1hOGJlYzUwOGVhOTKH7ova9QhCAwlwYXJhZ3JhcGgHAO6L2vUITAYGAO6L2vUITQthdHRyaWJ1dGlvbkR7InVzZXJJZCI6ImI3NjA3YjIxLTE2MzEtNDM1ZS05MmQ4LWQ2YTY1Mjg2ZmY3NyIsImFjdG9yVHlwZSI6InVzZXIifYTui9r1CE4WQWRkIGEgd2F5IHRvIHNlZSB3aGF0IIbui9r1CGQLYXR0cmlidXRpb24EbnVsbIbui9r1CGUEY29kZQJ7fYbui9r1CGYLYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2E7ova9QhnEW9uZXRhc2tncmFwaCBjb3B5hu6L2vUIeARjb2RlBG51bGyG7ova9Qh5C2F0dHJpYnV0aW9uBG51bGyG7ova9Qh6C2F0dHJpYnV0aW9uRHsidXNlcklkIjoiYjc2MDdiMjEtMTYzMS00MzVlLTkyZDgtZDZhNjUyODZmZjc3IiwiYWN0b3JUeXBlIjoidXNlciJ9hO6L2vUIe3Igd291bGQgd3JpdGUgYmVmb3JlIGl0IHdyaXRlcyBhbnl0aGluZywgc28gYSBwZXJzb24gY2FuIGNoZWNrIGEgcGxhbidzIGNvcHkgdG8gYSBib2FyZCB3aXRob3V0IHRvdWNoaW5nIHRoZSBib2FyZC6G7ova9QjtAQthdHRyaWJ1dGlvbgRudWxsh+6L2vUITAMHaGVhZGluZwcA7ova9QjvAQYGAO6L2vUI8AELYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2E7ova9QjxAQNXaHmG7ova9Qj0AQthdHRyaWJ1dGlvbgRudWxsKADui9r1CO8BBWxldmVsAX0CKADui9r1CO8BAmlkAXckZWI5N2IzNDEtNTA2My00ZjQ0LWEyYzAtZDhjZTQ4NmYzNTlmh+6L2vUI7wEDCXBhcmFncmFwaAcA7ova9Qj4AQYGAO6L2vUI+QELYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2E7ova9Qj6AYkBQSBjb3B5IHRoYXQgbGFuZHMgd3Jvbmcgb24gYSBzaGFyZWQgYm9hcmQgaXMgbm90aWNlZCBieSBldmVyeW9uZSBhbmQgdW5kb25lIGJ5IGhhbmQuIFNlZWluZyB0aGUgb3V0Y29tZSBmaXJzdCBtYWtlcyB0aGUgY29weSBzYWZlIHRvIHRyeS6G7ova9QiDAwthdHRyaWJ1dGlvbgRudWxsh+6L2vUI+AEDB2hlYWRpbmcHAO6L2vUIhQMGBgDui9r1CIYDC2F0dHJpYnV0aW9uRHsidXNlcklkIjoiYjc2MDdiMjEtMTYzMS00MzVlLTkyZDgtZDZhNjUyODZmZjc3IiwiYWN0b3JUeXBlIjoidXNlciJ9hO6L2vUIhwMMQXJjaGl0ZWN0dXJlhu6L2vUIkwMLYXR0cmlidXRpb24EbnVsbCgA7ova9QiFAwVsZXZlbAF9AigA7ova9QiFAwJpZAF3JGFlMDdhZTI1LTQyZTItNDEzOS04NmJmLWU2YjkwODJiYWE4N4fui9r1CIUDAwdoZWFkaW5nBwDui9r1CJcDBgYA7ova9QiYAwthdHRyaWJ1dGlvbkR7InVzZXJJZCI6ImI3NjA3YjIxLTE2MzEtNDM1ZS05MmQ4LWQ2YTY1Mjg2ZmY3NyIsImFjdG9yVHlwZSI6InVzZXIifYTui9r1CJkDEUNvcHkgcGxhbm5lciDigJQghu6L2vUIqAMLYXR0cmlidXRpb24EbnVsbIbui9r1CKkDBGNvZGUCe32G7ova9QiqAwthdHRyaWJ1dGlvbkR7InVzZXJJZCI6ImI3NjA3YjIxLTE2MzEtNDM1ZS05MmQ4LWQ2YTY1Mjg2ZmY3NyIsImFjdG9yVHlwZSI6InVzZXIifYTui9r1CKsDG25pY2tkZXJvYmVydGlzL29uZXRhc2tncmFwaIbui9r1CMYDBGNvZGUEbnVsbIbui9r1CMcDC2F0dHJpYnV0aW9uBG51bGwoAO6L2vUIlwMFbGV2ZWwBfQMoAO6L2vUIlwMCaWQBdyRlZWY0OWYxNy1iMDc4LTQ3MmUtODY0NC04OTgwM2ZmNzRmNmKH7ova9QiXAwMJcGFyYWdyYXBoBwDui9r1CMsDBgYA7ova9QjMAwthdHRyaWJ1dGlvbkR7InVzZXJJZCI6ImI3NjA3YjIxLTE2MzEtNDM1ZS05MmQ4LWQ2YTY1Mjg2ZmY3NyIsImFjdG9yVHlwZSI6InVzZXIifYTui9r1CM0DY1RoZSBwbGFubmVyIGFscmVhZHkgcmVhZHMgYm90aCBlbmRzIGJlZm9yZSBpdCB3cml0ZXMuIEEgcHJldmlldyBzdG9wcyBhZnRlciB0aGUgcGxhbiBhbmQgcHJpbnRzIGl0Lobui9r1CLAEC2F0dHJpYnV0aW9uBG51bGyH7ova9QjLAwMHaGVhZGluZwcA7ova9QiyBAYGAO6L2vUIswQLYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2E7ova9Qi0BCVUaGUgcHJldmlldyByZXBvcnQgaXMgdGhlIGNvcHkgcmVwb3J0hu6L2vUI2QQLYXR0cmlidXRpb24EbnVsbCgA7ova9QiyBAVsZXZlbAF9BCgA7ova9QiyBAJpZAF3JDNlZDUwODhkLWI2ZTQtNDdhOC05Mzk2LTU4M2QzNTRjOTY5MIfui9r1CLIEAwlwYXJhZ3JhcGgHAO6L2vUI3QQGBgDui9r1CN4EBnN0cm9uZwJ7fYbui9r1CN8EC2F0dHJpYnV0aW9uRHsidXNlcklkIjoiYjc2MDdiMjEtMTYzMS00MzVlLTkyZDgtZDZhNjUyODZmZjc3IiwiYWN0b3JUeXBlIjoidXNlciJ9hO6L2vUI4AQYUmV2ZXJzaWJpbGl0eTogaGlnaCBjb3N0hu6L2vUI+AQGc3Ryb25nBG51bGyG7ova9Qj5BAthdHRyaWJ1dGlvbgRudWxshu6L2vUI+gQLYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2E7ova9Qj7BEwg4oCUIG90aGVyIHRvb2xzIHBhcnNlIHRoZSByZXBvcnQsIHNvIGl0cyBzaGFwZSBjYW5ub3QgY2hhbmdlIG9uY2UgcmVsZWFzZWQuhu6L2vUIxQULYXR0cmlidXRpb24EbnVsbIfui9r1CN0EAwlwYXJhZ3JhcGgHAO6L2vUIxwUGBgDui9r1CMgFC2F0dHJpYnV0aW9uRHsidXNlcklkIjoiYjc2MDdiMjEtMTYzMS00MzVlLTkyZDgtZDZhNjUyODZmZjc3IiwiYWN0b3JUeXBlIjoidXNlciJ9hO6L2vUIyQXIAUEgcHJldmlldyBwcmludHMgZXhhY3RseSB0aGUgcmVwb3J0IGEgcmVhbCBjb3B5IHByaW50cywgd2l0aCBldmVyeSB3cml0ZSBtYXJrZWQgYXMgbm90IG1hZGUuIE5vdGhpbmcgZWxzZSBpcyBhZGRlZCB0byB0aGUgcmVwb3J0LCBzbyBhIHRvb2wgdGhhdCByZWFkcyBhIGNvcHkncyByZXBvcnQgcmVhZHMgYSBwcmV2aWV3J3Mgd2l0aG91dCBjaGFuZ2Uuhu6L2vUIkQcLYXR0cmlidXRpb24EbnVsbIfui9r1CMcFAxNjb2xsYXBzaWJsZV9zZWN0aW9uBwDui9r1CJMHAxNjb2xsYXBzaWJsZV9oZWFkaW5nBwDui9r1CJQHAwlwYXJhZ3JhcGgHAO6L2vUIlQcGBgDui9r1CJYHC2F0dHJpYnV0aW9uRHsidXNlcklkIjoiYjc2MDdiMjEtMTYzMS00MzVlLTkyZDgtZDZhNjUyODZmZjc3IiwiYWN0b3JUeXBlIjoidXNlciJ9hO6L2vUIlwcIRXhhbXBsZXOG7ova9QifBwthdHRyaWJ1dGlvbgRudWxsh+6L2vUIlAcDCXBhcmFncmFwaAcA7ova9QihBwYGAO6L2vUIogcLYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2E7ova9QijB2xUaGUgcHJvc2UgZXhhbXBsZTogY29weWluZyBhIHByb2plY3Qgd2l0aCB0d28gdGFza3MgaW50byBhIGJvYXJkIHRoYXQgaG9sZHMgb25lIG9mIHRoZW0gcmVwb3J0cyBvbmUgdGFzayBhcyCG7ova9QiPCAthdHRyaWJ1dGlvbgRudWxshu6L2vUIkAgEY29kZQJ7fYbui9r1CJEIC2F0dHJpYnV0aW9uRHsidXNlcklkIjoiYjc2MDdiMjEtMTYzMS00MzVlLTkyZDgtZDZhNjUyODZmZjc3IiwiYWN0b3JUeXBlIjoidXNlciJ9hO6L2vUIkggMd291bGQtY3JlYXRlhu6L2vUInggEY29kZQRudWxshu6L2vUInwgLYXR0cmlidXRpb24EbnVsbIbui9r1CKAIC2F0dHJpYnV0aW9uRHsidXNlcklkIjoiYjc2MDdiMjEtMTYzMS00MzVlLTkyZDgtZDZhNjUyODZmZjc3IiwiYWN0b3JUeXBlIjoidXNlciJ9hO6L2vUIoQgMIGFuZCBvbmUgYXMghu6L2vUIrQgLYXR0cmlidXRpb24EbnVsbIbui9r1CK4IBGNvZGUCe32G7ova9QivCAthdHRyaWJ1dGlvbkR7InVzZXJJZCI6ImI3NjA3YjIxLTE2MzEtNDM1ZS05MmQ4LWQ2YTY1Mjg2ZmY3NyIsImFjdG9yVHlwZSI6InVzZXIifYTui9r1CLAIDHdvdWxkLXVwZGF0ZYbui9r1CLwIBGNvZGUEbnVsbIbui9r1CL0IC2F0dHJpYnV0aW9uBG51bGyG7ova9Qi+CAthdHRyaWJ1dGlvbkR7InVzZXJJZCI6ImI3NjA3YjIxLTE2MzEtNDM1ZS05MmQ4LWQ2YTY1Mjg2ZmY3NyIsImFjdG9yVHlwZSI6InVzZXIifYTui9r1CL8IIiwgYW5kIHRoZSBib2FyZCBpcyBsZWZ0IGFzIGl0IHdhcy6G7ova9QjhCAthdHRyaWJ1dGlvbgRudWxsh+6L2vUIoQcDCmNvZGVfYmxvY2sHAO6L2vUI4wgGBgDui9r1COQIC2F0dHJpYnV0aW9uRHsidXNlcklkIjoiYjc2MDdiMjEtMTYzMS00MzVlLTkyZDgtZDZhNjUyODZmZjc3IiwiYWN0b3JUeXBlIjoidXNlciJ9hO6L2vUI5QiUAXsiaXRlbXMiOiBbCiAgeyJzb3VyY2UiOiAibm90ZXM6VDEiLCAib3V0Y29tZSI6ICJ3b3VsZC1jcmVhdGUifSwKICB7InNvdXJjZSI6ICJub3RlczpUMiIsICJvdXRjb21lIjogIndvdWxkLXVwZGF0ZSIsICJkZXN0aW5hdGlvbiI6ICJib2FyZDpJXzQyIn0KXX2G7ova9Qj5CQthdHRyaWJ1dGlvbgRudWxsKADui9r1COMICGxhbmd1YWdlAXcEanNvbigA7ova9QjjCAJpZAF3JGE1MjMwMTY1LTA3OWQtNDc2Yy04NmMwLTY1NDU1M2Y2MDhmMygA7ova9QiTBwJpZAF3JGFmM2IzYWY1LTlmMzEtNGE0ZC1iMDdlLTYyMDFlMjZiZmJmMigA7ova9QiTBxJ3YXNDb3BpZWRXaGlsZU9wZW4Bf4fui9r1CJMHAwlwYXJhZ3JhcGgHAO6L2vUI/wkGBgDui9r1CIAKBnN0cm9uZwJ7fYbui9r1CIEKC2F0dHJpYnV0aW9uRHsidXNlcklkIjoiYjc2MDdiMjEtMTYzMS00MzVlLTkyZDgtZDZhNjUyODZmZjc3IiwiYWN0b3JUeXBlIjoidXNlciJ9hO6L2vUIggoLUmV2ZXJzaWJsZTqG7ova9QiNCgZzdHJvbmcEbnVsbIbui9r1CI4KC2F0dHJpYnV0aW9uBG51bGyH7ova9Qj/CQMTY29sbGFwc2libGVfc2VjdGlvbgcA7ova9QiQCgMTY29sbGFwc2libGVfaGVhZGluZwcA7ova9QiRCgMJcGFyYWdyYXBoBwDui9r1CJIKBgYA7ova9QiTCgthdHRyaWJ1dGlvbkR7InVzZXJJZCI6ImI3NjA3YjIxLTE2MzEtNDM1ZS05MmQ4LWQ2YTY1Mjg2ZmY3NyIsImFjdG9yVHlwZSI6InVzZXIifYTui9r1CJQKB0FkZHMgYSCG7ova9QibCgthdHRyaWJ1dGlvbgRudWxshu6L2vUInAoEY29kZQJ7fYbui9r1CJ0KC2F0dHJpYnV0aW9uRHsidXNlcklkIjoiYjc2MDdiMjEtMTYzMS00MzVlLTkyZDgtZDZhNjUyODZmZjc3IiwiYWN0b3JUeXBlIjoidXNlciJ9hO6L2vUIngoJLS1kcnktcnVuhu6L2vUIpwoEY29kZQRudWxshu6L2vUIqAoLYXR0cmlidXRpb24EbnVsbIbui9r1CKkKC2F0dHJpYnV0aW9uRHsidXNlcklkIjoiYjc2MDdiMjEtMTYzMS00MzVlLTkyZDgtZDZhNjUyODZmZjc3IiwiYWN0b3JUeXBlIjoidXNlciJ9hO6L2vUIqgoJIGZsYWcgdG8ghu6L2vUIswoLYXR0cmlidXRpb24EbnVsbIbui9r1CLQKBGNvZGUCe32G7ova9Qi1CgthdHRyaWJ1dGlvbkR7InVzZXJJZCI6ImI3NjA3YjIxLTE2MzEtNDM1ZS05MmQ4LWQ2YTY1Mjg2ZmY3NyIsImFjdG9yVHlwZSI6InVzZXIifYTui9r1CLYKBGNvcHmG7ova9Qi6CgRjb2RlBG51bGyG7ova9Qi7CgthdHRyaWJ1dGlvbgRudWxsh+6L2vUIkQoDCXBhcmFncmFwaAcA7ova9Qi9CgYGAO6L2vUIvgoLYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2E7ova9Qi/CgxUaGUgZmxhZyBpcyCG7ova9QjLCgthdHRyaWJ1dGlvbgRudWxshu6L2vUIzAoEY29kZQJ7fYbui9r1CM0KC2F0dHJpYnV0aW9uRHsidXNlcklkIjoiYjc2MDdiMjEtMTYzMS00MzVlLTkyZDgtZDZhNjUyODZmZjc3IiwiYWN0b3JUeXBlIjoidXNlciJ9hO6L2vUIzgoJLS1kcnktcnVuhu6L2vUI1woEY29kZQRudWxshu6L2vUI2AoLYXR0cmlidXRpb24EbnVsbIbui9r1CNkKC2F0dHJpYnV0aW9uRHsidXNlcklkIjoiYjc2MDdiMjEtMTYzMS00MzVlLTkyZDgtZDZhNjUyODZmZjc3IiwiYWN0b3JUeXBlIjoidXNlciJ9hO6L2vUI2gpbLCB0aGUgbmFtZSBldmVyeSBvdGhlciB2ZXJiIG9mIHRoZSBjb21tYW5kIGxpbmUgYWxyZWFkeSB1c2VzIGZvciBhIHJ1biB0aGF0IHdyaXRlcyBub3RoaW5nLobui9r1CLULC2F0dHJpYnV0aW9uBG51bGwoAO6L2vUIkAoCaWQBdyQ4OWMyNGNjNi0xNzY3LTRmMWItODE5YS1jYzM1ZGVmZTNlYWUoAO6L2vUIkAoSd2FzQ29waWVkV2hpbGVPcGVuAX+H7ova9QiQCgMTY29sbGFwc2libGVfc2VjdGlvbgcA7ova9Qi5CwMTY29sbGFwc2libGVfaGVhZGluZwcA7ova9Qi6CwMJcGFyYWdyYXBoBwDui9r1CLsLBgYA7ova9Qi8CwthdHRyaWJ1dGlvbkR7InVzZXJJZCI6ImI3NjA3YjIxLTE2MzEtNDM1ZS05MmQ4LWQ2YTY1Mjg2ZmY3NyIsImFjdG9yVHlwZSI6InVzZXIifYTui9r1CL0LM1ByaW50cyBpdGVtcyBpbiB0aGUgb3JkZXIgdGhlIGNvcHkgd291bGQgd3JpdGUgdGhlbYbui9r1CPALC2F0dHJpYnV0aW9uBG51bGyH7ova9Qi6CwMJcGFyYWdyYXBoBwDui9r1CPILBgYA7ova9QjzCwthdHRyaWJ1dGlvbkR7InVzZXJJZCI6ImI3NjA3YjIxLTE2MzEtNDM1ZS05MmQ4LWQ2YTY1Mjg2ZmY3NyIsImFjdG9yVHlwZSI6InVzZXIifYTui9r1CPQLZ0l0ZW1zIGFyZSBwcmludGVkIGluIHRoZSBvcmRlciB0aGUgY29weSB3b3VsZCB3cml0ZSB0aGVtLCBzbyB0aGUgcHJldmlldyByZWFkcyBhcyBhIHNjcmlwdCBvZiB0aGUgY29weS6G7ova9QjbDAthdHRyaWJ1dGlvbgRudWxsKADui9r1CLkLAmlkAXckNTA1YmZlZWQtMjI3MS00ZDYyLWFjNDEtMDE4ODlmYzk2OTE5KADui9r1CLkLEndhc0NvcGllZFdoaWxlT3BlbgF/h+6L2vUIuQsDE2NvbGxhcHNpYmxlX3NlY3Rpb24HAO6L2vUI3wwDE2NvbGxhcHNpYmxlX2hlYWRpbmcHAO6L2vUI4AwDCXBhcmFncmFwaAcA7ova9QjhDAYGAO6L2vUI4gwLYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2E7ova9QjjDAZFeGl0cyCG7ova9QjpDAthdHRyaWJ1dGlvbgRudWxshu6L2vUI6gwEY29kZQJ7fYbui9r1COsMC2F0dHJpYnV0aW9uRHsidXNlcklkIjoiYjc2MDdiMjEtMTYzMS00MzVlLTkyZDgtZDZhNjUyODZmZjc3IiwiYWN0b3JUeXBlIjoidXNlciJ9hO6L2vUI7AwBNIbui9r1CO0MBGNvZGUEbnVsbIbui9r1CO4MC2F0dHJpYnV0aW9uBG51bGyG7ova9QjvDAthdHRyaWJ1dGlvbkR7InVzZXJJZCI6ImI3NjA3YjIxLTE2MzEtNDM1ZS05MmQ4LWQ2YTY1Mjg2ZmY3NyIsImFjdG9yVHlwZSI6InVzZXIifYTui9r1CPAMHyB3aGVuIGFueSBpdGVtIHdvdWxkIGJlIHJlZnVzZWSG7ova9QiPDQthdHRyaWJ1dGlvbgRudWxsh+6L2vUI4AwDCXBhcmFncmFwaAcA7ova9QiRDQYGAO6L2vUIkg0LYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2E7ova9QiTDRBBIHByZXZpZXcgZXhpdHMghu6L2vUIow0LYXR0cmlidXRpb24EbnVsbIbui9r1CKQNBGNvZGUCe32G7ova9QilDQthdHRyaWJ1dGlvbkR7InVzZXJJZCI6ImI3NjA3YjIxLTE2MzEtNDM1ZS05MmQ4LWQ2YTY1Mjg2ZmY3NyIsImFjdG9yVHlwZSI6InVzZXIifYTui9r1CKYNATCG7ova9QinDQRjb2RlBG51bGyG7ova9QioDQthdHRyaWJ1dGlvbgRudWxshu6L2vUIqQ0LYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2E7ova9QiqDSEgd2hlbiB0aGUgY29weSB3b3VsZCBzdWNjZWVkIGFuZCCG7ova9QjLDQthdHRyaWJ1dGlvbgRudWxshu6L2vUIzA0EY29kZQJ7fYbui9r1CM0NC2F0dHJpYnV0aW9uRHsidXNlcklkIjoiYjc2MDdiMjEtMTYzMS00MzVlLTkyZDgtZDZhNjUyODZmZjc3IiwiYWN0b3JUeXBlIjoidXNlciJ9hO6L2vUIzg0BNIbui9r1CM8NBGNvZGUEbnVsbIbui9r1CNANC2F0dHJpYnV0aW9uBG51bGyG7ova9QjRDQthdHRyaWJ1dGlvbkR7InVzZXJJZCI6ImI3NjA3YjIxLTE2MzEtNDM1ZS05MmQ4LWQ2YTY1Mjg2ZmY3NyIsImFjdG9yVHlwZSI6InVzZXIifYTui9r1CNINRSB3aGVuIGFueSBpdGVtIHdvdWxkIGJlIHJlZnVzZWQsIHRoZSBzYW1lIGNvZGVzIHRoZSBjb3B5IGl0c2VsZiB1c2VzLobui9r1CJcOC2F0dHJpYnV0aW9uBG51bGwoAO6L2vUI3wwCaWQBdyQyM2EyOTczMy1hNzg2LTRhZDUtOTkxNi00Y2E2OTkyMTc4M2UoAO6L2vUI3wwSd2FzQ29waWVkV2hpbGVPcGVuAX+H7ova9QjfDAMHaGVhZGluZwcA7ova9QibDgYGAO6L2vUInA4LYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2E7ova9QidDg1QbGFubmVkIHRhc2tzhu6L2vUIqg4LYXR0cmlidXRpb24EbnVsbCgA7ova9QibDgVsZXZlbAF9AigA7ova9QibDgJpZAF3JGVlYmFjNDBhLTM0NzktNGJjZS1hZDI4LTVhMGVhNjdiMjNlOYfui9r1CJsOAwVpbWFnZSgA7ova9QiuDgt1cGxvYWRTdGF0ZQF3CGZpbmlzaGVkKADui9r1CK4OA3NyYwF3iQFodHRwczovL3VwbG9hZHMubGluZWFyLmFwcC9kOGI0YTRjMy01ZmVhLTQ1NjgtOWZkYy1lMDhiN2I4YWI4NDYvMjcyNTBjMTYtMjhkNy00ZmQxLThhODQtYzFjMjJjY2Q4ZDBmLzA0MjQ3ZGNhLWM2ZjEtNDNiNC04ZjNkLTYyZWVjNDdhZGVhMygA7ova9QiuDgNhbHQBdyREZXBlbmRlbmN5IGdyYXBoIG9mIHRoZSBwbGFuJ3MgdGFza3MoAO6L2vUIrg4SY29udGVudEF0dHJpYnV0aW9uAXYCBnVzZXJJZHckYjc2MDdiMjEtMTYzMS00MzVlLTkyZDgtZDZhNjUyODZmZjc3CWFjdG9yVHlwZXcEdXNlcofui9r1CK4OAxNjb2xsYXBzaWJsZV9zZWN0aW9uBwDui9r1CLMOAxNjb2xsYXBzaWJsZV9oZWFkaW5nBwDui9r1CLQOAwlwYXJhZ3JhcGgHAO6L2vUItQ4GBgDui9r1CLYOC2F0dHJpYnV0aW9uRHsidXNlcklkIjoiYjc2MDdiMjEtMTYzMS00MzVlLTkyZDgtZDZhNjUyODZmZjc3IiwiYWN0b3JUeXBlIjoidXNlciJ9hO6L2vUItw4KVGFzayB0YWJsZYbui9r1CMEOC2F0dHJpYnV0aW9uBG51bGyH7ova9Qi0DgMFdGFibGUHAO6L2vUIww4DCXRhYmxlX3JvdwcA7ova9QjEDgMMdGFibGVfaGVhZGVyBwDui9r1CMUOAwlwYXJhZ3JhcGgHAO6L2vUIxg4GBgDui9r1CMcOC2F0dHJpYnV0aW9uRHsidXNlcklkIjoiYjc2MDdiMjEtMTYzMS00MzVlLTkyZDgtZDZhNjUyODZmZjc3IiwiYWN0b3JUeXBlIjoidXNlciJ9hO6L2vUIyA4EVGFza4bui9r1CMwOC2F0dHJpYnV0aW9uBG51bGwoAO6L2vUIxQ4HY29sc3BhbgF9ASgA7ova9QjFDgdyb3dzcGFuAX0Bh+6L2vUIxQ4DDHRhYmxlX2hlYWRlcgcA7ova9QjQDgMJcGFyYWdyYXBoBwDui9r1CNEOBgYA7ova9QjSDgthdHRyaWJ1dGlvbkR7InVzZXJJZCI6ImI3NjA3YjIxLTE2MzEtNDM1ZS05MmQ4LWQ2YTY1Mjg2ZmY3NyIsImFjdG9yVHlwZSI6InVzZXIifYTui9r1CNMOBFVuaXSG7ova9QjXDgthdHRyaWJ1dGlvbgRudWxsKADui9r1CNAOB2NvbHNwYW4BfQEoAO6L2vUI0A4Hcm93c3BhbgF9AYfui9r1CNAOAwx0YWJsZV9oZWFkZXIHAO6L2vUI2w4DCXBhcmFncmFwaAcA7ova9QjcDgYGAO6L2vUI3Q4LYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2E7ova9QjeDhBXaGF0IGl0IGRlbGl2ZXJzhu6L2vUI7g4LYXR0cmlidXRpb24EbnVsbCgA7ova9QjbDgdjb2xzcGFuAX0BKADui9r1CNsOB3Jvd3NwYW4BfQGH7ova9QjbDgMMdGFibGVfaGVhZGVyBwDui9r1CPIOAwlwYXJhZ3JhcGgHAO6L2vUI8w4GBgDui9r1CPQOC2F0dHJpYnV0aW9uRHsidXNlcklkIjoiYjc2MDdiMjEtMTYzMS00MzVlLTkyZDgtZDZhNjUyODZmZjc3IiwiYWN0b3JUeXBlIjoidXNlciJ9hO6L2vUI9Q4KRGVwZW5kcyBvbobui9r1CP8OC2F0dHJpYnV0aW9uBG51bGwoAO6L2vUI8g4HY29sc3BhbgF9ASgA7ova9QjyDgdyb3dzcGFuAX0Bh+6L2vUI8g4DDHRhYmxlX2hlYWRlcgcA7ova9QiDDwMJcGFyYWdyYXBoBwDui9r1CIQPBgYA7ova9QiFDwthdHRyaWJ1dGlvbkR7InVzZXJJZCI6ImI3NjA3YjIxLTE2MzEtNDM1ZS05MmQ4LWQ2YTY1Mjg2ZmY3NyIsImFjdG9yVHlwZSI6InVzZXIifYTui9r1CIYPDldoZXJlIGl0IGxpdmVzhu6L2vUIlA8LYXR0cmlidXRpb24EbnVsbCgA7ova9QiDDwdjb2xzcGFuAX0BKADui9r1CIMPB3Jvd3NwYW4BfQGH7ova9QjEDgMJdGFibGVfcm93BwDui9r1CJgPAwp0YWJsZV9jZWxsBwDui9r1CJkPAwlwYXJhZ3JhcGgHAO6L2vUImg8GBgDui9r1CJsPBGNvZGUCe32G7ova9QicDwthdHRyaWJ1dGlvbkR7InVzZXJJZCI6ImI3NjA3YjIxLTE2MzEtNDM1ZS05MmQ4LWQ2YTY1Mjg2ZmY3NyIsImFjdG9yVHlwZSI6InVzZXIifYTui9r1CJ0PDnByZXZpZXctcmVwb3J0hu6L2vUIqw8EY29kZQRudWxshu6L2vUIrA8LYXR0cmlidXRpb24EbnVsbCgA7ova9QiZDwdjb2xzcGFuAX0BKADui9r1CJkPB3Jvd3NwYW4BfQGH7ova9QiZDwMKdGFibGVfY2VsbAcA7ova9QiwDwMJcGFyYWdyYXBoBwDui9r1CLEPBgYA7ova9QiyDwthdHRyaWJ1dGlvbkR7InVzZXJJZCI6ImI3NjA3YjIxLTE2MzEtNDM1ZS05MmQ4LWQ2YTY1Mjg2ZmY3NyIsImFjdG9yVHlwZSI6InVzZXIifYTui9r1CLMPDENvcHkgcGxhbm5lcobui9r1CL8PC2F0dHJpYnV0aW9uBG51bGwoAO6L2vUIsA8HY29sc3BhbgF9ASgA7ova9QiwDwdyb3dzcGFuAX0Bh+6L2vUIsA8DCnRhYmxlX2NlbGwHAO6L2vUIww8DCXBhcmFncmFwaAcA7ova9QjEDwYGAO6L2vUIxQ8LYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2E7ova9QjGDxtUaGUgcmVwb3J0IGEgcHJldmlldyBwcmludHOG7ova9QjhDwthdHRyaWJ1dGlvbgRudWxsKADui9r1CMMPB2NvbHNwYW4BfQEoAO6L2vUIww8Hcm93c3BhbgF9AYfui9r1CMMPAwp0YWJsZV9jZWxsBwDui9r1COUPAwlwYXJhZ3JhcGgHAO6L2vUI5g8GBgDui9r1COcPC2F0dHJpYnV0aW9uRHsidXNlcklkIjoiYjc2MDdiMjEtMTYzMS00MzVlLTkyZDgtZDZhNjUyODZmZjc3IiwiYWN0b3JUeXBlIjoidXNlciJ9hO6L2vUI6A8Ebm9uZYbui9r1COwPC2F0dHJpYnV0aW9uBG51bGwoAO6L2vUI5Q8HY29sc3BhbgF9ASgA7ova9QjlDwdyb3dzcGFuAX0Bh+6L2vUI5Q8DCnRhYmxlX2NlbGwHAO6L2vUI8A8DCXBhcmFncmFwaAcA7ova9QjxDwYGAO6L2vUI8g8EY29kZQJ7fYbui9r1CPMPC2F0dHJpYnV0aW9uRHsidXNlcklkIjoiYjc2MDdiMjEtMTYzMS00MzVlLTkyZDgtZDZhNjUyODZmZjc3IiwiYWN0b3JUeXBlIjoidXNlciJ9hO6L2vUI9A8bbmlja2Rlcm9iZXJ0aXMvb25ldGFza2dyYXBohu6L2vUIjxAEY29kZQRudWxshu6L2vUIkBALYXR0cmlidXRpb24EbnVsbCgA7ova9QjwDwdjb2xzcGFuAX0BKADui9r1CPAPB3Jvd3NwYW4BfQGH7ova9QiYDwMJdGFibGVfcm93BwDui9r1CJQQAwp0YWJsZV9jZWxsBwDui9r1CJUQAwlwYXJhZ3JhcGgHAO6L2vUIlhAGBgDui9r1CJcQBGNvZGUCe32G7ova9QiYEAthdHRyaWJ1dGlvbkR7InVzZXJJZCI6ImI3NjA3YjIxLTE2MzEtNDM1ZS05MmQ4LWQ2YTY1Mjg2ZmY3NyIsImFjdG9yVHlwZSI6InVzZXIifYTui9r1CJkQDHByZXZpZXctZmxhZ4bui9r1CKUQBGNvZGUEbnVsbIbui9r1CKYQC2F0dHJpYnV0aW9uBG51bGwoAO6L2vUIlRAHY29sc3BhbgF9ASgA7ova9QiVEAdyb3dzcGFuAX0Bh+6L2vUIlRADCnRhYmxlX2NlbGwHAO6L2vUIqhADCXBhcmFncmFwaAcA7ova9QirEAYGAO6L2vUIrBALYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2E7ova9QitEAxDb3B5IHBsYW5uZXKG7ova9Qi5EAthdHRyaWJ1dGlvbgRudWxsKADui9r1CKoQB2NvbHNwYW4BfQEoAO6L2vUIqhAHcm93c3BhbgF9AYfui9r1CKoQAwp0YWJsZV9jZWxsBwDui9r1CL0QAwlwYXJhZ3JhcGgHAO6L2vUIvhAGBgDui9r1CL8QC2F0dHJpYnV0aW9uRHsidXNlcklkIjoiYjc2MDdiMjEtMTYzMS00MzVlLTkyZDgtZDZhNjUyODZmZjc3IiwiYWN0b3JUeXBlIjoidXNlciJ9hO6L2vUIwBAEVGhlIIbui9r1CMQQC2F0dHJpYnV0aW9uBG51bGyG7ova9QjFEARjb2RlAnt9hu6L2vUIxhALYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2E7ova9QjHEAktLWRyeS1ydW6G7ova9QjQEARjb2RlBG51bGyG7ova9QjREAthdHRyaWJ1dGlvbgRudWxshu6L2vUI0hALYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2E7ova9QjTEAkgZmxhZyBvbiCG7ova9QjcEAthdHRyaWJ1dGlvbgRudWxshu6L2vUI3RAEY29kZQJ7fYbui9r1CN4QC2F0dHJpYnV0aW9uRHsidXNlcklkIjoiYjc2MDdiMjEtMTYzMS00MzVlLTkyZDgtZDZhNjUyODZmZjc3IiwiYWN0b3JUeXBlIjoidXNlciJ9hO6L2vUI3xAEY29weYbui9r1COMQBGNvZGUEbnVsbIbui9r1COQQC2F0dHJpYnV0aW9uBG51bGwoAO6L2vUIvRAHY29sc3BhbgF9ASgA7ova9Qi9EAdyb3dzcGFuAX0Bh+6L2vUIvRADCnRhYmxlX2NlbGwHAO6L2vUI6BADCXBhcmFncmFwaAcA7ova9QjpEAYGAO6L2vUI6hAEY29kZQJ7fYbui9r1COsQC2F0dHJpYnV0aW9uRHsidXNlcklkIjoiYjc2MDdiMjEtMTYzMS00MzVlLTkyZDgtZDZhNjUyODZmZjc3IiwiYWN0b3JUeXBlIjoidXNlciJ9hO6L2vUI7BAOcHJldmlldy1yZXBvcnSG7ova9Qj6EARjb2RlBG51bGyG7ova9Qj7EAthdHRyaWJ1dGlvbgRudWxsKADui9r1COgQB2NvbHNwYW4BfQEoAO6L2vUI6BAHcm93c3BhbgF9AYfui9r1COgQAwp0YWJsZV9jZWxsBwDui9r1CP8QAwlwYXJhZ3JhcGgHAO6L2vUIgBEGBgDui9r1CIERBGNvZGUCe32G7ova9QiCEQthdHRyaWJ1dGlvbkR7InVzZXJJZCI6ImI3NjA3YjIxLTE2MzEtNDM1ZS05MmQ4LWQ2YTY1Mjg2ZmY3NyIsImFjdG9yVHlwZSI6InVzZXIifYTui9r1CIMRG25pY2tkZXJvYmVydGlzL29uZXRhc2tncmFwaIbui9r1CJ4RBGNvZGUEbnVsbIbui9r1CJ8RC2F0dHJpYnV0aW9uBG51bGwoAO6L2vUI/xAHY29sc3BhbgF9ASgA7ova9Qj/EAdyb3dzcGFuAX0Bh+6L2vUIlBADCXRhYmxlX3JvdwcA7ova9QijEQMKdGFibGVfY2VsbAcA7ova9QikEQMJcGFyYWdyYXBoBwDui9r1CKURBgYA7ova9QimEQRjb2RlAnt9hu6L2vUIpxELYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2E7ova9QioEQxwcmV2aWV3LWV4aXSG7ova9Qi0EQRjb2RlBG51bGyG7ova9Qi1EQthdHRyaWJ1dGlvbgRudWxsKADui9r1CKQRB2NvbHNwYW4BfQEoAO6L2vUIpBEHcm93c3BhbgF9AYfui9r1CKQRAwp0YWJsZV9jZWxsBwDui9r1CLkRAwlwYXJhZ3JhcGgHAO6L2vUIuhEGBgDui9r1CLsRC2F0dHJpYnV0aW9uRHsidXNlcklkIjoiYjc2MDdiMjEtMTYzMS00MzVlLTkyZDgtZDZhNjUyODZmZjc3IiwiYWN0b3JUeXBlIjoidXNlciJ9hO6L2vUIvBEMQ29weSBwbGFubmVyhu6L2vUIyBELYXR0cmlidXRpb24EbnVsbCgA7ova9Qi5EQdjb2xzcGFuAX0BKADui9r1CLkRB3Jvd3NwYW4BfQGH7ova9Qi5EQMKdGFibGVfY2VsbAcA7ova9QjMEQMJcGFyYWdyYXBoBwDui9r1CM0RBgYA7ova9QjOEQthdHRyaWJ1dGlvbkR7InVzZXJJZCI6ImI3NjA3YjIxLTE2MzEtNDM1ZS05MmQ4LWQ2YTY1Mjg2ZmY3NyIsImFjdG9yVHlwZSI6InVzZXIifYTui9r1CM8RGFRoZSBwcmV2aWV3J3MgZXhpdCBjb2Rlc4bui9r1COcRC2F0dHJpYnV0aW9uBG51bGwoAO6L2vUIzBEHY29sc3BhbgF9ASgA7ova9QjMEQdyb3dzcGFuAX0Bh+6L2vUIzBEDCnRhYmxlX2NlbGwHAO6L2vUI6xEDCXBhcmFncmFwaAcA7ova9QjsEQYGAO6L2vUI7REEY29kZQJ7fYbui9r1CO4RC2F0dHJpYnV0aW9uRHsidXNlcklkIjoiYjc2MDdiMjEtMTYzMS00MzVlLTkyZDgtZDZhNjUyODZmZjc3IiwiYWN0b3JUeXBlIjoidXNlciJ9hO6L2vUI7xEOcHJldmlldy1yZXBvcnSG7ova9Qj9EQRjb2RlBG51bGyG7ova9Qj+EQthdHRyaWJ1dGlvbgRudWxsKADui9r1COsRB2NvbHNwYW4BfQEoAO6L2vUI6xEHcm93c3BhbgF9AYfui9r1COsRAwp0YWJsZV9jZWxsBwDui9r1CIISAwlwYXJhZ3JhcGgHAO6L2vUIgxIGBgDui9r1CIQSBGNvZGUCe32G7ova9QiFEgthdHRyaWJ1dGlvbkR7InVzZXJJZCI6ImI3NjA3YjIxLTE2MzEtNDM1ZS05MmQ4LWQ2YTY1Mjg2ZmY3NyIsImFjdG9yVHlwZSI6InVzZXIifYTui9r1CIYSG25pY2tkZXJvYmVydGlzL29uZXRhc2tncmFwaIbui9r1CKESBGNvZGUEbnVsbIbui9r1CKISC2F0dHJpYnV0aW9uBG51bGwoAO6L2vUIghIHY29sc3BhbgF9ASgA7ova9QiCEgdyb3dzcGFuAX0Bh+6L2vUIoxEDCXRhYmxlX3JvdwcA7ova9QimEgMKdGFibGVfY2VsbAcA7ova9QinEgMJcGFyYWdyYXBoBwDui9r1CKgSBgYA7ova9QipEgRjb2RlAnt9hu6L2vUIqhILYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2E7ova9QirEg1wcmV2aWV3LWFkb3B0hu6L2vUIuBIEY29kZQRudWxshu6L2vUIuRILYXR0cmlidXRpb24EbnVsbCgA7ova9QinEgdjb2xzcGFuAX0BKADui9r1CKcSB3Jvd3NwYW4BfQGH7ova9QinEgMKdGFibGVfY2VsbAcA7ova9Qi9EgMJcGFyYWdyYXBoBwDui9r1CL4SBgYA7ova9Qi/EgthdHRyaWJ1dGlvbkR7InVzZXJJZCI6ImI3NjA3YjIxLTE2MzEtNDM1ZS05MmQ4LWQ2YTY1Mjg2ZmY3NyIsImFjdG9yVHlwZSI6InVzZXIifYTui9r1CMASDE9yY2hlc3RyYXRvcobui9r1CMwSC2F0dHJpYnV0aW9uBG51bGwoAO6L2vUIvRIHY29sc3BhbgF9ASgA7ova9Qi9Egdyb3dzcGFuAX0Bh+6L2vUIvRIDCnRhYmxlX2NlbGwHAO6L2vUI0BIDCXBhcmFncmFwaAcA7ova9QjREgYGAO6L2vUI0hILYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2E7ova9QjTEiVUaGUgcGxhbm5pbmcgZmxvdyBwcmV2aWV3cyBldmVyeSBjb3B5hu6L2vUI+BILYXR0cmlidXRpb24EbnVsbCgA7ova9QjQEgdjb2xzcGFuAX0BKADui9r1CNASB3Jvd3NwYW4BfQGH7ova9QjQEgMKdGFibGVfY2VsbAcA7ova9Qj8EgMJcGFyYWdyYXBoBwDui9r1CP0SBgYA7ova9Qj+EgRjb2RlAnt9hu6L2vUI/xILYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2E7ova9QiAEwxwcmV2aWV3LWZsYWeG7ova9QiMEwRjb2RlBG51bGyG7ova9QiNEwthdHRyaWJ1dGlvbgRudWxshu6L2vUIjhMLYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2E7ova9QiPEwIsIIbui9r1CJETC2F0dHJpYnV0aW9uBG51bGyG7ova9QiSEwRjb2RlAnt9hu6L2vUIkxMLYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2E7ova9QiUEwxwcmV2aWV3LWV4aXSG7ova9QigEwRjb2RlBG51bGyG7ova9QihEwthdHRyaWJ1dGlvbgRudWxsKADui9r1CPwSB2NvbHNwYW4BfQEoAO6L2vUI/BIHcm93c3BhbgF9AYfui9r1CPwSAwp0YWJsZV9jZWxsBwDui9r1CKUTAwlwYXJhZ3JhcGgHAO6L2vUIphMGBgDui9r1CKcTBGNvZGUCe32G7ova9QioEwthdHRyaWJ1dGlvbkR7InVzZXJJZCI6ImI3NjA3YjIxLTE2MzEtNDM1ZS05MmQ4LWQ2YTY1Mjg2ZmY3NyIsImFjdG9yVHlwZSI6InVzZXIifYTui9r1CKkTHm5pY2tkZXJvYmVydGlzL2FpLW9yY2hlc3RyYXRvcobui9r1CMcTBGNvZGUEbnVsbIbui9r1CMgTC2F0dHJpYnV0aW9uBG51bGwoAO6L2vUIpRMHY29sc3BhbgF9ASgA7ova9QilEwdyb3dzcGFuAX0BKADui9r1CMMOBnNpemluZwF3A2ZpdCgA7ova9QizDgJpZAF3JDNkMzE1ZjA2LTU0YWYtNDAxNi1hZDU2LWE5MmI1MGQzYTRkYSgA7ova9QizDhJ3YXNDb3BpZWRXaGlsZU9wZW4BfwA=",
+  "node_types": {
+    "top_level": [
+      "heading",
+      "heading",
+      "paragraph",
+      "heading",
+      "paragraph",
+      "heading",
+      "heading",
+      "paragraph",
+      "heading",
+      "paragraph",
+      "paragraph",
+      "collapsible_section",
+      "paragraph",
+      "collapsible_section",
+      "collapsible_section",
+      "collapsible_section",
+      "heading",
+      "image",
+      "collapsible_section"
+    ],
+    "all": [
+      "heading(level 1.0)",
+      "heading(level 2.0)",
+      "paragraph",
+      "heading(level 2.0)",
+      "paragraph",
+      "heading(level 2.0)",
+      "heading(level 3.0)",
+      "paragraph",
+      "heading(level 4.0)",
+      "paragraph",
+      "paragraph",
+      "collapsible_section",
+      "collapsible_heading",
+      "paragraph",
+      "paragraph",
+      "code_block(language json)",
+      "paragraph",
+      "collapsible_section",
+      "collapsible_heading",
+      "paragraph",
+      "paragraph",
+      "collapsible_section",
+      "collapsible_heading",
+      "paragraph",
+      "paragraph",
+      "collapsible_section",
+      "collapsible_heading",
+      "paragraph",
+      "paragraph",
+      "heading(level 2.0)",
+      "image",
+      "collapsible_section",
+      "collapsible_heading",
+      "paragraph",
+      "table",
+      "table_row",
+      "table_header",
+      "paragraph",
+      "table_header",
+      "paragraph",
+      "table_header",
+      "paragraph",
+      "table_header",
+      "paragraph",
+      "table_header",
+      "paragraph",
+      "table_row",
+      "table_cell",
+      "paragraph",
+      "table_cell",
+      "paragraph",
+      "table_cell",
+      "paragraph",
+      "table_cell",
+      "paragraph",
+      "table_cell",
+      "paragraph",
+      "table_row",
+      "table_cell",
+      "paragraph",
+      "table_cell",
+      "paragraph",
+      "table_cell",
+      "paragraph",
+      "table_cell",
+      "paragraph",
+      "table_cell",
+      "paragraph",
+      "table_row",
+      "table_cell",
+      "paragraph",
+      "table_cell",
+      "paragraph",
+      "table_cell",
+      "paragraph",
+      "table_cell",
+      "paragraph",
+      "table_cell",
+      "paragraph",
+      "table_row",
+      "table_cell",
+      "paragraph",
+      "table_cell",
+      "paragraph",
+      "table_cell",
+      "paragraph",
+      "table_cell",
+      "paragraph",
+      "table_cell",
+      "paragraph"
+    ]
+  },
+  "node_tree": {
+    "content": [
+      {
+        "attrs": {
+          "id": "d1c31fd1-8973-44cd-ade2-016585616eeb",
+          "level": 1.0
+        },
+        "content": [
+          {
+            "runs": [
+              {
+                "marks": {},
+                "text": "Design: preview a copy before it writes (sample, new layout)"
+              }
+            ],
+            "type": "#text"
+          }
+        ],
+        "type": "heading"
+      },
+      {
+        "attrs": {
+          "id": "a6aa3032-c72c-4ad7-8b90-a8bec508ea92",
+          "level": 2.0
+        },
+        "content": [
+          {
+            "runs": [
+              {
+                "marks": {},
+                "text": "What"
+              }
+            ],
+            "type": "#text"
+          }
+        ],
+        "type": "heading"
+      },
+      {
+        "attrs": {},
+        "content": [
+          {
+            "runs": [
+              {
+                "marks": {},
+                "text": "Add a way to see what "
+              },
+              {
+                "marks": {
+                  "code": {}
+                },
+                "text": "onetaskgraph copy"
+              },
+              {
+                "marks": {},
+                "text": " would write before it writes anything, so a person can check a plan's copy to a board without touching the board."
+              }
+            ],
+            "type": "#text"
+          }
+        ],
+        "type": "paragraph"
+      },
+      {
+        "attrs": {
+          "id": "eb97b341-5063-4f44-a2c0-d8ce486f359f",
+          "level": 2.0
+        },
+        "content": [
+          {
+            "runs": [
+              {
+                "marks": {},
+                "text": "Why"
+              }
+            ],
+            "type": "#text"
+          }
+        ],
+        "type": "heading"
+      },
+      {
+        "attrs": {},
+        "content": [
+          {
+            "runs": [
+              {
+                "marks": {},
+                "text": "A copy that lands wrong on a shared board is noticed by everyone and undone by hand. Seeing the outcome first makes the copy safe to try."
+              }
+            ],
+            "type": "#text"
+          }
+        ],
+        "type": "paragraph"
+      },
+      {
+        "attrs": {
+          "id": "ae07ae25-42e2-4139-86bf-e6b9082baa87",
+          "level": 2.0
+        },
+        "content": [
+          {
+            "runs": [
+              {
+                "marks": {},
+                "text": "Architecture"
+              }
+            ],
+            "type": "#text"
+          }
+        ],
+        "type": "heading"
+      },
+      {
+        "attrs": {
+          "id": "eef49f17-b078-472e-8644-89803ff74f6b",
+          "level": 3.0
+        },
+        "content": [
+          {
+            "runs": [
+              {
+                "marks": {},
+                "text": "Copy planner — "
+              },
+              {
+                "marks": {
+                  "code": {}
+                },
+                "text": "nickderobertis/onetaskgraph"
+              }
+            ],
+            "type": "#text"
+          }
+        ],
+        "type": "heading"
+      },
+      {
+        "attrs": {},
+        "content": [
+          {
+            "runs": [
+              {
+                "marks": {},
+                "text": "The planner already reads both ends before it writes. A preview stops after the plan and prints it."
+              }
+            ],
+            "type": "#text"
+          }
+        ],
+        "type": "paragraph"
+      },
+      {
+        "attrs": {
+          "id": "3ed5088d-b6e4-47a8-9396-583d354c9690",
+          "level": 4.0
+        },
+        "content": [
+          {
+            "runs": [
+              {
+                "marks": {},
+                "text": "The preview report is the copy report"
+              }
+            ],
+            "type": "#text"
+          }
+        ],
+        "type": "heading"
+      },
+      {
+        "attrs": {},
+        "content": [
+          {
+            "runs": [
+              {
+                "marks": {
+                  "strong": {}
+                },
+                "text": "Reversibility: high cost"
+              },
+              {
+                "marks": {},
+                "text": " — other tools parse the report, so its shape cannot change once released."
+              }
+            ],
+            "type": "#text"
+          }
+        ],
+        "type": "paragraph"
+      },
+      {
+        "attrs": {},
+        "content": [
+          {
+            "runs": [
+              {
+                "marks": {},
+                "text": "A preview prints exactly the report a real copy prints, with every write marked as not made. Nothing else is added to the report, so a tool that reads a copy's report reads a preview's without change."
+              }
+            ],
+            "type": "#text"
+          }
+        ],
+        "type": "paragraph"
+      },
+      {
+        "attrs": {
+          "id": "af3b3af5-9f31-4a4d-b07e-6201e26bfbf2",
+          "wasCopiedWhileOpen": null
+        },
+        "content": [
+          {
+            "attrs": {},
+            "content": [
+              {
+                "attrs": {},
+                "content": [
+                  {
+                    "runs": [
+                      {
+                        "marks": {},
+                        "text": "Examples"
+                      }
+                    ],
+                    "type": "#text"
+                  }
+                ],
+                "type": "paragraph"
+              }
+            ],
+            "type": "collapsible_heading"
+          },
+          {
+            "attrs": {},
+            "content": [
+              {
+                "runs": [
+                  {
+                    "marks": {},
+                    "text": "The prose example: copying a project with two tasks into a board that holds one of them reports one task as "
+                  },
+                  {
+                    "marks": {
+                      "code": {}
+                    },
+                    "text": "would-create"
+                  },
+                  {
+                    "marks": {},
+                    "text": " and one as "
+                  },
+                  {
+                    "marks": {
+                      "code": {}
+                    },
+                    "text": "would-update"
+                  },
+                  {
+                    "marks": {},
+                    "text": ", and the board is left as it was."
+                  }
+                ],
+                "type": "#text"
+              }
+            ],
+            "type": "paragraph"
+          },
+          {
+            "attrs": {
+              "id": "a5230165-079d-476c-86c0-654553f608f3",
+              "language": "json"
+            },
+            "content": [
+              {
+                "runs": [
+                  {
+                    "marks": {},
+                    "text": "{\"items\": [\n  {\"source\": \"notes:T1\", \"outcome\": \"would-create\"},\n  {\"source\": \"notes:T2\", \"outcome\": \"would-update\", \"destination\": \"board:I_42\"}\n]}"
+                  }
+                ],
+                "type": "#text"
+              }
+            ],
+            "type": "code_block"
+          }
+        ],
+        "type": "collapsible_section"
+      },
+      {
+        "attrs": {},
+        "content": [
+          {
+            "runs": [
+              {
+                "marks": {
+                  "strong": {}
+                },
+                "text": "Reversible:"
+              }
+            ],
+            "type": "#text"
+          }
+        ],
+        "type": "paragraph"
+      },
+      {
+        "attrs": {
+          "id": "89c24cc6-1767-4f1b-819a-cc35defe3eae",
+          "wasCopiedWhileOpen": null
+        },
+        "content": [
+          {
+            "attrs": {},
+            "content": [
+              {
+                "attrs": {},
+                "content": [
+                  {
+                    "runs": [
+                      {
+                        "marks": {},
+                        "text": "Adds a "
+                      },
+                      {
+                        "marks": {
+                          "code": {}
+                        },
+                        "text": "--dry-run"
+                      },
+                      {
+                        "marks": {},
+                        "text": " flag to "
+                      },
+                      {
+                        "marks": {
+                          "code": {}
+                        },
+                        "text": "copy"
+                      }
+                    ],
+                    "type": "#text"
+                  }
+                ],
+                "type": "paragraph"
+              }
+            ],
+            "type": "collapsible_heading"
+          },
+          {
+            "attrs": {},
+            "content": [
+              {
+                "runs": [
+                  {
+                    "marks": {},
+                    "text": "The flag is "
+                  },
+                  {
+                    "marks": {
+                      "code": {}
+                    },
+                    "text": "--dry-run"
+                  },
+                  {
+                    "marks": {},
+                    "text": ", the name every other verb of the command line already uses for a run that writes nothing."
+                  }
+                ],
+                "type": "#text"
+              }
+            ],
+            "type": "paragraph"
+          }
+        ],
+        "type": "collapsible_section"
+      },
+      {
+        "attrs": {
+          "id": "505bfeed-2271-4d62-ac41-01889fc96919",
+          "wasCopiedWhileOpen": null
+        },
+        "content": [
+          {
+            "attrs": {},
+            "content": [
+              {
+                "attrs": {},
+                "content": [
+                  {
+                    "runs": [
+                      {
+                        "marks": {},
+                        "text": "Prints items in the order the copy would write them"
+                      }
+                    ],
+                    "type": "#text"
+                  }
+                ],
+                "type": "paragraph"
+              }
+            ],
+            "type": "collapsible_heading"
+          },
+          {
+            "attrs": {},
+            "content": [
+              {
+                "runs": [
+                  {
+                    "marks": {},
+                    "text": "Items are printed in the order the copy would write them, so the preview reads as a script of the copy."
+                  }
+                ],
+                "type": "#text"
+              }
+            ],
+            "type": "paragraph"
+          }
+        ],
+        "type": "collapsible_section"
+      },
+      {
+        "attrs": {
+          "id": "23a29733-a786-4ad5-9916-4ca69921783e",
+          "wasCopiedWhileOpen": null
+        },
+        "content": [
+          {
+            "attrs": {},
+            "content": [
+              {
+                "attrs": {},
+                "content": [
+                  {
+                    "runs": [
+                      {
+                        "marks": {},
+                        "text": "Exits "
+                      },
+                      {
+                        "marks": {
+                          "code": {}
+                        },
+                        "text": "4"
+                      },
+                      {
+                        "marks": {},
+                        "text": " when any item would be refused"
+                      }
+                    ],
+                    "type": "#text"
+                  }
+                ],
+                "type": "paragraph"
+              }
+            ],
+            "type": "collapsible_heading"
+          },
+          {
+            "attrs": {},
+            "content": [
+              {
+                "runs": [
+                  {
+                    "marks": {},
+                    "text": "A preview exits "
+                  },
+                  {
+                    "marks": {
+                      "code": {}
+                    },
+                    "text": "0"
+                  },
+                  {
+                    "marks": {},
+                    "text": " when the copy would succeed and "
+                  },
+                  {
+                    "marks": {
+                      "code": {}
+                    },
+                    "text": "4"
+                  },
+                  {
+                    "marks": {},
+                    "text": " when any item would be refused, the same codes the copy itself uses."
+                  }
+                ],
+                "type": "#text"
+              }
+            ],
+            "type": "paragraph"
+          }
+        ],
+        "type": "collapsible_section"
+      },
+      {
+        "attrs": {
+          "id": "eebac40a-3479-4bce-ad28-5a0ea67b23e9",
+          "level": 2.0
+        },
+        "content": [
+          {
+            "runs": [
+              {
+                "marks": {},
+                "text": "Planned tasks"
+              }
+            ],
+            "type": "#text"
+          }
+        ],
+        "type": "heading"
+      },
+      {
+        "attrs": {
+          "alt": "Dependency graph of the plan's tasks",
+          "contentAttribution": {
+            "actorType": "user",
+            "userId": "b7607b21-1631-435e-92d8-d6a65286ff77"
+          },
+          "src": "https://uploads.linear.app/d8b4a4c3-5fea-4568-9fdc-e08b7b8ab846/27250c16-28d7-4fd1-8a84-c1c22ccd8d0f/04247dca-c6f1-43b4-8f3d-62eec47adea3",
+          "uploadState": "finished"
+        },
+        "content": [],
+        "type": "image"
+      },
+      {
+        "attrs": {
+          "id": "3d315f06-54af-4016-ad56-a92b50d3a4da",
+          "wasCopiedWhileOpen": null
+        },
+        "content": [
+          {
+            "attrs": {},
+            "content": [
+              {
+                "attrs": {},
+                "content": [
+                  {
+                    "runs": [
+                      {
+                        "marks": {},
+                        "text": "Task table"
+                      }
+                    ],
+                    "type": "#text"
+                  }
+                ],
+                "type": "paragraph"
+              }
+            ],
+            "type": "collapsible_heading"
+          },
+          {
+            "attrs": {
+              "sizing": "fit"
+            },
+            "content": [
+              {
+                "attrs": {},
+                "content": [
+                  {
+                    "attrs": {
+                      "colspan": 1.0,
+                      "rowspan": 1.0
+                    },
+                    "content": [
+                      {
+                        "attrs": {},
+                        "content": [
+                          {
+                            "runs": [
+                              {
+                                "marks": {},
+                                "text": "Task"
+                              }
+                            ],
+                            "type": "#text"
+                          }
+                        ],
+                        "type": "paragraph"
+                      }
+                    ],
+                    "type": "table_header"
+                  },
+                  {
+                    "attrs": {
+                      "colspan": 1.0,
+                      "rowspan": 1.0
+                    },
+                    "content": [
+                      {
+                        "attrs": {},
+                        "content": [
+                          {
+                            "runs": [
+                              {
+                                "marks": {},
+                                "text": "Unit"
+                              }
+                            ],
+                            "type": "#text"
+                          }
+                        ],
+                        "type": "paragraph"
+                      }
+                    ],
+                    "type": "table_header"
+                  },
+                  {
+                    "attrs": {
+                      "colspan": 1.0,
+                      "rowspan": 1.0
+                    },
+                    "content": [
+                      {
+                        "attrs": {},
+                        "content": [
+                          {
+                            "runs": [
+                              {
+                                "marks": {},
+                                "text": "What it delivers"
+                              }
+                            ],
+                            "type": "#text"
+                          }
+                        ],
+                        "type": "paragraph"
+                      }
+                    ],
+                    "type": "table_header"
+                  },
+                  {
+                    "attrs": {
+                      "colspan": 1.0,
+                      "rowspan": 1.0
+                    },
+                    "content": [
+                      {
+                        "attrs": {},
+                        "content": [
+                          {
+                            "runs": [
+                              {
+                                "marks": {},
+                                "text": "Depends on"
+                              }
+                            ],
+                            "type": "#text"
+                          }
+                        ],
+                        "type": "paragraph"
+                      }
+                    ],
+                    "type": "table_header"
+                  },
+                  {
+                    "attrs": {
+                      "colspan": 1.0,
+                      "rowspan": 1.0
+                    },
+                    "content": [
+                      {
+                        "attrs": {},
+                        "content": [
+                          {
+                            "runs": [
+                              {
+                                "marks": {},
+                                "text": "Where it lives"
+                              }
+                            ],
+                            "type": "#text"
+                          }
+                        ],
+                        "type": "paragraph"
+                      }
+                    ],
+                    "type": "table_header"
+                  }
+                ],
+                "type": "table_row"
+              },
+              {
+                "attrs": {},
+                "content": [
+                  {
+                    "attrs": {
+                      "colspan": 1.0,
+                      "rowspan": 1.0
+                    },
+                    "content": [
+                      {
+                        "attrs": {},
+                        "content": [
+                          {
+                            "runs": [
+                              {
+                                "marks": {
+                                  "code": {}
+                                },
+                                "text": "preview-report"
+                              }
+                            ],
+                            "type": "#text"
+                          }
+                        ],
+                        "type": "paragraph"
+                      }
+                    ],
+                    "type": "table_cell"
+                  },
+                  {
+                    "attrs": {
+                      "colspan": 1.0,
+                      "rowspan": 1.0
+                    },
+                    "content": [
+                      {
+                        "attrs": {},
+                        "content": [
+                          {
+                            "runs": [
+                              {
+                                "marks": {},
+                                "text": "Copy planner"
+                              }
+                            ],
+                            "type": "#text"
+                          }
+                        ],
+                        "type": "paragraph"
+                      }
+                    ],
+                    "type": "table_cell"
+                  },
+                  {
+                    "attrs": {
+                      "colspan": 1.0,
+                      "rowspan": 1.0
+                    },
+                    "content": [
+                      {
+                        "attrs": {},
+                        "content": [
+                          {
+                            "runs": [
+                              {
+                                "marks": {},
+                                "text": "The report a preview prints"
+                              }
+                            ],
+                            "type": "#text"
+                          }
+                        ],
+                        "type": "paragraph"
+                      }
+                    ],
+                    "type": "table_cell"
+                  },
+                  {
+                    "attrs": {
+                      "colspan": 1.0,
+                      "rowspan": 1.0
+                    },
+                    "content": [
+                      {
+                        "attrs": {},
+                        "content": [
+                          {
+                            "runs": [
+                              {
+                                "marks": {},
+                                "text": "none"
+                              }
+                            ],
+                            "type": "#text"
+                          }
+                        ],
+                        "type": "paragraph"
+                      }
+                    ],
+                    "type": "table_cell"
+                  },
+                  {
+                    "attrs": {
+                      "colspan": 1.0,
+                      "rowspan": 1.0
+                    },
+                    "content": [
+                      {
+                        "attrs": {},
+                        "content": [
+                          {
+                            "runs": [
+                              {
+                                "marks": {
+                                  "code": {}
+                                },
+                                "text": "nickderobertis/onetaskgraph"
+                              }
+                            ],
+                            "type": "#text"
+                          }
+                        ],
+                        "type": "paragraph"
+                      }
+                    ],
+                    "type": "table_cell"
+                  }
+                ],
+                "type": "table_row"
+              },
+              {
+                "attrs": {},
+                "content": [
+                  {
+                    "attrs": {
+                      "colspan": 1.0,
+                      "rowspan": 1.0
+                    },
+                    "content": [
+                      {
+                        "attrs": {},
+                        "content": [
+                          {
+                            "runs": [
+                              {
+                                "marks": {
+                                  "code": {}
+                                },
+                                "text": "preview-flag"
+                              }
+                            ],
+                            "type": "#text"
+                          }
+                        ],
+                        "type": "paragraph"
+                      }
+                    ],
+                    "type": "table_cell"
+                  },
+                  {
+                    "attrs": {
+                      "colspan": 1.0,
+                      "rowspan": 1.0
+                    },
+                    "content": [
+                      {
+                        "attrs": {},
+                        "content": [
+                          {
+                            "runs": [
+                              {
+                                "marks": {},
+                                "text": "Copy planner"
+                              }
+                            ],
+                            "type": "#text"
+                          }
+                        ],
+                        "type": "paragraph"
+                      }
+                    ],
+                    "type": "table_cell"
+                  },
+                  {
+                    "attrs": {
+                      "colspan": 1.0,
+                      "rowspan": 1.0
+                    },
+                    "content": [
+                      {
+                        "attrs": {},
+                        "content": [
+                          {
+                            "runs": [
+                              {
+                                "marks": {},
+                                "text": "The "
+                              },
+                              {
+                                "marks": {
+                                  "code": {}
+                                },
+                                "text": "--dry-run"
+                              },
+                              {
+                                "marks": {},
+                                "text": " flag on "
+                              },
+                              {
+                                "marks": {
+                                  "code": {}
+                                },
+                                "text": "copy"
+                              }
+                            ],
+                            "type": "#text"
+                          }
+                        ],
+                        "type": "paragraph"
+                      }
+                    ],
+                    "type": "table_cell"
+                  },
+                  {
+                    "attrs": {
+                      "colspan": 1.0,
+                      "rowspan": 1.0
+                    },
+                    "content": [
+                      {
+                        "attrs": {},
+                        "content": [
+                          {
+                            "runs": [
+                              {
+                                "marks": {
+                                  "code": {}
+                                },
+                                "text": "preview-report"
+                              }
+                            ],
+                            "type": "#text"
+                          }
+                        ],
+                        "type": "paragraph"
+                      }
+                    ],
+                    "type": "table_cell"
+                  },
+                  {
+                    "attrs": {
+                      "colspan": 1.0,
+                      "rowspan": 1.0
+                    },
+                    "content": [
+                      {
+                        "attrs": {},
+                        "content": [
+                          {
+                            "runs": [
+                              {
+                                "marks": {
+                                  "code": {}
+                                },
+                                "text": "nickderobertis/onetaskgraph"
+                              }
+                            ],
+                            "type": "#text"
+                          }
+                        ],
+                        "type": "paragraph"
+                      }
+                    ],
+                    "type": "table_cell"
+                  }
+                ],
+                "type": "table_row"
+              },
+              {
+                "attrs": {},
+                "content": [
+                  {
+                    "attrs": {
+                      "colspan": 1.0,
+                      "rowspan": 1.0
+                    },
+                    "content": [
+                      {
+                        "attrs": {},
+                        "content": [
+                          {
+                            "runs": [
+                              {
+                                "marks": {
+                                  "code": {}
+                                },
+                                "text": "preview-exit"
+                              }
+                            ],
+                            "type": "#text"
+                          }
+                        ],
+                        "type": "paragraph"
+                      }
+                    ],
+                    "type": "table_cell"
+                  },
+                  {
+                    "attrs": {
+                      "colspan": 1.0,
+                      "rowspan": 1.0
+                    },
+                    "content": [
+                      {
+                        "attrs": {},
+                        "content": [
+                          {
+                            "runs": [
+                              {
+                                "marks": {},
+                                "text": "Copy planner"
+                              }
+                            ],
+                            "type": "#text"
+                          }
+                        ],
+                        "type": "paragraph"
+                      }
+                    ],
+                    "type": "table_cell"
+                  },
+                  {
+                    "attrs": {
+                      "colspan": 1.0,
+                      "rowspan": 1.0
+                    },
+                    "content": [
+                      {
+                        "attrs": {},
+                        "content": [
+                          {
+                            "runs": [
+                              {
+                                "marks": {},
+                                "text": "The preview's exit codes"
+                              }
+                            ],
+                            "type": "#text"
+                          }
+                        ],
+                        "type": "paragraph"
+                      }
+                    ],
+                    "type": "table_cell"
+                  },
+                  {
+                    "attrs": {
+                      "colspan": 1.0,
+                      "rowspan": 1.0
+                    },
+                    "content": [
+                      {
+                        "attrs": {},
+                        "content": [
+                          {
+                            "runs": [
+                              {
+                                "marks": {
+                                  "code": {}
+                                },
+                                "text": "preview-report"
+                              }
+                            ],
+                            "type": "#text"
+                          }
+                        ],
+                        "type": "paragraph"
+                      }
+                    ],
+                    "type": "table_cell"
+                  },
+                  {
+                    "attrs": {
+                      "colspan": 1.0,
+                      "rowspan": 1.0
+                    },
+                    "content": [
+                      {
+                        "attrs": {},
+                        "content": [
+                          {
+                            "runs": [
+                              {
+                                "marks": {
+                                  "code": {}
+                                },
+                                "text": "nickderobertis/onetaskgraph"
+                              }
+                            ],
+                            "type": "#text"
+                          }
+                        ],
+                        "type": "paragraph"
+                      }
+                    ],
+                    "type": "table_cell"
+                  }
+                ],
+                "type": "table_row"
+              },
+              {
+                "attrs": {},
+                "content": [
+                  {
+                    "attrs": {
+                      "colspan": 1.0,
+                      "rowspan": 1.0
+                    },
+                    "content": [
+                      {
+                        "attrs": {},
+                        "content": [
+                          {
+                            "runs": [
+                              {
+                                "marks": {
+                                  "code": {}
+                                },
+                                "text": "preview-adopt"
+                              }
+                            ],
+                            "type": "#text"
+                          }
+                        ],
+                        "type": "paragraph"
+                      }
+                    ],
+                    "type": "table_cell"
+                  },
+                  {
+                    "attrs": {
+                      "colspan": 1.0,
+                      "rowspan": 1.0
+                    },
+                    "content": [
+                      {
+                        "attrs": {},
+                        "content": [
+                          {
+                            "runs": [
+                              {
+                                "marks": {},
+                                "text": "Orchestrator"
+                              }
+                            ],
+                            "type": "#text"
+                          }
+                        ],
+                        "type": "paragraph"
+                      }
+                    ],
+                    "type": "table_cell"
+                  },
+                  {
+                    "attrs": {
+                      "colspan": 1.0,
+                      "rowspan": 1.0
+                    },
+                    "content": [
+                      {
+                        "attrs": {},
+                        "content": [
+                          {
+                            "runs": [
+                              {
+                                "marks": {},
+                                "text": "The planning flow previews every copy"
+                              }
+                            ],
+                            "type": "#text"
+                          }
+                        ],
+                        "type": "paragraph"
+                      }
+                    ],
+                    "type": "table_cell"
+                  },
+                  {
+                    "attrs": {
+                      "colspan": 1.0,
+                      "rowspan": 1.0
+                    },
+                    "content": [
+                      {
+                        "attrs": {},
+                        "content": [
+                          {
+                            "runs": [
+                              {
+                                "marks": {
+                                  "code": {}
+                                },
+                                "text": "preview-flag"
+                              },
+                              {
+                                "marks": {},
+                                "text": ", "
+                              },
+                              {
+                                "marks": {
+                                  "code": {}
+                                },
+                                "text": "preview-exit"
+                              }
+                            ],
+                            "type": "#text"
+                          }
+                        ],
+                        "type": "paragraph"
+                      }
+                    ],
+                    "type": "table_cell"
+                  },
+                  {
+                    "attrs": {
+                      "colspan": 1.0,
+                      "rowspan": 1.0
+                    },
+                    "content": [
+                      {
+                        "attrs": {},
+                        "content": [
+                          {
+                            "runs": [
+                              {
+                                "marks": {
+                                  "code": {}
+                                },
+                                "text": "nickderobertis/ai-orchestrator"
+                              }
+                            ],
+                            "type": "#text"
+                          }
+                        ],
+                        "type": "paragraph"
+                      }
+                    ],
+                    "type": "table_cell"
+                  }
+                ],
+                "type": "table_row"
+              }
+            ],
+            "type": "table"
+          }
+        ],
+        "type": "collapsible_section"
+      }
+    ],
+    "type": "doc"
+  },
+  "blocks": [],
+  "rewrite": {
+    "sent_markdown": "# Design: preview a copy before it writes (sample, new layout)\n\n## What\n\nAdd a way to see what `onetaskgraph copy` would write before it writes anything, so a person can check a plan's copy to a board without touching the board.\n\n## Why\n\nA copy that lands wrong on a shared board is noticed by everyone and undone by hand. Seeing the outcome first makes the copy safe to try.\n\n## Architecture\n\n### Copy planner — `nickderobertis/onetaskgraph`\n\nThe planner already reads both ends before it writes. A preview stops after the plan and prints it.\n\n#### The preview report is the copy report\n\n**Reversibility: high cost** — other tools parse the report, so its shape cannot change once released.\n\nA preview prints exactly the report a real copy prints, with every write marked as not made. Nothing else is added to the report, so a tool that reads a copy's report reads a preview's without change.\n\n+++ Examples\n\nThe prose example: copying a project with two tasks into a board that holds one of them reports one task as `would-create` and one as `would-update`, and the board is left as it was.\n\n```json\n{\"items\": [\n  {\"source\": \"notes:T1\", \"outcome\": \"would-create\"},\n  {\"source\": \"notes:T2\", \"outcome\": \"would-update\", \"destination\": \"board:I_42\"}\n]}\n```\n\n+++\n\n**Reversible:**\n\n+++ Adds a `--dry-run` flag to `copy`\n\nThe flag is `--dry-run`, the name every other verb of the command line already uses for a run that writes nothing.\n\n+++\n\n+++ Prints items in the order the copy would write them\n\nItems are printed in the order the copy would write them, so the preview reads as a script of the copy.\n\n+++\n\n+++ Exits `4` when any item would be refused\n\nA preview exits `0` when the copy would succeed and `4` when any item would be refused, the same codes the copy itself uses.\n\n+++\n\n## Planned tasks\n\n![Dependency graph of the plan's tasks](https://uploads.linear.app/d8b4a4c3-5fea-4568-9fdc-e08b7b8ab846/27250c16-28d7-4fd1-8a84-c1c22ccd8d0f/04247dca-c6f1-43b4-8f3d-62eec47adea3)\n\n+++ Task table\n\n| Task | Unit | What it delivers | Depends on | Where it lives |\n| -- | -- | -- | -- | -- |\n| `preview-report` | Copy planner | The report a preview prints | none | `nickderobertis/onetaskgraph` |\n| `preview-flag` | Copy planner | The `--dry-run` flag on `copy` | `preview-report` | `nickderobertis/onetaskgraph` |\n| `preview-exit` | Copy planner | The preview's exit codes | `preview-report` | `nickderobertis/onetaskgraph` |\n| `preview-adopt` | Orchestrator | The planning flow previews every copy | `preview-flag`, `preview-exit` | `nickderobertis/ai-orchestrator` |\n\n+++",
+    "stored_markdown": "# Design: preview a copy before it writes (sample, new layout)\n\n## What\n\nAdd a way to see what `onetaskgraph copy` would write before it writes anything, so a person can check a plan's copy to a board without touching the board.\n\n## Why\n\nA copy that lands wrong on a shared board is noticed by everyone and undone by hand. Seeing the outcome first makes the copy safe to try.\n\n## Architecture\n\n### Copy planner — `nickderobertis/onetaskgraph`\n\nThe planner already reads both ends before it writes. A preview stops after the plan and prints it.\n\n#### The preview report is the copy report\n\n**Reversibility: high cost** — other tools parse the report, so its shape cannot change once released.\n\nA preview prints exactly the report a real copy prints, with every write marked as not made. Nothing else is added to the report, so a tool that reads a copy's report reads a preview's without change.\n\n+++ Examples\n\nThe prose example: copying a project with two tasks into a board that holds one of them reports one task as `would-create` and one as `would-update`, and the board is left as it was.\n\n```json\n{\"items\": [\n  {\"source\": \"notes:T1\", \"outcome\": \"would-create\"},\n  {\"source\": \"notes:T2\", \"outcome\": \"would-update\", \"destination\": \"board:I_42\"}\n]}\n```\n\n+++\n\n**Reversible:**\n\n+++ Adds a `--dry-run` flag to `copy`\n\nThe flag is `--dry-run`, the name every other verb of the command line already uses for a run that writes nothing.\n\n+++\n\n+++ Prints items in the order the copy would write them\n\nItems are printed in the order the copy would write them, so the preview reads as a script of the copy.\n\n+++\n\n+++ Exits `4` when any item would be refused\n\nA preview exits `0` when the copy would succeed and `4` when any item would be refused, the same codes the copy itself uses.\n\n+++\n\n## Planned tasks\n\n![Dependency graph of the plan's tasks](https://uploads.linear.app/d8b4a4c3-5fea-4568-9fdc-e08b7b8ab846/27250c16-28d7-4fd1-8a84-c1c22ccd8d0f/04247dca-c6f1-43b4-8f3d-62eec47adea3)\n\n+++ Task table\n\n| Task | Unit | What it delivers | Depends on | Where it lives |\n| -- | -- | -- | -- | -- |\n| `preview-report` | Copy planner | The report a preview prints | none | `nickderobertis/onetaskgraph` |\n| `preview-flag` | Copy planner | The `--dry-run` flag on `copy` | `preview-report` | `nickderobertis/onetaskgraph` |\n| `preview-exit` | Copy planner | The preview's exit codes | `preview-report` | `nickderobertis/onetaskgraph` |\n| `preview-adopt` | Orchestrator | The planning flow previews every copy | `preview-flag`, `preview-exit` | `nickderobertis/ai-orchestrator` |\n\n+++",
+    "stored_unchanged": true,
+    "node_types_unchanged": true,
+    "node_types": {
+      "top_level": [
+        "heading",
+        "heading",
+        "paragraph",
+        "heading",
+        "paragraph",
+        "heading",
+        "heading",
+        "paragraph",
+        "heading",
+        "paragraph",
+        "paragraph",
+        "collapsible_section",
+        "paragraph",
+        "collapsible_section",
+        "collapsible_section",
+        "collapsible_section",
+        "heading",
+        "image",
+        "collapsible_section"
+      ],
+      "all": [
+        "heading(level 1.0)",
+        "heading(level 2.0)",
+        "paragraph",
+        "heading(level 2.0)",
+        "paragraph",
+        "heading(level 2.0)",
+        "heading(level 3.0)",
+        "paragraph",
+        "heading(level 4.0)",
+        "paragraph",
+        "paragraph",
+        "collapsible_section",
+        "collapsible_heading",
+        "paragraph",
+        "paragraph",
+        "code_block(language json)",
+        "paragraph",
+        "collapsible_section",
+        "collapsible_heading",
+        "paragraph",
+        "paragraph",
+        "collapsible_section",
+        "collapsible_heading",
+        "paragraph",
+        "paragraph",
+        "collapsible_section",
+        "collapsible_heading",
+        "paragraph",
+        "paragraph",
+        "heading(level 2.0)",
+        "image",
+        "collapsible_section",
+        "collapsible_heading",
+        "paragraph",
+        "table",
+        "table_row",
+        "table_header",
+        "paragraph",
+        "table_header",
+        "paragraph",
+        "table_header",
+        "paragraph",
+        "table_header",
+        "paragraph",
+        "table_header",
+        "paragraph",
+        "table_row",
+        "table_cell",
+        "paragraph",
+        "table_cell",
+        "paragraph",
+        "table_cell",
+        "paragraph",
+        "table_cell",
+        "paragraph",
+        "table_cell",
+        "paragraph",
+        "table_row",
+        "table_cell",
+        "paragraph",
+        "table_cell",
+        "paragraph",
+        "table_cell",
+        "paragraph",
+        "table_cell",
+        "paragraph",
+        "table_cell",
+        "paragraph",
+        "table_row",
+        "table_cell",
+        "paragraph",
+        "table_cell",
+        "paragraph",
+        "table_cell",
+        "paragraph",
+        "table_cell",
+        "paragraph",
+        "table_cell",
+        "paragraph",
+        "table_row",
+        "table_cell",
+        "paragraph",
+        "table_cell",
+        "paragraph",
+        "table_cell",
+        "paragraph",
+        "table_cell",
+        "paragraph",
+        "table_cell",
+        "paragraph"
+      ]
+    }
+  },
+  "sections": [
+    {
+      "summary": "Examples",
+      "summary_marks": [],
+      "body_node_types": [
+        "paragraph",
+        "code_block"
+      ]
+    },
+    {
+      "summary": "Adds a --dry-run flag to copy",
+      "summary_marks": [
+        "code"
+      ],
+      "body_node_types": [
+        "paragraph"
+      ]
+    },
+    {
+      "summary": "Prints items in the order the copy would write them",
+      "summary_marks": [],
+      "body_node_types": [
+        "paragraph"
+      ]
+    },
+    {
+      "summary": "Exits 4 when any item would be refused",
+      "summary_marks": [
+        "code"
+      ],
+      "body_node_types": [
+        "paragraph"
+      ]
+    },
+    {
+      "summary": "Task table",
+      "summary_marks": [],
+      "body_node_types": [
+        "table"
+      ]
+    }
+  ]
+}
