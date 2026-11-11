@@ -978,6 +978,82 @@ fn a_relation_write_whose_far_edges_entry_cannot_be_retired_is_refused_unsent() 
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn a_batched_update_naming_a_task_whose_entry_cannot_be_retired_sends_no_update_of_the_batch() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let cached = Cached::new(held());
+    filled(&cached, &COMMENTS);
+    let dir = cached.dir().expect("a cache").join("tasks");
+    let path = entry(&cached.dir().expect("a cache"), "tasks", "L-1");
+    // As above: an entry that can be neither removed nor emptied, and every process still reads.
+    let held_bytes = dir.join("held-elsewhere");
+    std::fs::rename(&path, &held_bytes).expect("moved aside");
+    std::os::unix::fs::symlink(&held_bytes, &path).expect("a symlink");
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).expect("read-only");
+    if std::fs::remove_file(&path).is_ok() {
+        // Running as a user no directory mode stops — nothing to prove here.
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).ok();
+        return;
+    }
+    let batch = cached.sandbox.project().join("updates.json");
+    std::fs::write(
+        &batch,
+        json!({"schema_version": 1, "updates": [
+            {"item": "linear:L-2", "title": "Second, retitled"},
+            {"item": "linear:L-1", "title": "First, retitled"},
+        ]})
+        .to_string(),
+    )
+    .expect("a batch");
+    let write = [
+        "task",
+        "update-many",
+        "linear",
+        "--input",
+        batch.to_str().expect("a path"),
+        "--json",
+    ];
+    let before = cached.workspace.served().len();
+    let output = cached.run(&write);
+    let sent: Vec<String> = cached.workspace.served()[before..]
+        .iter()
+        .map(|(document, _)| document.clone())
+        .collect();
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).expect("writable");
+    assert_eq!(
+        output.status.code(),
+        Some(4),
+        "{}",
+        crate::common::stderr(&output)
+    );
+    let answered: Value =
+        serde_json::from_str(&crate::common::stdout(&output)).expect("the batch answers JSON");
+    // L-2's own entry could be retired, but the batch goes as one request, so neither is sent.
+    for result in answered["results"].as_array().expect("results") {
+        assert_eq!(result["outcome"], "error", "{result:#}");
+        assert!(
+            result["reason"]
+                .as_str()
+                .is_some_and(|reason| reason.contains("the write was not sent")),
+            "{result:#}"
+        );
+    }
+    assert!(
+        !sent.iter().any(|document| document.starts_with("mutation")),
+        "nothing was written: {sent:?}"
+    );
+    // With the directory writable again, the same batch lands and the entry goes.
+    let (landed, _) = cached.ok(&write);
+    for result in landed["results"].as_array().expect("results") {
+        assert_eq!(result["outcome"], "written", "{result:#}");
+    }
+    assert!(
+        std::fs::symlink_metadata(&path).is_err(),
+        "the entry is retired"
+    );
+}
+
 #[test]
 fn a_project_edge_walk_is_kept_only_when_read_whole_in_one_command() {
     let mut workspace = held();
