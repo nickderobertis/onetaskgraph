@@ -1,0 +1,32 @@
+//! What every instance of one Linear tracker in a process shares: the team's vocabulary — its
+//! id, its workflow states and the workspace's project statuses — and the ids of the labels its
+//! writes named.
+//!
+//! A long-lived caller builds a source instance per command, and several sources over one team
+//! are each an instance; each would otherwise read the same vocabulary afresh. Nothing of a
+//! user's work is held here — names and the ids Linear gives them — and a write that fails
+//! carrying one of them drops what this tracker holds, as an instance's own forget does, so the
+//! next write reads afresh rather than sending a stale id again.
+
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+
+use onetaskgraph_plugin_api::NativeId;
+
+use super::Vocabulary;
+
+/// Every tracker's vocabulary, by its endpoint and team.
+pub(crate) fn vocabularies() -> MutexGuard<'static, HashMap<(String, String), Arc<Vocabulary>>> {
+    static HELD: OnceLock<Mutex<HashMap<(String, String), Arc<Vocabulary>>>> = OnceLock::new();
+    HELD.get_or_init(Mutex::default)
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Every label id read, by its tracker's endpoint, whether it is a project label, and its name.
+pub(crate) fn labels() -> MutexGuard<'static, HashMap<(String, bool, String), NativeId>> {
+    static HELD: OnceLock<Mutex<HashMap<(String, bool, String), NativeId>>> = OnceLock::new();
+    HELD.get_or_init(Mutex::default)
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}

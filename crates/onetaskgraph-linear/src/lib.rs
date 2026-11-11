@@ -567,6 +567,7 @@ pub mod live_artifact;
 
 mod batch;
 mod origins;
+mod shared;
 
 /// The plugin kind a `linear` source's `plugin:` field names.
 pub const KIND: &str = "linear";
@@ -925,7 +926,9 @@ pub mod graphql {
 
     /// The documents this source sends batched by [`composed`], each the single-root document it
     /// batches.
-    pub const BATCHED: [&str; 10] = [
+    pub const BATCHED: [&str; 12] = [
+        ISSUE_LABEL,
+        PROJECT_LABEL,
         ISSUE_RELATION_CREATE,
         ISSUE,
         ISSUES,
@@ -1911,11 +1914,11 @@ enum HeldRelations<'a> {
     /// Nothing yet, so they are read.
     Unread,
 }
-enum Lookup<'a> {
-    IssueLabel(&'a str),
-    ProjectLabel(&'a str),
+enum Lookup {
+    IssueLabel(String),
+    ProjectLabel(String),
 }
-impl Lookup<'_> {
+impl Lookup {
     fn query(&self) -> &'static str {
         match self {
             Self::IssueLabel(_) => graphql::ISSUE_LABEL,
@@ -2833,8 +2836,14 @@ impl LinearSource {
         })
     }
 
-    async fn one_id(&self, lookup: Lookup<'_>) -> Result<NativeId, SourceError> {
+    async fn one_id(&self, lookup: Lookup) -> Result<NativeId, SourceError> {
         let data = self.send(lookup.query(), lookup.variables()).await?;
+        self.only_id(&lookup, &data)
+    }
+
+    /// The one id `data`, a lookup's answer, names — refused naming the lookup when it names
+    /// none or several.
+    fn only_id(&self, lookup: &Lookup, data: &Value) -> Result<NativeId, SourceError> {
         let connection = lookup.connection();
         let nodes = data
             .get(connection)
@@ -2895,14 +2904,33 @@ impl LinearSource {
             .vocabulary
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(read.clone());
+        if let Some(key) = self.shared_key() {
+            shared::vocabularies().insert(key, read.clone());
+        }
         Ok((read, true))
     }
 
     fn held_vocabulary(&self) -> Option<std::sync::Arc<Vocabulary>> {
-        self.vocabulary
+        let mut held = self
+            .vocabulary
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if held.is_none() {
+            // What another instance of this tracker in this process already read.
+            *held = self
+                .shared_key()
+                .and_then(|key| shared::vocabularies().get(&key).cloned());
+        }
+        held.clone()
+    }
+
+    /// The key every instance of this source's tracker in this process shares what it reads of
+    /// the team under: the endpoint and the team — `None` for a source with no team, which
+    /// resolves nothing.
+    fn shared_key(&self) -> Option<(String, String)> {
+        self.team
+            .as_ref()
+            .map(|team| (self.endpoint.0.clone(), team.0.clone()))
     }
 
     /// Drop what this instance holds, after a write carrying one of its ids failed: the id may
@@ -2912,6 +2940,10 @@ impl LinearSource {
             .vocabulary
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        if let Some(key) = self.shared_key() {
+            shared::vocabularies().remove(&key);
+            shared::labels().retain(|(endpoint, _, _), _| *endpoint != key.0);
+        }
     }
 
     /// Hold one name `sources fields --apply` created beside the ones read, so the writes after
@@ -2923,6 +2955,9 @@ impl LinearSource {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(vocabulary) = guard.as_mut() {
             std::sync::Arc::make_mut(vocabulary).add(created.clone());
+            if let Some(key) = self.shared_key() {
+                shared::vocabularies().insert(key, vocabulary.clone());
+            }
         }
     }
 
@@ -2976,23 +3011,58 @@ impl LinearSource {
         })
     }
 
+    /// The ids of `labels`, each held for every instance of this tracker in this process once
+    /// read, and every one not yet held read in one aliased request.
     async fn label_ids(
         &self,
         labels: &[Label],
         kind: WriteKind,
     ) -> Result<Vec<NativeId>, SourceError> {
-        let mut ids = Vec::with_capacity(labels.len());
-        for label in labels {
-            ids.push(
-                self.one_id(if matches!(kind, WriteKind::Project) {
-                    Lookup::ProjectLabel(&label.name)
-                } else {
-                    Lookup::IssueLabel(&label.name)
-                })
-                .await?,
-            );
+        let project = matches!(kind, WriteKind::Project);
+        let key = |name: &str| (self.endpoint.0.clone(), project, name.to_owned());
+        let lookup = |name: &'_ str| {
+            if project {
+                Lookup::ProjectLabel(name.to_owned())
+            } else {
+                Lookup::IssueLabel(name.to_owned())
+            }
+        };
+        let missing: Vec<&str> = {
+            let held = shared::labels();
+            let mut missing: Vec<&str> = Vec::new();
+            for label in labels {
+                if !held.contains_key(&key(&label.name)) && !missing.contains(&label.name.as_str())
+                {
+                    missing.push(label.name.as_str());
+                }
+            }
+            missing
+        };
+        match missing.as_slice() {
+            [] => {}
+            [name] => {
+                let id = self.one_id(lookup(name)).await?;
+                shared::labels().insert(key(name), id);
+            }
+            names => {
+                let lookups: Vec<Lookup> = names.iter().map(|name| lookup(name)).collect();
+                let each: Vec<Value> = lookups.iter().map(Lookup::variables).collect();
+                let single = lookups[0].query();
+                let values = match self.send_aliased(single, &each).await? {
+                    batch::Aliased::Answered(values) => values,
+                    batch::Aliased::Refused(_, refusal) => return Err(refusal.into_error()),
+                };
+                for ((name, lookup), value) in names.iter().zip(&lookups).zip(values) {
+                    let id = self.only_id(lookup, &json!({ lookup.connection(): value }))?;
+                    shared::labels().insert(key(name), id);
+                }
+            }
         }
-        Ok(ids)
+        let held = shared::labels();
+        Ok(labels
+            .iter()
+            .filter_map(|label| held.get(&key(&label.name)).cloned())
+            .collect())
     }
     fn write_description(
         &self,

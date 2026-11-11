@@ -1441,7 +1441,8 @@ async fn a_project_this_source_created_is_removed_again_over_real_http() {
 async fn writes_create_update_and_route_task_and_project_edges_over_real_http() {
     let id_page = |root: &str, id: &str| serde_json::json!({(root):{"nodes":[{"id":id}]}});
     // One source writes all four, so the resolution is read once, by the first write, and
-    // every write after it resolves its status from what that read answered. A create reads
+    // every write after it resolves its status from what that read answered; so is each label,
+    // by the first write naming it. A create reads
     // no relations first: an item that did not exist holds none to replace.
     let (endpoint, wire) = response_server(vec![
         writable_resolution(),
@@ -1450,7 +1451,7 @@ async fn writes_create_update_and_route_task_and_project_edges_over_real_http() 
         serde_json::json!({"issueRelationCreate":{"success":true,"issueRelation":{"id":"R-I"}}}),
         serde_json::json!({"issues":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":"next"}}}),
         serde_json::json!({"issues":{"nodes":[{"id":"I-FAR","identifier":"ENG-9","title":"far","description":"\n\n<!-- onetaskgraph.metadata\n{\"onetaskgraph.origin\":\"authored:FAR\"}\n-->","url":null,"createdAt":null,"updatedAt":null,"state":{"name":"Todo","type":"unstarted"},"priority":0,"labels":{"nodes":[]},"project":null}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}),
-        id_page("issueLabels", "LABEL"),
+        // The label is held from the first write's read of it, so the rewrite reads none.
         // A rewrite reads back the relations it replaces in its own answer.
         serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"I-NEW","description":null,"relations":{"nodes":[{"id":"OLD","type":"blocks","relatedIssue":{"id":"OLD-FAR"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}),
         serde_json::json!({"issueRelationDelete":{"success":true}}),
@@ -1459,7 +1460,6 @@ async fn writes_create_update_and_route_task_and_project_edges_over_real_http() 
         serde_json::json!({"projectCreate":{"success":true,"project":{"id":"P-NEW","content":null}}}),
         serde_json::json!({"projectRelationCreate":{"success":true,"projectRelation":{"id":"R-P"}}}),
         serde_json::json!({"projects":{"nodes":[{"id":"P-FAR","name":"far","content":"<!-- onetaskgraph.metadata\n{\"onetaskgraph.origin\":\"authored:PFAR\"}\n-->","url":null,"createdAt":null,"updatedAt":null,"status":{"name":"Todo","type":"unstarted"},"labels":{"nodes":[]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}),
-        id_page("projectLabels", "PLABEL"),
         serde_json::json!({"projectUpdate":{"success":true,"project":{"id":"P-NEW","content":null,"relations":{"nodes":[{"id":"OLD-P","type":"dependency","relatedProject":{"id":"P-FAR"}}],"pageInfo":{"hasNextPage":true,"endCursor":"next"}}}}}),
         serde_json::json!({"projectRelationDelete":{"success":true}}),
         serde_json::json!({"project":{"content":null,"relations":{"nodes":[{"id":"OLD-P2","type":"related","relatedProject":{"id":"P-OTHER"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}},"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}),
