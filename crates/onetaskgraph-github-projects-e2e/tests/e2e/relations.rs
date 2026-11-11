@@ -1319,3 +1319,160 @@ fn a_relations_read_answered_with_an_error_beside_an_alias_is_refused_never_a_wh
         json!(["board:B-2"])
     );
 }
+
+/// A template rendering one line of text and one picture.
+const PICTURE: &str = "---\nonetaskgraph_template: 1\nvariables:\n  note:\n    description: \
+                       What changed\n    type: string\n---\n# The change\n{{ note }}\n\
+                       ![shot](./shot.png)\n";
+
+#[test]
+fn a_render_with_image_assets_of_a_linked_task_keeps_its_links_section() {
+    use super::asset_board::Board as Attachments;
+    use onetaskgraph_e2e_support::{binary, clock::SimulatedClock, images};
+    // The board behind the attachment host every GitHub asset journey uploads through, on a
+    // simulated clock.
+    let clock = SimulatedClock::start(1);
+    let sandbox = Sandbox::new();
+    let (mut config, github) = github_projects_with_items(&sandbox, vec![issue("B-2", None)]);
+    let attachments = Attachments::new(config["endpoint"].as_str().unwrap(), &clock, 0, None);
+    config["endpoint"] = json!(attachments.endpoint);
+    config["link_types"] = json!({"caused-by": {"native": "relates-to"}});
+    sandbox.project_document(&document(&json!({
+        "board": {"plugin": "github-projects", "config": config},
+    })));
+    let template = sandbox.project().join("picture.md");
+    std::fs::write(&template, PICTURE).unwrap();
+    let template = template.display().to_string();
+    let picture = |name: &str, seed: u64| {
+        let directory = sandbox.subdirectory(name);
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("shot.png");
+        std::fs::write(&path, images::png(seed, 64 * 1024)).unwrap();
+        path.display().to_string()
+    };
+    let run = |arguments: &[&str], stdin: &str| {
+        let lease = clock.lease(0);
+        let output = sandbox
+            .subprocess(binary())
+            .args(arguments)
+            .envs(clock.client_env(0))
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .and_then(|mut child| {
+                std::io::Write::write_all(child.stdin.as_mut().unwrap(), stdin.as_bytes())?;
+                drop(child.stdin.take());
+                child.wait_with_output()
+            })
+            .unwrap();
+        lease.wait_for_detach();
+        drop(lease);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "`onetaskgraph {}` failed\n{}",
+            arguments.join(" "),
+            stderr(&output)
+        );
+        serde_json::from_str::<Value>(&stdout(&output)).expect("JSON")
+    };
+    let first = picture("first", 0xA1);
+    let created = run(
+        &[
+            "task",
+            "create",
+            "board",
+            "--project",
+            "board:P-1",
+            "--title",
+            "Pictures",
+            "--template",
+            &template,
+            "--var",
+            "note=created",
+            "--no-interactive",
+            "--asset",
+            &first,
+            "--json",
+        ],
+        "",
+    );
+    let id = created["items"][0]["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the created id: {created:#}"))
+        .to_owned();
+    let native = id.trim_start_matches("board:").to_owned();
+    let added = run(
+        &["task", "link", "add-many", "--input", "-", "--json"],
+        &json!({"schema_version": 1, "links": [
+            {"from": id, "to": "board:B-2", "type": "caused-by"}]})
+        .to_string(),
+    );
+    assert_eq!(added["results"][0]["outcome"], "written", "{added:#}");
+    let section = links_section(&github, &native);
+    assert!(section.contains("[Ticket B-2]("), "{section}");
+
+    // Rendered again with new words and a new picture: the section is re-rendered unchanged.
+    let second = picture("second", 0xB2);
+    run(
+        &[
+            "task",
+            "render",
+            &id,
+            "--var",
+            "note=rendered",
+            "--no-interactive",
+            "--asset",
+            &second,
+            "--json",
+        ],
+        "",
+    );
+    let body = github.item(&native).unwrap()["body"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(
+        body.contains("rendered") && !body.contains("created"),
+        "{body}"
+    );
+    assert_eq!(links_section(&github, &native), section);
+    let shown = run(&["task", "show", &id, "--json"], "");
+    let content = shown["items"][0]["item"]["content"].as_str().unwrap();
+    assert!(content.contains("rendered"), "{content}");
+    assert!(!content.contains("## Links"), "{content}");
+    assert!(
+        shown["items"][0]["item"]["metadata"]["onetaskgraph.assets"]["shot.png"].is_object(),
+        "{shown:#}"
+    );
+    assert_eq!(github.relates_to(&native), ["B-2"]);
+}
+
+#[test]
+fn with_the_cache_on_a_link_removal_retires_its_from_end_s_entry() {
+    let board = Board::with_source(
+        ["A-1", "B-2"].iter().map(|id| issue(id, None)).collect(),
+        &mirrored(),
+        &json!({"cache": {"enabled": true}}),
+    );
+    let (added, _) = board.links("add-many", &[("A-1", "B-2", "caused-by")]);
+    assert_eq!(outcomes(&added), ["written"]);
+    let held = filled(&board, "A-1");
+    let (removed, served) = board.links("remove-many", &[("A-1", "B-2", "caused-by")]);
+    assert_eq!(outcomes(&removed), ["written"]);
+    assert_eq!(fields_sent(&served, graphql::REMOVE_RELATES_TO), [1]);
+    let (shown, served) = pinned_show(&board, "A-1", &held);
+    assert_eq!(shown.code, Some(0), "{}", shown.stderr);
+    assert!(
+        !served.is_empty(),
+        "the pinned read after the removal reached the board"
+    );
+    assert!(
+        shown.json["items"][0]["item"]["metadata"]
+            .get("onetaskgraph.links")
+            .is_none(),
+        "the pre-removal entry was served: {:#}",
+        shown.json
+    );
+}
