@@ -190,20 +190,23 @@ impl LinkTypes {
     ) -> Result<Self, SourceError> {
         let mut mirrored = BTreeMap::new();
         for (name, entry) in configured {
-            if name.trim().is_empty() {
-                return Err(SourceError::Config {
-                    message: "link_types names a type with an empty name; name each link type"
-                        .to_owned(),
-                });
-            }
-            if name.chars().any(char::is_control) {
-                return Err(SourceError::Config {
-                    message: format!(
-                        "link_types names the type {name:?}, which holds a line break or another \
-                         control character its `## Links` section cannot list on one line; name \
-                         it on one line"
-                    ),
-                });
+            // The one rule a link's type is held to, at a call as here, so a configured name is
+            // the name a call spells it by.
+            match Self::type_name(name) {
+                Ok(checked) if checked == name => {}
+                Ok(checked) => {
+                    return Err(SourceError::Config {
+                        message: format!(
+                            "link_types names the type {name:?} with surrounding whitespace, which \
+                             a link's type never carries; name it {checked:?}"
+                        ),
+                    });
+                }
+                Err(why) => {
+                    return Err(SourceError::Config {
+                        message: format!("link_types names the type {name:?}, which {why}"),
+                    });
+                }
             }
             let Some(word) = &entry.native else {
                 continue;
@@ -235,6 +238,30 @@ impl LinkTypes {
             mirrored.insert(name.clone(), NativeWord(word.clone()));
         }
         Ok(Self(mirrored))
+    }
+
+    /// `name` as a link's type: without surrounding whitespace — or why it names no type a link
+    /// can carry, because it is empty or holds a line break or another control character, which
+    /// its `## Links` section could not list on one line. The one rule a link call, a stored
+    /// link and a source's `link_types` are each held to.
+    ///
+    /// # Errors
+    ///
+    /// Why `name` names no type, as words that follow "which".
+    pub fn type_name(name: &str) -> Result<&str, &'static str> {
+        // Checked before trimming, so a name ending in a line break is refused rather than read
+        // as the name without it.
+        if name.chars().any(char::is_control) {
+            return Err(
+                "holds a line break or another control character, which its `## Links` section \
+                 cannot list on one line",
+            );
+        }
+        let name = name.trim();
+        if name.is_empty() {
+            return Err("names no type");
+        }
+        Ok(name)
     }
 
     /// The native word `link_type` is mirrored as, or `None` for a type kept in metadata alone.

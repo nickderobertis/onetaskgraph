@@ -641,7 +641,8 @@ fn a_native_mirror_named_on_a_source_with_none_is_refused_naming_the_source_type
     // A type with no name, or one its `## Links` section could not list on one line, is refused
     // at load too, saying what to name instead.
     for (configured, named) in [
-        (json!({"  ": {}}), "empty name"),
+        (json!({"  ": {}}), "names no type"),
+        (json!({" caused-by ": {}}), "name it \"caused-by\""),
         (json!({"caused\nby": {}}), "line break"),
     ] {
         store.configure(&json!({"link_types": configured}));

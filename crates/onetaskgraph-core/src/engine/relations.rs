@@ -19,9 +19,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use onetaskgraph_plugin_api::{
-    BatchAnswer, BatchUpdate, LinkDirection, Location, MetadataKey, NativeId, NativeLink,
-    ParentAnswer, ParentWrite, Relations, SourceError, SourceName, TaskLink, TaskUpdate,
-    with_links_section,
+    BatchAnswer, BatchUpdate, LinkDirection, LinkTypes, Location, MetadataKey, NativeId,
+    NativeLink, ParentAnswer, ParentWrite, Relations, SourceError, SourceName, TaskLink,
+    TaskUpdate, with_links_section,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -346,21 +346,10 @@ pub enum LinkOp {
 struct LinkTypeName(String);
 
 impl LinkTypeName {
-    /// `name` checked, or why it names no type a link can carry.
+    /// `name` checked by [`LinkTypes::type_name`], the rule a source's `link_types` is held to
+    /// as well, or why it names no type a link can carry.
     fn new(name: &str) -> Result<Self, &'static str> {
-        // Checked before trimming, so a name ending in a line break is refused rather than read
-        // as the name without it while its stored spelling keeps the break.
-        if name.chars().any(char::is_control) {
-            return Err(
-                "names a type holding a line break or another control character, which its \
-                 `## Links` section cannot list on one line",
-            );
-        }
-        let name = name.trim();
-        if name.is_empty() {
-            return Err("names no type");
-        }
-        Ok(Self(name.to_owned()))
+        LinkTypes::type_name(name).map(|name| Self(name.to_owned()))
     }
 }
 
