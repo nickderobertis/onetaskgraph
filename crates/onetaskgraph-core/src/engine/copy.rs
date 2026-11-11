@@ -12274,8 +12274,11 @@ fn same(held: &Item, outgoing: &Item, destination: &SourceName) -> bool {
                 && held.priority == outgoing.priority
                 && held.labels == outgoing.labels
                 && held.project == outgoing.project
-                && record::without_record(&held.metadata)
-                    == record::without_record(&outgoing.metadata)
+                // Repositories are compared as the field they are: a hosted destination also
+                // reports the slot it carries them in as metadata, which a folder keeps in its
+                // front matter instead — the one difference `record::digest` leaves out too.
+                && record::digest_metadata(&held.metadata)
+                    == record::digest_metadata(&outgoing.metadata)
                 && held.repositories == outgoing.repositories
                 && held.classification == outgoing.classification
         }

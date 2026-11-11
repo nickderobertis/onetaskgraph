@@ -34,6 +34,7 @@ mod live_project_create;
 mod origin_batch;
 mod pinning_walk;
 mod plan_copy;
+mod plan_road;
 mod project_create;
 mod store_cost;
 mod stored_digest;
