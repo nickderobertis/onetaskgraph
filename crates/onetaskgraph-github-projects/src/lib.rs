@@ -9164,6 +9164,8 @@ impl GitHubProjectsSource {
             return Ok(None);
         };
         let held = item.raw_body.clone().unwrap_or_default();
+        // The task's `## Links` section, re-rendered from the links it holds, stays with it.
+        let content = &onetaskgraph_plugin_api::relinked(content, item.body.as_deref(), &item.slot);
         let body = with_content(&held, &self.marked(content))?;
         // Checked before anything is sent: content ending in what this source reads as its own
         // metadata slot would read back as metadata rather than as the content it was.
@@ -9468,7 +9470,13 @@ impl GitHubProjectsSource {
             record_edges(&mut slot, recorded);
         }
         let held = item.raw_body.clone().unwrap_or_default();
-        let content = match &update.content {
+        // A content write keeps the task's `## Links` section, re-rendered from the links the
+        // slot holds once written.
+        let relinked = update
+            .content
+            .as_deref()
+            .map(|content| onetaskgraph_plugin_api::relinked(content, item.body.as_deref(), &slot));
+        let content = match &relinked {
             Some(content) => with_content(&held, &self.marked(content))?,
             None => held.clone(),
         };
@@ -9483,7 +9491,7 @@ impl GitHubProjectsSource {
         // Checked before anything is sent, as a content write checks it: content ending in
         // what this source reads as its own slot would read back as metadata.
         let (visible, read) = self.visible(Some(body.clone()))?;
-        let wanted = update.content.as_deref().or(item.body.as_deref());
+        let wanted = relinked.as_deref().or(item.body.as_deref());
         if visible.as_deref().unwrap_or_default() != wanted.unwrap_or_default() || read != slot {
             return Err(SourceError::Refused {
                 message: format!(
@@ -9690,6 +9698,8 @@ impl GitHubProjectsSource {
         } else {
             content
         };
+        let relinked = onetaskgraph_plugin_api::relinked(content, item.body.as_deref(), &slot);
+        let content = relinked.as_str();
         let body = with_slot(&with_content(&held, &self.marked(content))?, &slot)?;
         // Checked before anything is sent, as a content write checks it.
         let (visible, read) = self.visible(Some(body.clone()))?;
@@ -9709,11 +9719,13 @@ impl GitHubProjectsSource {
         }
         item.body = visible.filter(|value| !value.is_empty());
         item.raw_body = Some(body);
+        // The content as a read answers it: without the `## Links` section of a linked task.
+        let answered = onetaskgraph_plugin_api::read_content(Some(content.to_owned()), &read);
         item.slot = read;
         self.remember_written(item, false)?;
         Ok(Some(onetaskgraph_plugin_api::AssetsWritten {
             id: id.clone(),
-            content: Some(content.to_owned()),
+            content: answered,
         }))
     }
 
@@ -10517,6 +10529,15 @@ impl GitHubProjectsSource {
             }
             None => incoming.content.map(str::to_owned),
         };
+        // A write over an existing item keeps its `## Links` section, re-rendered from the
+        // links it holds.
+        let content = content.map(|content| {
+            onetaskgraph_plugin_api::relinked(
+                &content,
+                existing.and_then(|item| item.body.as_deref()),
+                incoming.metadata,
+            )
+        });
         let marked = content.as_deref().map(|content| self.marked(content));
         let body = compose_body(marked.as_deref(), &slot)?;
         // Read before anything is created, for the reason the field below is: a value

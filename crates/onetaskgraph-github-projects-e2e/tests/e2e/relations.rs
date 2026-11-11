@@ -855,3 +855,70 @@ fn an_item_with_no_relation_is_written_byte_for_byte_as_before_relations_existed
         "A body\n\n## Links\n\nwritten by a person, kept\n"
     );
 }
+
+/// The `## Links` section of a board issue's body — its heading up to the metadata slot.
+fn links_section(board: &GitHubBoardFields, id: &str) -> String {
+    let body = board.item(id).expect("the issue")["body"]
+        .as_str()
+        .expect("a body")
+        .to_owned();
+    let start = body.find("## Links\n").unwrap_or(body.len());
+    let end = body.find("<!--").unwrap_or(body.len());
+    body[start..end.max(start)].trim_end().to_owned()
+}
+
+#[test]
+fn every_content_write_of_a_linked_task_keeps_its_links_section() {
+    let board = Board::of(
+        ["A-1", "B-2"].iter().map(|id| issue(id, None)).collect(),
+        &mirrored(),
+    );
+    let (added, _) = board.links("add-many", &[("A-1", "B-2", "caused-by")]);
+    assert_eq!(outcomes(&added), ["written"]);
+    let rendered = links_section(&board.board, "A-1");
+    assert!(rendered.contains("[Ticket B-2]("), "{rendered}");
+
+    let directory = board.sandbox.subdirectory("bodies");
+    std::fs::create_dir_all(&directory).unwrap();
+    let file = directory.join("body.md");
+    for (verb, text) in [
+        ("content", "Rewritten by content set."),
+        ("update", "Rewritten by update."),
+    ] {
+        std::fs::write(&file, text).unwrap();
+        let path = file.to_str().unwrap();
+        let written = match verb {
+            "content" => board.run(
+                &[
+                    "task",
+                    "content",
+                    "set",
+                    "board:A-1",
+                    "--file",
+                    path,
+                    "--json",
+                ],
+                "",
+            ),
+            _ => board.run(
+                &["task", "update", "board:A-1", "--body-file", path, "--json"],
+                "",
+            ),
+        };
+        assert_eq!(written.code, Some(0), "{verb}: {}", written.stderr);
+        let body = board.board.item("A-1").unwrap()["body"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        // The board writes its heading anchor before the section, as before every heading.
+        assert!(body.starts_with(&format!("{text}\n\n")), "{verb}: {body}");
+        assert_eq!(links_section(&board.board, "A-1"), rendered, "{verb}");
+        let shown = board.run(&["task", "show", "board:A-1", "--json"], "");
+        assert_eq!(shown.json["items"][0]["item"]["content"], text, "{verb}");
+    }
+    let items = board.relations(&["A-1", "B-2"]);
+    assert_eq!(
+        links_of(&items[0]),
+        [link("caused-by", "out", "B-2", "present")]
+    );
+}
