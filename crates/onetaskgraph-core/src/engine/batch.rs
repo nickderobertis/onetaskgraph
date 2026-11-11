@@ -303,8 +303,8 @@ impl FindAnswer {
 /// item. Fewer answers than items leave each item past the last answer unanswered, its answer
 /// malformed; more answers than items say nothing of which answer is whose, so every item's
 /// answer is malformed, naming both counts — each item was sent, so each may have been written.
-fn one_each<T>(
-    source: &SourceName,
+pub(crate) fn one_each<T>(
+    source: &dyn std::fmt::Display,
     asked: usize,
     answers: Vec<Result<T, onetaskgraph_plugin_api::SourceError>>,
 ) -> Vec<Result<T, onetaskgraph_plugin_api::SourceError>> {

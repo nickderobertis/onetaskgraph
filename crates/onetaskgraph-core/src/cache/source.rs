@@ -919,15 +919,22 @@ impl CachedSource {
                 Err(error) => answers[at] = Some(Err(error)),
             }
         }
+        if sent.len() == items.len() {
+            // Every item sent: the answers go back as the source gave them, for the engine to
+            // hold to one per item.
+            let written = write(items.to_vec()).await;
+            for item in items {
+                self.cache.invalidate(id_of(item));
+            }
+            return written;
+        }
         if !sent.is_empty() {
             let written = write(sent.iter().map(|at| items[*at].clone()).collect()).await;
-            let mut written = written.into_iter();
-            for at in &sent {
-                answers[*at] = Some(written.next().unwrap_or_else(|| {
-                    Err(SourceError::Malformed {
-                        message: "an item of the batch was given no answer".to_owned(),
-                    })
-                }));
+            // Spliced back by position, so held to one answer per item sent first — the
+            // engine's own rule for a batched answer.
+            let written = crate::engine::batch::one_each(&self.inner.kind(), sent.len(), written);
+            for (at, answer) in sent.iter().zip(written) {
+                answers[*at] = Some(answer);
                 self.cache.invalidate(id_of(&items[*at]));
             }
         }
@@ -3378,5 +3385,146 @@ mod tests {
             source.health().await.expect("answering");
         }
         assert_eq!(probe.lock().expect("the probe").healths, 2);
+    }
+
+    /// A source answering every batch of comments with one answer more than it was given.
+    struct Overanswering {
+        inner: InMemorySource,
+    }
+
+    #[async_trait::async_trait]
+    impl TaskSource for Overanswering {
+        fn kind(&self) -> &'static str {
+            self.inner.kind()
+        }
+        fn capabilities(&self) -> Capabilities {
+            self.inner.capabilities()
+        }
+        async fn health(&self) -> Result<Health, SourceError> {
+            self.inner.health().await
+        }
+        async fn get_task(&self, id: &NativeId) -> Result<Option<Task>, SourceError> {
+            self.inner.get_task(id).await
+        }
+        async fn get_project(&self, id: &NativeId) -> Result<Option<Project>, SourceError> {
+            self.inner.get_project(id).await
+        }
+        async fn query_tasks(
+            &self,
+            query: &TaskQuery,
+            page: &PageRequest,
+        ) -> Result<Page<Task>, SourceError> {
+            self.inner.query_tasks(query, page).await
+        }
+        async fn query_projects(
+            &self,
+            query: &ProjectQuery,
+            page: &PageRequest,
+        ) -> Result<Page<Project>, SourceError> {
+            self.inner.query_projects(query, page).await
+        }
+        async fn labels(&self, page: &PageRequest) -> Result<Page<Label>, SourceError> {
+            self.inner.labels(page).await
+        }
+        async fn task_dependencies(
+            &self,
+            id: &NativeId,
+            direction: Direction,
+            page: &PageRequest,
+        ) -> Result<Page<DependencyEdge>, SourceError> {
+            self.inner.task_dependencies(id, direction, page).await
+        }
+        async fn project_dependencies(
+            &self,
+            id: &NativeId,
+            direction: Direction,
+            page: &PageRequest,
+        ) -> Result<Page<DependencyEdge>, SourceError> {
+            self.inner.project_dependencies(id, direction, page).await
+        }
+        async fn add_comments(
+            &self,
+            comments: &[onetaskgraph_plugin_api::BatchComment],
+        ) -> Vec<Result<onetaskgraph_plugin_api::BatchAnswer<Comment>, SourceError>> {
+            (0..=comments.len())
+                .map(|_| Ok(onetaskgraph_plugin_api::BatchAnswer::Missing))
+                .collect()
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_batch_answered_with_a_surplus_is_never_cut_to_look_whole() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().expect("a directory");
+        let cache = SourceCache::new(
+            CacheLocation {
+                dir: dir.path().to_path_buf(),
+                remote: "remote".to_owned(),
+            },
+            VersionCoverage::whole(),
+            ProjectVersionCoverage::whole(),
+            DocumentVersionCoverage::whole(),
+        );
+        let source = CachedSource::over(
+            Box::new(Overanswering {
+                inner: InMemorySource::new(InMemoryConfig::default()).expect("an empty source"),
+            }),
+            cache.clone(),
+        );
+        let comment = |task: &str| onetaskgraph_plugin_api::BatchComment {
+            task: id(task),
+            comment: onetaskgraph_plugin_api::NewComment {
+                body: CommentBody::new("A note.".to_owned()).expect("a body"),
+                author: None,
+            },
+            if_version: None,
+        };
+        let batch = [comment("T-1"), comment("T-2"), comment("T-3")];
+
+        // Every item sent: the source's answer goes back as it gave it, surplus and all, for
+        // the engine to hold to one per item.
+        let answered = source.add_comments(&batch).await;
+        assert_eq!(answered.len(), 4, "the surplus is passed on");
+
+        // T-2's entry cannot be retired, so it alone is refused; the other two are sent, and
+        // their surplus answer is held to one per item — each malformed, none silently dropped.
+        cache.write(&Entry {
+            schema: ENTRY_SCHEMA,
+            remote: "remote".to_owned(),
+            task: task("T-2", "v1"),
+            comments: None,
+            assets: None,
+            edges: None,
+            context: None,
+        });
+        let path = cache.task_path(&id("T-2"));
+        let tasks = path.parent().expect("the entries' directory").to_path_buf();
+        let held = tasks.join("held-elsewhere");
+        std::fs::rename(&path, &held).expect("moved aside");
+        std::os::unix::fs::symlink(&held, &path).expect("a symlink");
+        std::fs::set_permissions(&tasks, std::fs::Permissions::from_mode(0o555))
+            .expect("read-only");
+        if std::fs::remove_file(&path).is_ok() {
+            // Running as a user no directory mode stops — nothing to prove here.
+            return;
+        }
+        let answered = source.add_comments(&batch).await;
+        std::fs::set_permissions(&tasks, std::fs::Permissions::from_mode(0o755)).expect("writable");
+        assert_eq!(answered.len(), 3, "one answer per item");
+        assert!(
+            matches!(&answered[1], Err(SourceError::Config { message })
+                if message.contains("the write was not sent")),
+            "{:?}",
+            answered[1]
+        );
+        for at in [0, 2] {
+            assert!(
+                matches!(&answered[at], Err(SourceError::Malformed { message })
+                    if message.contains("answered 3 answers to the 2 items")),
+                "{:?}",
+                answered[at]
+            );
+        }
     }
 }
