@@ -271,7 +271,7 @@ fn authored_regions(content: &str) -> Vec<Region> {
         // Linear keeps none — so it is no block to translate.
         let returned = lines[index..=close]
             .iter()
-            .any(|line| line.ending != "\n" && line.ending != "");
+            .any(|line| line.ending != "\n" && !line.ending.is_empty());
         let block = (!nested && !returned && lines[index].text == "<details>")
             .then(|| authored_parts(&lines[index..=close]))
             .flatten()
