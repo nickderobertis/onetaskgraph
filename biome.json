@@ -18,7 +18,8 @@
       "!scripts/nx-remote-cache.mjs",
       "!scripts/actions-cache-prune.mjs",
       "!scripts/coverage-merge.mjs",
-      "!scripts/nx-version-free-inputs.mjs"
+      "!scripts/nx-version-free-inputs.mjs",
+      "!crates/onetaskgraph-e2e-support/fixtures/expandable_blocks"
     ]
   },
   "formatter": {
