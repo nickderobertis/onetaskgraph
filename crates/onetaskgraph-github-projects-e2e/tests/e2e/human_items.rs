@@ -639,7 +639,8 @@ fn an_edit_a_person_makes_before_the_terminal_projection_survives_it() {
                     store.operations_since(before),
                     [
                         super::plan_copy::operation_name(graphql::UPDATE_FIELD_WHOLE),
-                        "updating an issue"
+                        // Answered with the issue's token, for the version the update reports.
+                        super::plan_copy::operation_name(graphql::UPDATE_ISSUE_TOKEN),
                     ],
                     "{item}"
                 );
@@ -758,7 +759,10 @@ fn a_request_on_standard_input_is_projected_and_a_half_landed_terminal_is_finish
     projected(&store.project(&completed));
     assert_eq!(
         store.operations_since(before),
-        ["reading one issue", "updating an issue"]
+        [
+            "reading one issue",
+            super::plan_copy::operation_name(graphql::UPDATE_ISSUE_TOKEN)
+        ]
     );
     assert_eq!(
         store.board.fields.state(&created),
@@ -926,7 +930,10 @@ fn a_primed_update_changing_the_body_without_moving_an_option_reads_the_body_fir
         .expect("the issue is held");
     assert_eq!(
         store.operations_since(before),
-        ["reading one issue", "updating an issue"]
+        [
+            "reading one issue",
+            super::plan_copy::operation_name(graphql::UPDATE_ISSUE_TOKEN)
+        ]
     );
     let body = store.board.fields.body(&id.0);
     assert!(

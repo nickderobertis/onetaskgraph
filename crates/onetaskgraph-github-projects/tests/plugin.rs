@@ -1762,6 +1762,62 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
     }
     let unpriced = query.replacen("rateLimit{cost} ", "", 1);
     let query = unpriced.as_str();
+    // A mutation's twin selecting the issue it wrote — whole, or its token's parts: answered as
+    // the plain mutation, with that issue shown as a read of it by its id shows it — as GitHub
+    // answers the twin.
+    if let Some(plain) = onetaskgraph_github_projects::graphql::DOCUMENTS
+        .iter()
+        .map(|(document, _)| *document)
+        .find(|plain| {
+            onetaskgraph_github_projects::graphql::whole_twin(plain) == Some(query)
+                || onetaskgraph_github_projects::graphql::token_twin(plain) == Some(query)
+        })
+    {
+        let mut answered = answer(state, plain, variables);
+        let input = &variables["input"];
+        let (at, issue) = match input.get("itemId").and_then(Value::as_str) {
+            Some(item) => {
+                let issue = state
+                    .lock()
+                    .unwrap()
+                    .items
+                    .iter()
+                    .find(|held| held.item_id == item)
+                    .map(|held| held.content_id.clone());
+                let root = if plain == onetaskgraph_github_projects::graphql::CLEAR_FIELD {
+                    "/clearProjectV2ItemFieldValue/projectV2Item"
+                } else {
+                    "/updateProjectV2ItemFieldValue/projectV2Item"
+                };
+                (root, issue)
+            }
+            None if plain == onetaskgraph_github_projects::graphql::UPDATE_ISSUE => {
+                ("/updateIssue", input["id"].as_str().map(str::to_owned))
+            }
+            None => return answered,
+        };
+        if let Some(issue) = issue {
+            let read = answer(
+                state,
+                onetaskgraph_github_projects::graphql::ISSUE,
+                &json!({"id": issue,
+                        "first": variables.get("first").cloned().unwrap_or(json!(100)),
+                        "nestedFirst": variables["nestedFirst"],
+                        "boardItems": variables["boardItems"], "duplicates": true}),
+            );
+            let (key, node) = if at == "/updateIssue" {
+                ("issue", read["node"].clone())
+            } else {
+                ("content", read["node"].clone())
+            };
+            if let Some(slot) = answered.pointer_mut(at)
+                && node.is_object()
+            {
+                slot[key] = node;
+            }
+        }
+        return answered;
+    }
     // The batched origin lookup with a page of a project's members beside it: the lookup as on
     // its own, and the members as GitHub lists a project's sub-issues, trimmed to what the read
     // selects — or as a journey bends them.

@@ -215,6 +215,10 @@ fn per_node(document: &str) -> bool {
         graphql::ISSUE_BOARD_ITEMS,
         graphql::ISSUE_DEPENDENCIES,
         graphql::UPDATE_ISSUE,
+        // What a targeted update sends in place of each, for the version it reports.
+        graphql::UPDATE_ISSUE_TOKEN,
+        graphql::UPDATE_FIELD_TOKEN,
+        graphql::CLEAR_FIELD_TOKEN,
         graphql::UPDATE_ISSUES,
         graphql::UPDATE_DRAFT,
         graphql::UPDATE_FIELD,

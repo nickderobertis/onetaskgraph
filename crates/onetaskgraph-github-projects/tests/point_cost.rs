@@ -115,6 +115,14 @@ const PRICES: &[(&str, u64)] = &[
     (graphql::UPDATE_FIELD_WHOLE, 1),
     (graphql::CLEAR_FIELD_WHOLE, 1),
     // llmlint: ignore-end[tests_hold_no_nonfunctional_thresholds]
+    // The twins a targeted update sends in place of the document beside each, so its answer
+    // spells the version the written task holds: each selects what a read of the issue does,
+    // and costs the one point the plain document does.
+    // llmlint: ignore-block[tests_hold_no_nonfunctional_thresholds] As at `SUB_ISSUES` above: the price is the instrument, not a threshold. These three are new documents, and the sweep below refuses any document in `graphql::DOCUMENTS` without a recorded price; what a follow-up cycle spends is the `github-points-per-follow-up-cycle` budget's, judged by onebudgetspec.
+    (graphql::UPDATE_ISSUE_TOKEN, 1),
+    (graphql::UPDATE_FIELD_TOKEN, 1),
+    (graphql::CLEAR_FIELD_TOKEN, 1),
+    // llmlint: ignore-end[tests_hold_no_nonfunctional_thresholds]
     (graphql::STATUS_OPTIONS_SNAPSHOT, 1),
     (graphql::STATUS_OPTIONS_UPDATE, 1),
 ];

@@ -4450,7 +4450,9 @@ fn github_plain_of(query: &str) -> Option<&'static str> {
     graphql::DOCUMENTS
         .iter()
         .map(|(document, _)| *document)
-        .find(|plain| graphql::whole_twin(plain) == Some(query))
+        .find(|plain| {
+            graphql::whole_twin(plain) == Some(query) || graphql::token_twin(plain) == Some(query)
+        })
 }
 
 // llmlint: ignore[code_lands_in_the_domain_that_owns_it] How the loopback board answers a whole-issue document, which belongs beside the rest of its answers for the reason `GitHubBoard` records.
@@ -4474,14 +4476,15 @@ impl GitHubBoard {
                 .find(|held| held["id"] == comment)
                 .map_or(Value::Null, |held| held["issue"].clone());
             ("/updateIssueComment/issueComment/issue", issue)
-        } else if query == graphql::UPDATE_ISSUE_WHOLE {
+        } else if query == graphql::UPDATE_ISSUE_WHOLE || query == graphql::UPDATE_ISSUE_TOKEN {
             ("/updateIssue/issue", variables["input"]["id"].clone())
         } else {
-            let key = if query == graphql::UPDATE_FIELD_WHOLE {
-                "updateProjectV2ItemFieldValue"
-            } else {
-                "clearProjectV2ItemFieldValue"
-            };
+            let key =
+                if query == graphql::UPDATE_FIELD_WHOLE || query == graphql::UPDATE_FIELD_TOKEN {
+                    "updateProjectV2ItemFieldValue"
+                } else {
+                    "clearProjectV2ItemFieldValue"
+                };
             let item = variables["input"]["itemId"].clone();
             let issue = self
                 .items
@@ -4915,6 +4918,19 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
                         }
                     };
                     let mut answered = answer[root].clone();
+                    // The batch of updates selects each issue it updated whole, as a read of it
+                    // by its own id shows it.
+                    if query == documents::WRITE_TASKS && prefix == "update" {
+                        let node = board.lock().unwrap().detail_node(
+                            &variables[&alias]["id"],
+                            &Value::Null,
+                            &json!(100),
+                            true,
+                        );
+                        if node.is_object() {
+                            answered["issue"] = node;
+                        }
+                    }
                     match bent {
                         Some(AliasAnswer::Missing) => continue,
                         Some(AliasAnswer::NamingAnotherBlocker) => {

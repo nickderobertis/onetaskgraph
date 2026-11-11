@@ -916,6 +916,15 @@ impl GitHubProjectsSource {
             })
     }
 
+    /// Whether the batch of updates running is holding back the writes of the update of `id`
+    /// it is composing.
+    pub(super) fn holding_writes_of(&self, id: &NativeId) -> bool {
+        self.task_writes().is_ok_and(|held| {
+            held.as_ref()
+                .is_some_and(|batch| batch.current.as_ref() == Some(id))
+        })
+    }
+
     /// Hold one task's board field writes on `board` for the batch of updates running, when one
     /// is: answers whether they were held.
     pub(super) fn hold_fields(
@@ -1161,10 +1170,22 @@ impl GitHubProjectsSource {
             .flatten()
             .unwrap_or_default();
         let refused = self.send_task_writes(held).await;
-        for (at, outcome) in composed {
+        let versions = self
+            .versions_after_writes(
+                composed
+                    .iter()
+                    .map(|(at, _)| updates[*at].id.clone())
+                    .filter(|id| !refused.contains_key(id))
+                    .collect(),
+            )
+            .await;
+        for (at, mut outcome) in composed {
             let id = &updates[at].id;
             answers[at] = Some(match refused.get(id) {
-                None => Ok(BatchAnswer::Written(outcome)),
+                None => {
+                    outcome.task.version = versions.get(id).cloned();
+                    Ok(BatchAnswer::Written(outcome))
+                }
                 Some(error) => {
                     // What this process recorded of the write is not what the board holds.
                     let _ = self.forget(id);
@@ -1176,6 +1197,42 @@ impl GitHubProjectsSource {
             .into_iter()
             .map(|answer| answer.unwrap_or(Ok(BatchAnswer::Missing)))
             .collect()
+    }
+
+    /// The change token each task in `written` holds after this batch's writes of it: the one
+    /// its issue update's own answer in [`graphql::WRITE_TASKS`] spelled, which selects the
+    /// issue whole; and, for a task whose update wrote its board fields alone — no answer of
+    /// which shows the issue — the one a batched read of those tasks, made once every write has
+    /// been sent, spells. A task neither can answer gets no version, never the one it was read
+    /// at before the writes; and that read failing leaves every write as written.
+    async fn versions_after_writes(&self, written: Vec<NativeId>) -> BTreeMap<NativeId, String> {
+        let mut versions = BTreeMap::new();
+        let mut unanswered = Vec::new();
+        for id in written {
+            match self.written_answer(&id) {
+                Some(Some(token)) => {
+                    versions.insert(id, token);
+                }
+                // Shown whole without every part of a token: a read would read the same parts.
+                Some(None) => {}
+                None => unanswered.push(id),
+            }
+        }
+        if unanswered.is_empty() {
+            return versions;
+        }
+        let Ok(read) = self.items_by_ids(&unanswered).await else {
+            return versions;
+        };
+        for (id, item) in unanswered.into_iter().zip(read) {
+            if let Some(item) = item
+                && let Some(token) = item.written_version()
+            {
+                self.remember_written_token(&item, token.clone());
+                versions.insert(id, token);
+            }
+        }
+        versions
     }
 
     /// Send every write `held` holds, in [`graphql::WRITE_TASKS`] requests: every task's field
@@ -1240,6 +1297,10 @@ impl GitHubProjectsSource {
             variables.insert(format!("update{slot}"), json!({"id":filler}));
             variables.insert(format!("sendUpdate{slot}"), json!(false));
         }
+        // What each issue update selects of the issue it wrote is read at a read's page sizes.
+        variables.insert("nestedFirst".to_owned(), json!(super::NESTED_PAGE_SIZE));
+        variables.insert("boardItems".to_owned(), json!(super::BOARD_ITEMS_PAGE_SIZE));
+        variables.insert("duplicates".to_owned(), json!(true));
         variables
     }
 
@@ -1359,7 +1420,11 @@ impl GitHubProjectsSource {
                 }
             };
             match answered {
-                Some(answered) if answered == task.0 => {}
+                Some(answered) if answered == task.0 => {
+                    if let Some(issue) = data.get(&alias).and_then(|value| value.get("issue")) {
+                        self.record_written_issue(issue);
+                    }
+                }
                 Some(_) => refused.push((
                     task.clone(),
                     SourceError::Malformed {

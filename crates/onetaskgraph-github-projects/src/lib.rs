@@ -922,6 +922,27 @@ pub fn node_count(document: &str, variables: &Variables) -> Result<u64, NodeCoun
     github_graphql_node_count::node_count(document, variables)
 }
 
+/// `variables` with the page sizes and flags a token twin's inline issue selection binds,
+/// at a read's page sizes.
+fn token_variables(mut variables: Value) -> Value {
+    if let Some(object) = variables.as_object_mut() {
+        object.insert("nestedFirst".to_owned(), json!(NESTED_PAGE_SIZE));
+        object.insert("boardItems".to_owned(), json!(BOARD_ITEMS_PAGE_SIZE));
+        object.insert("duplicates".to_owned(), json!(true));
+    }
+    variables
+}
+
+/// The input members a mutation names the issue or board item it writes by.
+const WRITTEN_NAMES: [&str; 4] = ["id", "issueId", "subjectId", "itemId"];
+
+tokio::task_local! {
+    /// The source a targeted update is running on, by its address, while it runs: what has its
+    /// mutations sent as the twins selecting the whole issue, so the update answers the version
+    /// its own last response shows (see `GitHubProjectsSource::written_tokens`).
+    static SPELLING: usize;
+}
+
 /// The issue-title prefix that makes a board issue a document.
 ///
 /// A GitHub Projects board has no document type — it holds issues — so the discriminator
@@ -1025,12 +1046,24 @@ pub mod graphql {
     macro_rules! board_issue {
         () => {
             concat!(
-                r#" fragment BoardIssue on Issue{__typename id number title body url createdAt updatedAt state stateReason(enableDuplicate:$duplicates) repository{nameWithOwner} parent{id} subIssuesSummary{total} commentCount:comments{totalCount} relationshipEvents:timelineItems(itemTypes:$relationshipEvents){totalCount}
+                r#" fragment BoardIssue on Issue{"#,
+                board_issue_fields!(),
+                "}"
+            )
+        };
+    }
+
+    /// What [`board_issue!`] selects of an issue, written out where a document selects it
+    /// inline rather than through the fragment.
+    macro_rules! board_issue_fields {
+        () => {
+            concat!(
+                r#"__typename id number title body url createdAt updatedAt state stateReason(enableDuplicate:$duplicates) repository{nameWithOwner} parent{id} subIssuesSummary{total} commentCount:comments{totalCount} relationshipEvents:timelineItems(itemTypes:$relationshipEvents){totalCount}
       labels(first:$nestedFirst){nodes{id name color}pageInfo{hasNextPage}}
       projectItems(first:$boardItems){nodes{id updatedAt project{id number}
         "#,
                 board_item_values!(),
-                r#"}pageInfo{hasNextPage endCursor}}}"#
+                r#"}pageInfo{hasNextPage endCursor}}"#
             )
         };
     }
@@ -2190,16 +2223,24 @@ pub mod graphql {
     /// What `task update-many` sends, in two requests at most: every item's field values and
     /// clears first, then every issue update of an item whose fields all landed — the order one
     /// item's update keeps, so a refusal part way leaves an item's body as it stood.
+    ///
+    /// Each `update<n>` selects the issue it updated as a read of it does, so its response spells
+    /// the change token the task holds after its batch's writes — the version `update-many`
+    /// answers — with no read after them. Its page sizes are bound by `$nestedFirst` and
+    /// `$boardItems`, as every read's are.
     pub const WRITE_TASKS: &str = concat!(
         "mutation(",
         wide_variables!("field", "UpdateProjectV2ItemFieldValueInput", "sendField"; 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18),
         wide_variables!("clear", "ClearProjectV2ItemFieldValueInput", "sendClear"; 0 1 2 3 4 5 6 7 8 9 10),
         wide_variables!("update", "UpdateIssueInput", "sendUpdate"; 0 1 2 3 4 5 6 7 8 9 10),
+        r#"$nestedFirst:Int!,$boardItems:Int!,$duplicates:Boolean!"#,
+        relationship_events_variable!(),
         "){",
         wide_slots!("field", "updateProjectV2ItemFieldValue", "projectV2Item{id}", "sendField"; 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18),
         wide_slots!("clear", "clearProjectV2ItemFieldValue", "projectV2Item{id}", "sendClear"; 0 1 2 3 4 5 6 7 8 9 10),
-        wide_slots!("update", "updateIssue", "issue{id}", "sendUpdate"; 0 1 2 3 4 5 6 7 8 9 10),
-        "}"
+        wide_slots!("update", "updateIssue", "issue{id ...BoardIssue}", "sendUpdate"; 0 1 2 3 4 5 6 7 8 9 10),
+        "}",
+        board_issue!()
     );
 
     /// What a mutation of a write the store's cache expects selects of the issue it wrote:
@@ -2282,6 +2323,63 @@ pub mod graphql {
         board_issue!()
     );
 
+    /// The variables every document selecting [`board_issue_fields!`] inline declares beside
+    /// its own.
+    macro_rules! token_variables {
+        () => {
+            concat!(
+                r#",$nestedFirst:Int!,$boardItems:Int!,$duplicates:Boolean!"#,
+                relationship_events_variable!()
+            )
+        };
+    }
+
+    /// [`UPDATE_ISSUE`], selecting what a read of the issue updated selects — every part of its
+    /// change token, and no comment — inline, so its root fields are the plain document's.
+    ///
+    /// What a targeted update sends in the plain document's place, so the version it answers
+    /// is the one its own last response spells (`GitHubProjectsSource::written_tokens`). It
+    /// costs the one point the plain document does.
+    pub const UPDATE_ISSUE_TOKEN: &str = concat!(
+        r#"mutation($input:UpdateIssueInput!"#,
+        token_variables!(),
+        r#"){updateIssue(input:$input){issue{"#,
+        board_issue_fields!(),
+        r#"}}}"#
+    );
+    /// [`UPDATE_FIELD`], selecting the issue behind the board item written as
+    /// [`UPDATE_ISSUE_TOKEN`] selects the issue it updates.
+    pub const UPDATE_FIELD_TOKEN: &str = concat!(
+        r#"mutation($input:UpdateProjectV2ItemFieldValueInput!,$readPriority:Boolean!,$priorityName:String!"#,
+        token_variables!(),
+        r#"){updateProjectV2ItemFieldValue(input:$input){projectV2Item{id fieldValueByName(name:$priorityName) @include(if:$readPriority){... on ProjectV2ItemFieldSingleSelectValue{name field{... on ProjectV2SingleSelectField{id name options{id name}}}}} content{... on Issue{"#,
+        board_issue_fields!(),
+        r#"}}}}}"#
+    );
+    /// [`CLEAR_FIELD`], selecting the issue behind the board item cleared as
+    /// [`UPDATE_ISSUE_TOKEN`] selects the issue it updates.
+    pub const CLEAR_FIELD_TOKEN: &str = concat!(
+        r#"mutation($input:ClearProjectV2ItemFieldValueInput!,$readPriority:Boolean!,$priorityName:String!"#,
+        token_variables!(),
+        r#"){clearProjectV2ItemFieldValue(input:$input){projectV2Item{id fieldValueByName(name:$priorityName) @include(if:$readPriority){... on ProjectV2ItemFieldSingleSelectValue{name field{... on ProjectV2SingleSelectField{id name options{id name}}}}} content{... on Issue{"#,
+        board_issue_fields!(),
+        r#"}}}}}"#
+    );
+
+    /// The document a targeted update sends in `document`'s place, when it has one: the twin
+    /// whose answer spells the change token of the issue written.
+    #[must_use]
+    pub fn token_twin(document: &str) -> Option<&'static str> {
+        [
+            (UPDATE_ISSUE, UPDATE_ISSUE_TOKEN),
+            (UPDATE_FIELD, UPDATE_FIELD_TOKEN),
+            (CLEAR_FIELD, CLEAR_FIELD_TOKEN),
+        ]
+        .into_iter()
+        .find(|(plain, _)| *plain == document)
+        .map(|(_, token)| token)
+    }
+
     /// The document sent in `document`'s place while a write the store's cache expects runs,
     /// when it has one.
     #[must_use]
@@ -2307,7 +2405,7 @@ pub mod graphql {
     /// `documents_are_all_inventoried` reads this file back and fails naming any `pub
     /// const` here that this list omits, so the two cannot part — which is the same guard
     /// `CATEGORIES` carries, in the one shape available to a set of `&str` constants.
-    pub const DOCUMENTS: [(&str, &str); 60] = [
+    pub const DOCUMENTS: [(&str, &str); 63] = [
         (
             ISSUES_BY_CREATION,
             "listing a repository's issues newest first for a create key",
@@ -2436,6 +2534,18 @@ pub mod graphql {
         (
             CLEAR_FIELD_WHOLE,
             "clearing a board field, answered with the whole issue",
+        ),
+        (
+            UPDATE_ISSUE_TOKEN,
+            "updating an issue, answered with its version",
+        ),
+        (
+            UPDATE_FIELD_TOKEN,
+            "writing a board field, answered with the issue's version",
+        ),
+        (
+            CLEAR_FIELD_TOKEN,
+            "clearing a board field, answered with the issue's version",
         ),
     ];
 }
@@ -4107,6 +4217,16 @@ pub struct GitHubProjectsSource {
     /// The board field writes and issue updates a batch of targeted updates is holding back,
     /// while one runs — see `batch::TaskWrites`.
     task_writes: Mutex<Option<batch::TaskWrites>>,
+    /// The change token each task a targeted update wrote in the current command holds after
+    /// that write, by the task's id with its board item's id — spelled from the write's own
+    /// last response, or from the read made right after it where no response showed the whole
+    /// issue: what [`TaskSource::written_task`] answers as its `version`. Any later mutation
+    /// naming the task or its board item drops its entry before it is sent, so an entry is
+    /// never one write behind.
+    /// A response that showed the issue whole but not every part of its token — a draft, or a
+    /// page of labels or field values that did not end — records `None`, which a read would
+    /// not improve on.
+    written_tokens: Mutex<BTreeMap<NativeId, (String, Option<String>)>>,
     clock: SharedClock,
     /// Whether the configuration declares this source private, as
     /// [`TaskSource::declare_visibility`] told it: what decides where a new issue whose one
@@ -5391,6 +5511,7 @@ impl GitHubProjectsSource {
             held_updates: Mutex::new(Vec::new()),
             held_comments: Mutex::new(BTreeMap::new()),
             task_writes: Mutex::new(None),
+            written_tokens: Mutex::new(BTreeMap::new()),
             clock: system_clock(),
             declared_private: std::sync::atomic::AtomicBool::new(false),
             numeric_repositories: tokio::sync::Mutex::new(BTreeMap::new()),
@@ -5465,23 +5586,137 @@ impl GitHubProjectsSource {
         if query != graphql::ORIGIN_LOOKUPS && query != graphql::ORIGIN_LOOKUPS_WITH_MEMBERS {
             Box::pin(self.send_pending_origins(None)).await?;
         }
-        if !self.expected.journaling() {
+        let journaling = self.expected.journaling();
+        let spelling = self.spelling();
+        if !journaling && !spelling {
             return self.graphql_sent(query, variables).await;
         }
         // While a write the store's cache expects runs, its mutations select the whole issue
         // they leave behind, so the response vouches for what the cache keeps — and every
         // request is recorded, so the write's parts are reported from their own responses.
-        let (query, variables) = match graphql::whole_twin(query) {
-            Some(twin) => (twin, expected::whole_variables(variables)),
-            None => (query, variables),
+        // A targeted update sends a twin of each selecting the issue's token parts inline, at
+        // the same price, so the version it answers is the one its own last response spells.
+        let (query, variables) = match (journaling, graphql::whole_twin(query)) {
+            (true, Some(twin)) => (twin, expected::whole_variables(variables)),
+            _ => match graphql::token_twin(query).filter(|_| spelling) {
+                Some(twin) => (twin, token_variables(variables)),
+                None => (query, variables),
+            },
         };
         let sent = self.graphql_sent(query, variables.clone()).await;
-        self.journal(query, &variables, &sent).await;
+        if spelling && let Ok(data) = &sent {
+            self.record_written_token(query, &variables, data);
+        }
+        if journaling {
+            self.journal(query, &variables, &sent).await;
+        }
         sent
+    }
+
+    /// Whether a targeted update of this source is running, whose mutations are each sent as
+    /// the twin selecting the whole issue (see [`Self::written_tokens`]).
+    fn spelling(&self) -> bool {
+        SPELLING
+            .try_with(|source| *source == std::ptr::from_ref(self) as usize)
+            .unwrap_or(false)
+    }
+
+    /// Record the change token the issue a mutation's response shows whole holds now, as
+    /// [`TaskSource::written_task`] answers it; a response showing no whole issue records
+    /// nothing.
+    fn record_written_token(&self, document: &str, variables: &Value, data: &Value) {
+        let (issue, _) = expected::read_back(document, variables, data);
+        if let Some(issue) = issue {
+            self.record_written_issue(issue);
+        }
+    }
+
+    /// Record the change token `issue`, as a write's own answer shows it whole, holds now — or,
+    /// where that answer lacks a part of one, that it was shown and spells none.
+    fn record_written_issue(&self, issue: &Value) {
+        // An answer naming the issue by its id alone did not show it, so it says nothing.
+        if issue.get("updatedAt").is_none() {
+            return;
+        }
+        let Some(id) = issue.get("id").and_then(Value::as_str) else {
+            return;
+        };
+        let (item, token) = match self.written_token_of(issue) {
+            Some((item, token)) => (item, Some(token)),
+            None => {
+                // Answered whole, but without every part of a token: its board item's id, where
+                // it says one, so a later write naming that item still drops the entry.
+                let item = issue
+                    .pointer("/projectItems/nodes")
+                    .and_then(Value::as_array)
+                    .and_then(|nodes| self.board_entry(nodes))
+                    .and_then(|entry| entry.get("id"))
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned();
+                (item, None)
+            }
+        };
+        if let Ok(mut tokens) = self.written_tokens.lock() {
+            tokens.insert(NativeId(id.to_owned()), (item, token));
+        }
+    }
+
+    /// Record `token` as the change token the task `item` holds after this command's write.
+    fn remember_written_token(&self, item: &Resolved, token: String) {
+        if let Ok(mut tokens) = self.written_tokens.lock() {
+            tokens.insert(item.id.clone(), (item.item_id.clone(), Some(token)));
+        }
+    }
+
+    /// The change token the task `id` holds after this command's latest write of it, when that
+    /// write's own response — or the read made right after it — showed one.
+    fn written_token(&self, id: &NativeId) -> Option<String> {
+        self.written_answer(id).flatten()
+    }
+
+    /// What this command's latest write of the task `id` showed of it: `Some` once a response
+    /// showed the issue whole — its token, or `None` where that response could not spell one —
+    /// and `None` where no response did.
+    fn written_answer(&self, id: &NativeId) -> Option<Option<String>> {
+        self.written_tokens
+            .lock()
+            .ok()?
+            .get(id)
+            .map(|(_, token)| token.clone())
+    }
+
+    /// Drop the written token of every task `variables` names, by its id or its board item's,
+    /// before a mutation that may move it is sent.
+    fn forget_written_tokens(&self, variables: &Value) {
+        let Ok(mut tokens) = self.written_tokens.lock() else {
+            return;
+        };
+        if tokens.is_empty() {
+            return;
+        }
+        let named: Vec<&str> = variables
+            .as_object()
+            .into_iter()
+            .flat_map(|arguments| arguments.values())
+            .flat_map(|input| {
+                WRITTEN_NAMES
+                    .iter()
+                    .filter_map(|key| input.get(key).and_then(Value::as_str))
+            })
+            .collect();
+        tokens.retain(|id, (item, _)| {
+            !named
+                .iter()
+                .any(|name| *name == id.0 || *name == item.as_str())
+        });
     }
 
     /// One document sent, retried while GitHub asks for a wait, exactly as asked.
     async fn graphql_sent(&self, query: &str, variables: Value) -> Result<Value, SourceError> {
+        if is_mutation(query) {
+            self.forget_written_tokens(&variables);
+        }
         if is_mutation(query)
             && ![
                 graphql::ADD_COMMENT,
@@ -8705,7 +8940,29 @@ impl GitHubProjectsSource {
     ///
     /// The task answered is the item as those writes left it, built from the read and what was
     /// sent rather than read again — the same record a later read in this run answers from.
+    ///
+    /// Its `version` is the one the task holds after the writes: the change token the last
+    /// mutation's own response spells — each sent as the twin selecting the whole issue, at
+    /// the price of the plain document — or, where that mutation shows no whole issue (several
+    /// board fields written together, or `blockedBy` alone), the token one read right after
+    /// the writes spells. Never the token the item was read at before them. Against GitHub
+    /// itself that token has not settled yet (`change_token::SETTLED`), so a read gives none
+    /// until it has, and a write held to it before then is refused rather than let through;
+    /// once settled, a read gives exactly this token unless the task changed again.
     async fn targeted_update(
+        &self,
+        id: &NativeId,
+        update: &TaskUpdate,
+    ) -> Result<Option<TaskUpdateOutcome>, SourceError> {
+        Box::pin(SPELLING.scope(
+            std::ptr::from_ref(self) as usize,
+            self.composed_update(id, update),
+        ))
+        .await
+    }
+
+    /// [`Self::targeted_update`], inside the scope that has its mutations answer whole.
+    async fn composed_update(
         &self,
         id: &NativeId,
         update: &TaskUpdate,
@@ -9042,6 +9299,9 @@ impl GitHubProjectsSource {
             self.set_item_fields(board.as_str(), &item.item_id, &writes, &cleared)
                 .await?;
         }
+        // Whether anything is sent: what the version answered has to come after.
+        let sends =
+            option_selected || !board_writes.is_empty() || !clears.is_empty() || !fields.is_empty();
         let mut blocked_by_moved = false;
         if let Some((native, _)) = &edges
             && item.content_kind == ContentKind::Issue
@@ -9090,10 +9350,19 @@ impl GitHubProjectsSource {
         if let Some((_, _, projected)) = projection_move {
             item.projected = projected;
         }
-        let task = item.task()?;
+        let mut task = item.task()?;
         let mut written = update.changed(&before, &task);
         if blocked_by_moved || recorded_moves {
             written.insert(UpdatedField::DependsOn);
+        }
+        if sends || blocked_by_moved {
+            // The token the item was read at is not the one it holds now. A batch of updates
+            // holding this one's writes back reads every task it wrote once they are sent.
+            task.version = if self.holding_writes_of(id) {
+                None
+            } else {
+                self.version_after_write(id).await
+            };
         }
         self.remember_written(item, false)?;
         Ok(Some(TaskUpdateOutcome {
@@ -9111,6 +9380,26 @@ impl GitHubProjectsSource {
     /// no room beside itself that is not its body, and answers written there would duplicate
     /// what the content already says and count against GitHub's body limit — so `answers`
     /// reaches nothing here. A body that would not change is not sent at all.
+    /// The change token the task `id` holds after the writes a targeted update just sent: the
+    /// one the last mutation's own response showed, or, where none showed the whole issue, the
+    /// one a read made now spells. `None` when that read cannot say — never the token the
+    /// task was read at before the writes.
+    async fn version_after_write(&self, id: &NativeId) -> Option<String> {
+        // A response that showed the issue whole answers, a token or none: a read made now
+        // would read the same parts.
+        if let Some(answered) = self.written_answer(id) {
+            return answered;
+        }
+        // An item this command created is answered from its own record, not read.
+        if self.created().ok()?.iter().any(|own| own.id == *id) {
+            return None;
+        }
+        let read = self.item_by_id(id).await.ok()??;
+        let token = read.written_version()?;
+        self.remember_written_token(&read, token.clone());
+        Some(token)
+    }
+
     async fn replace_rendering(
         &self,
         id: &NativeId,
@@ -12926,20 +13215,31 @@ impl Resolved {
     /// reached it did not carry all six of its parts, which a draft never does, did not say
     /// when GitHub served it, or found it changed too recently to have settled.
     fn version(&self) -> Option<String> {
+        let parts = self.token_parts()?;
+        change_token::settled(parts.issue, parts.item, self.served_at?)
+            .then(|| change_token::spell(&parts))
+    }
+
+    /// The change token this item, read just after a write of it, holds now — whether or not it
+    /// has settled: what a written task's `version` answers (see
+    /// [`GitHubProjectsSource::written_tokens`]), spelled from the parts a later read spells its
+    /// token from.
+    fn written_version(&self) -> Option<String> {
+        self.token_parts().map(|parts| change_token::spell(&parts))
+    }
+
+    /// Every part of this item's change token, or `None` when the read that reached it did not
+    /// carry them all — a draft never does.
+    fn token_parts(&self) -> Option<change_token::Parts> {
         match self.content_kind {
-            ContentKind::Issue => {
-                let (issue, item) = (self.updated_at?, self.item_updated_at?);
-                let parts = change_token::Parts {
-                    issue,
-                    item,
-                    comments: self.comment_count?,
-                    relationships: self.relationship_events?,
-                    facets: self.facets.clone()?,
-                    repository: self.own_repository.clone()?,
-                };
-                change_token::settled(issue, item, self.served_at?)
-                    .then(|| change_token::spell(&parts))
-            }
+            ContentKind::Issue => Some(change_token::Parts {
+                issue: self.updated_at?,
+                item: self.item_updated_at?,
+                comments: self.comment_count?,
+                relationships: self.relationship_events?,
+                facets: self.facets.clone()?,
+                repository: self.own_repository.clone()?,
+            }),
             ContentKind::DraftIssue => None,
         }
     }
@@ -13983,7 +14283,7 @@ impl TaskSource for GitHubProjectsSource {
                     .cloned()
             })?;
         let mut task = held.task().ok()?;
-        task.version = None;
+        task.version = self.written_token(id);
         Some(task)
     }
 

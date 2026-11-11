@@ -1,5 +1,5 @@
 requests 239
-node count 399762
+node count 399965
 
 requests per call
     1       0  DELETE /repos/{owner}/{repo}/labels/{name}
@@ -80,6 +80,7 @@ requests per call
     1       0  taking an issue out of its project
     2   20200  terminal status read-back
     9       0  the GraphQL rateLimit object
-    6       0  updating an issue
+    5       0  updating an issue
+    1     203  updating an issue, answered with its version
     2     200  writable field discovery
    10       0  writing a board field

@@ -582,7 +582,8 @@ fn updates_written_together_hold_their_versions_and_guards_and_write_each_whole(
     assert_eq!(board.board.status("U-2").as_deref(), Some("Todo"));
     assert_eq!(board.board.priority("U-2").as_deref(), Some("Low"));
     // Read once, together; then every field write in one request and every issue update in
-    // one more — never a request per ticket.
+    // one more — never a request per ticket. The issue updates' own answer shows each ticket
+    // whole, so the version each holds after its write needs no read after it.
     let mutations: Vec<&str> = documents(&served)
         .into_iter()
         .filter(|document| mutation(document))
@@ -779,17 +780,127 @@ fn two_updates_of_one_ticket_are_each_written_on_what_the_one_before_left() {
     assert!(body.starts_with("U-0 first"), "{body}");
     assert!(body.contains("orchestrator.seen"), "{body}");
     assert_eq!(board.board.status("U-0").as_deref(), Some("Doing"));
-    // A mutation's answer cannot vouch for the version GitHub settles the ticket at, so no
-    // written update claims one — least of all the one it was read at before the write.
-    for result in results {
-        assert!(result.get("version").is_none(), "{result:#}");
-    }
+    // Each written update answers the version its ticket holds after the batch's writes — both
+    // of U-0's the one its later update left — and once the board has settled, it is the one a
+    // read gives.
+    let reported: Vec<&str> = results
+        .iter()
+        .map(|result| {
+            result["version"]
+                .as_str()
+                .expect("a version after the write")
+        })
+        .collect();
+    assert_eq!(reported[0], reported[1], "{results:#?}");
+    board.board.pass_time(120);
+    assert_eq!(board.versions(&["U-0", "U-1"]), [reported[1], reported[2]]);
     let body = board.board.body("U-1");
     assert!(
         body.as_str()
             .is_some_and(|body| body.starts_with("U-1 triaged")),
         "{body}"
     );
+}
+
+/// `task update` of `id` retitled, held by `--if-version` to `version`.
+fn held_retitle(board: &Board, id: &str, version: &str) -> Answered {
+    board.run(
+        &[
+            "task",
+            "update",
+            &format!("board:{id}"),
+            "--title",
+            "Retitled under a hold",
+            "--if-version",
+            version,
+            "--json",
+        ],
+        "",
+    )
+}
+
+#[test]
+fn a_written_update_answers_the_version_it_left_and_a_write_held_to_it_goes_ahead() {
+    let board = ticket_board();
+    let before = board.versions(&["U-0", "U-1", "U-2", "U-3"]);
+    // Two updates written together, each held to the version read before it.
+    let batch = json!({"schema_version": 1, "updates": [
+        triage("U-0", Some(&before[0])),
+        triage("U-3", Some(&before[3])),
+    ]});
+    let batched = board.run(
+        &["task", "update-many", "board", "--input", "-", "--json"],
+        &batch.to_string(),
+    );
+    assert_eq!(batched.code, Some(0), "{}", batched.stderr);
+    let results = batched.json["results"].as_array().expect("results");
+    let reported: Vec<String> = results
+        .iter()
+        .map(|result| {
+            assert_eq!(result["outcome"], "written", "{result:#}");
+            result["version"]
+                .as_str()
+                .unwrap_or_else(|| panic!("a version after the write: {result:#}"))
+                .to_owned()
+        })
+        .collect();
+    assert_ne!(
+        reported[0], before[0],
+        "never the version read before the write"
+    );
+    assert_ne!(
+        reported[1], before[3],
+        "never the version read before the write"
+    );
+    // One update whose last write is its issue's, and one writing two board fields alone.
+    let single = |id: &str, arguments: &[&str]| {
+        let target = format!("board:{id}");
+        let mut command = vec!["task", "update", target.as_str()];
+        command.extend(arguments);
+        command.push("--json");
+        let written = board.run(&command, "");
+        assert_eq!(written.code, Some(0), "{}", written.stderr);
+        let version = written.json["result"]["version"]
+            .as_str()
+            .unwrap_or_else(|| panic!("a version after the write: {:#}", written.json))
+            .to_owned();
+        assert_eq!(
+            written.json["task"]["version"],
+            json!(version),
+            "the task answered carries the version the write left: {:#}",
+            written.json
+        );
+        version
+    };
+    let retitled = single("U-1", &["--title", "A retitled ticket"]);
+    assert_ne!(
+        retitled, before[1],
+        "never the version read before the write"
+    );
+    let moved = single("U-2", &["--status", "in-progress", "--priority", "high"]);
+    assert_ne!(moved, before[2], "never the version read before the write");
+
+    // Once the board has settled, each is the version a read gives.
+    board.board.pass_time(120);
+    assert_eq!(
+        board.versions(&["U-0", "U-3", "U-1", "U-2"]),
+        [reported[0].as_str(), &reported[1], &retitled, &moved]
+    );
+    // A write held to a reported version goes ahead; one held to the version read before the
+    // write is refused, writing nothing.
+    for (id, version) in [("U-0", &reported[0]), ("U-1", &retitled), ("U-2", &moved)] {
+        let held = held_retitle(&board, id, version);
+        assert_eq!(held.code, Some(0), "{id}: {}", held.stderr);
+        assert_eq!(held.json["task"]["title"], "Retitled under a hold", "{id}");
+    }
+    let stale = held_retitle(&board, "U-3", &before[3]);
+    assert_ne!(stale.code, Some(0), "{:#}", stale.json);
+    assert_eq!(
+        stale.json["failure"]["kind"], "version-moved",
+        "{:#}",
+        stale.json
+    );
+    assert_eq!(stale.json["held"]["version"], json!(reported[1]));
 }
 
 #[test]
