@@ -197,6 +197,7 @@ fn alias_answer<'a>(
     let Some(value) = data.get(alias).filter(|value| !value.is_null()) else {
         return Ok(None);
     };
+    // llmlint: ignore[boundary_inputs_validated] Only an error whose path starts at this alias is about this alias: GraphQL gives every error raised while executing a field that field's path, and a pathless one is a request error answered with no data, so it never stands beside a populated alias. Counting pathless errors here would also turn every write that landed beside another alias's failure into an error, inviting a duplicate retry.
     let own: Vec<&str> = data
         .get(ANSWER_ERRORS)
         .and_then(Value::as_array)
