@@ -119,7 +119,8 @@
         "nx-hashes",
         "coverage-units",
         "coverage-read-set",
-        "coverage-spawned-binary"
+        "coverage-spawned-binary",
+        "budget-telemetry-replay"
       ]
     },
     "nx-inputs": {
@@ -230,6 +231,23 @@
         }
       ],
       "outputs": []
+    },
+    "budget-telemetry-replay": {
+      "executor": "nx:run-commands",
+      "dependsOn": ["bootstrap"],
+      "options": {
+        "command": "node --test .github/nx-policy/tests/budget-telemetry-replay.test.mjs"
+      },
+      "cache": false,
+      "inputs": [
+        "{projectRoot}/tests/budget-telemetry-replay.test.mjs",
+        "{projectRoot}/tests/fixtures/coverage-harness.mjs",
+        "{workspaceRoot}/crates/onetaskgraph-e2e/budgets.yaml",
+        "{workspaceRoot}/crates/onetaskgraph-e2e/tests/e2e/budget_runner.rs",
+        "{workspaceRoot}/crates/onetaskgraph-e2e/tests/e2e/boundary/batch.rs",
+        "{workspaceRoot}/crates/onetaskgraph-e2e-support/src/telemetry.rs"
+      ],
+      "//": "Uncached: it builds this tree's e2e test executable and runs the real budget over it, so no input list short of the whole crate graph describes its result. Its inputs say which edits select it: the budget, its reader and what records it; every project.json is already in this project's default."
     }
   },
   "//": "Workspace-wide Nx input contracts have their own project so project-definition edits select these checks without selecting the CD or sidecar journeys."
