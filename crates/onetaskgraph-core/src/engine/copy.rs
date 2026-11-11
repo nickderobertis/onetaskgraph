@@ -5465,7 +5465,11 @@ impl Engine {
         .await?;
         // Each record a body links to is written before the body, so a link is addressable when
         // its body is first written rather than finished by a write of its own.
-        let mut planned = targets_first(planned);
+        let planned = targets_first(planned, false);
+        // Reported in that order: a task written ahead of another only so its edges land with
+        // its own create moves no line of the report.
+        let reported: Vec<GlobalId> = planned.iter().map(|item| item.source.clone()).collect();
+        let mut planned = targets_first(planned, true);
         self.note_derived_relations(&mut planned)?;
         // Once a document's references point where they land, and before anything is compared
         // with the destination or written to it: every status is what its destination will
@@ -5894,6 +5898,12 @@ impl Engine {
         for (index, outcome) in left_out {
             outcomes.insert(index.min(outcomes.len()), outcome);
         }
+        outcomes.sort_by_key(|outcome| {
+            reported
+                .iter()
+                .position(|source| source == &outcome.source)
+                .unwrap_or(usize::MAX)
+        });
         Ok(outcomes)
     }
 
@@ -6917,15 +6927,15 @@ impl Engine {
             return;
         }
         let reachable = self.routes.reachable(&request.destination);
-        let mut wanted: Vec<(SourceName, Vec<NativeId>)> = Vec::new();
+        let mut wanted: Vec<(SourceName, Vec<(MetadataRecord, NativeId)>)> = Vec::new();
         let mut origins: Vec<(SourceName, Vec<String>)> = Vec::new();
-        let mut want = |there: &SourceName, native: NativeId| match wanted
-            .iter_mut()
-            .find(|(name, _)| name == there)
-        {
-            Some((_, natives)) if natives.contains(&native) => {}
-            Some((_, natives)) => natives.push(native),
-            None => wanted.push((there.clone(), vec![native])),
+        let mut want = |there: &SourceName, record: MetadataRecord, native: NativeId| {
+            let native = (record, native);
+            match wanted.iter_mut().find(|(name, _)| name == there) {
+                Some((_, natives)) if natives.contains(&native) => {}
+                Some((_, natives)) => natives.push(native),
+                None => wanted.push((there.clone(), vec![native])),
+            }
         };
         // Each destination project this copy names, with the origin it records there and why
         // the copy names it: what a cache standing in front of that destination is pinned
@@ -6963,12 +6973,12 @@ impl Engine {
             if !(request.comments && read.item.level() == Level::Task) {
                 for there in &reachable {
                     if let Some(link) = link_of(metadata, there) {
-                        want(there, link.native);
+                        want(there, read.item.level().record(), link.native);
                     }
                     if let Some(origin) =
                         origin_of(metadata).filter(|origin| &origin.source == there)
                     {
-                        want(there, origin.native);
+                        want(there, read.item.level().record(), origin.native);
                     }
                 }
             }
@@ -7068,7 +7078,7 @@ impl Engine {
                     {
                         screened_homes.push(there.clone());
                     }
-                    want(there, link.native.clone());
+                    want(there, MetadataRecord::Project, link.native.clone());
                     homes.push((
                         there.clone(),
                         link.native,
@@ -7138,7 +7148,7 @@ impl Engine {
             }
             if let Ok(there) = self.writable(&name) {
                 // Nothing is decided by it: each read it would have answered is made as before.
-                let _ = there.source().read_ahead_for_copy(&natives).await;
+                let _ = there.source().read_ahead_records_for_copy(&natives).await;
             }
         }
     }
@@ -11850,10 +11860,12 @@ async fn read_destination(
     .map_err(|error| refused(destination, error))
 }
 
-/// `planned` with every item a planned body links to ahead of that body, and otherwise in the
-/// order it came in: an item is taken once every item of `planned` it links to has been,
-/// and where links run in a cycle, the earliest item left is taken as it stands.
-fn targets_first(planned: Vec<Planned>) -> Vec<Planned> {
+/// `planned` with every item a planned body links to — and, with `dependencies`, every item a
+/// planned task depends on — ahead of it, and otherwise in the order it came in: an item is taken once every item of
+/// `planned` it links to or depends on has been, and where they run in a cycle, the earliest
+/// item left is taken as it stands. A task created after what it depends on lands with its
+/// edges in its own write, rather than in a second write once its far end exists.
+fn targets_first(planned: Vec<Planned>, dependencies: bool) -> Vec<Planned> {
     let links: Vec<Vec<usize>> = planned
         .iter()
         .map(|item| {
@@ -11869,9 +11881,9 @@ fn targets_first(planned: Vec<Planned>) -> Vec<Planned> {
                 .filter(|(_, other)| {
                     other.to == item.to
                         && !std::ptr::eq(*other, item)
-                        && referents.iter().any(|referent| {
+                        && (referents.iter().any(|referent| {
                             referent.level == other.item.level() && referent.id == other.source
-                        })
+                        }) || (dependencies && depends_on(item, other)))
                 })
                 .map(|(index, _)| index)
                 .collect()
@@ -11895,6 +11907,22 @@ fn targets_first(planned: Vec<Planned>) -> Vec<Planned> {
         .into_iter()
         .map(|index| slots[index].take().expect("each item taken once"))
         .collect()
+}
+
+/// Whether the planned `item` depends on the planned `other`: one of its edges names `other`'s
+/// source id, qualified or by the native id its own source names its own items by.
+fn depends_on(item: &Planned, other: &Planned) -> bool {
+    item.edges.iter().any(|edge| {
+        let kind = match other.item.level() {
+            Level::Task => ItemKind::Task,
+            Level::Project => ItemKind::Project,
+            Level::Document => return false,
+        };
+        edge.to.kind == kind
+            && (edge.to.id() == other.source.to_string()
+                || (other.source.source == item.source.source
+                    && edge.to.id() == other.source.native.as_str()))
+    })
 }
 
 /// One item a copy call writes: the source it lands in, its interface and its source id.

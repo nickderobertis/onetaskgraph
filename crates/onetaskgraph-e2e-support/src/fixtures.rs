@@ -7265,13 +7265,12 @@ fn linear_serve(
                 );
                 continue;
             }
-            let aliased = onetaskgraph_linear::graphql::unaliased(
+            let aliased = onetaskgraph_linear::graphql::decomposed(
                 request["query"].as_str().unwrap_or_default(),
             );
-            let (status, response) = if let Some((single, count)) = aliased {
+            let (status, response) = if let Some(singles) = aliased {
                 linear_aliased(
-                    single,
-                    count,
+                    &singles,
                     &request,
                     recorded.as_ref(),
                     &mut state.lock().unwrap(),
@@ -7361,20 +7360,19 @@ fn linear_serve(
     json!({"endpoint":endpoint,"team":"FIX","status_mapping":linear_default_mapping()})
 }
 
-/// An aliased document — `count` copies of `single` — answered as Linear answers one: each alias
-/// as `single` alone answers it, in order; the first one refused ends the answer there with no
+/// An aliased document — the documents `singles` composed — answered as Linear answers one: each
+/// alias as its document alone answers it, in order; the first one refused ends the answer there with no
 /// `data` and an error at that alias's path, every mutation before it applied and none after,
 /// because each root this plugin batches is non-null.
 fn linear_aliased(
-    single: &str,
-    count: usize,
+    singles: &[&str],
     request: &Value,
     recorded: Option<&Value>,
     data: &mut Value,
 ) -> (&'static str, Value) {
     let variables = request.get("variables").cloned().unwrap_or(Value::Null);
     let mut answered = serde_json::Map::new();
-    for at in 0..count {
+    for (at, single) in singles.iter().enumerate() {
         let alias = format!("a{at}");
         let one = json!({"query": single,
             "variables": onetaskgraph_linear::graphql::alias_variables(&variables, at)});

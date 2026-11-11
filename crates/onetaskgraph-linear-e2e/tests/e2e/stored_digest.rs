@@ -713,9 +713,10 @@ fn over_the_stdio_protocol_linear_stores_what_the_copy_records_and_refuses_what_
 }
 
 /// An item that depends on another of the same copy lands first without that edge and is
-/// written again once its far end exists; that second write's answer is read exactly as the
-/// first's was, its follow-up answered for, so a backend storing its own stored content
-/// otherwise from that write on is still refused.
+/// written again once its far end exists — which, a copy creating what an item depends on
+/// before the item, takes two tasks depending on each other; that second write's answer is
+/// read exactly as the first's was, its follow-up answered for, so a backend storing its own
+/// stored content otherwise from that write on is still refused.
 #[test]
 fn a_repair_write_linear_stores_otherwise_is_refused_as_stored_content_diverged() {
     let plan = Plan::new();
@@ -728,7 +729,7 @@ fn a_repair_write_linear_stores_otherwise_is_refused_as_stored_content_diverged(
     .expect("a task file");
     std::fs::write(
         tasks.join("B.md"),
-        "---\ntitle: Upstream\nstatus: todo\n---\nDone first.\n",
+        "---\ntitle: Upstream\nstatus: todo\ndepends_on: [A]\n---\nDone first.\n",
     )
     .expect("a task file");
     // Linear stores its own stored content otherwise from the moment it has created the second

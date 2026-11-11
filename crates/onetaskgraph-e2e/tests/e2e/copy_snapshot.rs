@@ -630,9 +630,17 @@ fn a_linear_task_whose_comments_change_on_two_pages_between_its_page_reads_lands
     let newest = format!("C-{}", BEYOND_A_PAGE - 1);
     workspace.after_request(
         |document: &str, variables: &Value| {
-            document == onetaskgraph_linear::graphql::ISSUE_DETAIL
-                && variables["id"] == "T-3"
-                && variables["before"].is_null()
+            use onetaskgraph_linear::graphql;
+            // T-3's first page, read alone or as one alias of a batched detail read.
+            let first_page =
+                |variables: &Value| variables["id"] == "T-3" && variables["before"].is_null();
+            (document == graphql::ISSUE_DETAIL && first_page(variables))
+                || graphql::decomposed(document).is_some_and(|singles| {
+                    singles.iter().enumerate().any(|(at, single)| {
+                        *single == graphql::ISSUE_DETAIL
+                            && first_page(&graphql::alias_variables(variables, at))
+                    })
+                })
         },
         0,
         move |workspace| {

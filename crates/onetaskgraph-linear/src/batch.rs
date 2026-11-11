@@ -58,7 +58,21 @@ impl LinearSource {
         single: &str,
         each: &[Value],
     ) -> Result<Aliased, SourceError> {
-        let document = graphql::aliased(single, each.len());
+        self.send_composed_of(&vec![single; each.len()], each).await
+    }
+
+    /// Send each of `singles` with its variables in `each` as one [`graphql::composed`]
+    /// document, on the terms of [`Self::send_aliased`].
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::send_aliased`].
+    pub(crate) async fn send_composed_of(
+        &self,
+        singles: &[&str],
+        each: &[Value],
+    ) -> Result<Aliased, SourceError> {
+        let document = graphql::composed(singles);
         match self
             .answer_with(
                 &document,
@@ -470,6 +484,125 @@ impl LinearSource {
             task,
             comments: Some(Ok(Some(comments))),
         }))
+    }
+
+    /// [`TaskSource::read_ahead_records_for_copy`](onetaskgraph_plugin_api::TaskSource::read_ahead_records_for_copy):
+    /// every task and project the copy names read beside the first page of its forward
+    /// relations, and every document, in one composed read, each held for the next read of it.
+    /// An item Linear says is not there is left to its own read, which answers it absent, and
+    /// the rest are read together again.
+    pub(crate) async fn read_ahead_batched(
+        &self,
+        records: &[(onetaskgraph_plugin_api::MetadataRecord, NativeId)],
+    ) -> Result<(), SourceError> {
+        use onetaskgraph_plugin_api::MetadataRecord;
+        if records.len() < 2
+            || !self.batches(graphql::ISSUE)
+            || !self.batches(graphql::PROJECT)
+            || !self.batches(graphql::ISSUE_DEPENDS_ON)
+        {
+            return Ok(());
+        }
+        let mut pending: Vec<&(MetadataRecord, NativeId)> = records.iter().collect();
+        while !pending.is_empty() {
+            let mut singles = Vec::new();
+            let mut each = Vec::new();
+            let mut owners = Vec::new();
+            for (at, (record, id)) in pending.iter().enumerate() {
+                let reads: &[&'static str] = match record {
+                    MetadataRecord::Task => &[graphql::ISSUE, graphql::ISSUE_DEPENDS_ON],
+                    MetadataRecord::Project => &[graphql::PROJECT, graphql::PROJECT_DEPENDS_ON],
+                    MetadataRecord::Document => &[graphql::DOCUMENT],
+                };
+                for (part, single) in reads.iter().enumerate() {
+                    singles.push(*single);
+                    each.push(if part == 0 {
+                        json!({"id": id.0})
+                    } else {
+                        json!({"id": id.0, "first": MAX_PAGE_SIZE, "after": null})
+                    });
+                    owners.push((at, part));
+                }
+            }
+            match self.send_composed_of(&singles, &each).await? {
+                Aliased::Answered(values) => {
+                    let mut ahead = self
+                        .ahead
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    let mut edges = self
+                        .edges_ahead
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    for ((at, part), value) in owners.into_iter().zip(values) {
+                        let (record, id) = pending[at];
+                        let key = (*record, id.clone());
+                        if part == 0 {
+                            ahead.insert(key, value);
+                        } else {
+                            edges.insert(key, value);
+                        }
+                    }
+                    pending.clear();
+                }
+                Aliased::Refused(refused, refusal)
+                    if refusal.entity_missing()
+                        || refusal.project_missing()
+                        || refusal.document_missing() =>
+                {
+                    let (at, _) = owners[refused];
+                    pending.remove(at);
+                }
+                Aliased::Refused(_, refusal) => return Err(refusal.into_error()),
+            }
+        }
+        Ok(())
+    }
+
+    /// Create every relation held back for `finish_writes` in one aliased `issueRelationCreate`
+    /// document. One Linear refuses fails the whole write — the copy then takes back what it
+    /// made — since a relation create is not safe to send twice.
+    pub(crate) async fn finish_relations(&self) -> Result<(), SourceError> {
+        let held: Vec<(NativeId, Value)> = std::mem::take(
+            &mut *self
+                .deferred_relations
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        if held.is_empty() {
+            return Ok(());
+        }
+        let each: Vec<Value> = held
+            .iter()
+            .map(|(_, variables)| variables.clone())
+            .collect();
+        let values = if each.len() == 1 {
+            vec![
+                self.send(graphql::ISSUE_RELATION_CREATE, each[0].clone())
+                    .await?["issueRelationCreate"]
+                    .clone(),
+            ]
+        } else {
+            match self
+                .send_aliased(graphql::ISSUE_RELATION_CREATE, &each)
+                .await?
+            {
+                Aliased::Answered(values) => values,
+                Aliased::Refused(_, refusal) => return Err(refusal.into_error()),
+            }
+        };
+        for ((near, _), value) in held.iter().zip(values) {
+            self.unknown_version(near);
+            let answered = json!({"issueRelationCreate": value});
+            let payload = super::mutation_payload(&answered, MutationRoot::IssueRelationCreate)?;
+            let relation = payload
+                .get("issueRelation")
+                .ok_or_else(|| SourceError::Malformed {
+                    message: "missing issueRelationCreate relation".to_owned(),
+                })?;
+            super::backend_id(relation, "id")?;
+        }
+        Ok(())
     }
 
     /// [`TaskSource::query_tasks_batch`](onetaskgraph_plugin_api::TaskSource::query_tasks_batch):

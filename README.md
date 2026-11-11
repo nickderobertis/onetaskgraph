@@ -85,7 +85,8 @@ onetaskgraph task show-many <ID>... [--no-comments] [--pin ID=VERSION]...
 onetaskgraph task deps <ID> [--direction depends-on|depended-on-by] [--pin VERSION] [--complete]
 onetaskgraph task copy <ID>... --to <SOURCE> [--match-by KEY] [--recreate] [--create] [--dry-run]
                        [--status CATEGORY]... [--expect VERSION]  # --expect: one task, caching destination
-                       [--if-version VERSION]  # one task: refused as version-moved when it moved
+                       [--if-version [ID=]VERSION]...  # ID=VERSION: that task's counterpart
+                       # answered failed as version-moved when it moved, the others copied
 onetaskgraph task copy --to <SOURCE> [--source S]... [--commented-since RFC3339]
                        [--metadata KEY[/SEGMENT...]=VALUE]... [--status CATEGORY]...  # by query
 onetaskgraph task locate <ID>... --to <SOURCE> [--no-counterpart | --target-native NATIVE-ID]
@@ -97,6 +98,12 @@ onetaskgraph task comment list   <ID> [--pin VERSION]
 onetaskgraph task comments <SOURCE> --since RFC3339 [--metadata KEY[/SEGMENT...]=VALUE]...
                            [--status S]... [--item ID]...
                            # every comment made or edited since then, and the next watermark
+onetaskgraph task comment add-many <SOURCE> --input FILE|-
+                           # many comments in one call, each answered on its own
+onetaskgraph task find <SOURCE> --queries FILE|-
+                           # many narrowed searches in one call, each answered under its key
+onetaskgraph task update-many <SOURCE> --input FILE|-
+                           # many held multi-field updates in one call, each answered on its own
 onetaskgraph task comment edit   <ID> <COMMENT-ID> [--body-file PATH] [--expect VERSION]
                                       [--if-version VERSION]
 onetaskgraph task comment delete <ID> <COMMENT-ID> [--expect VERSION]
@@ -114,6 +121,7 @@ onetaskgraph task update <ID> [--title TITLE] [--body-file PATH]
                          [--metadata KEY=JSON]... [--remove-metadata KEY]...
                          [--delivers ID... | --no-delivers] [--depends-on ID... | --no-depends-on]
                          [--repository ORIGIN... | --no-repositories]
+                         [--when-priority PRIORITY]...  # every field, only over these
                          [--expect VERSION] [--if-version VERSION]
                          [--term-scope REPOSITORY... | --term-scope-empty]
 onetaskgraph task create <SOURCE> --project P --title TITLE
@@ -371,7 +379,43 @@ Linear sends one `issueUpdate` of what differs, and a folder of Markdown replace
 once, every byte it was not asked to change kept. Naming a status or a `delivers` list keeps
 every delivered task in step exactly as `task status set` does, and exits `4` when one could
 not be; naming neither re-evaluates nothing. A key both set and removed is refused before
-anything is written, and so is an update naming no field.
+anything is written, and so is an update naming no field. With `--when-priority PRIORITY`
+(repeatable, `none` for a task with none) the whole update is written only while the task holds
+one of them, in one write held to the version that read found; at any other priority nothing of
+it is written and its `guard` answers `held` with the priority the task holds.
+
+### Many items in one call
+
+Three commands do one thing to many tasks of one source in one call, each answering every item
+on its own; their documents are `onetaskgraph schema`'s `FindRequest` and `FoundTasks`,
+`CommentBatch` and `CommentsAdded`, and `UpdateBatch` and `TasksUpdated`, read from a file or
+from standard input with `-`.
+
+- `task find <SOURCE> --queries FILE` runs many searches, `{"schema_version": 1, "queries":
+  [{"key", "text", "in", "metadata", "origin", "status"}]}`, each narrowed by at least one of
+  `text` (in the `title`, the `content` or `both`), `metadata` (`{"<KEY>[/<SEGMENT>…]":
+  "<value>"}`) and `origin` — one narrowed by none is refused naming its key, and nothing is
+  read. Each answer holds every match across every page, as `task list` reports a task; one
+  whose page the source refused is answered `complete: false` with a `reason` naming the page,
+  every other search goes on, and the command exits `4`.
+- `task comment add-many <SOURCE> --input FILE` adds `{"schema_version": 1, "comments":
+  [{"item", "body", "if_version"}]}`, answering each `written` with the comment's id, URL and
+  version, `version-moved` with the version its task is at, or `error` with a reason naming it.
+- `task update-many <SOURCE> --input FILE` applies `{"schema_version": 1, "updates": [{"item",
+  "if_version", "title", "body", "status", "priority", "when_priority", "metadata",
+  "remove_metadata", "repositories"}]}` — every member but `item` optional — each update one
+  held write of every field it names: `written` with the version after it, `held` when its
+  priority guard declined, `version-moved` with the version its task is at, or `error`.
+
+No item's failure writes or refuses another, and a batch exits `4` when any item is
+`version-moved` or `error`. A source asks its backend for as few requests as it can: Linear
+reads the tasks a batch writes in one aliased request and sends the updates, or the comments,
+in one more, and runs the searches of one round of pages as one aliased request. Where Linear
+refuses one alias of such a request it answers none of them, so the item it refused is sent
+or answered on its own and the rest are sent together again — an update twice changes nothing,
+and a comment is never sent twice: one Linear refused after the comments aliased before it
+landed has each of those found again by a read of its task. A folder of Markdown and an
+in-memory source answer each item with what one call for it would.
 
 A task can name the tasks it **delivers**: finishing it finishes them. In a folder of
 Markdown that is a `delivers:` list in the front matter — a bare id names a task of the same
@@ -1083,10 +1127,13 @@ set`, `task status set`, `task comment add`, `task comment edit` and `task copy`
 precondition: it lands only while the task is at the version a read of it reported (`task show`'s
 `version`), and otherwise exits `1` with nothing written and the failure kind `version-moved`,
 whose `held.version` — and message — name the version the task is at now. Read again, decide
-whether the write still applies, and write at that version. On `task copy` it names the version
-of the one destination task the copy writes over, and is refused beside more than one task, a
-query, a project or a document as `if-version-one-task`; a copy that creates its counterpart
-holds nothing. It needs no cache, and leaves `--expect`, which is about cost and never a
+whether the write still applies, and write at that version. On `task copy` a bare `VERSION`
+names the version of the one destination task the copy writes over, and is refused beside more
+than one task, a query, a project or a document as `if-version-one-task`; `--if-version
+ID=VERSION`, repeatable, holds the counterpart of each task `ID` names to its own version, decided
+on the copy's own read of it, so one that moved is answered `failed` as `version-moved` — its
+`held.version` the version it is at — and written nothing while every other task is copied. A
+copy that creates its counterpart holds nothing. It needs no cache, and leaves `--expect`, which is about cost and never a
 precondition, exactly as it was.
 
 Which guarantee a write gets is its source's:

@@ -1443,6 +1443,24 @@ pub trait TaskSource: Send + Sync {
         Ok(())
     }
 
+    /// [`read_ahead_for_copy`](Self::read_ahead_for_copy), with what each id is at this source —
+    /// a task, a project or a document — as the copy knows it: what a source whose reads by id
+    /// are each of one kind needs to read them together.
+    ///
+    /// Defaulted to [`read_ahead_for_copy`](Self::read_ahead_for_copy) of the ids alone, so a
+    /// source that reads any kind by one id is asked exactly as it was.
+    ///
+    /// # Errors
+    ///
+    /// As [`read_ahead_for_copy`](Self::read_ahead_for_copy).
+    async fn read_ahead_records_for_copy(
+        &self,
+        records: &[(MetadataRecord, NativeId)],
+    ) -> Result<(), SourceError> {
+        let ids: Vec<NativeId> = records.iter().map(|(_, id)| id.clone()).collect();
+        self.read_ahead_for_copy(&ids).await
+    }
+
     /// Ask, together, which items were copied from each of `origins` — the qualified ids a copy
     /// is about to look for at this destination by the `onetaskgraph.origin` each item records
     /// — and hold each answer

@@ -923,37 +923,50 @@ pub mod graphql {
     /// Remove a comment.
     pub const COMMENT_DELETE: &str = "mutation($id:String!){ commentDelete(id:$id){success} }";
 
-    /// The documents this source sends batched by [`aliased`], each the single-root document it
+    /// The documents this source sends batched by [`composed`], each the single-root document it
     /// batches.
-    pub const BATCHED: [&str; 5] = [
+    pub const BATCHED: [&str; 10] = [
+        ISSUE_RELATION_CREATE,
         ISSUE,
         ISSUES,
         ISSUE_UPDATE_READ,
         COMMENT_CREATE,
         ISSUE_DETAIL,
+        ISSUE_DEPENDS_ON,
+        PROJECT,
+        PROJECT_DEPENDS_ON,
+        DOCUMENT,
     ];
 
     /// `single` — a document of one root field, as this source sends it alone — `count` times
-    /// in one document: the `i`th copy aliased `a<i>`, each of its variables `$<name>` renamed
-    /// `$<name>_<i>`.
-    ///
-    /// What batches many reads, or many writes, of one kind into one request. Linear executes
-    /// each aliased field as it would the document alone, and answers it under its alias; a
-    /// field it refuses is answered with an error whose `path` starts at that alias, and —
-    /// every root this source batches being non-null — with no `data` at all, after applying
-    /// every mutation aliased before it and none after.
+    /// in one document, as [`composed`] composes it.
     #[must_use]
     pub fn aliased(single: &str, count: usize) -> String {
-        let (head, body) = single.split_once('{').unwrap_or((single, ""));
-        let body = body.trim_end().strip_suffix('}').unwrap_or(body).trim();
-        let (kind, variables) = head
-            .split_once('(')
-            .map_or((head.trim(), ""), |(kind, rest)| {
-                (kind.trim(), rest.trim_end().trim_end_matches(')'))
-            });
-        let mut declared = Vec::with_capacity(count);
-        let mut fields = Vec::with_capacity(count);
-        for at in 0..count {
+        composed(&vec![single; count])
+    }
+
+    /// The documents `singles` — each of one root field, as this source sends it alone, all
+    /// queries or all mutations — in one document: the `i`th aliased `a<i>`, each of its
+    /// variables `$<name>` renamed `$<name>_<i>`.
+    ///
+    /// What batches many reads, or many writes, into one request. Linear executes each aliased
+    /// field as it would the document alone, and answers it under its alias; a field it refuses
+    /// is answered with an error whose `path` starts at that alias, and — every root this source
+    /// batches being non-null — with no `data` at all, after applying every mutation aliased
+    /// before it and none after.
+    #[must_use]
+    pub fn composed(singles: &[&str]) -> String {
+        let mut kind = "query";
+        let mut declared = Vec::with_capacity(singles.len());
+        let mut fields = Vec::with_capacity(singles.len());
+        for (at, single) in singles.iter().enumerate() {
+            let (head, body) = parts(single);
+            let (operation, variables) = head
+                .split_once('(')
+                .map_or((head.trim(), ""), |(operation, rest)| {
+                    (operation.trim(), rest.trim_end().trim_end_matches(')'))
+                });
+            kind = operation;
             if !variables.is_empty() {
                 declared.push(suffixed(variables, at));
             }
@@ -964,6 +977,36 @@ pub mod graphql {
         } else {
             format!("{kind}({}){{ {} }}", declared.join(","), fields.join(" "))
         }
+    }
+
+    /// A single-root document split into what comes before its selection and the selection's
+    /// one root field.
+    fn parts(single: &str) -> (&str, &str) {
+        let (head, body) = single.split_once('{').unwrap_or((single, ""));
+        (
+            head,
+            body.trim_end().strip_suffix('}').unwrap_or(body).trim(),
+        )
+    }
+
+    /// The documents of [`BATCHED`] `document` composes, in order, when it is one [`composed`]
+    /// spells — what a server answering it answers each alias as.
+    #[must_use]
+    pub fn decomposed(document: &str) -> Option<Vec<&'static str>> {
+        let count = (0..)
+            .take_while(|at| document.contains(&format!(" a{at}: ")))
+            .count();
+        if count == 0 {
+            return None;
+        }
+        let mut singles = Vec::with_capacity(count);
+        for at in 0..count {
+            let single = BATCHED.into_iter().find(|single| {
+                document.contains(&format!("a{at}: {}", suffixed(parts(single).1, at)))
+            })?;
+            singles.push(single);
+        }
+        (composed(&singles) == document).then_some(singles)
     }
 
     /// Every `$name` in `text` renamed `$name_<at>`.
@@ -1000,20 +1043,16 @@ pub mod graphql {
         serde_json::Value::Object(merged)
     }
 
-    /// The document of [`BATCHED`] `document` batches and how many times, when it is one —
-    /// what a server answering it answers each alias as.
+    /// The single document [`aliased`] batched `document` repeats and how many times, when it is
+    /// one.
     #[must_use]
     pub fn unaliased(document: &str) -> Option<(&'static str, usize)> {
-        let count = (0..)
-            .take_while(|at| document.contains(&format!(" a{at}: ")))
-            .count();
-        if count == 0 {
-            return None;
-        }
-        BATCHED
-            .into_iter()
-            .find(|single| aliased(single, count) == document)
-            .map(|single| (single, count))
+        let singles = decomposed(document)?;
+        let first = *singles.first()?;
+        singles
+            .iter()
+            .all(|single| *single == first)
+            .then_some((first, singles.len()))
     }
 
     /// The variables of the `at`th item of an [`aliased`] document, as its single document
@@ -1768,6 +1807,18 @@ struct LinearSource {
     /// moment later answers (spike `spike-linear-stored-content`), so a follow-up write that
     /// keeps the metadata slot byte for byte reads nothing after the write before it.
     written: std::sync::Mutex<std::collections::HashMap<(MetadataRecord, NativeId), Value>>,
+    /// Whether a copy asked, through `begin_deferred_writes`, for the relations of the issues it
+    /// creates to wait for its `finish_writes`.
+    deferring: std::sync::atomic::AtomicBool,
+    /// The relation creates waiting for `finish_writes`: each near issue and its variables.
+    deferred_relations: std::sync::Mutex<Vec<(NativeId, Value)>>,
+    /// What a copy's read ahead read of each item it named — its raw fields, and for a task or
+    /// a project the first page of its forward relations — each answering the next read of it
+    /// once, and none outliving the command or any write; see
+    /// [`TaskSource::read_ahead_records_for_copy`].
+    ahead: std::sync::Mutex<std::collections::HashMap<(MetadataRecord, NativeId), Value>>,
+    /// The forward relations page [`Self::ahead`] read beside each task and project.
+    edges_ahead: std::sync::Mutex<std::collections::HashMap<(MetadataRecord, NativeId), Value>>,
     /// Where each item this instance wrote is, as its latest write's own answer said — what
     /// [`TaskSource::written_location`] answers, so a copy records where it landed an item it
     /// created without reading it.
@@ -1827,6 +1878,10 @@ impl LinearSource {
             edges_versions: std::sync::Mutex::new(std::collections::HashMap::new()),
             stored: std::sync::Mutex::new(std::collections::HashMap::new()),
             written: std::sync::Mutex::new(std::collections::HashMap::new()),
+            deferring: std::sync::atomic::AtomicBool::new(false),
+            deferred_relations: std::sync::Mutex::new(Vec::new()),
+            ahead: std::sync::Mutex::new(std::collections::HashMap::new()),
+            edges_ahead: std::sync::Mutex::new(std::collections::HashMap::new()),
             locations: std::sync::Mutex::new(std::collections::HashMap::new()),
             headings: std::sync::Mutex::new(std::collections::HashMap::new()),
             answered: std::sync::Mutex::new(std::collections::HashMap::new()),
@@ -2346,6 +2401,7 @@ impl LinearSource {
         // A write may change which items record an origin, so nothing read ahead outlives it.
         if query.trim_start().starts_with("mutation") {
             self.forget_origins_ahead(false);
+            self.forget_ahead();
         }
         match self
             .answer_using(
@@ -3402,6 +3458,11 @@ impl LinearSource {
             .collect();
         let mut kept = std::collections::BTreeSet::new();
         let mut cursor: Option<Cursor> = None;
+        // A created issue holds no relation to reconcile, so its creates may wait for the
+        // copy's `finish_writes` and go with every other's in one request.
+        let deferred = matches!(held, HeldRelations::None)
+            && matches!(kind, WriteKind::Task)
+            && self.deferring.load(std::sync::atomic::Ordering::SeqCst);
         let mut answered = match held {
             HeldRelations::None => None,
             HeldRelations::Page(page) => Some(page.clone()),
@@ -3559,6 +3620,13 @@ impl LinearSource {
                     json!({"issueId":near.0,"relatedIssueId":far,"type":relation_type}),
                 )
             };
+            if deferred {
+                self.deferred_relations
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push((near.clone(), json!({"input": input})));
+                continue;
+            }
             let data = self.send(query, json!({"input":input})).await?;
             self.unknown_version(near);
             let mutation = if matches!(kind, WriteKind::Project) {
@@ -5214,6 +5282,27 @@ impl TaskSource for LinearSource {
     ) -> Vec<Result<onetaskgraph_plugin_api::BatchAnswer<Comment>, SourceError>> {
         self.comment_batched(comments).await
     }
+    /// The relations of every issue the copy creates from here on are created together, in
+    /// [`finish_writes`](Self::finish_writes).
+    fn begin_deferred_writes(&self) {
+        self.deferring
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+    /// Every relation held back since `begin_deferred_writes`, created in one aliased
+    /// `issueRelationCreate` document — see the `batch` module.
+    async fn finish_writes(&self) -> Result<(), SourceError> {
+        self.deferring
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        self.finish_relations().await
+    }
+    /// Every task and project with its forward relations, and every document, the copy names
+    /// read in one mixed aliased read — see the `batch` module.
+    async fn read_ahead_records_for_copy(
+        &self,
+        records: &[(MetadataRecord, NativeId)],
+    ) -> Result<(), SourceError> {
+        self.read_ahead_batched(records).await
+    }
     /// Every query not by origin as one aliased `issues` read per round — see the `batch`
     /// module.
     async fn query_tasks_batch(
@@ -5232,6 +5321,7 @@ impl TaskSource for LinearSource {
     /// command that wrote it, so the next command already reads each item as a person left it.
     async fn end_command(&self) -> Result<(), SourceError> {
         self.edges_versions().clear();
+        self.forget_ahead();
         self.forget_origins_ahead(true);
         self.written
             .lock()
@@ -5560,6 +5650,40 @@ impl LinearSource {
         }
     }
 
+    /// What the copy's read ahead read of the `record` `id`, taken.
+    fn take_ahead(&self, record: MetadataRecord, id: &NativeId) -> Option<Value> {
+        self.ahead
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&(record, id.clone()))
+    }
+
+    /// The forward relations page the copy's read ahead read beside the item `id` of `root`,
+    /// taken, as the data a relations read of it answers.
+    fn take_edges_ahead(&self, root: DependencyRoot, id: &NativeId) -> Option<Value> {
+        let (record, field) = match root {
+            DependencyRoot::Issue => (MetadataRecord::Task, "issue"),
+            DependencyRoot::Project => (MetadataRecord::Project, "project"),
+        };
+        self.edges_ahead
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&(record, id.clone()))
+            .map(|value| json!({ field: value }))
+    }
+
+    /// Let go of everything the copy's read ahead holds.
+    fn forget_ahead(&self) {
+        self.ahead
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+        self.edges_ahead
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+    }
+
     /// The whole item the latest long-form write of the `record` `id` was answered with,
     /// taken; see [`Self::written`].
     fn take_written(&self, record: MetadataRecord, id: &NativeId) -> Option<Value> {
@@ -5677,6 +5801,15 @@ impl LinearSource {
         id: &NativeId,
         read: Read,
     ) -> Result<Option<(Task, Option<String>)>, SourceError> {
+        if let Some(issue) = self.take_ahead(MetadataRecord::Task, id) {
+            return Ok(optional(&json!({"issue": issue}), "issue", |v| {
+                Ok((
+                    map_task(v, &self.name, &self.statuses, self.spelling())?,
+                    optional_string(v, "description")?,
+                ))
+            })?
+            .filter(|(task, _)| self.in_scope(task.project.as_ref())));
+        }
         let document = match read {
             Read::Load => self.read_document(ISSUE),
             Read::ForWrite => {
@@ -5785,6 +5918,15 @@ impl LinearSource {
         id: &NativeId,
         read: Read,
     ) -> Result<Option<(Project, Option<String>)>, SourceError> {
+        if let Some(project) = self.take_ahead(MetadataRecord::Project, id) {
+            return Ok(optional(&json!({"project": project}), "project", |v| {
+                Ok((
+                    map_project(v, &self.statuses, self.spelling())?,
+                    optional_string(v, "content")?,
+                ))
+            })?
+            .filter(|(project, _)| self.in_scope(Some(&project.id))));
+        }
         let document = match read {
             Read::Load => self.read_document(PROJECT),
             Read::ForWrite => {
@@ -5822,7 +5964,10 @@ impl LinearSource {
         // the reason `delete_task` records: Linear answers an id naming nothing with an
         // errored response rather than a null, and reading the null defensively is what
         // keeps a responder that does answer one from being a malformed-response failure.
-        if let Some(document) = self.take_written(MetadataRecord::Document, id) {
+        if let Some(document) = self
+            .take_written(MetadataRecord::Document, id)
+            .or_else(|| self.take_ahead(MetadataRecord::Document, id))
+        {
             return Ok(Some((
                 map_document(&document)?,
                 optional_string(&document, "content")?,
@@ -6268,9 +6413,22 @@ impl LinearSource {
                 limit as usize,
             ));
         }
-        let d = self
-            .send(query, json!({"id":id.0,"first":limit,"after":cursor}))
-            .await?;
+        let ahead = (cursor.is_none()
+            && direction == Direction::DependsOn
+            && limit == MAX_PAGE_SIZE
+            && matches!(
+                query,
+                graphql::ISSUE_DEPENDS_ON | graphql::PROJECT_DEPENDS_ON
+            ))
+        .then(|| self.take_edges_ahead(root, id))
+        .flatten();
+        let d = match ahead {
+            Some(d) => d,
+            None => {
+                self.send(query, json!({"id":id.0,"first":limit,"after":cursor}))
+                    .await?
+            }
+        };
         let walked = if cursor.is_none() {
             WalkPage::First
         } else {

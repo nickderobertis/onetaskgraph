@@ -290,6 +290,14 @@ impl TaskSource for HeldOff {
         self.noted(self.inner.read_ahead_for_copy(ids).await)
     }
 
+    async fn read_ahead_records_for_copy(
+        &self,
+        records: &[(MetadataRecord, NativeId)],
+    ) -> Result<(), SourceError> {
+        self.refused()?;
+        self.noted(self.inner.read_ahead_records_for_copy(records).await)
+    }
+
     async fn read_ahead_origins_for_copy(&self, origins: &[String]) -> Result<(), SourceError> {
         self.refused()?;
         self.noted(self.inner.read_ahead_origins_for_copy(origins).await)

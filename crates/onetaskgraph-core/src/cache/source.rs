@@ -889,6 +889,18 @@ impl CachedSource {
     /// Run one write naming `id`, every entry naming it taken out of service before anything is
     /// sent — the write refused, sending nothing, when that cannot be done — and left
     /// unserveable after it.
+    /// Whether this cache answers a copy's read of `id` with no request: a task or a project
+    /// only when it holds its forward edges too, which a copy reads of it next — where the token
+    /// does not cover them, or the entry holds none, its edge reads would each be a request of
+    /// their own, and reading it ahead carries them in the one request instead.
+    fn answers_ahead(&self, id: &NativeId) -> bool {
+        let task = self.servable(id, false).is_ok() && self.held_edges(id).is_some();
+        let project = self.servable_project(id).is_some()
+            && self.cache.project_coverage.forward_edges.reason().is_none()
+            && self.held_project_edges(id).is_some();
+        task || project || self.servable_document(id).is_some()
+    }
+
     /// A batched write of `ids`, each answered on its own: every id's entries retired before it
     /// is sent — an id that cannot be retired answered refused, and the batch not sent — and
     /// invalidated after, whatever each came to.
@@ -1126,16 +1138,23 @@ impl TaskSource for CachedSource {
     /// it next: where the token does not cover them, or the entry holds none, its edge reads
     /// would each be a request of their own, and reading it ahead carries them in the one
     /// request instead.
+    async fn read_ahead_records_for_copy(
+        &self,
+        records: &[(MetadataRecord, NativeId)],
+    ) -> Result<(), SourceError> {
+        let unserved: Vec<(MetadataRecord, NativeId)> = records
+            .iter()
+            .filter(|(_, id)| !self.answers_ahead(id))
+            .cloned()
+            .collect();
+        // Handed on even when the cache answers every id, as `read_ahead_for_copy` hands it on.
+        self.inner.read_ahead_records_for_copy(&unserved).await
+    }
+
     async fn read_ahead_for_copy(&self, ids: &[NativeId]) -> Result<(), SourceError> {
         let unserved: Vec<NativeId> = ids
             .iter()
-            .filter(|id| {
-                let task = self.servable(id, false).is_ok() && self.held_edges(id).is_some();
-                let project = self.servable_project(id).is_some()
-                    && self.cache.project_coverage.forward_edges.reason().is_none()
-                    && self.held_project_edges(id).is_some();
-                !(task || project || self.servable_document(id).is_some())
-            })
+            .filter(|id| !self.answers_ahead(id))
             .cloned()
             .collect();
         // Handed on even when the cache answers every id: what the source holds back for the
