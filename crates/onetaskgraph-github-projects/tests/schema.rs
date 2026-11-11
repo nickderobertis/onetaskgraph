@@ -1722,7 +1722,7 @@ fn a_stopped_server_is_replaced() {
     assert!(
         answer["stale"]
             .as_str()
-            .is_some_and(|why| why.contains("protocol 1 was sent 0")),
+            .is_some_and(|why| why.contains("protocol 2 was sent 0")),
         "{answer}"
     );
     let stopped = std::time::Instant::now();
@@ -1761,6 +1761,21 @@ fn a_schema_check_server_stops_once_idle_and_never_while_a_client_is_connected()
         std::time::Duration::from_secs(60),
         "watching a schema check server stop once idle",
         an_idle_server_stops,
+    );
+}
+
+/// A client's close need not reach the server for its idle stop: one that leaves while another
+/// handle to its socket stays open — as a handle a child process inherited does, which on
+/// Windows kept a connection open in the server's count after every client had gone — one that
+/// says `bye` and keeps its socket open, and one reset with an answer unread each count as gone,
+/// and once all have, it stops. A greeted client that has not left keeps it serving however long
+/// it is silent.
+#[test]
+fn a_schema_check_server_stops_once_its_clients_leave_however_their_close_arrives() {
+    within(
+        std::time::Duration::from_secs(60),
+        "watching a schema check server stop after delayed and abrupt closes",
+        clients_leaving_without_a_close_stop_it,
     );
 }
 
@@ -1876,7 +1891,7 @@ fn greeted(port: u16) -> (std::net::TcpStream, serde_json::Value) {
     let mut stream =
         std::net::TcpStream::connect(("127.0.0.1", port)).expect("the server accepts a client");
     stream
-        .write_all(b"{\"hello\":1}\n")
+        .write_all(b"{\"hello\":2}\n")
         .expect("the hello is sent");
     let mut answer = String::new();
     BufReader::new(&stream)
@@ -1972,11 +1987,73 @@ fn an_idle_server_stops() {
         "a server serving a client keeps its endpoint"
     );
 
-    // The last connection closed, it stops by itself.
+    // The last connection left, it stops by itself.
+    github_schema::leave(&stream);
     drop(stream);
     wait_until_stopped(&endpoint, port);
 
     unknown_user_field(&server, "askedAfterTheIdleStop");
+    let (_, replaced_by) = server.server();
+    assert_ne!(replaced_by, pid, "a new server answered");
+}
+
+fn clients_leaving_without_a_close_stop_it() {
+    use std::io::{BufRead, BufReader, Write};
+
+    let idle = std::time::Duration::from_secs(2);
+    let server = github_schema::serve_privately_from_a_copy(idle);
+    let endpoint = server
+        .schema()
+        .parent()
+        .expect("the copy sits in the rendezvous directory")
+        .join("endpoint.json");
+    let (port, pid) = server.server();
+    server.disconnect();
+
+    // Leaves while a second handle to its socket stays open, so closing its own ends nothing.
+    let (leaving, ready) = greeted(port);
+    assert_eq!(ready["ready"], true, "{ready}");
+    let inherited = leaving.try_clone().expect("a second handle to the socket");
+    github_schema::leave(&leaving);
+    drop(leaving);
+
+    // Says `bye` and never closes until the end of this test.
+    let (mut lingering, ready) = greeted(port);
+    assert_eq!(ready["ready"], true, "{ready}");
+
+    // Reset: closed with the server's answer to a request unread.
+    let (mut reset, ready) = greeted(port);
+    assert_eq!(ready["ready"], true, "{ready}");
+    reset
+        .write_all(b"{\"query\":\"query{viewer{resetWithThisUnread}}\",\"operationName\":null,\"variables\":null,\"coerce\":false}\n")
+        .expect("the request is sent");
+    let mut unread = [0_u8; 1];
+    reset.peek(&mut unread).expect("the answer arrives unread");
+    drop(reset);
+
+    // `lingering` has not left: however long it is silent, the server serves it.
+    std::thread::sleep(idle * 3);
+    assert!(
+        endpoint.exists(),
+        "a server with a client connected keeps its endpoint"
+    );
+    lingering
+        .write_all(b"{\"query\":\"query{viewer{stillConnected}}\",\"operationName\":null,\"variables\":null,\"coerce\":false}\n")
+        .expect("the request is sent");
+    let mut answer = String::new();
+    BufReader::new(&lingering)
+        .read_line(&mut answer)
+        .expect("a server with a client connected answers it");
+    assert!(answer.contains("stillConnected"), "{answer}");
+
+    // Its `bye` is the last client gone, with two sockets to it still open.
+    lingering
+        .write_all(b"{\"bye\":true}\n")
+        .expect("the bye is sent");
+    wait_until_stopped(&endpoint, port);
+    drop((inherited, lingering));
+
+    unknown_user_field(&server, "askedAfterTheClientsLeft");
     let (_, replaced_by) = server.server();
     assert_ne!(replaced_by, pid, "a new server answered");
 }
@@ -2037,7 +2114,7 @@ fn a_request_line_not_in_the_protocols_shape_is_answered_internal() {
         reader.read_line(&mut answer).expect("the server answers");
         serde_json::from_str(&answer).expect("the answer is JSON")
     };
-    assert_eq!(exchange(r#"{"hello":1}"#)["ready"], json!(true));
+    assert_eq!(exchange(r#"{"hello":2}"#)["ready"], json!(true));
 
     let valid =
         r#""query":"query($id:ID!){node(id:$id){id}}","operationName":null,"variables":{"id":5.5}"#;
