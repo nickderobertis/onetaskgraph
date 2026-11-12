@@ -1114,17 +1114,58 @@ fn tasks_created_together_are_all_taken_back_when_github_leaves_one_person_off()
     assert!(!store.board.holds_titled("Plan p2"), "{said}");
 }
 
+/// The failure document a run printed: its kind and its message.
+fn failure(output: &Output) -> (String, String) {
+    let printed: Value = serde_json::from_str(&stdout(output)).unwrap_or(Value::Null);
+    (
+        printed["failure"]["kind"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned(),
+        printed["failure"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned(),
+    )
+}
+
 #[test]
-fn a_create_github_assigns_otherwise_and_will_not_take_back_answers_the_assignment_and_stays() {
+fn a_create_github_assigns_otherwise_and_will_not_take_back_names_both_failures_and_the_issue_left()
+{
     // On either create path: GitHub leaves pat off the issue it creates, and then refuses the
-    // delete that would take it back. What is answered is why the write stopped — pat left off —
-    // and the issue is still there, which a person then has to remove.
+    // delete that would take it back. The answer says both — why the write stopped and that its
+    // issue is still there — naming that issue and what to do before writing the task again.
     let store = Assigning::new();
     store.board.leave_off_when_assigned("pat");
-    let deleted = |served: &[(String, Value)]| {
-        served
-            .iter()
-            .any(|(document, _)| document.contains("deleteIssue(input:$"))
+    let assert_left = |output: &Output, served: &[(String, Value)], title: &str| {
+        let said = format!("{}{}", stdout(output), stderr(output));
+        assert_ne!(output.status.code(), Some(0), "{said}");
+        assert!(
+            served
+                .iter()
+                .any(|(document, _)| document.contains("deleteIssue(input:$")),
+            "the take-back was asked for: {served:#?}"
+        );
+        assert!(
+            store.board.holds_titled(title),
+            "the issue is still there: {said}"
+        );
+        let (kind, message) = failure(output);
+        assert_eq!(kind, "refused", "{said}");
+        assert!(
+            message.contains("left pat off"),
+            "the assignment's refusal: {message}"
+        );
+        assert!(
+            message.contains("refused taking back the issue this write created")
+                && message.contains("still in the repository"),
+            "the cleanup's failure: {message}"
+        );
+        assert!(
+            message.contains("next: delete that issue"),
+            "what to do: {message}"
+        );
+        message
     };
 
     // `task create`: the issue is created on no board and filed after.
@@ -1147,27 +1188,40 @@ fn a_create_github_assigns_otherwise_and_will_not_take_back_answers_the_assignme
         ],
         None,
     );
-    let said = format!("{}{}", stdout(&output), stderr(&output));
-    assert_ne!(output.status.code(), Some(0), "{said}");
+    let message = assert_left(&output, &served, "Kept for pat");
+    let created = created_id(&served, "Kept for pat");
     assert!(
-        said.contains("left pat off"),
-        "the assignment's refusal: {said}"
+        message.contains(&created),
+        "names the issue {created}: {message}"
     );
-    assert!(deleted(&served), "the take-back was asked for: {served:#?}");
-    assert!(store.board.holds_titled("Kept for pat"), "{said}");
 
     // A copy: the issue is created filed on the board by its `createIssue`.
     store.board.refuse_once("deleteIssue(input:$");
     store.plan("p8", "kept", "pat");
     let (output, served) = store.run(&["task", "copy", "plans:p8", "--to", "board"], None);
-    let said = format!("{}{}", stdout(&output), stderr(&output));
-    assert_ne!(output.status.code(), Some(0), "{said}");
+    let message = assert_left(&output, &served, "Plan p8");
+    let created = created_id(&served, "Plan p8");
     assert!(
-        said.contains("left pat off"),
-        "the assignment's refusal: {said}"
+        message.contains(&created),
+        "names the issue {created}: {message}"
     );
-    assert!(deleted(&served), "the take-back was asked for: {served:#?}");
-    assert!(store.board.holds_titled("Plan p8"), "{said}");
+}
+
+/// The node id of the issue the `createIssue` titled `title` that `served` sent was taken back
+/// as: what its refused `deleteIssue` named.
+fn created_id(served: &[(String, Value)], title: &str) -> String {
+    assert!(
+        served
+            .iter()
+            .any(|(document, variables)| document.contains("createIssue(")
+                && variables.to_string().contains(title)),
+        "{title} was created: {served:#?}"
+    );
+    served
+        .iter()
+        .filter(|(document, _)| document.contains("deleteIssue(input:$"))
+        .find_map(|(_, variables)| variables["input"]["issueId"].as_str().map(str::to_owned))
+        .unwrap_or_else(|| panic!("no delete named the issue: {served:#?}"))
 }
 
 #[test]

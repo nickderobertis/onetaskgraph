@@ -20,7 +20,7 @@
 use std::collections::BTreeMap;
 use std::sync::MutexGuard;
 
-use onetaskgraph_plugin_api::SourceError;
+use onetaskgraph_plugin_api::{NativeId, SourceError};
 use serde_json::{Map, Value, json};
 
 use super::{ANSWER_ERRORS, GitHubProjectsSource, PEOPLE_PER_LOOKUP, graphql, required_str};
@@ -264,6 +264,42 @@ impl GitHubProjectsSource {
                     .unwrap_or_else(|| person.clone())
             })
             .collect()
+    }
+
+    /// `refused` — why the issue `content`, which a create made from `created`, was not assigned
+    /// as asked — once that issue is taken back. When GitHub refuses the delete too, the issue is
+    /// still in the repository, and the answer says so beside the assignment's refusal, naming
+    /// the issue, so a caller deletes or fixes it rather than writing the task again, which would
+    /// create a second.
+    pub(super) async fn taken_back(
+        &self,
+        content: &NativeId,
+        created: &Value,
+        refused: SourceError,
+    ) -> SourceError {
+        let Err(cleanup) = self.delete_issue(content).await else {
+            return refused;
+        };
+        let address = created
+            .get("url")
+            .and_then(Value::as_str)
+            .map_or_else(String::new, |url| format!(" at {url}"));
+        let left = format!(
+            "; GitHub then refused taking back the issue this write created, {content}{address}, \
+             so it is still in the repository ({cleanup}); next: delete that issue, or assign it \
+             as wanted, before writing this task again, which would otherwise create a second issue"
+        );
+        match refused {
+            SourceError::Malformed { message } => SourceError::Malformed {
+                message: format!("{message}{left}"),
+            },
+            SourceError::Refused { message } => SourceError::Refused {
+                message: format!("{message}{left}"),
+            },
+            other => SourceError::Refused {
+                message: format!("{other}{left}"),
+            },
+        }
     }
 
     /// The login of the person whose node id is `id`, as this process looked them up — or the id

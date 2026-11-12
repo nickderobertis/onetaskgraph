@@ -11283,13 +11283,10 @@ impl GitHubProjectsSource {
                 message: "GitHub issue creation returned no issue".into(),
             })?;
         let landed = self.created_landed(created).await?;
-        // An issue GitHub created assigned otherwise than asked is refused, and taken back, best
-        // effort, as one whose number cannot be read is: a delete GitHub refuses too leaves the
-        // issue where it is, and the refusal answered is still the assignment's, which is why
-        // the write stopped.
+        // An issue GitHub created assigned otherwise than asked is refused and taken back; a
+        // delete GitHub refuses too is answered beside the refusal, naming the issue left.
         if let Err(error) = self.assigned_as_asked(&input, Some(created)) {
-            let _ = self.delete_issue(&landed.content_id).await;
-            return Err(error);
+            return Err(self.taken_back(&landed.content_id, created, error).await);
         }
         Ok(landed)
     }
@@ -12784,11 +12781,10 @@ impl GitHubProjectsSource {
                 message: "GitHub issue creation returned no issue".into(),
             })?;
         let content_id = NativeId(required_str(created, "id")?.to_owned());
-        // Assigned otherwise than asked, the issue is refused and taken back on the terms of the
-        // filed create's: best effort, answering the assignment's refusal either way.
+        // Assigned otherwise than asked, the issue is refused and taken back as the filed
+        // create's is, a refused delete answered beside the refusal.
         if let Err(error) = self.assigned_as_asked(&input, Some(created)) {
-            let _ = self.delete_issue(&content_id).await;
-            return Err(error);
+            return Err(self.taken_back(&content_id, created, error).await);
         }
         // Optional although GitHub's schema makes it non-null: the issue exists by now, so
         // a response without it is not worth failing a landed write over — the item simply
