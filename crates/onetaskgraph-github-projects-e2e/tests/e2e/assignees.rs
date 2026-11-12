@@ -24,8 +24,8 @@ const TWIN: &str = "A-2";
 /// The three people both hold.
 const THREE: [&str; 3] = ["octocat", "hubot", "monalisa"];
 
-/// One loopback board holding the shared dataset and plain open issues `A-1` to `A-12`, as
-/// source `board`, beside a folder of Markdown `plans` opted in to assignees.
+/// One loopback board holding the shared dataset, plain open issues `A-1` to `A-12` and the
+/// draft `SKETCH`, as source `board`, beside a folder of Markdown `plans` opted in to assignees.
 struct Assigning {
     sandbox: Sandbox,
     board: GitHubBoardFields,
@@ -47,6 +47,12 @@ impl Assigning {
                     "repo": "nickderobertis/onetaskgraph", "status": "Todo", "origin": "",
                     "labels": []})
             })
+            .chain([
+                json!({"item": "ITEM-SKETCH", "id": "SKETCH", "type": "DraftIssue",
+                "title": "Sketch", "body": "a draft nobody converted", "state": "OPEN",
+                "reason": null, "parent": null, "repo": null, "status": "Todo", "origin": "",
+                "labels": []}),
+            ])
             .collect();
         let (mut config, board) = github_projects_with_items(&sandbox, items);
         if opted {
@@ -591,4 +597,120 @@ fn a_board_not_opted_in_refuses_every_assignee_write_unsent_and_never_asks_for_a
                 && !variables.to_string().contains("assignee")),
         "a board not opted in asked for assignees"
     );
+}
+
+#[test]
+fn a_draft_reads_as_assigned_to_nobody_and_an_assignee_written_to_it_is_refused_unsent() {
+    let store = Assigning::new();
+    // A draft holds no comments, which `task show` reports beside the item, exiting 4.
+    let (shown, _) = store.exited(&["task", "show", "board:SKETCH"], None, 4);
+    assert_eq!(shown["items"][0]["item"]["assignees"], json!([]), "{shown}");
+    let (output, served) = store.run(&["task", "assignee", "set", "board:SKETCH", "hubot"], None);
+    let said = format!("{}{}", stdout(&output), stderr(&output));
+    assert_ne!(output.status.code(), Some(0), "{said}");
+    assert!(said.contains("draft"), "{said}");
+    assert!(
+        writes(&served).is_empty(),
+        "nothing is written: {served:#?}"
+    );
+    assert_eq!(lookups(&served), 0, "nobody is looked up for a draft");
+}
+
+#[test]
+fn a_failed_assignment_forgets_the_person_and_the_next_write_in_the_process_looks_them_up_again() {
+    // Two updates of one task in one call are written one after the other, the second on what
+    // the first left: so a second write naming the same person is a later write of the same
+    // process, and how many lookups the call sent says whether it remembered them.
+    let store = Assigning::new();
+    let twice = |id: &str, person: &str| {
+        json!([
+            {"item": format!("board:{id}"), "assignee": person},
+            {"item": format!("board:{id}"), "title": "Asked again", "assignee": person},
+        ])
+    };
+    // A person the board assigns is looked up once: the second write finds them resolved.
+    let (answer, kept) = store.update_many(&twice("A-3", "hubot"), 0);
+    assert_eq!(outcomes(&answer), ["written", "written"], "{answer}");
+    assert_eq!(lookups(&kept), 1, "{kept:#?}");
+
+    // A person the board leaves off fails the first write, which forgets them, so the second
+    // write looks them up again — and fails the same way.
+    store.board.leave_off_when_assigned("pat");
+    let (answer, forgot) = store.update_many(&twice("A-4", "pat"), 4);
+    assert_eq!(outcomes(&answer), ["error", "error"], "{answer}");
+    assert_eq!(lookups(&forgot), 2, "{forgot:#?}");
+    assert_eq!(store.people("board:A-4"), json!([]));
+}
+
+#[test]
+fn a_write_answered_without_the_people_it_left_assigned_is_refused_as_malformed() {
+    let store = Assigning::new();
+    store.board.answer_next_assignment_without_assignees();
+    let (output, served) = store.run(&["task", "assignee", "set", "board:A-3", "hubot"], None);
+    let said = format!("{}{}", stdout(&output), stderr(&output));
+    assert_ne!(output.status.code(), Some(0), "{said}");
+    assert!(said.contains("without the people"), "{said}");
+    assert_eq!(writes(&served).len(), 1, "{served:#?}");
+}
+
+#[test]
+fn a_replacement_github_answers_keeping_a_person_it_did_not_name_is_refused_naming_them() {
+    let store = Assigning::new();
+    store.board.keep_when_replaced("octocat");
+    let (output, _) = store.run(&["task", "assignee", "set", "board:A-1", "defunkt"], None);
+    let said = format!("{}{}", stdout(&output), stderr(&output));
+    assert_ne!(output.status.code(), Some(0), "{said}");
+    assert!(said.contains("kept octocat"), "{said}");
+    assert_eq!(store.board.assignees_of("A-1"), ["defunkt", "octocat"]);
+}
+
+#[test]
+fn a_create_github_answers_assigned_otherwise_takes_the_new_issue_back_on_either_create_path() {
+    let store = Assigning::new();
+    store.board.leave_off_when_assigned("pat");
+    let deletes = |served: &[(String, Value)]| {
+        writes(served)
+            .iter()
+            .filter(|(document, _)| document.contains("deleteIssue"))
+            .count()
+    };
+    // `task create`: the issue is created on no board and filed after.
+    let body = store.sandbox.project().join("body.md");
+    std::fs::write(&body, "Left off.\n").expect("a body");
+    let (output, served) = store.run(
+        &[
+            "task",
+            "create",
+            "board",
+            "--project",
+            "P-1",
+            "--title",
+            "Created for pat",
+            "--body-file",
+            body.to_str().expect("a path"),
+            "--assignee",
+            "pat",
+        ],
+        None,
+    );
+    let said = format!("{}{}", stdout(&output), stderr(&output));
+    assert_ne!(output.status.code(), Some(0), "{said}");
+    assert!(said.contains("pat"), "{said}");
+    assert_eq!(deletes(&served), 1, "{served:#?}");
+    assert!(!store.board.holds_titled("Created for pat"));
+
+    // A copy: the issue is created filed on the board by its `createIssue`.
+    store.plan("p9", "copied", "pat");
+    let (output, served) = store.run(&["task", "copy", "plans:p9", "--to", "board"], None);
+    let said = format!("{}{}", stdout(&output), stderr(&output));
+    assert_ne!(output.status.code(), Some(0), "{said}");
+    assert!(said.contains("pat"), "{said}");
+    assert!(
+        served
+            .iter()
+            .any(|(document, _)| document.contains("createIssue(input:$input)")),
+        "the copy created its issue alone: {served:#?}"
+    );
+    assert_eq!(deletes(&served), 1, "{served:#?}");
+    assert!(!store.board.holds_titled("Plan p9"));
 }

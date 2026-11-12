@@ -8540,7 +8540,7 @@ impl GitHubProjectsSource {
             board_fields: Self::carried_board_fields(content, board_id)?,
             blocked_by: carried_blocked_by(content)?,
             assignees: if self.assignees {
-                assignees::assignee_logins(content)?
+                Some(assignees::assignee_logins(content)?)
             } else {
                 None
             },

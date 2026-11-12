@@ -23,10 +23,21 @@ use serde_json::{Map, Value, json};
 use super::{ANSWER_ERRORS, GitHubProjectsSource, PEOPLE_BATCH, graphql, required_str};
 
 /// Every login an issue's — or a draft's — `assignees` connection holds, in the order GitHub
-/// answered them; `None` when the answer did not select the connection at all.
-pub(super) fn assignee_logins(content: &Value) -> Result<Option<Vec<String>>, SourceError> {
+/// answered them, read by a source opted in to assignees: every document such a source sends
+/// selects the connection wherever it reads an issue or a draft
+/// ([`graphql::with_assignees`]), so an answer without it is refused rather than read as
+/// holding nobody.
+pub(super) fn assignee_logins(content: &Value) -> Result<Vec<String>, SourceError> {
+    let id = content
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or("an issue");
     let Some(connection) = content.get("assignees") else {
-        return Ok(None);
+        return Err(SourceError::Malformed {
+            message: format!(
+                "GitHub answered {id} without the assignees this source asked for beside it"
+            ),
+        });
     };
     let nodes = connection
         .get("nodes")
@@ -45,7 +56,6 @@ pub(super) fn assignee_logins(content: &Value) -> Result<Option<Vec<String>>, So
                 })
         })
         .collect::<Result<Vec<_>, _>>()
-        .map(Some)
 }
 
 /// Whether two lists of people name the same ones, whatever their order or the case of their
@@ -298,17 +308,24 @@ impl GitHubProjectsSource {
                 ),
             });
         };
-        let holds: Vec<(&str, &str)> = holds
+        // Every node is a person with an id and a login; one that is not is no answer to hold
+        // the write to — a malformed connection must not pass for one holding nobody.
+        let holds: Vec<(&str, &str)> = match holds
             .iter()
-            .filter_map(|node| {
-                Some((
-                    node.get("id")?.as_str()?,
-                    node.get("login")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default(),
-                ))
-            })
-            .collect();
+            .map(|node| Some((node.get("id")?.as_str()?, node.get("login")?.as_str()?)))
+            .collect::<Option<Vec<_>>>()
+        {
+            Some(holds) => holds,
+            None => {
+                self.forget_people(input);
+                return Err(SourceError::Malformed {
+                    message: format!(
+                        "GitHub answered the assignee write of {what} with an assignee that has \
+                         no id or no login"
+                    ),
+                });
+            }
+        };
         let left_off: Vec<String> = asked
             .iter()
             .filter(|id| !holds.iter().any(|(held, _)| held == *id))

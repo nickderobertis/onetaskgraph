@@ -48,6 +48,10 @@ pub(super) struct Assignees {
     /// Aliases of the request being answered that were refused, with the person each named, to
     /// answer `null` beside an error.
     owed: Vec<(String, String)>,
+    /// People this board keeps on an issue that holds them whatever a replacement names.
+    kept: Vec<String>,
+    /// Whether the next answer to an assignee write leaves the people it assigned out.
+    unanswered: bool,
 }
 
 /// The login of the person whose node id this board gave as `id`.
@@ -220,6 +224,18 @@ pub(super) fn answered(
     if spelled {
         held.show_assignees(&mut data);
     }
+    let writes = assigning_inputs(query, variables);
+    if !writes.is_empty() && std::mem::take(&mut held.assignees.unanswered) {
+        for (_, alias, _) in writes {
+            if let Some(issue) = data
+                .get_mut(&alias)
+                .and_then(|answer| answer.get_mut("issue"))
+                .and_then(Value::as_object_mut)
+            {
+                issue.remove("assignees");
+            }
+        }
+    }
     data
 }
 
@@ -227,12 +243,17 @@ impl GitHubBoard {
     /// Replace the issue `issue`'s assignees with `people`, less any this board leaves off,
     /// moving its `updatedAt` when that changes whom it holds.
     fn assign(&mut self, issue: &str, people: &[String]) {
-        let kept: Vec<String> = people
+        let before = self.assignees.held.get(issue).cloned().unwrap_or_default();
+        let mut kept: Vec<String> = people
             .iter()
             .filter(|person| !self.assignees.left_off.contains(person))
             .cloned()
             .collect();
-        let before = self.assignees.held.get(issue).cloned().unwrap_or_default();
+        for person in &before {
+            if self.assignees.kept.contains(person) && !kept.contains(person) {
+                kept.push(person.clone());
+            }
+        }
         if before == kept {
             return;
         }
@@ -310,6 +331,34 @@ impl GitHubBoardFields {
             .assignees
             .refused
             .push(login.to_owned());
+    }
+
+    /// Keep `login` on every issue that holds them, whatever a later replacement names, while
+    /// answering it as a success.
+    pub fn keep_when_replaced(&self, login: &str) {
+        self.board
+            .lock()
+            .unwrap()
+            .assignees
+            .kept
+            .push(login.to_owned());
+    }
+
+    /// Answer the next assignee write — applied as asked — without the people it left the issue
+    /// assigned to, once.
+    pub fn answer_next_assignment_without_assignees(&self) {
+        self.board.lock().unwrap().assignees.unanswered = true;
+    }
+
+    /// Whether the board holds an issue or a draft titled `title`.
+    #[must_use]
+    pub fn holds_titled(&self, title: &str) -> bool {
+        let board = self.board.lock().unwrap();
+        board
+            .items
+            .iter()
+            .chain(board.pending.iter())
+            .any(|item| item["title"] == title)
     }
 
     /// Answer every write assigning `login` as a success while leaving them off the issue.
