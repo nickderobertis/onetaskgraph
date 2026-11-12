@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.14](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-in-memory-v0.14.13...onetaskgraph-in-memory-v0.14.14) - 2026-11-12
+
+### Added
+
+- assign items to people on every plugin, opt-in per source ([#3984](https://github.com/nickderobertis/onetaskgraph/pull/3984))
+
 ## [0.14.13](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-in-memory-v0.14.12...onetaskgraph-in-memory-v0.14.13) - 2026-11-11
 
 ### Added
