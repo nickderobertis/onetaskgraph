@@ -1113,3 +1113,59 @@ fn tasks_created_together_are_all_taken_back_when_github_leaves_one_person_off()
     assert!(!store.board.holds_titled("Plan p1"), "{said}");
     assert!(!store.board.holds_titled("Plan p2"), "{said}");
 }
+
+#[test]
+fn a_create_github_assigns_otherwise_and_will_not_take_back_answers_the_assignment_and_stays() {
+    // On either create path: GitHub leaves pat off the issue it creates, and then refuses the
+    // delete that would take it back. What is answered is why the write stopped — pat left off —
+    // and the issue is still there, which a person then has to remove.
+    let store = Assigning::new();
+    store.board.leave_off_when_assigned("pat");
+    let deleted = |served: &[(String, Value)]| {
+        served
+            .iter()
+            .any(|(document, _)| document.contains("deleteIssue(input:$"))
+    };
+
+    // `task create`: the issue is created on no board and filed after.
+    store.board.refuse_once("deleteIssue(input:$");
+    let body = store.sandbox.project().join("kept.md");
+    std::fs::write(&body, "Kept.\n").expect("a body");
+    let (output, served) = store.run(
+        &[
+            "task",
+            "create",
+            "board",
+            "--project",
+            "P-1",
+            "--title",
+            "Kept for pat",
+            "--body-file",
+            body.to_str().expect("a path"),
+            "--assignee",
+            "pat",
+        ],
+        None,
+    );
+    let said = format!("{}{}", stdout(&output), stderr(&output));
+    assert_ne!(output.status.code(), Some(0), "{said}");
+    assert!(
+        said.contains("left pat off"),
+        "the assignment's refusal: {said}"
+    );
+    assert!(deleted(&served), "the take-back was asked for: {served:#?}");
+    assert!(store.board.holds_titled("Kept for pat"), "{said}");
+
+    // A copy: the issue is created filed on the board by its `createIssue`.
+    store.board.refuse_once("deleteIssue(input:$");
+    store.plan("p8", "kept", "pat");
+    let (output, served) = store.run(&["task", "copy", "plans:p8", "--to", "board"], None);
+    let said = format!("{}{}", stdout(&output), stderr(&output));
+    assert_ne!(output.status.code(), Some(0), "{said}");
+    assert!(
+        said.contains("left pat off"),
+        "the assignment's refusal: {said}"
+    );
+    assert!(deleted(&served), "the take-back was asked for: {served:#?}");
+    assert!(store.board.holds_titled("Plan p8"), "{said}");
+}

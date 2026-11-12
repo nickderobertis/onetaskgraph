@@ -248,8 +248,6 @@ impl GitHubProjectsSource {
             .collect()
     }
 
-    /// The login of the person whose node id is `id`, as this process looked them up — or the id
-    /// itself, for one it never did.
     /// `people` as GitHub spells each of them: its own login for every person this process
     /// looked up, and as given otherwise.
     pub(super) fn spelled(&self, people: &[String]) -> Vec<String> {
@@ -268,6 +266,8 @@ impl GitHubProjectsSource {
             .collect()
     }
 
+    /// The login of the person whose node id is `id`, as this process looked them up — or the id
+    /// itself, for one it never did.
     fn login_of(&self, id: &str) -> String {
         self.people()
             .iter()

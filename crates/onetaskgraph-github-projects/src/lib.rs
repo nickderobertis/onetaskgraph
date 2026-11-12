@@ -11283,8 +11283,10 @@ impl GitHubProjectsSource {
                 message: "GitHub issue creation returned no issue".into(),
             })?;
         let landed = self.created_landed(created).await?;
-        // An issue GitHub created assigned otherwise than asked is taken back, as one whose
-        // number cannot be read is: the write is refused, and leaves nothing behind.
+        // An issue GitHub created assigned otherwise than asked is refused, and taken back, best
+        // effort, as one whose number cannot be read is: a delete GitHub refuses too leaves the
+        // issue where it is, and the refusal answered is still the assignment's, which is why
+        // the write stopped.
         if let Err(error) = self.assigned_as_asked(&input, Some(created)) {
             let _ = self.delete_issue(&landed.content_id).await;
             return Err(error);
@@ -12782,6 +12784,8 @@ impl GitHubProjectsSource {
                 message: "GitHub issue creation returned no issue".into(),
             })?;
         let content_id = NativeId(required_str(created, "id")?.to_owned());
+        // Assigned otherwise than asked, the issue is refused and taken back on the terms of the
+        // filed create's: best effort, answering the assignment's refusal either way.
         if let Err(error) = self.assigned_as_asked(&input, Some(created)) {
             let _ = self.delete_issue(&content_id).await;
             return Err(error);
