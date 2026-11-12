@@ -7623,10 +7623,15 @@ fn linear_serve(
                 continue;
             }
             let request = linear_identifiers_resolved(request, &state.lock().unwrap());
+            // An assignee taken out, for `linear_assignees::after` to answer with.
+            let (request, assigning) =
+                crate::linear_assignees::before(request, &mut state.lock().unwrap());
             let aliased = onetaskgraph_linear::graphql::decomposed(
                 request["query"].as_str().unwrap_or_default(),
             );
-            let (status, response) = if let Some(singles) = aliased {
+            let (status, response) = if let Some(answered) = assigning.answered() {
+                answered
+            } else if let Some(singles) = aliased {
                 let mut answered = linear_aliased(
                     &singles,
                     &request,
@@ -7706,6 +7711,8 @@ fn linear_serve(
                     Err(message) => ("400 Bad Request", json!({"errors":[{"message":message}]})),
                 }
             };
+            let response =
+                crate::linear_assignees::after(assigning, response, &mut state.lock().unwrap());
             answers.lock().unwrap().push(response.clone());
             // Answered, and not yet sent: a change made here is one the next request sees and
             // this one did not.
