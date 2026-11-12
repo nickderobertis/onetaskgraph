@@ -885,6 +885,10 @@ fn a_lookup_answered_without_an_id_or_without_its_not_found_error_is_refused_as_
                 as Box<dyn FnMut(&mut Value) + Send>,
         ),
         (
+            "another user than asked for",
+            Box::new(|data: &mut Value| data["u0"] = json!({"id": "U_hubot", "login": "hubot"})),
+        ),
+        (
             "no answer and no error",
             Box::new(|data: &mut Value| {
                 if let Some(members) = data.as_object_mut() {
@@ -947,4 +951,62 @@ fn a_write_answered_with_a_person_missing_an_id_or_login_is_refused_and_the_call
         "the call's one lookup answers its later writes too: {served:#?}"
     );
     assert_eq!(store.people("board:A-6"), json!(["hubot"]));
+}
+
+/// Set the board's `config.assignees` to `opted`, keeping every other setting of the store.
+fn opting(store: &Assigning, opted: bool) {
+    let path = store.sandbox.project().join("onetaskgraph.yaml");
+    let mut document: Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).expect("the project document"))
+            .expect("JSON");
+    document["sources"]["board"]["config"]["assignees"] = json!(opted);
+    store.sandbox.project_document(&document.to_string());
+}
+
+#[test]
+fn an_entry_cached_before_the_board_opted_in_is_read_again_rather_than_served_without_people() {
+    // The board's cache is on and it has not opted in: a pinned read fills an entry, which the
+    // same pin then serves with no request.
+    let store = Assigning::configured(false, Some(json!({"enabled": true})));
+    let (first, _) = store.ok(&["task", "show", &format!("board:{SEEDED}")]);
+    let token = first["items"][0]["item"]["version"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a version: {first}"))
+        .to_owned();
+    assert!(
+        first["items"][0]["item"].get("assignees").is_none(),
+        "{first}"
+    );
+    let (cached, served) = store.ok(&["task", "show", &format!("board:{SEEDED}"), "--pin", &token]);
+    assert_eq!(
+        served,
+        Vec::<(String, Value)>::new(),
+        "served from the cache: {cached}"
+    );
+
+    // Opted in, the same pin is read from GitHub — the entry holds nobody's people — and
+    // answers every person the issue holds.
+    opting(&store, true);
+    let (opted, served) = store.ok(&["task", "show", &format!("board:{SEEDED}"), "--pin", &token]);
+    assert!(!served.is_empty(), "the entry was not served: {opted}");
+    assert_eq!(
+        opted["items"][0]["item"]["assignees"],
+        json!(THREE),
+        "{opted}"
+    );
+
+    // Opted out again, the entry the opted-in read wrote is not served either, and no answer
+    // carries an `assignees` key.
+    let (again, _) = store.ok(&["task", "show", &format!("board:{SEEDED}")]);
+    let token = again["items"][0]["item"]["version"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a version: {again}"))
+        .to_owned();
+    opting(&store, false);
+    let (plain, served) = store.ok(&["task", "show", &format!("board:{SEEDED}"), "--pin", &token]);
+    assert!(!served.is_empty(), "the entry was not served: {plain}");
+    assert!(
+        plain["items"][0]["item"].get("assignees").is_none(),
+        "{plain}"
+    );
 }

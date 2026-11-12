@@ -162,6 +162,7 @@ impl LinearSource {
                 .map(|name| (*name).to_owned())
                 .collect()
         };
+        // llmlint: ignore[changed_behavior_has_e2e] The split past 8,250 names is reachable only by one call naming 8,251 unseen people. Measured on the loopback: an update-many of that many items over its five issues sent 16,498 requests and took 24 s, and one over 8,251 issues of their own is refused HTTP 413 by its batched read. The journeys drive this same loop with one connection and with two (252 names), and the plugin's pinned-schema test validates the 33-connection document.
         for request in unresolved.chunks(PEOPLE_PER_LOOKUP) {
             // One connection answers one page of names: one page is sent as `USERS` itself, and
             // more as that document aliased once a page.
@@ -340,5 +341,30 @@ impl LinearSource {
                 said(asked)
             ),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PEOPLE_PER_LOOKUP, USERS_CONNECTIONS, USERS_PAGE};
+
+    /// The README's row for how many names one Linear lookup carries is this plugin's own
+    /// limit, worked out as the README works it out.
+    #[test]
+    fn the_readme_states_the_lookup_limit_this_plugin_splits_at() {
+        let readme = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../README.md"));
+        // One connection of a page of users, each an object of two properties, priced as
+        // Linear documents it: under its 10,000-point query limit at this many connections.
+        let per_connection = 1 + 1 + USERS_PAGE * 12 / 10;
+        assert!(per_connection * USERS_CONNECTIONS <= 10_000);
+        assert!(per_connection * (USERS_CONNECTIONS + 1) > 10_000);
+        let row = format!(
+            "| `linear` | {},{:03} display names | {USERS_CONNECTIONS} `users` connections of \
+             {USERS_PAGE} (Linear's connection maximum), each at most {per_connection} of the \
+             10,000 complexity points Linear allows a query |",
+            PEOPLE_PER_LOOKUP / 1000,
+            PEOPLE_PER_LOOKUP % 1000
+        );
+        assert!(readme.contains(&row), "the README states {row:?}");
     }
 }

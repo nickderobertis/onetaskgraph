@@ -2536,3 +2536,24 @@ fn the_schema_check_replaces_a_graphql_copy_that_is_not_the_pinned_tarballs() {
         );
     }
 }
+
+/// The README's row for how many people one GitHub lookup names is the plugin's own limit.
+#[test]
+fn the_readme_states_the_lookup_limit_this_plugin_splits_at() {
+    let readme = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../README.md"));
+    let limit = onetaskgraph_github_projects::PEOPLE_PER_LOOKUP;
+    let spelled = limit
+        .to_string()
+        .as_bytes()
+        .rchunks(3)
+        .rev()
+        .map(|digits| std::str::from_utf8(digits).expect("digits"))
+        .collect::<Vec<_>>()
+        .join(",");
+    assert_eq!(
+        u64::try_from(limit).expect("a count"),
+        onetaskgraph_github_projects::NODE_COUNT_LIMIT
+    );
+    let row = format!("| `github-projects` | {spelled} logins | GitHub's limit of {spelled} nodes");
+    assert!(readme.contains(&row), "the README states {row:?}");
+}

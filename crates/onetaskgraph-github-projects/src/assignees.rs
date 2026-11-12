@@ -171,6 +171,7 @@ impl GitHubProjectsSource {
                 }
             }
         }
+        // llmlint: ignore[changed_behavior_has_e2e] A second lookup happens only for one call naming more than 500,000 unseen logins, GitHub's own node limit, which no journey can drive. The journeys drive this same loop for 22 logins in one request, and the schema test validates a lookup sized to any number of people.
         for chunk in wanted.chunks(PEOPLE_PER_LOOKUP) {
             let mut variables = Map::new();
             for (slot, login) in chunk.iter().enumerate() {
@@ -183,10 +184,23 @@ impl GitHubProjectsSource {
             for (slot, login) in chunk.iter().enumerate() {
                 let alias = format!("u{slot}");
                 match data.get(&alias).filter(|user| !user.is_null()) {
-                    Some(user) => found.push((
-                        login.to_lowercase(),
-                        Some(required_str(user, "id")?.to_owned()),
-                    )),
+                    Some(user) => {
+                        // The id is held for the person asked for only when the answer is that
+                        // person: one naming somebody else would assign them in their place.
+                        let answered = required_str(user, "login")?;
+                        if !answered.eq_ignore_ascii_case(login) {
+                            return Err(SourceError::Malformed {
+                                message: format!(
+                                    "GitHub answered the lookup of the login {login} with the \
+                                     user {answered}"
+                                ),
+                            });
+                        }
+                        found.push((
+                            login.to_lowercase(),
+                            Some(required_str(user, "id")?.to_owned()),
+                        ));
+                    }
                     None if not_found_at(&data, &alias) => found.push((login.to_lowercase(), None)),
                     None => {
                         return Err(SourceError::Malformed {
