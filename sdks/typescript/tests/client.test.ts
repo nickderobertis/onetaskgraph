@@ -1647,6 +1647,42 @@ test("a task's priority is listed, filtered and set through the real binary", as
   }
 });
 
+test("a task's assignee is created, replaced, cleared and guarded through the real binary", async () => {
+  const root = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-assignees-"));
+  try {
+    mkdirSync(resolve(root, "work/tasks"), { recursive: true });
+    writeFileSync(resolve(root, "body.md"), "Route me.\n");
+    writeFileSync(
+      resolve(root, "onetaskgraph.yaml"),
+      JSON.stringify({
+        sources: {
+          work: { plugin: "local-md", config: { root: resolve(root, "work"), assignees: true } },
+        },
+      }),
+    );
+    const assigning = new OnetaskgraphClient({ binaryPath: binary, cwd: root });
+
+    await assigning.taskCreate("work", "p", "Routed", { bodyFile: "body.md", assignee: "ana" });
+    const created = await assigning.taskShow("work:routed");
+    expect(created.items[0]?.item.assignees).toEqual(["ana"]);
+
+    const replaced = await assigning.taskAssigneeSet("work:routed", "ben");
+    expect(replaced.assignees).toEqual(["ben"]);
+    const cleared = await assigning.taskAssigneeSet("work:routed");
+    expect(cleared.assignees).toEqual([]);
+
+    // Held to a version the task has since moved past, the write is refused and lands nothing.
+    const stale = replaced.result?.version;
+    if (typeof stale !== "string") throw new Error("the replacing write answered no version");
+    const moved = assigning.taskAssigneeSet("work:routed", "cara", { ifVersion: stale });
+    await expect(moved).rejects.toBeInstanceOf(OnetaskgraphExecutionError);
+    const shown = await assigning.taskShow("work:routed");
+    expect(shown.items[0]?.item.assignees).toEqual([]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 function commentedFolder(): string {
   const root = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-commented-"));
   mkdirSync(resolve(root, "work/tasks"), { recursive: true });
