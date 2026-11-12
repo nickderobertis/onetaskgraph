@@ -775,3 +775,190 @@ fn an_assignee_only_change_moves_the_change_token_and_a_pinned_read_is_never_ser
         old.json
     );
 }
+
+#[test]
+fn a_create_naming_nobody_keeps_the_assignee_linear_gives_it_by_default() {
+    let team = Team::new();
+    // A Linear template or triage rule assigning every new issue to cy.
+    team.workspace.assign_by_default("U-CY");
+    let body = team.body();
+    let created = team.ok(&[
+        "task",
+        "create",
+        "team",
+        "--project",
+        "P-1",
+        "--title",
+        "Defaulted",
+        "--body-file",
+        &body,
+    ]);
+    assert_eq!(
+        created.assignee_ids(),
+        Vec::<Value>::new(),
+        "a create naming nobody sends no assigneeId: {:#?}",
+        created.sent
+    );
+    assert_eq!(created.lookups(), 0);
+    assert_eq!(
+        created.json["items"][0]["item"]["assignees"],
+        json!(["cy"]),
+        "the create reports the default Linear applied: {}",
+        created.json
+    );
+    let id = created.json["items"][0]["id"]
+        .as_str()
+        .expect("an id")
+        .to_owned();
+    assert_eq!(team.assignees(&id), json!(["cy"]));
+
+    // A task copied out of a folder that holds it unassigned — an explicit empty set — is a
+    // create naming nobody too: it lands with the default, and its answer is not refused for
+    // naming somebody.
+    team.note("Unassigned at the source", &[]);
+    let copied = team.ok(&["task", "copy", "notes:N-1", "--to", "team"]);
+    assert_eq!(
+        copied.assignee_ids(),
+        Vec::<Value>::new(),
+        "{:#?}",
+        copied.sent
+    );
+    let destination = copied.json["items"][0]["destination"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a destination: {}", copied.json))
+        .to_owned();
+    assert_eq!(team.assignees(&destination), json!(["cy"]));
+}
+
+/// An engine over `team`'s configuration, as a long-lived caller holds one across commands.
+fn long_lived(team: &Team) -> (Engine, tokio::runtime::Runtime) {
+    let environment = onetaskgraph_core::Environment::from_pairs([
+        (
+            "XDG_CONFIG_HOME",
+            team.sandbox.config_home().to_string_lossy().into_owned(),
+        ),
+        (
+            "XDG_CACHE_HOME",
+            team.cache_home.to_string_lossy().into_owned(),
+        ),
+        ("LINEAR_API_KEY", "fixture-key".to_owned()),
+    ]);
+    let loaded = onetaskgraph_core::config::load(
+        &team.sandbox.project(),
+        &environment,
+        &onetaskgraph_core::config::Layer::default(),
+    )
+    .expect("the configuration loads");
+    let engine = Engine::build(&loaded.config, &loaded.secrets);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a runtime");
+    (engine, runtime)
+}
+
+/// Assign `id` to `person` through `engine`: who it then holds, or why it was refused, and how
+/// many person lookups the call sent.
+fn attempt(
+    team: &Team,
+    engine: &Engine,
+    runtime: &tokio::runtime::Runtime,
+    id: &str,
+    person: &str,
+) -> (Result<Vec<String>, String>, usize) {
+    let mark = team.workspace.served_count();
+    let id: GlobalId = id.parse().unwrap();
+    let answered = runtime
+        .block_on(engine.set_task_assignee(&id, Some(person)))
+        .map(|set| set.assignees)
+        .map_err(|error| error.to_string());
+    let lookups = team
+        .workspace
+        .served_since(mark)
+        .iter()
+        .filter(|(query, _)| query == graphql::USERS)
+        .count();
+    (answered, lookups)
+}
+
+#[test]
+fn a_mismatched_or_failed_assignment_lets_go_of_every_person_resolved_so_the_next_resolves_afresh()
+{
+    let team = Team::new();
+    let (engine, runtime) = long_lived(&team);
+    let attempt = |id: &str, person: &str| attempt(&team, &engine, &runtime, id, person);
+    assert_eq!(attempt("team:A-2", "bob"), (Ok(vec!["bob".to_owned()]), 1));
+    assert_eq!(
+        attempt("team:A-3", "bob"),
+        (Ok(vec!["bob".to_owned()]), 0),
+        "held: a later call naming bob resolves nothing"
+    );
+
+    // Linear answers the assignment with another person than it was sent.
+    team.workspace.assign_instead("U-BOB", Some("U-CY"));
+    let (answered, lookups) = attempt("team:A-4", "bob");
+    let refusal = answered.expect_err("an answer naming another person is refused");
+    assert!(
+        refusal.contains("\"cy\"") && refusal.contains("\"bob\""),
+        "the refusal names both: {refusal}"
+    );
+    assert_eq!(lookups, 0, "bob was still held when the write was sent");
+    team.workspace.assign_instead("U-BOB", None);
+    assert_eq!(
+        attempt("team:A-5", "bob"),
+        (Ok(vec!["bob".to_owned()]), 1),
+        "after the mismatch, bob is resolved afresh"
+    );
+    assert_eq!(
+        attempt("team:A-2", "cy"),
+        (Ok(vec!["cy".to_owned()]), 1),
+        "cy is resolved, and held from here"
+    );
+
+    // Linear refuses a write naming an assignee.
+    team.workspace.refuse_writes_of("A-1");
+    let (answered, lookups) = attempt("team:A-1", "cy");
+    answered.expect_err("the refused write fails");
+    assert_eq!(lookups, 0, "cy was held when the write was sent");
+    assert_eq!(team.workspace.assignee_of("A-1").as_deref(), Some("ada"));
+    assert_eq!(
+        attempt("team:A-3", "cy"),
+        (Ok(vec!["cy".to_owned()]), 1),
+        "after the failure, cy is resolved afresh"
+    );
+    assert_eq!(team.assignees("team:A-3"), json!(["cy"]));
+    assert_eq!(team.assignees("team:A-5"), json!(["bob"]));
+}
+
+#[test]
+fn a_display_name_unknown_in_one_command_is_assignable_after_the_command_ends() {
+    let team = Team::new();
+    let (engine, runtime) = long_lived(&team);
+    let attempt = |person: &str| attempt(&team, &engine, &runtime, "team:A-2", person);
+    let (answered, lookups) = attempt("dee");
+    let refusal = answered.expect_err("nobody is displayed as dee");
+    assert!(refusal.contains("\"dee\""), "{refusal}");
+    assert_eq!(lookups, 1);
+    let (answered, lookups) = attempt("dee");
+    answered.expect_err("still nobody");
+    assert_eq!(
+        lookups, 0,
+        "a name found unknown is refused again without a request"
+    );
+
+    // dee joins the workspace; within the same command the name is still the one refused.
+    team.workspace.add_user("U-DEE", "dee");
+    let (answered, lookups) = attempt("dee");
+    answered.expect_err("refused until the command ends");
+    assert_eq!(lookups, 0);
+
+    runtime
+        .block_on(engine.end_command())
+        .expect("the command ends");
+    assert_eq!(
+        attempt("dee"),
+        (Ok(vec!["dee".to_owned()]), 1),
+        "the next command asks Linear again, and assigns dee"
+    );
+    assert_eq!(team.assignees("team:A-2"), json!(["dee"]));
+}

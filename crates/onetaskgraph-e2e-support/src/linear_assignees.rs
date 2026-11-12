@@ -79,6 +79,12 @@ pub(crate) fn before(mut request: Value, data: &mut Value) -> (Value, Assigning)
     if !query.trim_start().starts_with("mutation") {
         return (request, assigning);
     }
+    let plain = request["query"].as_str().unwrap_or_default().to_owned();
+    let singles = graphql::decomposed(&plain);
+    let creates_issue = |alias: Option<usize>| match (alias, &singles) {
+        (Some(at), Some(singles)) => singles.get(at) == Some(&graphql::ISSUE_CREATE),
+        _ => plain == graphql::ISSUE_CREATE,
+    };
     let Some(variables) = request.get_mut("variables").and_then(Value::as_object_mut) else {
         return (request, assigning);
     };
@@ -95,11 +101,19 @@ pub(crate) fn before(mut request: Value, data: &mut Value) -> (Value, Assigning)
             continue;
         };
         let Some(assignee) = input.remove("assigneeId") else {
+            // A create naming nobody takes the workspace's default, as a Linear template or
+            // triage rule assigns a new issue.
+            if creates_issue(alias)
+                && let Some(default) = data.get("_linear_default_assignee").cloned()
+            {
+                assigning.creates.push((alias, default));
+            }
             continue;
         };
         if !assignee.is_null() && !users(data).iter().any(|user| user["id"] == assignee) {
             assigning.refused = true;
         }
+        let assignee = instead(data, assignee);
         let id = variables
             .get(&format!("id{suffix}"))
             .and_then(Value::as_str)
@@ -196,6 +210,15 @@ fn decorate(value: &mut Value, data: &Value) {
     }
 }
 
+/// The user `asked` is assigned as: another one, where [`LinearWorkspace::assign_instead`]
+/// says so.
+fn instead(data: &Value, asked: Value) -> Value {
+    asked
+        .as_str()
+        .and_then(|asked| data["_linear_assign_instead"].get(asked).cloned())
+        .unwrap_or(asked)
+}
+
 /// The workspace's users.
 fn users(data: &Value) -> Vec<Value> {
     data["_linear_users"]
@@ -251,6 +274,37 @@ fn task_mut<'a>(data: &'a mut Value, id: &str) -> Option<&'a mut Value> {
 }
 
 impl LinearWorkspace {
+    /// Add the user `id`, displayed as `name`, as a person joining the workspace would.
+    pub fn add_user(&self, id: &str, name: &str) {
+        let mut data = self.state.lock().unwrap();
+        let mut held = users(&data);
+        held.push(json!({"id": id, "displayName": name}));
+        data["_linear_users"] = Value::Array(held);
+    }
+
+    /// Assign every issue created naming no assignee to the user `id`, as a Linear template or
+    /// triage rule does.
+    pub fn assign_by_default(&self, id: &str) {
+        self.state.lock().unwrap()["_linear_default_assignee"] = json!(id);
+    }
+
+    /// From now on, assign the user `given` wherever a write asks for `asked` — a workspace
+    /// answering an assignment with another person than it was sent; `None` stops it.
+    pub fn assign_instead(&self, asked: &str, given: Option<&str>) {
+        let mut data = self.state.lock().unwrap();
+        if !data["_linear_assign_instead"].is_object() {
+            data["_linear_assign_instead"] = json!({});
+        }
+        match given {
+            Some(given) => data["_linear_assign_instead"][asked] = json!(given),
+            None => {
+                data["_linear_assign_instead"]
+                    .as_object_mut()
+                    .map(|held| held.remove(asked));
+            }
+        }
+    }
+
     /// The display name of the user the issue `id` is assigned to, as this workspace holds it —
     /// `None` when it is unassigned.
     pub fn assignee_of(&self, id: &str) -> Option<String> {
