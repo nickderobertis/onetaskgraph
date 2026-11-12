@@ -1057,3 +1057,82 @@ fn an_issue_a_refused_create_left_keeps_its_assignee_unless_a_copy_is_guarded_on
     );
     assert_eq!(team.assignees(&made[0]), json!(["bob"]));
 }
+
+/// One way an answer is made malformed: what it is, and the change to the member it bends.
+type Malformed = (&'static str, fn(&mut Value));
+
+/// The failure kind a command that failed printed: its failure document's, or the first error
+/// a read reported its source failed with.
+fn failure_kind(ran: &Ran) -> String {
+    ran.json["failure"]["kind"]
+        .as_str()
+        .or_else(|| ran.json["errors"][0]["error"]["kind"].as_str())
+        .unwrap_or_default()
+        .to_owned()
+}
+
+#[test]
+fn an_issue_answered_without_its_assignee_or_with_one_missing_a_name_is_refused_as_malformed() {
+    let team = Team::new();
+    let bends: [Malformed; 2] = [
+        ("no assignee member", |issue| {
+            if let Some(issue) = issue.as_object_mut() {
+                issue.remove("assignee");
+            }
+        }),
+        ("an assignee with no display name", |issue| {
+            issue["assignee"] = json!({"id": "U-ADA"});
+        }),
+    ];
+    for (what, bend) in bends {
+        team.workspace.bend_answers_as_sent(
+            |query, _| query.contains("issue(id:") && query.contains("assignee{displayName}"),
+            1,
+            move |_, data| {
+                if let Some(issue) = data.get_mut("issue") {
+                    bend(issue);
+                }
+            },
+        );
+        let ran = team.run(&["task", "show", "team:A-1", "--no-comments"]);
+        assert_ne!(ran.code, Some(0), "{what}: {}", ran.json);
+        assert_eq!(failure_kind(&ran), "malformed", "{what}: {}", ran.json);
+    }
+    // Answered as it should be, the same read holds its person.
+    assert_eq!(team.assignees("team:A-1"), json!(["ada"]));
+}
+
+#[test]
+fn a_lookup_answered_malformed_or_naming_one_display_name_twice_is_refused_writing_nothing() {
+    let team = Team::new();
+    let bends: [Malformed; 3] = [
+        ("nodes that are not a list", |users| {
+            users["nodes"] = json!("bob")
+        }),
+        ("a user with no id", |users| {
+            users["nodes"] = json!([{"displayName": "bob"}]);
+        }),
+        ("one name answered as two users", |users| {
+            users["nodes"] = json!([
+                {"id": "U-BOB", "displayName": "bob"},
+                {"id": "U-BOB-2", "displayName": "bob"},
+            ]);
+        }),
+    ];
+    for (what, bend) in bends {
+        team.workspace.bend_answers_as_sent(
+            |query, _| query == graphql::USERS,
+            1,
+            move |_, data| {
+                if let Some(users) = data.get_mut("users") {
+                    bend(users);
+                }
+            },
+        );
+        let ran = team.run(&["task", "assignee", "set", "team:A-2", "bob"]);
+        assert_ne!(ran.code, Some(0), "{what}: {}", ran.json);
+        assert_eq!(failure_kind(&ran), "malformed", "{what}: {}", ran.json);
+        assert!(ran.mutations().is_empty(), "{what}: {:#?}", ran.sent);
+    }
+    assert_eq!(team.assignees("team:A-2"), json!([]));
+}

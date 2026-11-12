@@ -6559,6 +6559,7 @@ pub fn linear_workspace_failing(
         answers: Arc::new(Mutex::new(Vec::new())),
         hooks: Arc::new(Mutex::new(Vec::new())),
         bends: Arc::new(Mutex::new(Vec::new())),
+        late_bends: Arc::new(Mutex::new(Vec::new())),
         limits: Arc::new(Mutex::new(std::collections::VecDeque::new())),
         lost: Arc::new(Mutex::new(Vec::new())),
     };
@@ -6718,6 +6719,9 @@ pub struct LinearWorkspace {
     answers: Arc<Mutex<Vec<Value>>>,
     hooks: Arc<Mutex<Vec<LinearHook>>>,
     bends: Arc<Mutex<Vec<LinearBend>>>,
+    /// Bends applied to an answer once every other layer — assignees included — has made it,
+    /// matched against the document as the plugin sent it.
+    late_bends: Arc<Mutex<Vec<LinearBend>>>,
     /// How each of the next requests is answered, in order: `Some(wait)` refused `429` naming
     /// a reset `wait` seconds ahead, `None` answered as usual.
     limits: Arc<Mutex<std::collections::VecDeque<Option<u64>>>>,
@@ -6752,6 +6756,23 @@ impl LinearWorkspace {
         bend: impl FnMut(&Value, &mut Value) + Send + 'static,
     ) {
         self.bends.lock().unwrap().push(LinearBend {
+            matches: Box::new(matches),
+            times,
+            bend: Box::new(bend),
+        });
+    }
+
+    /// [`Self::bend_answers`], applied once every other layer of this workspace — the people
+    /// an opted-in source reads included — has made the answer, and matched against the
+    /// document exactly as the plugin sent it.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] As `bend_answers`: a control of the loopback Linear's answers, which only its request loop here makes.
+    pub fn bend_answers_as_sent(
+        &self,
+        matches: impl Fn(&str, &Value) -> bool + Send + 'static,
+        times: usize,
+        bend: impl FnMut(&Value, &mut Value) + Send + 'static,
+    ) {
+        self.late_bends.lock().unwrap().push(LinearBend {
             matches: Box::new(matches),
             times,
             bend: Box::new(bend),
@@ -7450,6 +7471,7 @@ fn linear_server_over(
         answers: Arc::new(Mutex::new(Vec::new())),
         hooks: Arc::new(Mutex::new(Vec::new())),
         bends: Arc::new(Mutex::new(Vec::new())),
+        late_bends: Arc::new(Mutex::new(Vec::new())),
         limits: Arc::new(Mutex::new(std::collections::VecDeque::new())),
         lost: Arc::new(Mutex::new(Vec::new())),
     };
@@ -7640,6 +7662,7 @@ fn linear_serve(
                 continue;
             }
             let request = linear_identifiers_resolved(request, &state.lock().unwrap());
+            let sent_query = request["query"].as_str().unwrap_or_default().to_owned();
             // An assignee taken out, for `linear_assignees::after` to answer with.
             let (request, assigning) =
                 crate::linear_assignees::before(request, &mut state.lock().unwrap());
@@ -7728,8 +7751,19 @@ fn linear_serve(
                     Err(message) => ("400 Bad Request", json!({"errors":[{"message":message}]})),
                 }
             };
-            let response =
+            let mut response =
                 crate::linear_assignees::after(assigning, response, &mut state.lock().unwrap());
+            if let Some(data) = response.get_mut("data").filter(|data| !data.is_null()) {
+                let variables = request.get("variables").cloned().unwrap_or(Value::Null);
+                let mut bends = workspace.late_bends.lock().unwrap();
+                if let Some(bend) = bends
+                    .iter_mut()
+                    .find(|bend| bend.times > 0 && (bend.matches)(&sent_query, &variables))
+                {
+                    bend.times -= 1;
+                    (bend.bend)(&variables, data);
+                }
+            }
             answers.lock().unwrap().push(response.clone());
             // Answered, and not yet sent: a change made here is one the next request sees and
             // this one did not.

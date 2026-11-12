@@ -52,7 +52,13 @@ pub(super) struct Assignees {
     kept: Vec<String>,
     /// Whether the next answer to an assignee write leaves the people it assigned out.
     unanswered: bool,
+    /// Answers to bend once each, in order: the first whose document holds its text is handed
+    /// the `data` the board would have answered.
+    bends: Vec<(&'static str, AnswerBend)>,
 }
+
+/// How one answer is bent: handed the `data` the board would have answered.
+type AnswerBend = Box<dyn FnMut(&mut Value) + Send>;
 
 /// The login of the person whose node id this board gave as `id`.
 fn login_of(id: &str) -> Option<&str> {
@@ -224,6 +230,15 @@ pub(super) fn answered(
     if spelled {
         held.show_assignees(&mut data);
     }
+    if let Some(at) = held
+        .assignees
+        .bends
+        .iter()
+        .position(|(holds, _)| query.contains(holds))
+    {
+        let (_, mut bend) = held.assignees.bends.remove(at);
+        bend(&mut data);
+    }
     let writes = assigning_inputs(query, variables);
     if !writes.is_empty() && std::mem::take(&mut held.assignees.unanswered) {
         for (_, alias, _) in writes {
@@ -342,6 +357,21 @@ impl GitHubBoardFields {
             .assignees
             .kept
             .push(login.to_owned());
+    }
+
+    /// Bend the next answer to a document holding `holds` through `bend`, once, after the board
+    /// applied the request: a GitHub answering as no correct one does.
+    pub fn bend_next_answer(
+        &self,
+        holds: &'static str,
+        bend: impl FnMut(&mut Value) + Send + 'static,
+    ) {
+        self.board
+            .lock()
+            .unwrap()
+            .assignees
+            .bends
+            .push((holds, Box::new(bend)));
     }
 
     /// Answer the next assignee write — applied as asked — without the people it left the issue

@@ -737,3 +737,150 @@ fn more_people_than_one_lookup_asks_for_are_resolved_in_two_and_the_second_answe
     assert_eq!(store.people("board:A-1"), json!(["octocat"]));
     assert_eq!(store.people("board:A-2"), json!(["hubot"]));
 }
+
+/// Apply `change` to every `assignees` connection `data` holds, wherever it is.
+fn every_connection(data: &mut Value, change: &dyn Fn(&mut Value)) {
+    match data {
+        Value::Object(members) => {
+            for (key, member) in members.iter_mut() {
+                if key == "assignees" {
+                    change(member);
+                } else {
+                    every_connection(member, change);
+                }
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                every_connection(item, change);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The failure kind a command that failed printed: its failure document's, or the first error
+/// a read reported its source failed with.
+fn failure_kind(output: &Output) -> String {
+    let printed: Value = serde_json::from_str(&stdout(output)).unwrap_or(Value::Null);
+    printed["failure"]["kind"]
+        .as_str()
+        .or_else(|| printed["errors"][0]["error"]["kind"].as_str())
+        .unwrap_or_default()
+        .to_owned()
+}
+
+#[test]
+fn a_read_answered_with_a_malformed_assignee_connection_is_refused_never_read_as_nobody() {
+    let store = Assigning::new();
+    for (what, bend) in [
+        (
+            "no connection",
+            Box::new(|data: &mut Value| {
+                if let Some(node) = data.get_mut("node").and_then(Value::as_object_mut) {
+                    node.remove("assignees");
+                }
+            }) as Box<dyn FnMut(&mut Value) + Send>,
+        ),
+        (
+            "nodes not a list",
+            Box::new(|data: &mut Value| {
+                every_connection(data, &|connection| connection["nodes"] = json!("octocat"));
+            }),
+        ),
+        (
+            "a person without a login",
+            Box::new(|data: &mut Value| {
+                every_connection(data, &|connection| {
+                    connection["nodes"] = json!([{"id": "U_octocat"}]);
+                });
+            }),
+        ),
+    ] {
+        store.board.bend_next_answer("node(id:$id)", bend);
+        let (output, _) = store.run(&["task", "show", &format!("board:{TWIN}")], None);
+        assert_ne!(output.status.code(), Some(0), "{what}: {}", stdout(&output));
+        assert_eq!(
+            failure_kind(&output),
+            "malformed",
+            "{what}: {}",
+            stdout(&output)
+        );
+    }
+    // Answered as it should be, the same read holds every person.
+    assert_eq!(store.people(&format!("board:{TWIN}")), json!(THREE));
+}
+
+#[test]
+fn a_lookup_answered_without_an_id_or_without_its_not_found_error_is_refused_as_malformed() {
+    let store = Assigning::new();
+    for (what, bend) in [
+        (
+            "a user without an id",
+            Box::new(|data: &mut Value| data["u0"] = json!({"login": "defunkt"}))
+                as Box<dyn FnMut(&mut Value) + Send>,
+        ),
+        (
+            "no answer and no error",
+            Box::new(|data: &mut Value| {
+                if let Some(members) = data.as_object_mut() {
+                    members.remove("u0");
+                }
+            }),
+        ),
+    ] {
+        store.board.bend_next_answer(":user(login:", bend);
+        let (output, served) =
+            store.run(&["task", "assignee", "set", "board:A-5", "defunkt"], None);
+        assert_ne!(output.status.code(), Some(0), "{what}: {}", stdout(&output));
+        assert_eq!(
+            failure_kind(&output),
+            "malformed",
+            "{what}: {}",
+            stdout(&output)
+        );
+        assert!(
+            writes(&served).is_empty(),
+            "{what}: nothing is written: {served:#?}"
+        );
+    }
+    assert_eq!(store.people("board:A-5"), json!([]));
+}
+
+#[test]
+fn a_write_answered_with_a_person_missing_an_id_or_login_is_refused_and_forgets_the_people_it_named()
+ {
+    // Updates of one task in one call are written one after the other, each on what the one
+    // before left: the first lands but is answered malformed, the second unassigns, and the
+    // third assigns the same person again — a later write of the same process, whose lookup says
+    // whether the first forgot them.
+    let store = Assigning::new();
+    store
+        .board
+        .bend_next_answer("updateIssue(", |data: &mut Value| {
+            every_connection(data, &|connection| {
+                connection["nodes"] = json!([{"id": "U_hubot"}]);
+            });
+        });
+    let (answer, served) = store.update_many(
+        &json!([
+            {"item": "board:A-6", "assignee": "hubot"},
+            {"item": "board:A-6", "assignee": null},
+            {"item": "board:A-6", "assignee": "hubot"},
+        ]),
+        4,
+    );
+    assert_eq!(
+        outcomes(&answer),
+        ["error", "written", "written"],
+        "{answer}"
+    );
+    let reason = answer["results"][0]["reason"].as_str().expect("a reason");
+    assert!(reason.contains("no id or no login"), "{reason}");
+    assert_eq!(
+        lookups(&served),
+        2,
+        "the person was looked up again: {served:#?}"
+    );
+    assert_eq!(store.people("board:A-6"), json!(["hubot"]));
+}

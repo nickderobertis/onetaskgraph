@@ -2444,6 +2444,7 @@ pub struct TaskCopyArgs {
     ///
     /// Decided on the copy's own read of the destination task, so it adds no request; a create
     /// takes the source's assignee. Only for a destination that opted in to assignees.
+    // llmlint: ignore[invalid_states_unrepresentable] The task's contract fixes this flag literally as a repeatable `--when-destination-assignees <PERSON|none>`, which both SDKs map to one string list; `destination_assignees` in `main` turns it into the engine's `Option<Vec<String>>` — `none` alone an unassigned set — and refuses `none` beside a person before anything is read, which `a_copy_carries_the_assignee_refuses_an_item_holding_two_and_guards_a_recopy` drives.
     #[arg(long = "when-destination-assignees", value_name = "PERSON|none")]
     pub when_destination_assignees: Vec<String>,
 
