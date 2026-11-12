@@ -189,8 +189,9 @@ pub struct TaskCreate {
     /// Who may read it, as declared. It is tightened by its repositories and its project
     /// before it is placed, and a private one filed under a project held public is refused.
     pub classification: Classification,
-    /// The one person it is assigned to, as its source names a person; `None` creates it
-    /// unassigned. Refused, before anything is read, for a source that has not opted in to
+    /// The one person it is assigned to, as its source names a person; `None` names nobody,
+    /// leaving any default its destination applies — a Linear team's template or triage rule —
+    /// in place. Refused, before anything is read, for a source that has not opted in to
     /// assignees.
     pub assignee: Option<String>,
 }

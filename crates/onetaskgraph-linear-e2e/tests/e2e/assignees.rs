@@ -962,3 +962,98 @@ fn a_display_name_unknown_in_one_command_is_assignable_after_the_command_ends() 
     );
     assert_eq!(team.assignees("team:A-2"), json!(["dee"]));
 }
+
+#[test]
+fn more_names_than_one_lookup_asks_for_are_resolved_in_two_and_the_second_answers_its_people() {
+    // Two hundred and fifty names Linear holds no user under fill the first lookup; the two it
+    // knows come after them, so only the second lookup can answer them.
+    let team = Team::new();
+    let mut updates: Vec<Value> = (0..250)
+        .map(|n| json!({"item": format!("team:A-{}", n % 3 + 3), "assignee": format!("stranger{n}")}))
+        .collect();
+    updates.push(json!({"item": "team:A-1", "assignee": "bob"}));
+    updates.push(json!({"item": "team:A-2", "assignee": "cy"}));
+    let input = team.file(
+        "many.json",
+        &json!({"schema_version": 1, "updates": updates}),
+    );
+    let ran = team.run(&["task", "update-many", "team", "--input", &input]);
+    assert_ne!(ran.code, Some(0), "{}", ran.json);
+    assert_eq!(ran.lookups(), 2, "{:#?}", ran.sent.len());
+    let results = ran.json["results"].as_array().expect("results");
+    assert_eq!(results.len(), 252);
+    assert!(
+        results[..250]
+            .iter()
+            .all(|result| result["outcome"] == "error"),
+        "{}",
+        ran.json
+    );
+    assert!(
+        results[0].to_string().contains("stranger0"),
+        "{}",
+        results[0]
+    );
+    assert_eq!(results[250]["outcome"], "written", "{}", results[250]);
+    assert_eq!(results[251]["outcome"], "written", "{}", results[251]);
+    assert_eq!(team.assignees("team:A-1"), json!(["bob"]));
+    assert_eq!(team.assignees("team:A-2"), json!(["cy"]));
+}
+
+/// A copy whose create Linear answered assigned to somebody else is refused naming both, and the
+/// issue it leaves is an existing item from then on: a later copy keeps whom it holds and sends
+/// no assignee, and one guarded on exactly that person writes the note's over them.
+#[test]
+fn an_issue_a_refused_create_left_keeps_its_assignee_unless_a_copy_is_guarded_on_it() {
+    let team = Team::new();
+    team.note("Misassigned", &["bob"]);
+    team.workspace.assign_instead("U-BOB", Some("U-CY"));
+    let refused = team.run(&["task", "copy", "notes:N-1", "--to", "team"]);
+    assert_ne!(refused.code, Some(0), "{}", refused.json);
+    let said = refused.json.to_string();
+    assert!(said.contains("cy") && said.contains("bob"), "{said}");
+    team.workspace.assign_instead("U-BOB", None);
+    let listed = team.ok(&["task", "list", "--source", "team", "--all"]);
+    let made: Vec<String> = listed.json["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .filter(|item| item["item"]["title"] == "Misassigned")
+        .map(|item| item["id"].as_str().expect("an id").to_owned())
+        .collect();
+    assert_eq!(made.len(), 1, "{}", listed.json);
+    assert_eq!(team.assignees(&made[0]), json!(["cy"]));
+
+    let kept = team.ok(&["task", "copy", "notes:N-1", "--to", "team"]);
+    assert_eq!(
+        kept.json["items"][0]["destination"],
+        made[0].as_str(),
+        "{}",
+        kept.json
+    );
+    assert!(kept.assignee_ids().is_empty(), "{:#?}", kept.sent);
+    assert_eq!(team.assignees(&made[0]), json!(["cy"]));
+
+    let guarded = team.ok(&[
+        "task",
+        "copy",
+        "notes:N-1",
+        "--to",
+        "team",
+        "--when-destination-assignees",
+        "cy",
+    ]);
+    assert_eq!(
+        guarded.json["items"][0]["assignee_condition"],
+        json!({"held": ["cy"], "met": true}),
+        "{}",
+        guarded.json
+    );
+    assert_eq!(
+        guarded.assignee_ids(),
+        [json!("U-BOB")],
+        "{:#?}",
+        guarded.sent
+    );
+    assert_eq!(team.assignees(&made[0]), json!(["bob"]));
+}

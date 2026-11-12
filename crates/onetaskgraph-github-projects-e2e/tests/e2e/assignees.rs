@@ -714,3 +714,26 @@ fn a_create_github_answers_assigned_otherwise_takes_the_new_issue_back_on_either
     assert_eq!(deletes(&served), 1, "{served:#?}");
     assert!(!store.board.holds_titled("Plan p9"));
 }
+
+#[test]
+fn more_people_than_one_lookup_asks_for_are_resolved_in_two_and_the_second_answers_its_people() {
+    // Twenty people GitHub does not know fill the first lookup; the two it knows come after
+    // them, so only the second lookup can answer them.
+    let store = Assigning::new();
+    let mut updates: Vec<Value> = (0..20)
+        .map(
+            |n| json!({"item": format!("board:A-{}", n % 12 + 1), "assignee": format!("ghost{n}")}),
+        )
+        .collect();
+    updates.push(json!({"item": "board:A-1", "assignee": "octocat"}));
+    updates.push(json!({"item": "board:A-2", "assignee": "hubot"}));
+    let (answer, served) = store.update_many(&Value::Array(updates), 4);
+    assert_eq!(lookups(&served), 2, "{served:#?}");
+    let outcomes = outcomes(&answer);
+    assert_eq!(&outcomes[..20], ["error"; 20], "{answer}");
+    assert_eq!(&outcomes[20..], ["written", "written"], "{answer}");
+    let reason = answer["results"][0]["reason"].as_str().expect("a reason");
+    assert!(reason.contains("ghost0"), "{reason}");
+    assert_eq!(store.people("board:A-1"), json!(["octocat"]));
+    assert_eq!(store.people("board:A-2"), json!(["hubot"]));
+}

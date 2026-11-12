@@ -364,16 +364,23 @@ impl LinearSource {
             };
             deciding.push((at, held));
         }
-        // Every person the updates to be written assign, resolved in one request; a failure
-        // here is each such update's own when it is composed.
-        let people = super::assignees::named(deciding.iter().filter_map(|(at, (before, _))| {
+        // Every person the updates to be written assign, resolved in one request — the later
+        // updates of an issue too, which are made after the batch and would otherwise each
+        // resolve their own; a failure here is each such update's own when it is composed. A
+        // first update naming exactly the people its issue holds writes none, so asks for none.
+        let firsts = deciding.iter().filter_map(|(at, (before, _))| {
             updates[*at]
                 .update
                 .assignees
                 .as_deref()
                 .filter(|people| *people != before.assignees.as_deref().unwrap_or_default())
-                .filter(|people| !people.is_empty())
-        }));
+        });
+        let afterwards = later
+            .iter()
+            .filter(|at| answers[**at].is_none())
+            .filter_map(|at| updates[*at].update.assignees.as_deref());
+        let people =
+            super::assignees::named(firsts.chain(afterwards).filter(|people| !people.is_empty()));
         if !people.is_empty() {
             let _ = self.resolve_people(&people).await;
         }
@@ -924,7 +931,8 @@ impl LinearSource {
     /// in step with `write`, as a create would have written it, by a compared update: only the
     /// title, the description, the state, the priority and the labels that differ are sent, the
     /// metadata the write names laid over what the issue's slot holds so a key a person added
-    /// there since is kept, and its relations reconciled with the write's edges.
+    /// there since is kept, and its relations reconciled with the write's edges. Its assignee is
+    /// left as the issue holds it.
     pub(crate) async fn bring_in_step(
         &self,
         held: &NativeId,
@@ -972,11 +980,9 @@ impl LinearSource {
         if held_labels != sent_labels {
             input.insert("labelIds".into(), json!(labels));
         }
-        if let Some(people) = write.item.assignees.as_deref().filter(|people| {
-            *people != before.assignees.as_deref().unwrap_or_default() && !people.is_empty()
-        }) {
-            input.insert("assigneeId".into(), self.assignee_id(people).await?);
-        }
+        // No assignee: the create the earlier attempt sent carried it already, so the issue
+        // holds another person only when somebody reassigned it since — and a person's own
+        // assignment stands, as it does over every existing item a copy updates.
         if !input.is_empty() {
             let data = self
                 .send(

@@ -616,8 +616,14 @@ several people, and a write lands only while the item holds exactly the people n
 
 An assignee write rides the documents the call already sends — `assigneeId` in Linear's
 `issueCreate` or `issueUpdate` input, `assigneeIds` in GitHub's `createIssue` or
-`updateIssue` — and costs at most one person lookup per call naming someone not yet resolved in
-the process (a GitHub login to its node id, a Linear display name to its user id).
+`updateIssue` — and costs one person lookup request for the people a call names that the process
+has not resolved yet (a GitHub login to its node id, twenty to a request; a Linear display name to
+its user id, 250 to a request), and none for a person already resolved or for unassigning. A
+write that fails, or is answered with other people than it asked for, forgets the people it
+named, so the next write naming them looks them up again.
+
+A create naming no assignee asks the destination to assign nobody; a Linear team whose template
+or triage rule assigns a default still does, and the task reads back with that person.
 
 ### Seeing which plan you got
 

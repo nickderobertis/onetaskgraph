@@ -836,8 +836,9 @@ pub struct TaskCreateArgs {
 
     /// The one person it is assigned to, as its source names a person — a GitHub login, a
     /// Linear display name, the string as given in a folder or in memory. Taken at most once,
-    /// and only by a source whose configuration sets `assignees: true`; without it the task is
-    /// created unassigned.
+    /// and only by a source whose configuration sets `assignees: true`; without it the create
+    /// names nobody — a destination's own default, such as a Linear team's template or triage
+    /// rule, may still assign someone.
     #[arg(long = "assignee", value_name = "PERSON")]
     pub assignee: Option<String>,
 
