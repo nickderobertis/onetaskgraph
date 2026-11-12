@@ -4709,3 +4709,91 @@ fn each_item_of_a_batched_public_write_is_screened_and_rewritten_on_its_own() {
     assert!(text.contains(&format!("Rewritten for {WITH}.")), "{text}");
     assert!(text.contains("Three, plainly"), "{text}");
 }
+
+/// Opt the public folder `site` in to assignees.
+fn assigning(store: &Store) {
+    let mut document: Value = serde_json::from_str(
+        &std::fs::read_to_string(store.sandbox.project().join("onetaskgraph.yaml"))
+            .expect("the project document"),
+    )
+    .expect("JSON");
+    document["sources"]["site"]["config"]["assignees"] = json!(true);
+    store.sandbox.project_document(&document.to_string());
+}
+
+#[test]
+fn an_assignee_carrying_a_declared_term_is_refused_and_never_rewritten_into_another_person() {
+    let (store, _) = sanitizing(replaced());
+    assigning(&store);
+    store.record(
+        "site",
+        "tasks",
+        "clean",
+        "title: Clean\nstatus: todo\nassignees: [ana]",
+        PLAIN,
+    );
+    let before = tree(&store.folder("site"));
+    // A narrow write naming the term as a person: refused, writing nothing — the policy that
+    // rewrites the term in prose never renames anybody.
+    let (kind, said) = store.refused(&["task", "assignee", "set", "site:clean", TERM]);
+    assert_eq!(kind, "boundary-refused", "{said}");
+    assert!(
+        !said.contains(TERM),
+        "the refusal never spells the term: {said}"
+    );
+    assert_eq!(tree(&store.folder("site")), before);
+    // So is a whole new task assigned to it.
+    let body = store.sandbox.project().join("assigned.md");
+    std::fs::write(&body, "Plain words.\n").expect("a body");
+    let (kind, said) = store.refused(&[
+        "task",
+        "create",
+        "site",
+        "--project",
+        "p",
+        "--title",
+        "Assigned",
+        "--body-file",
+        body.to_str().expect("a path"),
+        "--assignee",
+        TERM,
+    ]);
+    assert_eq!(kind, "boundary-refused", "{said}");
+    assert_eq!(tree(&store.folder("site")), before);
+    // A person carrying no term is written as named.
+    store.ok(&["task", "assignee", "set", "site:clean", "ben"]);
+    assert!(
+        std::fs::read_to_string(store.folder("site").join("tasks").join("clean.md"))
+            .expect("the record")
+            .contains("assignees: [\"ben\"]")
+    );
+}
+
+#[test]
+fn a_stored_assignee_carrying_a_term_is_a_fixed_field_reported_as_assignees() {
+    let (store, _) = guarded(replaced());
+    assigning(&store);
+    store.record(
+        "site",
+        "tasks",
+        "clean",
+        &format!("title: Clean\nstatus: todo\nassignees: [{TERM}]"),
+        PLAIN,
+    );
+    let before = tree(&store.folder("site"));
+    let (code, report, out, err) = sweep(&store, "site", &["--complete"]);
+    assert_eq!(code, Some(1), "{out}{err}");
+    assert!(
+        entry(&report, "site:clean")["fields"]
+            .as_array()
+            .expect("fields")
+            .iter()
+            .any(|field| field["field"] == "assignees" && field["outcome"] == "unfixable"),
+        "{report}"
+    );
+    assert_eq!(tree(&store.folder("site")), before);
+    let (kind, said) = store.refused(&["task", "update", "site:clean", "--title", "Still clean"]);
+    assert_eq!(kind, "boundary-refused", "{said}");
+    assert!(said.contains("a fixed field"), "{said}");
+    assert_eq!(tree(&store.folder("site")), before);
+}

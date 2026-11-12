@@ -765,3 +765,63 @@ fn a_project_copy_holding_a_task_assigned_to_two_is_refused_whole_writing_nothin
         "no project was written"
     );
 }
+
+#[test]
+fn a_copy_guard_names_the_whole_set_in_any_order_and_none_alone_names_an_unassigned_task() {
+    let store = Store::new();
+    store.task(&store.work, "w1", "Guarded", "assignees: [ana]\n");
+    let report = store.ok(&["task", "copy", "work:w1", "--to", "copies"]);
+    let copied = outcome(&report, "work:w1")["destination"]
+        .as_str()
+        .expect("a destination")
+        .to_owned();
+    let native = copied.trim_start_matches("copies:").to_owned();
+    let copy_guarded = |people: &[&str]| {
+        let mut arguments = vec!["task", "copy", "work:w1", "--to", "copies"];
+        for person in people {
+            arguments.extend(["--when-destination-assignees", person]);
+        }
+        store.ok(&arguments)
+    };
+    // The counterpart holds two people a person gave it.
+    let file = store.file(&store.copies, &native);
+    let held = file.replace("assignees:\n- ana\n", "assignees: [ben, cara]\n");
+    assert_ne!(held, file, "{file}");
+    std::fs::write(
+        store.copies.join("tasks").join(format!("{native}.md")),
+        held,
+    )
+    .expect("the counterpart");
+
+    // A subset of them is not the set it holds: it keeps both.
+    let report = copy_guarded(&["ben"]);
+    assert_eq!(
+        outcome(&report, "work:w1")["assignee_condition"],
+        json!({"held": ["ben", "cara"], "met": false})
+    );
+    assert_eq!(people(&store.shown(&copied)), json!(["ben", "cara"]));
+    // `none` names an unassigned task, which it is not.
+    let report = copy_guarded(&["none"]);
+    assert_eq!(
+        outcome(&report, "work:w1")["assignee_condition"]["met"],
+        false
+    );
+    assert_eq!(people(&store.shown(&copied)), json!(["ben", "cara"]));
+    // The whole set, in another order, is met: the source's one person replaces both.
+    let report = copy_guarded(&["cara", "ben"]);
+    assert_eq!(
+        outcome(&report, "work:w1")["assignee_condition"],
+        json!({"held": ["ben", "cara"], "met": true})
+    );
+    assert_eq!(people(&store.shown(&copied)), json!(["ana"]));
+
+    // Unassigned, `none` alone is met and the source's person is written.
+    store.ok(&["task", "assignee", "set", &copied]);
+    store.ok(&["task", "assignee", "set", "work:w1", "dan"]);
+    let report = copy_guarded(&["none"]);
+    assert_eq!(
+        outcome(&report, "work:w1")["assignee_condition"],
+        json!({"held": [], "met": true})
+    );
+    assert_eq!(people(&store.shown(&copied)), json!(["dan"]));
+}
