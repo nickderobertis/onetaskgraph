@@ -28,7 +28,9 @@ use std::{
 use crate::common::{Sandbox, SourceBoundary};
 use crate::loopback;
 
+mod github_assignees;
 mod github_relations;
+pub use github_assignees::{GITHUB_PEOPLE, github_person_id};
 
 /// One row: a source kind, in one configuration, over the shared dataset.
 pub struct Row {
@@ -1346,6 +1348,8 @@ struct GitHubBoard {
     /// The board's issues' relations: its `relates-to` pairs, and how its next relation write
     /// is cut short (`github_relations`).
     relations: github_relations::Relations,
+    /// The board's issues' assignees, and how it answers writes of them (`github_assignees`).
+    assignees: github_assignees::Assignees,
 }
 
 /// Whether one request — its document and its variables — is one a [`BoardHook`] counts.
@@ -4041,6 +4045,7 @@ fn github_projects_board_at(
         refusing_search_pages: Vec::new(),
         rejecting: Vec::new(),
         relations: github_relations::Relations::default(),
+        assignees: github_assignees::Assignees::default(),
     }));
     let mut owed_failures: Vec<&'static str> = fail_first.to_vec();
     let watched = Arc::clone(&board);
@@ -4110,6 +4115,11 @@ fn github_projects_board_at(
                 body.len()
             ));
         }
+        // A document a source opted in to assignees spelled with them is answered as the
+        // document it was written as, and then with each issue's assignees (`github_assignees`).
+        let unspelled = onetaskgraph_github_projects::graphql::without_assignees(query);
+        let spelled = unspelled.is_some();
+        let query = unspelled.as_deref().unwrap_or(query);
         {
             let mut served = board.lock().unwrap();
             served.membership_first = ["memberships", "boardItems"]
@@ -4208,7 +4218,10 @@ fn github_projects_board_at(
                        "errors":[{"message":format!(
                            "Something went wrong while executing your query: {operation}")}]})
                 .to_string()
+            } else if let Some(refused) = github_assignees::refused(&board, query, &variables) {
+                refused.to_string()
             } else {
+                let variables = github_assignees::applied(&board, query, &variables);
                 // A document selecting the whole issue it writes is answered as its plain twin
                 // is, and then with that issue as a read of it by its own id shows it.
                 let plain = github_plain_of(query);
@@ -4217,6 +4230,7 @@ fn github_projects_board_at(
                     Some(_) => board.lock().unwrap().whole(query, data, &variables),
                     None => data,
                 };
+                let data = github_assignees::answered(&board, query, &variables, data, spelled);
                 {
                     let mut held = board.lock().unwrap();
                     if let Some(at) = held
@@ -4706,6 +4720,9 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         return answer;
     }
     board.lock().unwrap().counted_types = TimelineEvent::counted_by(query);
+    if let Some(answer) = github_assignees::answer(board, query, variables) {
+        return answer;
+    }
     if let Some(answer) = github_relations::answer(board, query, variables) {
         return answer;
     }
