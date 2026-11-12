@@ -1169,3 +1169,38 @@ fn a_create_github_assigns_otherwise_and_will_not_take_back_answers_the_assignme
     assert!(deleted(&served), "the take-back was asked for: {served:#?}");
     assert!(store.board.holds_titled("Plan p8"), "{said}");
 }
+
+#[test]
+fn a_batch_whose_shared_lookup_fails_looks_each_person_up_again_and_writes_every_update() {
+    // The lookup a batch makes for every person it names is answered malformed, once: each
+    // update then looks its own person up and is written — through the batched path for two
+    // updates, and on its own for one.
+    let store = Assigning::new();
+    let broken = |data: &mut Value| data["u0"] = json!({"login": "octocat"});
+    store.board.bend_next_answer(":user(login:", broken);
+    let (answer, served) = store.update_many(
+        &json!([
+            {"item": "board:A-7", "assignee": "octocat", "title": "Seven"},
+            {"item": "board:A-8", "assignee": "hubot", "title": "Eight"},
+        ]),
+        0,
+    );
+    assert_eq!(outcomes(&answer), ["written", "written"], "{answer}");
+    assert!(
+        lookups(&served) > 1,
+        "each person was looked up again: {served:#?}"
+    );
+    assert_eq!(store.people("board:A-7"), json!(["octocat"]));
+    assert_eq!(store.people("board:A-8"), json!(["hubot"]));
+
+    store.board.bend_next_answer(":user(login:", broken);
+    let (answer, served) =
+        store.update_many(&json!([{"item": "board:A-9", "assignee": "octocat"}]), 0);
+    assert_eq!(outcomes(&answer), ["written"], "{answer}");
+    assert_eq!(
+        lookups(&served),
+        2,
+        "the shared lookup, then its own: {served:#?}"
+    );
+    assert_eq!(store.people("board:A-9"), json!(["octocat"]));
+}

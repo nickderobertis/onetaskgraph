@@ -1311,3 +1311,47 @@ fn tasks_created_together_are_all_taken_back_when_linear_assigns_one_to_somebody
         "the copy took back what it created: {left:?}"
     );
 }
+
+#[test]
+fn a_batch_whose_shared_lookup_fails_resolves_each_person_again_and_writes_every_update() {
+    // The lookup an update-many makes for every person it names is answered malformed, once:
+    // each update then resolves its own person and is written.
+    let team = Team::new();
+    team.workspace.bend_answers_as_sent(
+        |query, _| is_lookup(query),
+        1,
+        |_, data| {
+            if let Some(users) = data.get_mut("users") {
+                users["nodes"] = json!("bob");
+            }
+        },
+    );
+    let input = team.file(
+        "shared.json",
+        &json!({"schema_version": 1, "updates": [
+            {"item": "team:A-2", "assignee": "bob"},
+            {"item": "team:A-3", "assignee": "cy"},
+        ]}),
+    );
+    let ran = team.run(&["task", "update-many", "team", "--input", &input]);
+    assert_eq!(ran.code, Some(0), "{}", ran.json);
+    assert_eq!(
+        result(&ran, "team:A-2")["outcome"],
+        "written",
+        "{}",
+        ran.json
+    );
+    assert_eq!(
+        result(&ran, "team:A-3")["outcome"],
+        "written",
+        "{}",
+        ran.json
+    );
+    assert!(
+        ran.lookups() > 1,
+        "each person was resolved again: {:#?}",
+        ran.sent
+    );
+    assert_eq!(team.assignees("team:A-2"), json!(["bob"]));
+    assert_eq!(team.assignees("team:A-3"), json!(["cy"]));
+}
