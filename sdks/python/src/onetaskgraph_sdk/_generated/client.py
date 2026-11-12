@@ -61,6 +61,7 @@ if TYPE_CHECKING:
         StatusOptionsReport,
         SweepReport,
         TaskAssetNames,
+        TaskAssigneeSet,
         TaskContentSet,
         TaskDetail,
         TaskDetails,
@@ -102,6 +103,7 @@ POSITIONALS: dict[tuple[str, ...], tuple[str, ...]] = {
     ("sources", "status-options"): ("source",),
     ("task", "answers"): ("id",),
     ("task", "assets"): ("id",),
+    ("task", "assignee", "set"): ("id", "person"),
     ("task", "attest"): ("id",),
     ("task", "attestation", "check"): ("id",),
     ("task", "comment", "add"): ("id",),
@@ -200,12 +202,18 @@ def _document(method: str, model: type[BaseModel], document: object) -> str:
     return json.dumps(written, allow_nan=False, ensure_ascii=False, separators=compact)
 
 
+# Each model's members whose `null` the binary reads as a value: written `null` when the
+# caller set them to `None`, rather than left out, which the binary reads as absent.
+_NULL_UNSETS: dict[str, frozenset[str]] = {"UpdateBatchItem": frozenset(["assignee"])}
+
+
 def _required_nulls(value: object, dumped: object) -> object:
     """`dumped`, with every required member of `value` that is `None` written as `null`.
 
     `exclude_none` leaves out every `None`, which the binary reads as absent; a member it
     requires and reads `null` in — a parent edge's `parent`, whose `null` removes the
-    parent — would then be refused as missing rather than read as what it says.
+    parent — would then be refused as missing rather than read as what it says. So is a
+    member `_NULL_UNSETS` names that the caller set to `None`: its `null` is a value.
     """
     match value, dumped:
         case RootModel() as root, _:
@@ -215,7 +223,9 @@ def _required_nulls(value: object, dumped: object) -> object:
                 key = field.serialization_alias or field.alias or name
                 member = getattr(model, name)
                 if member is None:
-                    if field.is_required():
+                    unsets = _NULL_UNSETS.get(type(model).__name__, frozenset())
+                    explicit = key in unsets and name in model.model_fields_set
+                    if field.is_required() or explicit:
                         out[key] = None
                 elif key in out:
                     out[key] = _required_nulls(member, out[key])
@@ -3162,6 +3172,84 @@ class GeneratedClient:
         )
 
     @overload
+    async def task_assignee_set(
+        self,
+        id: GlobalId | str,
+        person: str | None = None,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        if_version: VersionToken | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+    ) -> TaskAssigneeSet: ...
+
+    @overload
+    async def task_assignee_set(
+        self,
+        id: GlobalId | str,
+        person: str | None = None,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        if_version: VersionToken | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+    ) -> TaskAssigneeSet | SanitizeDryRun: ...
+
+    @overload
+    async def task_assignee_set(
+        self,
+        id: GlobalId | str,
+        person: str | None = None,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        if_version: VersionToken | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+    ) -> TaskAssigneeSet | SanitizeDryRun: ...
+
+    async def task_assignee_set(
+        self,
+        id: GlobalId | str,
+        person: str | None = None,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        if_version: VersionToken | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+        term_scope: list[str] | tuple[str, ...] | None = None,
+    ) -> TaskAssigneeSet | SanitizeDryRun:
+        """Run ``onetaskgraph task assignee set``."""
+        return await self._invoke(
+            ["task", "assignee", "set"],
+            _models.TaskAssigneeSet | _models.SanitizeDryRun,
+            id=id,
+            person=person,
+            default_sources=default_sources,
+            if_version=if_version,
+            page_size=page_size,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
+            set=set,
+            term_scope=_strings("task_assignee_set", "term_scope", term_scope),
+        )
+
+    @overload
     async def task_attest(
         self,
         id: GlobalId | str,
@@ -3982,6 +4070,7 @@ class GeneratedClient:
         target_task: GlobalId | str | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
         to: str | None = None,
+        when_destination_assignees: list[str] | tuple[str, ...] | None = None,
         when_destination_priority: list[Literal["none", "urgent", "high", "medium", "low"]]
         | tuple[Literal["none", "urgent", "high", "medium", "low"], ...]
         | None = None,
@@ -4038,6 +4127,7 @@ class GeneratedClient:
         target_task: GlobalId | str | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
         to: str | None = None,
+        when_destination_assignees: list[str] | tuple[str, ...] | None = None,
         when_destination_priority: list[Literal["none", "urgent", "high", "medium", "low"]]
         | tuple[Literal["none", "urgent", "high", "medium", "low"], ...]
         | None = None,
@@ -4094,6 +4184,7 @@ class GeneratedClient:
         target_task: GlobalId | str | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
         to: str | None = None,
+        when_destination_assignees: list[str] | tuple[str, ...] | None = None,
         when_destination_priority: list[Literal["none", "urgent", "high", "medium", "low"]]
         | tuple[Literal["none", "urgent", "high", "medium", "low"], ...]
         | None = None,
@@ -4149,6 +4240,7 @@ class GeneratedClient:
         target_task: GlobalId | str | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
         to: str | None = None,
+        when_destination_assignees: list[str] | tuple[str, ...] | None = None,
         when_destination_priority: list[Literal["none", "urgent", "high", "medium", "low"]]
         | tuple[Literal["none", "urgent", "high", "medium", "low"], ...]
         | None = None,
@@ -4193,6 +4285,9 @@ class GeneratedClient:
             target_task=target_task,
             term_scope=_strings("task_copy", "term_scope", term_scope),
             to=to,
+            when_destination_assignees=_strings(
+                "task_copy", "when_destination_assignees", when_destination_assignees
+            ),
             when_destination_priority=when_destination_priority,
             when_destination_status=when_destination_status,
         )
@@ -4205,6 +4300,7 @@ class GeneratedClient:
         title: str,
         *,
         asset: list[str] | tuple[str, ...] | None = None,
+        assignee: str | None = None,
         body_file: str | None = None,
         classification: Literal["public", "private"] | None = None,
         default_sources: list[str] | tuple[str, ...] | None = None,
@@ -4239,6 +4335,7 @@ class GeneratedClient:
         title: str,
         *,
         asset: list[str] | tuple[str, ...] | None = None,
+        assignee: str | None = None,
         body_file: str | None = None,
         classification: Literal["public", "private"] | None = None,
         default_sources: list[str] | tuple[str, ...] | None = None,
@@ -4273,6 +4370,7 @@ class GeneratedClient:
         title: str,
         *,
         asset: list[str] | tuple[str, ...] | None = None,
+        assignee: str | None = None,
         body_file: str | None = None,
         classification: Literal["public", "private"] | None = None,
         default_sources: list[str] | tuple[str, ...] | None = None,
@@ -4306,6 +4404,7 @@ class GeneratedClient:
         title: str,
         *,
         asset: list[str] | tuple[str, ...] | None = None,
+        assignee: str | None = None,
         body_file: str | None = None,
         classification: Literal["public", "private"] | None = None,
         default_sources: list[str] | tuple[str, ...] | None = None,
@@ -4339,6 +4438,7 @@ class GeneratedClient:
             project=project,
             title=title,
             asset=asset,
+            assignee=assignee,
             body_file=body_file,
             classification=classification,
             default_sources=default_sources,

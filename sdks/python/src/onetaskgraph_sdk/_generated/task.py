@@ -184,3 +184,9 @@ class Task(BaseModel):
             description="Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification: the engine tightens it by the task's own\nrepositories — any private or unknown one makes the task private — before it decides\nwhere the task may be written, and nothing written here can loosen that. The project\na task is filed under never tightens it: a task's visibility is its own."
         ),
     ] = Classification.ClassificationPublic
+    assignees: Annotated[
+        list[str] | None,
+        Field(
+            description="Every person the task is assigned to, as its source names a person — a GitHub login, a\nLinear display name, the string as given in a folder or in memory — in the order the\nsource holds them; empty means unassigned.\n\n**Present only for a source that opted in** with `config.assignees: true`\n([`Capabilities::assignees`](crate::Capabilities::assignees) `native`): every other\nsource leaves it absent, and it is left out of the wire when absent, so a task of a\nsource that has not opted in reads, and is written, exactly as it was before the field\nexisted. On a write, absent leaves the item's assignees as they are, and present\nreplaces them with exactly the people it names — the engine never hands a source more\nthan one."
+        ),
+    ] = None

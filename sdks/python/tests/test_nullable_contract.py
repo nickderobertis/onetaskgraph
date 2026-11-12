@@ -195,7 +195,7 @@ def test_the_guard_refuses_a_generated_member_the_schema_does_not_let_be_null(
     disagreements = generate.nullability_disagreements(emitted_bundle(), package)
     assert len(disagreements) == 1
     assert disagreements[0].startswith(
-        "SourceListing object {assets, comments, complete_by_issue, documents,"
+        "SourceListing object {assets, assignees, comments, complete_by_issue, documents,"
     )
     assert "the models for [['documents']]" in disagreements[0]
 
@@ -316,7 +316,7 @@ def test_generation_fails_when_its_models_stop_following_the_schema(
         line
         for line in message.splitlines()
         if line.strip().startswith(
-            "SourceListing object {assets, comments, complete_by_issue, documents,"
+            "SourceListing object {assets, assignees, comments, complete_by_issue, documents,"
         )
     )
     assert "the schema admits null for [[]]" in line

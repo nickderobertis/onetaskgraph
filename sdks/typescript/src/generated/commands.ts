@@ -30,6 +30,7 @@ export const binaryCommands = [
   "task status reconcile",
   "task status complete",
   "task priority set",
+  "task assignee set",
   "task content set",
   "task metadata set",
   "task attest",

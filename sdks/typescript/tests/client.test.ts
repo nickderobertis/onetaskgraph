@@ -1128,6 +1128,7 @@ test("taskCopy sends exactly the flags the binary's task copy reports, no more a
         whenDestinationStatus: ["backlog"],
         otherwise: "refuse",
         whenDestinationPriority: ["none"],
+        whenDestinationAssignees: ["none"],
         ifVersion: "md1|v",
       }),
       ...taskCopyFlags({ termScope: [] }),

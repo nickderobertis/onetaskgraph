@@ -131,3 +131,9 @@ class LinearConfig(BaseModel):
             validate_default=True,
         ),
     ] = {}
+    assignees: Annotated[
+        bool,
+        Field(
+            description="Whether this source's tasks carry their assignee: `false`, the default, reads every task\nwithout an `assignees` member, refuses every write naming one and sends Linear exactly\nthe documents it sent before assignees existed; `true` reads each issue's\n`assignee{displayName}` — a Linear user's display name, unique within its workspace —\nand writes one person, or none, as the issue's `assigneeId`."
+        ),
+    ] = False

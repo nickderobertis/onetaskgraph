@@ -1293,7 +1293,9 @@ def generate_client(
         "",
         "# Each model's members whose `null` the binary reads as a value: written `null` when the",
         "# caller set them to `None`, rather than left out, which the binary reads as absent.",
-        f"_NULL_UNSETS: dict[str, frozenset[str]] = {{{', '.join(f'{name!r}: frozenset({keys!r})' for name, keys in (unsets or {}).items())}}}",
+        "_NULL_UNSETS: dict[str, frozenset[str]] = {"
+        + ", ".join(f"{name!r}: frozenset({keys!r})" for name, keys in (unsets or {}).items())
+        + "}",
         "",
         "",
         "def _required_nulls(value: object, dumped: object) -> object:",

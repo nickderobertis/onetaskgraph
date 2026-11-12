@@ -615,7 +615,7 @@ several people, and a write lands only while the item holds exactly the people n
   assignee and is not refused for it.
 
 An assignee write rides the documents the call already sends — `assigneeId` in Linear's
-`issueUpdate` or `issueBatchCreate` input, `assigneeIds` in GitHub's `createIssue` or
+`issueCreate` or `issueUpdate` input, `assigneeIds` in GitHub's `createIssue` or
 `updateIssue` — and costs at most one person lookup per call naming someone not yet resolved in
 the process (a GitHub login to its node id, a Linear display name to its user id).
 

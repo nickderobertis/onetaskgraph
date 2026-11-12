@@ -4,6 +4,8 @@ import { dirname, resolve } from "node:path";
 import Ajv2020 from "ajv/dist/2020.js";
 import { binaryCommands } from "./generated/commands.ts";
 import type {
+  AttestationCheck,
+  Attested,
   CacheCleared,
   Classification,
   CommentBatch,
@@ -25,14 +27,12 @@ import type {
   LinksWritten,
   LocateReport,
   MetadataSet,
-  Attested,
-  AttestationCheck,
-  ProjectAttestationCheck,
-  PlannedProject,
   NativeId,
   ParentBatch,
   ParentsSet,
+  PlannedProject,
   Priority,
+  ProjectAttestationCheck,
   ProjectGraph,
   ProjectStatusSet,
   QueryResponseOfQualifiedDocument,
@@ -52,6 +52,7 @@ import type {
   StatusOptionsReport,
   SweepReport,
   TaskAssetNames,
+  TaskAssigneeSet,
   TaskContentSet,
   TaskDetail,
   TaskDetails,
@@ -159,11 +160,14 @@ export type Otherwise = (typeof otherwiseChoices)[number];
 // `whenDestinationStatus` writes over a counterpart only at those categories — `otherwise` says
 // what happens at another, refusing it as `destination-status` (the copy exits 4 with the report)
 // or keeping its status — and `whenDestinationPriority` writes the source's priority only over
-// those priorities, keeping any other. A create is never conditioned.
+// those priorities, keeping any other. `whenDestinationAssignees` writes the source's assignee
+// over a counterpart only while it holds exactly those people — `["none"]` for nobody — keeping
+// its own otherwise. A create is never conditioned.
 export type CopyConditionOptions = {
   whenDestinationStatus?: StatusCategory[];
   otherwise?: Otherwise;
   whenDestinationPriority?: Priority[];
+  whenDestinationAssignees?: string[];
 };
 export type TaskCopyOptions = StatusCopyOptions &
   CopyOptions &
@@ -225,6 +229,8 @@ export type TaskCreateOptions = CreateOptions &
     status?: StatusCategory;
     dependsOn?: string[];
     delivers?: string[];
+    // The one person it is assigned to, for a source that opted in to assignees.
+    assignee?: string;
   };
 export type DocumentCreateOptions = CreateOptions & AssetOptions & { id?: string };
 // A project is filed under no project, so it names none; its `id` is required instead, and a
@@ -336,6 +342,8 @@ export const commandResponseRoots: Readonly<Record<string, keyof typeof runtimeS
   // The items the configured sources hold for the issues a landing closed, moved to `done`.
   "task status complete": "IssuesCompleted",
   "task priority set": "TaskPrioritySet",
+  // The one person a task is assigned to after the write, or none.
+  "task assignee set": "TaskAssigneeSet",
   "task content set": "TaskContentSet",
   "task metadata set": "MetadataSet",
   // The attestation record written, and one kind of attestation checked.
@@ -437,6 +445,7 @@ const partialResponseCommands = new Set(
       (!command.startsWith("task comment ") || command === "task comment add-many") &&
       !command.endsWith(" metadata set") &&
       !command.endsWith(" priority set") &&
+      command !== "task assignee set" &&
       !command.endsWith(" content set") &&
       !command.startsWith("template ") &&
       !command.endsWith(" render") &&
@@ -1110,6 +1119,13 @@ export function taskCopyFlags(options: TaskCopyOptions): string[] {
   )) {
     conditions.push("--when-destination-priority", priority);
   }
+  for (const person of stringList(
+    "taskCopy",
+    "whenDestinationAssignees",
+    options.whenDestinationAssignees,
+  )) {
+    conditions.push("--when-destination-assignees", person);
+  }
   return [
     ...copyFlags("taskCopy", options),
     ...conditions,
@@ -1605,6 +1621,37 @@ export class OnetaskgraphClient {
     );
   }
   // One targeted update of one task: at least one field has to be named.
+  // Assign one task to `person`, replacing every person it held — or, with none, to nobody —
+  // on a source whose configuration sets `assignees: true`.
+  taskAssigneeSet(
+    id: string,
+    person?: string,
+    options?: WriteOptions & HeldOptions & { sanitizeDryRun?: false },
+  ): Promise<TaskAssigneeSet>;
+  taskAssigneeSet(
+    id: string,
+    person?: string,
+    options?: WriteOptions & HeldOptions,
+  ): Promise<TaskAssigneeSet | SanitizeDryRun>;
+  taskAssigneeSet(
+    id: string,
+    person?: string,
+    options: WriteOptions & HeldOptions = {},
+  ): Promise<TaskAssigneeSet | SanitizeDryRun> {
+    return this.run(
+      "task assignee set",
+      [
+        id,
+        ...(person === undefined ? [] : [stringOption("taskAssigneeSet", "person", person)]),
+        ...(options.ifVersion === undefined
+          ? []
+          : ["--if-version", stringOption("taskAssigneeSet", "ifVersion", options.ifVersion)]),
+        ...writePolicyFlags("taskAssigneeSet", options),
+      ],
+      undefined,
+      options.sanitizeDryRun === true,
+    );
+  }
   taskUpdate(
     id: string,
     options: TaskUpdateOptions & { sanitizeDryRun?: false },
@@ -2057,6 +2104,9 @@ export class OnetaskgraphClient {
     }
     for (const id of stringList("taskCreate", "delivers", options.delivers)) {
       args.push("--delivers", id);
+    }
+    if (options.assignee !== undefined) {
+      args.push("--assignee", stringOption("taskCreate", "assignee", options.assignee));
     }
     args.push(...assetFlags("taskCreate", options));
     return this.run("task create", [source, ...args], input, options.sanitizeDryRun === true);
