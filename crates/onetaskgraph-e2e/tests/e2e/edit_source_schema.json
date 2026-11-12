@@ -662,6 +662,13 @@
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "description": "One unit of work as a source reports it.",
     "properties": {
+      "assignees": {
+        "description": "Every person the task is assigned to, as its source names a person \u2014 a GitHub login, a\nLinear display name, the string as given in a folder or in memory \u2014 in the order the\nsource holds them; empty means unassigned.\n\n**Present only for a source that opted in** with `config.assignees: true`\n([`Capabilities::assignees`](crate::Capabilities::assignees) `native`): every other\nsource leaves it absent, and it is left out of the wire when absent, so a task of a\nsource that has not opted in reads, and is written, exactly as it was before the field\nexisted. On a write, absent leaves the item's assignees as they are, and present\nreplaces them with exactly the people it names \u2014 the engine never hands a source more\nthan one.",
+        "items": {
+          "type": "string"
+        },
+        "type": ["array", "null"]
+      },
       "classification": {
         "$ref": "#/$defs/Classification",
         "default": "public",

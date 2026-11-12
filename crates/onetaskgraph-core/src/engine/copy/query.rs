@@ -42,6 +42,7 @@ pub(super) fn failed(source: GlobalId, error: &EngineError) -> CopyOutcome {
         sections: super::SectionLinks::default(),
         status_condition: None,
         priority_condition: None,
+        assignee_condition: None,
         held: None,
         expected: crate::cache::ExpectedWrite::default(),
         source,
@@ -96,6 +97,7 @@ impl Engine {
                 expected: crate::cache::ExpectedWrite::default(),
                 status_condition: None,
                 priority_condition: None,
+                assignee_condition: None,
                 held: None,
                 source: id.clone(),
                 action: CopyAction::Skipped {
@@ -250,6 +252,7 @@ impl Engine {
             expected: crate::cache::ExpectedWrite::default(),
             status_condition: None,
             priority_condition: None,
+            assignee_condition: None,
             held: None,
             source: listed.id.clone(),
             action: CopyAction::Unchanged {

@@ -951,6 +951,7 @@ impl Engine {
                     update,
                     if_version: endpoint.read.task.version.clone(),
                     when_priority: Vec::new(),
+                    when_assignees: None,
                 },
             ));
         }
@@ -976,7 +977,7 @@ impl Engine {
                         found.unwrap_or_else(|| "unknown".to_owned())
                     )),
                     Ok(BatchAnswer::Missing) => Err(format!("{name} holds no task {id}")),
-                    Ok(BatchAnswer::PriorityHeld(_)) => {
+                    Ok(BatchAnswer::PriorityHeld(_) | BatchAnswer::AssigneesHeld(_)) => {
                         Err(format!("{id} was held by a guard this call never sets"))
                     }
                     Err(error) => Err(format!("{name} refused the write of {id}: {error}")),

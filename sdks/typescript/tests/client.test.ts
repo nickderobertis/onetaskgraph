@@ -1128,6 +1128,7 @@ test("taskCopy sends exactly the flags the binary's task copy reports, no more a
         whenDestinationStatus: ["backlog"],
         otherwise: "refuse",
         whenDestinationPriority: ["none"],
+        whenDestinationAssignees: ["none"],
         ifVersion: "md1|v",
       }),
       ...taskCopyFlags({ termScope: [] }),
@@ -1643,6 +1644,99 @@ test("a task's priority is listed, filtered and set through the real binary", as
     await expect(refused).rejects.toMatchObject({ exitCode: 1 });
   } finally {
     rmSync(priorityRoot, { recursive: true, force: true });
+  }
+});
+
+test("a task's assignee is created, replaced, cleared and guarded through the real binary", async () => {
+  const root = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-assignees-"));
+  try {
+    mkdirSync(resolve(root, "work/tasks"), { recursive: true });
+    writeFileSync(resolve(root, "body.md"), "Route me.\n");
+    writeFileSync(
+      resolve(root, "onetaskgraph.yaml"),
+      JSON.stringify({
+        sources: {
+          work: { plugin: "local-md", config: { root: resolve(root, "work"), assignees: true } },
+        },
+      }),
+    );
+    const assigning = new OnetaskgraphClient({ binaryPath: binary, cwd: root });
+
+    await assigning.taskCreate("work", "p", "Routed", { bodyFile: "body.md", assignee: "ana" });
+    const created = await assigning.taskShow("work:routed");
+    expect(created.items[0]?.item.assignees).toEqual(["ana"]);
+
+    const replaced = await assigning.taskAssigneeSet("work:routed", "ben");
+    expect(replaced.assignees).toEqual(["ben"]);
+    const cleared = await assigning.taskAssigneeSet("work:routed");
+    expect(cleared.assignees).toEqual([]);
+
+    // Held to a version the task has since moved past, the write is refused and lands nothing.
+    const stale = replaced.result?.version;
+    if (typeof stale !== "string") throw new Error("the replacing write answered no version");
+    const moved = assigning.taskAssigneeSet("work:routed", "cara", { ifVersion: stale });
+    await expect(moved).rejects.toBeInstanceOf(OnetaskgraphExecutionError);
+    const shown = await assigning.taskShow("work:routed");
+    expect(shown.items[0]?.item.assignees).toEqual([]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a copy guarded on the destination's assignees writes only over exactly that set", async () => {
+  const root = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-assignee-copy-"));
+  try {
+    for (const folder of ["work", "snap"]) {
+      mkdirSync(resolve(root, `${folder}/tasks`), { recursive: true });
+    }
+    writeFileSync(
+      resolve(root, "work/tasks/w1.md"),
+      "---\ntitle: Guarded\nstatus: todo\nassignees: [ana]\n---\nThe body.\n",
+    );
+    writeFileSync(
+      resolve(root, "onetaskgraph.yaml"),
+      JSON.stringify({
+        sources: Object.fromEntries(
+          ["work", "snap"].map((folder) => [
+            folder,
+            { plugin: "local-md", config: { root: resolve(root, folder), assignees: true } },
+          ]),
+        ),
+      }),
+    );
+    const copying = new OnetaskgraphClient({ binaryPath: binary, cwd: root });
+    const created = await copying.taskCopy(["work:w1"], "snap");
+    const destination = created.items[0]?.destination;
+    if (typeof destination !== "string") throw new Error("the copy created no counterpart");
+    // A person gives the counterpart two people of their own.
+    const file = resolve(root, "snap/tasks", `${destination.replace("snap:", "")}.md`);
+    writeFileSync(
+      file,
+      readFileSync(file, "utf8").replace("assignees:\n- ana\n", "assignees: [ben, cara]\n"),
+    );
+    const condition = (report: Awaited<ReturnType<typeof copying.taskCopy>>) =>
+      report.items[0]?.assignee_condition;
+    const shown = async () => (await copying.taskShow(destination)).items[0]?.item.assignees;
+
+    // One of the two is not the set it holds: it keeps both.
+    const subset = await copying.taskCopy(["work:w1"], "snap", {
+      whenDestinationAssignees: ["ben"],
+    });
+    expect(condition(subset)).toEqual({ held: ["ben", "cara"], met: false });
+    expect(await shown()).toEqual(["ben", "cara"]);
+    // Both, repeated in another order, are: the source's one person replaces them.
+    const whole = await copying.taskCopy(["work:w1"], "snap", {
+      whenDestinationAssignees: ["cara", "ben"],
+    });
+    expect(condition(whole)).toEqual({ held: ["ben", "cara"], met: true });
+    expect(await shown()).toEqual(["ana"]);
+    // `none` alone names an unassigned counterpart, which it is not.
+    const nobody = await copying.taskCopy(["work:w1"], "snap", {
+      whenDestinationAssignees: ["none"],
+    });
+    expect(condition(nobody)).toEqual({ held: ["ana"], met: false });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 

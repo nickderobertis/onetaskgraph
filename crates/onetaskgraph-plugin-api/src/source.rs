@@ -1177,8 +1177,9 @@ pub trait TaskSource: Send + Sync {
     /// order given.
     ///
     /// Each update is its own write, held to its own `if_version` and guarded by its own
-    /// `when_priority`: one answered [`BatchAnswer::VersionMoved`],
-    /// [`BatchAnswer::PriorityHeld`], [`BatchAnswer::Missing`] or an error writes nothing of
+    /// `when_priority` and `when_assignees`: one answered [`BatchAnswer::VersionMoved`],
+    /// [`BatchAnswer::PriorityHeld`], [`BatchAnswer::AssigneesHeld`], [`BatchAnswer::Missing`]
+    /// or an error writes nothing of
     /// its own and never writes or refuses another. Every field one update names is written
     /// together or not at all.
     ///

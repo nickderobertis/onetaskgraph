@@ -441,6 +441,7 @@ fn projected_task(
         delivers: Vec::new(),
         delivered_by: Vec::new(),
         classification,
+        assignees: None,
     }
 }
 

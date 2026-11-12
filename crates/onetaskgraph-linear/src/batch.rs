@@ -218,6 +218,7 @@ impl LinearSource {
                                                 &self.name,
                                                 &self.statuses,
                                                 self.spelling(),
+                                                self.assignees,
                                             )?,
                                             optional_string(v, "description")?,
                                         ))
@@ -263,6 +264,7 @@ impl LinearSource {
             now.as_ref().map(|(task, _)| task),
             each.if_version.as_deref(),
             &[],
+            None,
         ) {
             return Ok(answer);
         }
@@ -285,6 +287,7 @@ impl LinearSource {
             now.as_ref().map(|(task, _)| task),
             each.if_version.as_deref(),
             &each.when_priority,
+            each.when_assignees.as_deref(),
         ) {
             return Ok(answer);
         }
@@ -335,7 +338,7 @@ impl LinearSource {
                 return answers.into_iter().flatten().collect();
             }
         };
-        let mut sending: Vec<(usize, Composed)> = Vec::new();
+        let mut deciding: Vec<(usize, Held)> = Vec::new();
         for (at, held) in wanted.into_iter().zip(read) {
             let each = &updates[at];
             let held = match held {
@@ -350,14 +353,40 @@ impl LinearSource {
                 held.as_ref().map(|(task, _)| task),
                 each.if_version.as_deref(),
                 &each.when_priority,
+                each.when_assignees.as_deref(),
             ) {
                 answers[at] = Some(Ok(answer));
                 continue;
             }
-            let Some((before, description)) = held else {
+            let Some(held) = held else {
                 answers[at] = Some(Ok(BatchAnswer::Missing));
                 continue;
             };
+            deciding.push((at, held));
+        }
+        // Every person the updates to be written assign, resolved in one request — the later
+        // updates of an issue too, which are made after the batch and would otherwise each
+        // resolve their own; a failure here is each such update's own when it is composed. A
+        // first update naming exactly the people its issue holds writes none, so asks for none.
+        let firsts = deciding.iter().filter_map(|(at, (before, _))| {
+            updates[*at]
+                .update
+                .assignees
+                .as_deref()
+                .filter(|people| *people != before.assignees.as_deref().unwrap_or_default())
+        });
+        let afterwards = later
+            .iter()
+            .filter(|at| answers[**at].is_none())
+            .filter_map(|at| updates[*at].update.assignees.as_deref());
+        let people =
+            super::assignees::named(firsts.chain(afterwards).filter(|people| !people.is_empty()));
+        if !people.is_empty() {
+            let _ = self.resolve_people(&people).await;
+        }
+        let mut sending: Vec<(usize, Composed)> = Vec::new();
+        for (at, (before, description)) in deciding {
+            let each = &updates[at];
             match self.compose_update(&each.update, before, description).await {
                 Ok(composed) if composed.relations.is_some() => {
                     // An update writing relations sends them after its issue's own write, so it
@@ -417,6 +446,14 @@ impl LinearSource {
                                             "task {id} was updated and then answered as no issue"
                                         ),
                                     })
+                                })
+                                .and_then(|task| {
+                                    self.assigned_as(
+                                        &id,
+                                        updates[at].update.assignees.as_deref(),
+                                        &task,
+                                    )?;
+                                    Ok(task)
                                 })
                                 .map(|task| {
                                     BatchAnswer::Written(TaskUpdateOutcome {
@@ -530,6 +567,7 @@ impl LinearSource {
                 held.as_ref().map(|(task, _)| task),
                 each.if_version.as_deref(),
                 &[],
+                None,
             ) {
                 answers[at] = Some(Ok(answer));
                 continue;
@@ -659,6 +697,17 @@ impl LinearSource {
                 ),
             });
         }
+        // Every person the creates name resolved in one request, before any is composed.
+        if self.assignees {
+            let people = super::assignees::named(
+                writes
+                    .iter()
+                    .filter_map(|write| write.item.assignees.as_deref()),
+            );
+            if !people.is_empty() {
+                self.resolve_people(&people).await?;
+            }
+        }
         self.deferring_creates
             .store(true, std::sync::atomic::Ordering::SeqCst);
         let mut composed = Ok(());
@@ -751,7 +800,9 @@ impl LinearSource {
             }
             let each: Vec<Value> = queued
                 .iter()
-                .map(|(_, create)| create.variables.clone())
+                .map(|(_, create)| {
+                    json!({"input": super::assignees::create_input(create.variables["input"].clone())})
+                })
                 .collect();
             let singles = vec![graphql::ISSUE_CREATE; each.len()];
             match self.send_composed_each(&singles, &each).await? {
@@ -797,6 +848,16 @@ impl LinearSource {
                         return Err(error);
                     }
                     for (id, issue, create) in answered {
+                        if self.assignees {
+                            self.answered_as(
+                                &id,
+                                super::assignees::asked(
+                                    create.write.item.assignees.as_deref(),
+                                    true,
+                                ),
+                                &super::assignees::read(&issue)?,
+                            )?;
+                        }
                         self.hold_stored(
                             onetaskgraph_plugin_api::MetadataRecord::Task,
                             &id,
@@ -870,7 +931,8 @@ impl LinearSource {
     /// in step with `write`, as a create would have written it, by a compared update: only the
     /// title, the description, the state, the priority and the labels that differ are sent, the
     /// metadata the write names laid over what the issue's slot holds so a key a person added
-    /// there since is kept, and its relations reconciled with the write's edges.
+    /// there since is kept, and its relations reconciled with the write's edges. Its assignee is
+    /// left as the issue holds it.
     pub(crate) async fn bring_in_step(
         &self,
         held: &NativeId,
@@ -918,6 +980,9 @@ impl LinearSource {
         if held_labels != sent_labels {
             input.insert("labelIds".into(), json!(labels));
         }
+        // No assignee: the create the earlier attempt sent carried it already, so the issue
+        // holds another person only when somebody reassigned it since — and a person's own
+        // assignment stands, as it does over every existing item a copy updates.
         if !input.is_empty() {
             let data = self
                 .send(
@@ -991,7 +1056,13 @@ impl LinearSource {
         page: &PageRequest,
     ) -> Result<Option<TaskDetailRead>, SourceError> {
         Ok(optional(&json!({"issue": value}), "issue", |v| {
-            let mut task = map_task(v, &self.name, &self.statuses, self.spelling())?;
+            let mut task = map_task(
+                v,
+                &self.name,
+                &self.statuses,
+                self.spelling(),
+                self.assignees,
+            )?;
             if self.attached() && page.cursor.is_some() {
                 task.version = None;
             }
@@ -1172,7 +1243,13 @@ impl LinearSource {
                         let query = &asks[at].0;
                         answers[at] = Some(
                             connection(&json!({"issues": value}), "issues", |v| {
-                                map_task(v, &self.name, &self.statuses, self.spelling())
+                                map_task(
+                                    v,
+                                    &self.name,
+                                    &self.statuses,
+                                    self.spelling(),
+                                    self.assignees,
+                                )
                             })
                             .map(|listed| Page {
                                 items: listed

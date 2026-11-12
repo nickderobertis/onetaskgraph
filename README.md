@@ -114,6 +114,8 @@ onetaskgraph task status complete --issue <OWNER/NAME#N>... [--source <SOURCE>].
 onetaskgraph task priority set <ID> none|urgent|high|medium|low [--expect VERSION]
                                [--if-version VERSION] [--when-priority PRIORITY]...
                                # --when-priority: write only over these; else `outcome: held`
+onetaskgraph task assignee set <ID> [<PERSON>] [--if-version VERSION]
+                               # replaces every assignee; no PERSON unassigns — see "Assignees"
 onetaskgraph task content set <ID> --file PATH [--expect VERSION] [--if-version VERSION]
 onetaskgraph task metadata set <ID> <KEY> <VALUE> [--expect VERSION] [--if-version VERSION]
 onetaskgraph task update <ID> [--title TITLE] [--body-file PATH]
@@ -130,7 +132,7 @@ onetaskgraph task create <SOURCE> --project P --title TITLE
                          [--answers FILE] [--var NAME=VALUE]... [--status CATEGORY]
                          [--label L]... [--repository R]... [--depends-on ID]...
                          [--delivers ID]... [--metadata KEY=JSON]... [--asset PATH]...
-                         [--classification public|private]
+                         [--classification public|private] [--assignee PERSON]
                          [--term-scope REPOSITORY... | --term-scope-empty]
 onetaskgraph task render <ID> [--template FILE | --template-loader FILE] [--search-path DIR]...
                          [--answers FILE] [--var NAME=VALUE]... [--unset NAME]... [--dry-run]
@@ -546,6 +548,91 @@ Every aliased relation write is charged to the source's pacing as one content cr
 GitHub's secondary limit, not its point budget, is what sustained relation writes reach.
 <!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 
+### Assignees: one person, or none
+
+A source holds assignees only once its configuration opts in, on every plugin:
+
+```yaml
+sources:
+  board:
+    plugin: github-projects
+    config:
+      assignees: true   # default false
+```
+
+Off — the default — nothing changes: no read asks the destination for assignees, no item carries
+an `assignees` key, and every write naming an assignee is refused before anything is read or
+written, naming the source and the setting (`no-assignees`).
+
+**Reading.** An opted-in source's tasks carry `assignees: [<person>, ...]` in every shape the
+store answers — `task show`, `task show-many`, `task list`, `task find` — holding **every**
+person the item is assigned to, `[]` when nobody. A person is named as the destination names
+one:
+
+| Destination | A person is | Notes |
+|---|---|---|
+| `github-projects` | the user's **login** | An issue may hold several, and all of them are read. |
+| `linear` | the user's **display name** (their @handle) | Unique within a workspace; resolved to the user once per process, in one request for every name a call needs. |
+| `local-md` | the string as written, in the task's `assignees:` front-matter list | A file a person edited to hold several reads back with all of them. |
+| `in-memory` | the string as given | |
+
+A task's change token covers its assignees, so a cached read pinned to a token never serves
+assignees older than it.
+
+**Writing: one person or none.** Every write names at most one person and **replaces** whatever
+the item holds — on GitHub every earlier login is removed, on Linear the assignee is set or
+cleared:
+
+```bash
+onetaskgraph task create board --project P --title "Fix it" --assignee octocat   # at most once
+onetaskgraph task assignee set board:I_kw... hubot                  # replaces every assignee
+onetaskgraph task assignee set board:I_kw...                        # naming none: unassign
+onetaskgraph task assignee set board:I_kw... hubot --if-version V   # held to the version read
+```
+
+A person the destination will not assign is refused for that item, naming them, while the rest of
+the call goes on. GitHub assigns only people who can be assigned to issues in the issue's
+repository, and answers a write that names anyone else by leaving them off; so each write's answer
+is compared with what it asked for rather than trusted. On Linear an unknown display name is
+refused.
+
+**Guards: a person's own assignment stands.** A guard names a *set*, because a read can hold
+several people, and a write lands only while the item holds exactly the people named:
+
+- `task update-many`: an update's `"assignee": "<person>"` assigns, `"assignee": null`
+  unassigns, and leaving it out leaves the assignees as they are. `"when_assignees":
+  [<person>...]` writes the update only while the task holds exactly those people (`[]`: only
+  while it is unassigned); otherwise nothing of it is written and it answers `held`. An item a
+  person gave a second assignee therefore holds a write guarded on the first alone.
+- `task copy ... --when-destination-assignees <PERSON|none>` (repeat for each person; `none`
+  alone for nobody): a copy between two opted-in sources gives a **created** item the source
+  item's assignee, and writes it over an **existing** item only beside this flag and only while
+  that item holds exactly the set named — keeping the item's own otherwise. Each updated item's
+  outcome carries `assignee_condition: {"held": [<person>...], "met": <bool>}`. Decided on the
+  copy's own read, so it adds no request, as `--when-destination-priority` is. A source item
+  holding more than one person is refused for that item, naming it and how many it holds, the
+  call's other items going on. A copy from or to a source that has not opted in carries no
+  assignee and is not refused for it.
+
+An assignee write rides the documents the call already sends — `assigneeId` in Linear's
+`issueCreate` or `issueUpdate` input, `assigneeIds` in GitHub's `createIssue` or
+`updateIssue` — and costs at most one person-lookup request per call, for every person the call
+names that the process has not resolved yet (a GitHub login to its node id, a Linear display name
+to its user id), and none for a person already resolved or for unassigning. A call is split into
+more than one lookup only where one request would exceed the destination's own documented limit:
+
+| Destination | One lookup names at most | Why |
+|---|---|---|
+| `github-projects` | 500,000 logins | GitHub's limit of 500,000 nodes a request; each login is one `user(login:)` node |
+| `linear` | 8,250 display names | 33 `users` connections of 250 (Linear's connection maximum), each at most 302 of the 10,000 complexity points Linear allows a query |
+
+Within one call a person its lookup resolved is not looked up again, even after a write naming
+them failed or was answered with other people than it asked for; a later call looks such a person
+up afresh, so no write sends an id for anybody but the person it was resolved for.
+
+A create naming no assignee asks the destination to assign nobody; a Linear team whose template
+or triage rule assigns a default still does, and the task reads back with that person.
+
 ### Seeing which plan you got
 
 `--explain` renders the plan the query ran, per source. Here one `--label` query reaches
@@ -788,6 +875,7 @@ copied from, which is what makes the next copy of it an update.
 | `--when-destination-status CATEGORY` | `task copy` only, repeatable: write over an existing destination task only while it is at one of these categories. Decided on the copy's own read of the destination task — from the cache under `--expect` — so it adds no request; a create is unaffected. A task at another category is handled by `--otherwise`. Each updated task's outcome carries `status_condition: {"held": <category>, "met": <bool>}`. Refused before anything is read beside `--status-policy preserve-destination`, which writes no status to guard. |
 | `--otherwise refuse\|preserve-destination` | With `--when-destination-status`, and refused without it: what a task at another category gets. `refuse`, the default, writes nothing for it and answers it `{"action": "failed", "error": {"kind": "destination-status", …}, "held": …}` — naming the item, its category and the set — while every other item lands; the copy then exits `4`, with the report on standard output, as for any item left unwritten. `preserve-destination` copies it as `--status-policy preserve-destination` would, keeping its status. |
 | `--when-destination-priority PRIORITY` | `task copy` only, repeatable: write the source's priority over an existing destination task only while that task is at one of these priorities (`none`, `urgent`, `high`, `medium`, `low`); at any other it keeps its own — a priority a person set — and every other field is written as without the flag. Nothing is refused for it. Taken beside either `--status-policy` and beside `--when-destination-status`; a task a status condition refuses is written nothing. Decided on the same read, so it adds no request; a create takes the source's priority. Each updated task's outcome carries `priority_condition: {"held": <priority>, "met": <bool>}`. A later copy of the unchanged source without the flag writes the source's priority. |
+| `--when-destination-assignees PERSON\|none` | `task copy` only, repeatable: write the source's assignee over an existing destination task only while that task is assigned to exactly these people (`none` alone: to nobody); holding any other set it keeps its own, and every other field is written as without the flag. Without it a copy never writes an assignee over an existing task. Both sources must opt in with `config.assignees: true`; one that has not carries no assignee. Decided on the same read, so it adds no request; a create takes the source's assignee, and a source task holding several people is refused for that task. Each updated task's outcome carries `assignee_condition: {"held": [<person>...], "met": <bool>}`. See "Assignees: one person, or none". |
 | `--no-tasks` | Copy a project on its own. By default `project copy` copies the project and every task in it — a home's members' tasks included — matching each task independently. |
 | `--documents` | `project copy` only: copy the documents filed under the project too, in the same copy — read, put to the write policy and sized together with the project and its tasks before anything is written, and landed after them, filed under the project's copy, each reference to a task of the plan pointed at that task's copy. Without it `project copy` reads and writes no document, exactly as before, and `document copy` carries them. Refused beside `--member`. |
 | `--comments` | `task copy` and `project copy`: keep the destination's copies of each task's comments in step with the source's, as [below](#carrying-comments-and-copying-only-what-changed). Without it a copy reads and writes no comment. |

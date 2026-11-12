@@ -569,7 +569,7 @@ returning fewer items than `limit` is not thereby saying there are no more: only
 
 ### 4.2 `Capabilities`
 
-`projects`, `documents`, `comments`, `assets`, `priority`, `filter_by_priority`,
+`projects`, `documents`, `comments`, `assets`, `priority`, `assignees`, `filter_by_priority`,
 `filter_by_comment_activity`, `filter_by_metadata`, `filter_by_origin`, `reconcile_status`,
 `complete_by_issue`, `orphan_tasks`, `filter_by_label`, `filter_by_status`, `search_title` and
 `search_content` are each `"native"` or `"unsupported"`.
@@ -577,13 +577,13 @@ returning fewer items than `limit` is not thereby saying there are no more: only
 `"forward-only"` — there is deliberately **no** unsupported value for these two.
 `max_page_size` is a positive integer.
 
-`documents`, `comments`, `assets`, `priority`, `filter_by_priority`,
+`documents`, `comments`, `assets`, `priority`, `assignees`, `filter_by_priority`,
 `filter_by_comment_activity`, `filter_by_metadata`, `filter_by_origin`, `reconcile_status` and
-`complete_by_issue` are the ten members of this object that are **optional**, and an absent one
+`complete_by_issue` are the eleven members of this object that are **optional**, and an absent one
 means `"unsupported"`. That is §2.1
 doing its job, exactly as it does for the write-support member §3.3 specifies: a plugin written
-before there were documents, comments, image assets, priorities, a comment-activity filter or a
-metadata or origin filter says nothing here and is read as the source without them it is, with
+before there were documents, comments, image assets, priorities, assignees, a comment-activity
+filter or a metadata or origin filter says nothing here and is read as the source without them it is, with
 no version bump on either side.
 
 `documents` is also not a *predicate*, and the rules below do not reach it. It says whether
@@ -611,6 +611,17 @@ is never sent the narrow priority write (§4.19), and is never handed a task wri
 carrying a priority other than none — the engine refuses such a write before anything is sent,
 naming the source and the field. `filter_by_priority` **is** a predicate, the priority filter a
 task query carries (§4.5), and the rules below reach it like any other.
+
+`assignees` is not a predicate either: it says whether this source's tasks carry an
+`assignees` list at all — every person a task is assigned to, named as the store names a
+person, an empty list meaning unassigned. A built-in source declares it `"native"` only when its
+own configuration sets `assignees: true`, and leaves the member out otherwise. A plugin that answered `"unsupported"`, or said
+nothing, reports no `assignees` on any task, is never handed a task write (§4.9) or a targeted
+update (§4.21) naming one, and a copy into it carries none; a write naming an assignee is
+refused by the engine before anything is sent, naming the source and the setting. A plugin that
+answered `"native"` is handed at most one person per write, and replaces whatever the task holds
+with exactly that person, or with nobody; it refuses a person its store cannot assign, naming
+them, rather than writing the task without them.
 
 `filter_by_comment_activity` is a predicate too: the comment-activity instant a task query
 carries (§4.5), which keeps a task one of whose comments was created or last edited at or

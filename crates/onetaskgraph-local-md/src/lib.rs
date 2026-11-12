@@ -22,6 +22,7 @@
 //! | `comments` | **Supported and proven.** A task's comments are an optional trailing `## Comments` section of the task's own file — human-readable, full fidelity, never JSON — in exactly the shape [`COMMENTS_HEADING`] documents. The section is not the task's content, and nothing a copy writes into the file adds, changes or removes it. |
 //! | `assets` | **Supported and proven.** A record's image assets are files in a directory of their own beside the record's file — `<id>.assets/` — under the names its content references them by; written with the record, replaced and removed with it, and never touched for a record whose content references none. See `docs/local-md.md`. |
 //! | `priority` | **Supported,** and proven by this crate's `tests/priority.rs`. A task's optional `priority:` front-matter key holds `none`, `urgent`, `high`, `medium` or `low`; an absent key is `none`, `none` is never written, and any other value makes the file malformed naming the key. A project has no priority, so the key there is refused rather than ignored. |
+//! | `assignees` | **Supported,** when `config.assignees: true`, and proven by `onetaskgraph-e2e`'s `assignees` journeys. A task's `assignees:` front-matter list holds every person it is assigned to, as the strings given; a write replaces it with one person or none. Without the setting the key is neither read nor written, and every file is exactly what it was before assignees existed. |
 //! | `filter_by_priority` | **Supported,** and proven by this crate's `tests/priority.rs`, over that `priority:` key: a task is kept when its priority is any value asked for. |
 //! | `filter_by_comment_activity` | **Supported,** and proven by this crate's `tests/commented_since.rs`, over the comments section each task file already holds: a task is kept when one of its comments' `created_at` or `updated_at` is at or after `commented_since`. A task here has no `updated_at` of its own, so those comment times are the only evidence read, and a task with no comments section never matches. |
 //! | `filter_by_metadata` | **Supported,** and proven by this crate's `tests/metadata_origin.rs`, over the `metadata:` front-matter map each task file already holds: a task is kept when every value the query names is a string equal to it at that key and nested path. Applied in process over the files a task read parses anyway. |
@@ -145,6 +146,11 @@ pub struct LocalMdConfig {
     /// relation of its own: a type naming a `native` word is refused when the source is built.
     #[serde(default)]
     pub link_types: BTreeMap<String, onetaskgraph_plugin_api::LinkTypeConfig>,
+    /// Whether this source's tasks hold assignees, in an `assignees:` list of their front
+    /// matter. `false`, the default, reads no task's and writes none — every file is read and
+    /// written exactly as it was before assignees existed.
+    #[serde(default)]
+    pub assignees: bool,
 }
 
 /// The mapping a source with no `status_mapping:` of its own reads statuses through.
@@ -225,6 +231,8 @@ pub struct LocalMdSource {
     statuses: BTreeMap<String, StatusCategory>,
     /// The holds this source has taken on its records' files.
     holds: hold::Holds,
+    /// Whether this source's configuration opted in to assignees.
+    assignees: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -261,6 +269,9 @@ struct FrontMatter {
     /// A task's parent, a task of this source; never written by a file that has none.
     #[serde(default)]
     parent: Option<NativeId>,
+    /// A task's assignees, read only by a source that opted in; absent is unassigned.
+    #[serde(default)]
+    assignees: Option<Vec<String>>,
 }
 /// What a front matter's `project:` key is read into, by every kind of record and by the
 /// scoped read's look at that key alone — one type, so what the two accept cannot part. It is
@@ -440,6 +451,8 @@ struct Entry {
     version: Option<String>,
     /// A task's parent; `None` for a project, which has none.
     parent: Option<NativeId>,
+    /// A task's assignees, for a source that opted in; `None` otherwise, and for a project.
+    assignees: Option<Vec<String>>,
 }
 
 /// What every Markdown file of this source carries, whichever folder it is in.
@@ -551,6 +564,7 @@ impl LocalMdSource {
                 .map(|(k, v)| (k.to_lowercase(), v))
                 .collect(),
             holds: hold::Holds::default(),
+            assignees: config.assignees,
         })
     }
 
@@ -838,6 +852,7 @@ impl LocalMdSource {
             message: format!("{}: {e}", path.display()),
         })?;
         let parent = front.parent.take();
+        let assignees = front.assignees.take();
         let (shared, status, depends_on, delivery, priority) = front.split();
         // A task's comments section is not its content: what a query searches, a copy reads
         // and `task show` prints as the body is everything above it. A project has no
@@ -945,6 +960,10 @@ impl LocalMdSource {
             delivered_by,
             version: matches!(kind, WorkKind::Task).then(|| change_token::spell(text.as_bytes())),
             parent: parent.filter(|_| matches!(kind, WorkKind::Task)),
+            // Every person the file names, as many as a person wrote there; read only once the
+            // source opted in, and never of a project.
+            assignees: (self.assignees && matches!(kind, WorkKind::Task))
+                .then(|| assignees.unwrap_or_default()),
         })
     }
 
@@ -1310,6 +1329,11 @@ impl TaskSource for LocalMdSource {
             task_dependencies: DependencySupport::BothDirections,
             project_dependencies: DependencySupport::BothDirections,
             max_page_size: MAX_PAGE_SIZE,
+            assignees: if self.assignees {
+                Support::Native
+            } else {
+                Support::Unsupported
+            },
         }
     }
     fn writes(&self) -> WriteSupport {
@@ -1630,6 +1654,7 @@ impl TaskSource for LocalMdSource {
                 delivers: &task.delivers,
                 delivered_by: &task.delivered_by,
                 parent: None,
+                assignees: task.assignees.as_deref().unwrap_or_default(),
                 fields: Fields {
                     id: &task.id,
                     title: &task.title,
@@ -1901,6 +1926,9 @@ impl TaskSource for LocalMdSource {
     ) -> Result<Option<TaskUpdateOutcome>, SourceError> {
         self.held(Some(id), async {
             update.consistent()?;
+            if update.assignees.is_some() && !self.assignees {
+                return Err(onetaskgraph_plugin_api::unwritable_field(KIND, "assignees"));
+            }
             // A status named by its category's own word, which this folder's mapping does not read
             // as that category, is the category and nothing more: it is written in this folder's
             // own word for it, exactly as `set_task_status` writes one. Any other name is written
@@ -3567,6 +3595,7 @@ fn stored_task(d: Entry) -> Task {
         delivers: d.delivers,
         delivered_by: d.delivered_by,
         classification: d.common.classification,
+        assignees: d.assignees,
     }
 }
 fn project(d: Entry) -> Project {
@@ -3608,6 +3637,9 @@ enum Outgoing<'a> {
         delivered_by: &'a [TaskRef],
         /// The task's parent, kept from the file a write replaces; `None` for a project.
         parent: Option<&'a NativeId>,
+        /// The task's assignees; empty for a project, for an unassigned task and for every
+        /// task of a source that has not opted in, none of which writes the key.
+        assignees: &'a [String],
         fields: Fields<'a>,
     },
     /// A document, which takes part in no dependency graph and has no status.
@@ -3686,6 +3718,10 @@ struct WrittenFrontMatter {
     /// this source held one.
     #[serde(skip_serializing_if = "Option::is_none")]
     priority: Option<&'static str>,
+    /// Absent for nobody, so an unassigned task — and every task of a source that has not
+    /// opted in — is written exactly as it was before this source held assignees.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    assignees: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     labels: Vec<WrittenLabel>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -4087,6 +4123,16 @@ impl LocalMdSource {
             None => None,
         };
         let parent = existing.as_ref().and_then(|entry| entry.parent.clone());
+        // A write naming no assignees keeps the ones the file it replaces holds; a source that
+        // has not opted in writes none.
+        let assignees = if self.assignees {
+            task.assignees
+                .clone()
+                .or_else(|| existing.as_ref().and_then(|entry| entry.assignees.clone()))
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
         let content = task.content.as_deref().map(|content| {
             onetaskgraph_plugin_api::relinked(
                 content,
@@ -4107,6 +4153,7 @@ impl LocalMdSource {
                 delivers: &task.delivers,
                 delivered_by: &task.delivered_by,
                 parent: parent.as_ref(),
+                assignees: &assignees,
                 fields: Fields {
                     id: &task.id,
                     title: &task.title,
@@ -4140,6 +4187,7 @@ impl LocalMdSource {
                 delivers: &[],
                 delivered_by: &[],
                 parent: None,
+                assignees: &[],
                 fields: Fields {
                     id: &project.id,
                     title: &project.title,
@@ -4552,6 +4600,14 @@ impl LocalMdSource {
             });
             front("delivers", list.as_deref())?;
         }
+        if self.assignees && wanted.assignees.is_some() && wanted.assignees != before.assignees {
+            let list = wanted
+                .assignees
+                .as_ref()
+                .filter(|people| !people.is_empty())
+                .map(|people| serde_json::to_string(people).expect("a list of people renders"));
+            front("assignees", list.as_deref())?;
+        }
         if wanted.repositories != before.repositories {
             let list = (!wanted.repositories.is_empty()).then(|| {
                 serde_json::to_string(&wanted.repositories).expect("a list of origins renders")
@@ -4688,32 +4744,36 @@ impl LocalMdSource {
                 ..
             }
         );
-        let (status, priority, depends_on, delivers, delivered_by, parent) = match outgoing {
-            Outgoing::Work {
-                status,
-                priority,
-                depends_on,
-                delivers,
-                delivered_by,
-                parent,
-                ..
-            } => (
-                Some(*status),
-                *priority,
-                *depends_on,
-                *delivers,
-                *delivered_by,
-                *parent,
-            ),
-            Outgoing::Document { .. } => (
-                None,
-                Priority::None,
-                [].as_slice(),
-                [].as_slice(),
-                [].as_slice(),
-                None,
-            ),
-        };
+        let (status, priority, depends_on, delivers, delivered_by, parent, assignees) =
+            match outgoing {
+                Outgoing::Work {
+                    status,
+                    priority,
+                    depends_on,
+                    delivers,
+                    delivered_by,
+                    parent,
+                    assignees,
+                    ..
+                } => (
+                    Some(*status),
+                    *priority,
+                    *depends_on,
+                    *delivers,
+                    *delivered_by,
+                    *parent,
+                    *assignees,
+                ),
+                Outgoing::Document { .. } => (
+                    None,
+                    Priority::None,
+                    [].as_slice(),
+                    [].as_slice(),
+                    [].as_slice(),
+                    None,
+                    [].as_slice(),
+                ),
+            };
         // A status named by its category's own word, which this folder's mapping does not read
         // as that category, is the category and nothing more: it is written in this folder's own
         // word for it, exactly as `update_task` and `set_task_status` write one. Any other name
@@ -4759,6 +4819,7 @@ impl LocalMdSource {
             title: outgoing.title.to_owned(),
             status: status.map(|status| status.name.clone()),
             priority: (priority != Priority::None).then(|| priority.as_str()),
+            assignees: assignees.to_vec(),
             labels: outgoing
                 .labels
                 .iter()

@@ -95,6 +95,7 @@ if TYPE_CHECKING:
     from .sweep_report import SweepReport as SweepReport
     from .task import Task as Task
     from .task_asset_names import TaskAssetNames as TaskAssetNames
+    from .task_assignee_set import TaskAssigneeSet as TaskAssigneeSet
     from .task_content_set import TaskContentSet as TaskContentSet
     from .task_detail import TaskDetail as TaskDetail
     from .task_details import TaskDetails as TaskDetails
@@ -207,6 +208,7 @@ __all__ = [
     "SweepReport",
     "Task",
     "TaskAssetNames",
+    "TaskAssigneeSet",
     "TaskContentSet",
     "TaskDetail",
     "TaskDetails",
@@ -315,6 +317,7 @@ _MODULES: dict[str, tuple[str, str]] = {
     "SweepReport": ("sweep_report", "SweepReport"),
     "Task": ("task", "Task"),
     "TaskAssetNames": ("task_asset_names", "TaskAssetNames"),
+    "TaskAssigneeSet": ("task_assignee_set", "TaskAssigneeSet"),
     "TaskContentSet": ("task_content_set", "TaskContentSet"),
     "TaskDetail": ("task_detail", "TaskDetail"),
     "TaskDetails": ("task_details", "TaskDetails"),

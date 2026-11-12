@@ -140,6 +140,7 @@ impl TaskSource for Listing {
             task_dependencies: DependencySupport::BothDirections,
             project_dependencies: DependencySupport::BothDirections,
             max_page_size: 2,
+            assignees: Support::Unsupported,
         }
     }
     async fn health(&self) -> Result<Health, SourceError> {

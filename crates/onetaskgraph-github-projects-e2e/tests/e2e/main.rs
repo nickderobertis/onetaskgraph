@@ -19,6 +19,8 @@ use onetaskgraph_e2e_support::{common, fixtures};
 mod github_schema;
 
 mod approval;
+// Opt-in assignees on a board, against the loopback board.
+mod assignees;
 // The `plan-approval-seconds` workload runs in this crate's `test` target, whose saved telemetry
 // its reporter reads and whose `budgets` target judges it, as every budget of this crate does;
 // it is loopback-only and seconds long, beside the plan copy it builds on.

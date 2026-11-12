@@ -39,9 +39,9 @@ use onetaskgraph_status_options::{
 use serde::Serialize;
 
 use crate::cli::{
-    AttestationCommand, CacheCommand, Cli, Command, CommentCommand, ConfigCommand, ContentCommand,
-    CopyArgs, DependencyArgs, DocumentCommand, DocumentFilterArgs, ExpectArgs, FilterArgs,
-    GraphFormat, LabelCommand, LinkCommand, MetadataCommand, MetadataSetArgs, PageArgs,
+    AssigneeCommand, AttestationCommand, CacheCommand, Cli, Command, CommentCommand, ConfigCommand,
+    ContentCommand, CopyArgs, DependencyArgs, DocumentCommand, DocumentFilterArgs, ExpectArgs,
+    FilterArgs, GraphFormat, LabelCommand, LinkCommand, MetadataCommand, MetadataSetArgs, PageArgs,
     ParentCommand, PriorityCommand, ProjectAttestationCommand, ProjectCommand,
     ProjectStatusCommand, SelectionArgs, ShowArgs, SourcesCommand, StatusCommand, TaskAssetsArgs,
     TaskCommand,
@@ -807,6 +807,27 @@ async fn run_inner(
 
         Command::Task {
             command:
+                TaskCommand::Assignee {
+                    command: AssigneeCommand::Set(args),
+                },
+        } => {
+            let task = qualified(&args.id)?;
+            let engine = engine(loaded);
+            let set = held(
+                &engine,
+                &task,
+                &args.held,
+                engine.set_task_assignee(&task, args.person.as_deref()),
+            )
+            .await
+            .map_err(|error| write_failed(&engine, &error))?;
+            let rendered = rendering(loaded, &set, render::assignee_set, "the assignee")?;
+            emit(out, rendered.trim_end(), "the assignee")?;
+            Ok(EXIT_OK)
+        }
+
+        Command::Task {
+            command:
                 TaskCommand::Content {
                     command: ContentCommand::Set(args),
                 },
@@ -1002,6 +1023,7 @@ async fn run_inner(
                     .map(|priority| priority.priority())
                     .collect(),
                 versions: std::collections::HashMap::new(),
+                assignees: destination_assignees(&args.when_destination_assignees)?,
             };
             let held = copy_versions(&request, &args.if_version)?;
             if let CopyHeld::Each(versions) = &held {
@@ -1436,6 +1458,26 @@ fn write_failed(engine: &Engine, error: &onetaskgraph_core::EngineError) -> Fail
     Failure::from(error)
 }
 
+/// The people `--when-destination-assignees` names: `None` when it was not given, and `none`
+/// alone as an unassigned task — refused beside anybody, which no task can be at once.
+fn destination_assignees(given: &[String]) -> Result<Option<Vec<String>>, Failure> {
+    if given.is_empty() {
+        return Ok(None);
+    }
+    if given.iter().any(|person| person == "none") {
+        if given.len() > 1 {
+            return Err(Failure::decided(
+                "invalid-assignees",
+                "--when-destination-assignees named `none` beside a person, and a task cannot \
+                 be unassigned and assigned at once\n\
+                 next: name `none` alone for an unassigned task, or each person it holds",
+            ));
+        }
+        return Ok(Some(Vec::new()));
+    }
+    Ok(Some(given.to_vec()))
+}
+
 /// `<ID>=<VERSION>`, as `task show-many --pin` takes it.
 fn pinned(pin: &str) -> Result<(GlobalId, String), Failure> {
     let Some((id, version)) = pin
@@ -1513,6 +1555,9 @@ fn term_scope(command: &Command) -> Option<Vec<String>> {
             } => &args.term_scope,
             TaskCommand::Content {
                 command: ContentCommand::Set(args),
+            } => &args.term_scope,
+            TaskCommand::Assignee {
+                command: AssigneeCommand::Set(args),
             } => &args.term_scope,
             TaskCommand::Metadata {
                 command: MetadataCommand::Set(args),
@@ -2940,6 +2985,7 @@ mod tests {
                 "task status reconcile",
                 "task status complete",
                 "task priority set",
+                "task assignee set",
                 "task content set",
                 "task metadata set",
                 "task attest",

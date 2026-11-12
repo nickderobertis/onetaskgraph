@@ -133,6 +133,28 @@ pub struct Task {
     #[serde(default, skip_serializing_if = "Classification::is_public")]
     #[schemars(!skip_serializing_if)]
     pub classification: Classification,
+    /// Every person the task is assigned to, as its source names a person — a GitHub login, a
+    /// Linear display name, the string as given in a folder or in memory — in the order the
+    /// source holds them; empty means unassigned.
+    ///
+    /// **Present only for a source that opted in** with `config.assignees: true`
+    /// ([`Capabilities::assignees`](crate::Capabilities::assignees) `native`): every other
+    /// source leaves it absent, and it is left out of the wire when absent, so a task of a
+    /// source that has not opted in reads, and is written, exactly as it was before the field
+    /// existed. On a write, absent leaves the item's assignees as they are, and present
+    /// replaces them with exactly the people it names — the engine never hands a source more
+    /// than one.
+    // llmlint: ignore[invalid_states_unrepresentable] A read holds every person the destination holds — a GitHub issue may carry several — so the read field is a list; the one-person write is the engine's rule, refused before any source is asked (`EngineError::SeveralAssignees`), and keeping one field for both is what lets a source compare a write's answer with what it asked for without a second shape. Absent is a distinct state from empty: a source that never opted in, versus an unassigned item of one that did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assignees: Option<Vec<String>>,
+}
+
+/// Whether two lists of assignees name the same people, whatever their order.
+#[must_use]
+pub(crate) fn same_assignees(left: &[String], right: &[String]) -> bool {
+    let left: std::collections::BTreeSet<&str> = left.iter().map(String::as_str).collect();
+    let right: std::collections::BTreeSet<&str> = right.iter().map(String::as_str).collect();
+    left == right
 }
 
 /// A grouping of tasks, shaped like a [`Task`] without a parent of its own.

@@ -792,7 +792,7 @@ impl GitHubProjectsSource {
                 }
                 Some(item) => match item.task() {
                     Ok(task) => {
-                        decided_on(self, Some(&task), each.if_version.as_deref(), &[]).map(Ok)
+                        decided_on(self, Some(&task), each.if_version.as_deref(), &[], None).map(Ok)
                     }
                     Err(error) => Some(Err(error)),
                 },
@@ -840,7 +840,9 @@ impl GitHubProjectsSource {
     ) -> Result<BatchAnswer<Comment>, SourceError> {
         if each.if_version.is_some() {
             let task = TaskSource::get_task(self, &each.task).await?;
-            if let Some(answer) = decided_on(self, task.as_ref(), each.if_version.as_deref(), &[]) {
+            if let Some(answer) =
+                decided_on(self, task.as_ref(), each.if_version.as_deref(), &[], None)
+            {
                 return Ok(answer);
             }
         }
@@ -995,13 +997,17 @@ impl GitHubProjectsSource {
         &self,
         each: &BatchUpdate,
     ) -> Result<BatchAnswer<TaskUpdateOutcome>, SourceError> {
-        if each.if_version.is_some() || !each.when_priority.is_empty() {
+        if each.if_version.is_some()
+            || !each.when_priority.is_empty()
+            || each.when_assignees.is_some()
+        {
             let task = TaskSource::get_task(self, &each.id).await?;
             if let Some(answer) = decided_on(
                 self,
                 task.as_ref(),
                 each.if_version.as_deref(),
                 &each.when_priority,
+                each.when_assignees.as_deref(),
             ) {
                 return Ok(answer);
             }
@@ -1031,6 +1037,9 @@ impl GitHubProjectsSource {
             || self.deferring().unwrap_or(true)
             || self.task_writes().map_or(true, |held| held.is_some());
         if alone {
+            // Every person the batch assigns, looked up together; a lookup that fails leaves
+            // each update to look its own up, and answer that failure as its own.
+            let _ = self.resolve_people(&assigned(updates.iter())).await;
             let mut answers = Vec::with_capacity(updates.len());
             for each in updates {
                 answers.push(self.update_alone(each).await);
@@ -1085,6 +1094,7 @@ impl GitHubProjectsSource {
                 Some(&task),
                 each.if_version.as_deref(),
                 &each.when_priority,
+                each.when_assignees.as_deref(),
             ) {
                 answers[at] = Some(Ok(answer));
                 continue;
@@ -1099,6 +1109,17 @@ impl GitHubProjectsSource {
                 writing.push(at);
             }
         }
+        // Every person the updates the read let through assign, looked up together before any
+        // is composed; a lookup that fails leaves each to look its own up and answer it.
+        let _ = self
+            .resolve_people(&assigned(
+                writing
+                    .iter()
+                    .chain(separately.iter())
+                    .chain(later.iter())
+                    .map(|at| &updates[*at]),
+            ))
+            .await;
         // A task updated more than once is written one update at a time, in the batch's order,
         // each composed on what the one before left.
         let repeated: Vec<usize> = writing
@@ -1127,6 +1148,7 @@ impl GitHubProjectsSource {
                         Some(task),
                         each.if_version.as_deref(),
                         &each.when_priority,
+                        each.when_assignees.as_deref(),
                     ),
                     // The task's first update in this batch found it missing or unreadable.
                     None => Some(BatchAnswer::Missing),
@@ -1424,25 +1446,34 @@ impl GitHubProjectsSource {
             Err(error) => {
                 return chunk
                     .iter()
-                    .map(|(task, _)| (task.clone(), error.clone()))
+                    .map(|(task, fields)| {
+                        (task.clone(), self.refusing_people(fields, error.clone()))
+                    })
                     .collect();
             }
         };
         let mut refused = Vec::new();
-        for (slot, (task, _)) in chunk.iter().enumerate() {
+        for (slot, (task, fields)) in chunk.iter().enumerate() {
             let alias = format!("update{slot}");
             let answered = match alias_answer(&data, &alias, doing) {
                 Ok(answered) => answered
                     .and_then(|value| value.pointer("/issue/id"))
                     .and_then(Value::as_str),
                 Err(error) => {
-                    refused.push((task.clone(), error));
+                    refused.push((task.clone(), self.refusing_people(fields, error)));
                     continue;
                 }
             };
             match answered {
                 Some(answered) if answered == task.0 => {
-                    if let Some(issue) = data.get(&alias).and_then(|value| value.get("issue")) {
+                    let issue = data.get(&alias).and_then(|value| value.get("issue"));
+                    // GitHub leaves a person it cannot assign off without refusing the alias,
+                    // so this item is refused on its own answer, and the others stand.
+                    if let Err(error) = self.assigned_as_asked(fields, issue) {
+                        refused.push((task.clone(), error));
+                        continue;
+                    }
+                    if let Some(issue) = issue {
                         self.record_written_issue(issue);
                     }
                 }
@@ -1454,9 +1485,20 @@ impl GitHubProjectsSource {
                         ),
                     },
                 )),
-                None => refused.push((task.clone(), refused_alias(&data, &alias, doing))),
+                None => refused.push((
+                    task.clone(),
+                    self.refusing_people(fields, refused_alias(&data, &alias, doing)),
+                )),
             }
         }
         refused
     }
+}
+
+/// Every person `updates` assign, each as often as one names them.
+fn assigned<'a>(updates: impl Iterator<Item = &'a BatchUpdate>) -> Vec<String> {
+    updates
+        .filter_map(|each| each.update.assignees.clone())
+        .flatten()
+        .collect()
 }

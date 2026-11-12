@@ -42,6 +42,7 @@ use onetaskgraph_github_projects::{
 /// connection would move it.
 const PRICES: &[(&str, u64)] = &[
     (graphql::ISSUES_BY_CREATION, 1),
+    (graphql::USER_IDS, 1),
     (graphql::SEARCH_ISSUES, 5),
     (graphql::ISSUE, 1),
     (graphql::ISSUE_BOARD_ITEMS, 1),
@@ -382,4 +383,52 @@ fn the_largest_round_of_the_batched_search_is_the_largest_round_it_sends() {
             }
         }
     }
+}
+
+/// What each read a source opted in to assignees sends costs, where that is not what the same
+/// read costs a source that has not opted in, in points under the same page sizes.
+///
+/// The people ride the requests the read already sends — no request is added — but GitHub
+/// charges every connection it is asked for, and `assignees` is one more under each issue of a
+/// page: a document reading a page of issues costs more once its source opts in. Each figure is
+/// a pin, not a threshold, as every price in [`PRICES`] is; a source that has not opted in pays
+/// exactly what [`PRICES`] records.
+// llmlint: ignore[tests_hold_no_nonfunctional_thresholds] The price is the instrument, not a threshold, as at `SUB_ISSUES` in `PRICES`: these record what an opted-in source's reads cost, so a change that moves one is seen.
+const OPTED_PRICES: &[(&str, u64)] = &[
+    (graphql::ISSUE_RELATIONS, 2),
+    (graphql::SEARCH_ISSUES, 6),
+    (graphql::DOCUMENT_IN_PROJECT, 2),
+    (graphql::SUB_ISSUES, 2),
+    (graphql::BOARD, 4),
+    (graphql::BOARD_WITH_COMMENTS, 6),
+    (graphql::CLOSED_ITEMS, 4),
+    (graphql::ISSUE_DETAILS, 2),
+    (graphql::ISSUE_COPY_DETAILS, 2),
+    (graphql::SEARCH_BATCH, 28),
+];
+
+/// Every document a source opted in to assignees spells with them costs what [`OPTED_PRICES`]
+/// records for it, or — for every document it does not name — exactly what the plain document
+/// costs.
+#[test]
+fn a_document_spelled_with_assignees_costs_what_this_file_records() {
+    let moved = graphql::DOCUMENTS
+        .iter()
+        .filter_map(|(document, doing)| {
+            let spelled = graphql::with_assignees(document)?;
+            let plain = worst_case_point_cost(document).expect("the plain document prices");
+            let mut sizes = largest_page_sizes();
+            // The most people GitHub assigns one issue, the spelled variable's own default.
+            sizes.insert("assigneeFirst".to_owned(), 10);
+            let opted = point_cost(&spelled, &sizes).expect("the spelled document prices");
+            let recorded = OPTED_PRICES
+                .iter()
+                .find(|(pinned, _)| pinned == document)
+                .map_or(plain, |(_, price)| *price);
+            (opted != recorded).then(|| {
+                format!("{doing}: {opted} with assignees, recorded {recorded} ({plain} plain)")
+            })
+        })
+        .collect::<Vec<_>>();
+    assert!(moved.is_empty(), "{}", moved.join("\n"));
 }

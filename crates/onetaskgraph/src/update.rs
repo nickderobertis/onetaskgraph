@@ -127,6 +127,7 @@ fn request(id: &GlobalId, args: &TaskUpdateArgs) -> Result<TaskUpdate, Failure> 
         } else {
             Some(args.repository.clone())
         },
+        assignees: None,
     })
 }
 

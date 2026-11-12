@@ -410,6 +410,7 @@ fn a_task(native: &str) -> Task {
         delivers: Vec::new(),
         delivered_by: Vec::new(),
         classification: Default::default(),
+        assignees: None,
     }
 }
 
@@ -451,6 +452,7 @@ impl TaskSource for Misbehaving {
             task_dependencies: DependencySupport::BothDirections,
             project_dependencies: DependencySupport::BothDirections,
             max_page_size: 1,
+            assignees: Support::Unsupported,
         }
     }
     fn writes(&self) -> WriteSupport {

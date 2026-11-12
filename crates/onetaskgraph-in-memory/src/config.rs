@@ -54,6 +54,10 @@ pub struct InMemoryConfig {
     /// The link types this source would mirror natively — none, as it has no relation of its
     /// own: a type naming a `native` word is refused when the source is built.
     pub link_types: BTreeMap<String, LinkTypeConfig>,
+    /// Whether this source's tasks hold assignees: `false`, the default, leaves every task
+    /// without an `assignees` member and refuses every write naming one; `true` holds each
+    /// task's as the strings given, a task configured without any read as unassigned.
+    pub assignees: bool,
 }
 
 /// One comment, and the task it is on.
@@ -217,6 +221,20 @@ impl InMemoryConfig {
                          it holds none; set `capabilities.priority: native`, or remove the \
                          priority",
                         task.id, task.priority
+                    ));
+                }
+            }
+        }
+
+        // Assignees held where the source has not opted in: a reader would never be told of
+        // them, so they are refused rather than kept out of sight.
+        if !self.assignees {
+            for task in &self.tasks {
+                if task.assignees.is_some() {
+                    problems.push(format!(
+                        "task {} is configured with assignees under a source that does not set \
+                         `assignees: true`; set it, or remove the task's assignees",
+                        task.id
                     ));
                 }
             }
@@ -556,6 +574,7 @@ impl From<&CapabilityConfig> for Capabilities {
             task_dependencies: value.task_dependencies,
             project_dependencies: value.project_dependencies,
             max_page_size: value.max_page_size.get(),
+            assignees: Support::Unsupported,
         }
     }
 }

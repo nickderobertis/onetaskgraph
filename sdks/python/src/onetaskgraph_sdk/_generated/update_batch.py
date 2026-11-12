@@ -77,6 +77,18 @@ class UpdateBatchItem(BaseModel):
         list[Repository] | None,
         Field(description="Its repositories, replaced whole; an empty list clears them."),
     ] = None
+    assignee: Annotated[
+        str | None,
+        Field(
+            description="The one person it is assigned to, replacing every person it holds — `null` unassigns\nit, and leaving the member out leaves its assignees as they are. Only for a source that\nopted in with `config.assignees: true`."
+        ),
+    ] = None
+    when_assignees: Annotated[
+        list[str] | None,
+        Field(
+            description="Write only while the task is assigned to exactly these people, whatever their order —\n`[]` only while it is unassigned. Otherwise nothing of the update is written and it\nanswers `held`. Left out, it sets no guard."
+        ),
+    ] = None
 
 
 class UpdateBatch(BaseModel):

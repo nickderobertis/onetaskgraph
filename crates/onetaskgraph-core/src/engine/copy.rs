@@ -134,6 +134,13 @@ pub struct CopyConditions {
     /// priority over it; at any other the counterpart keeps its own, and every other field is
     /// written as it would be. Empty sets no condition.
     pub priority: Vec<Priority>,
+    /// The people a counterpart must be assigned to — exactly these, whatever their order,
+    /// `[]` meaning unassigned — for the copy to write the source's assignee over it; holding
+    /// any other set it keeps its own, and every other field is written as it would be.
+    /// `None` sets no condition, and a copy then never writes an assignee over an existing
+    /// item. Only for a destination that opted in to assignees.
+    // llmlint: ignore[invalid_states_unrepresentable] An empty set is a condition of its own here — met only by an unassigned counterpart — so "no condition" needs its own state, which `None` is.
+    pub assignees: Option<Vec<String>>,
     /// The version each named task's counterpart must be at for the copy to write it, keyed by
     /// the qualified id the task is copied from — `task copy --if-version <ID>=<VERSION>`.
     /// A counterpart at any other version is written nothing and answered `failed` as
@@ -626,6 +633,11 @@ pub struct CopyOutcome {
     /// update of a task.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub priority_condition: Option<PriorityCondition>,
+    /// What `--when-destination-assignees` found the counterpart's assignees at, and whether
+    /// that met it — present only when the copy was given the condition and this item was an
+    /// update of a task.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assignee_condition: Option<super::AssigneeCondition>,
     /// What the counterpart held, as the copy's read of it before writing found it — present
     /// only on an item the copy refused after that read, such as `destination-status`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1889,6 +1901,12 @@ struct Planned {
     /// What the copy's priority condition found at the counterpart task it updates — `None`
     /// when the copy set none, or creates the item. Unmet, the counterpart keeps its priority.
     priority_condition: Option<PriorityCondition>,
+    /// What the copy's assignee condition found at the counterpart task it updates — `None`
+    /// when the copy set none, or creates the item.
+    assignee_condition: Option<super::AssigneeCondition>,
+    /// The assignees the copy writes for a task — `None` leaving the destination's as they
+    /// are, or creating it unassigned — decided by [`Engine::decide_assignees`].
+    assignees: Option<Vec<String>>,
     /// The intent this copy holds to create its counterpart, once taken — and the one an
     /// earlier attempt recorded, when this copy creates again under it.
     intent: Option<intent::Intent>,
@@ -2277,6 +2295,7 @@ impl Engine {
         if (!conditions.status.is_empty()
             || conditions.otherwise.is_some()
             || !conditions.priority.is_empty()
+            || conditions.assignees.is_some()
             || !conditions.versions.is_empty())
             && request.scope != CopyScope::Tasks
         {
@@ -2291,6 +2310,11 @@ impl Engine {
             return Err(EngineError::StatusConditionPreserved);
         }
         let destination = self.writable(&request.destination)?;
+        // A guard on the destination's assignees names people a destination that has not opted
+        // in holds none of: refused before anything is read.
+        if conditions.assignees.is_some() {
+            super::assignees::holds_assignees(destination, "each copied task")?;
+        }
         // Before anything is read, and from the declaration rather than from a failed
         // write: a destination that says it has no documents has nowhere to put one.
         if request.scope == CopyScope::Documents {
@@ -5378,6 +5402,7 @@ impl Engine {
                     sections: SectionLinks::default(),
                     status_condition: None,
                     priority_condition: None,
+                    assignee_condition: None,
                     held: None,
                     expected: ExpectedWrite::default(),
                     source: origin,
@@ -5475,6 +5500,14 @@ impl Engine {
         // with the destination or written to it: every status is what its destination will
         // store, so an unchanged item reads as unchanged.
         let mut refused_for_status = decide_conditions(request, &mut planned);
+        // Each task's assignees as it lands, on the same read: one whose source holds several
+        // is left out of a task copy below, and refuses a project copy whole.
+        for (index, error) in self.decide_assignees(request, &mut planned)? {
+            if request.scope != CopyScope::Tasks || project.is_some() {
+                return Err(error);
+            }
+            refused_for_status.entry(index).or_insert(error);
+        }
         self.store_statuses(&mut planned).await?;
         // A task copy carries every task past one its destination cannot represent: each is
         // asked about before anything is written, and one refused is left out — reported
@@ -5496,6 +5529,7 @@ impl Engine {
                         let mut outcome = failed(item.source.clone(), &error);
                         outcome.status_condition = item.status_condition;
                         outcome.priority_condition = item.priority_condition;
+                        outcome.assignee_condition = item.assignee_condition.clone();
                         outcome.held = item.held.as_ref().map(|held| item_result(&held.item));
                         left_out.push((index, outcome));
                     }
@@ -5572,6 +5606,13 @@ impl Engine {
                     == held_task.status;
             // And likewise a priority a guarded copy kept beside the same source token.
             let priority_matches = item.keeps_priority() || task.priority == held_task.priority;
+            // And an assignee the copy writes, which the counterpart has to hold already.
+            let assignees_match = item.assignees.as_ref().is_none_or(|written| {
+                super::assignees::same_people(
+                    written,
+                    held_task.assignees.as_deref().unwrap_or_default(),
+                )
+            });
             // A counterpart an earlier release landed lacks the mark a copy now leaves on a task
             // whose edges are all on its record, and is written once more to carry it.
             let marked = self.declared(&item.to) == crate::config::SourceVisibility::Private
@@ -5581,6 +5622,7 @@ impl Engine {
                     .contains_key(MetadataKey::EDGES_ON_RECORD_KEY);
             item.skipped = status_matches
                 && priority_matches
+                && assignees_match
                 && marked
                 && self.token_covers_a_copy(&item.source.source, item.carried.is_some())
                 && as_written
@@ -6115,6 +6157,59 @@ impl Engine {
             }
         }
         Ok(created)
+    }
+
+    /// Decide, for every task of `planned`, the assignees the copy writes, on the reads already
+    /// in hand: none unless both its source and its destination hold assignees; the source's
+    /// for a create; and for an update only while `--when-destination-assignees` names exactly
+    /// the people the counterpart holds — recorded as its `assignee_condition` — the
+    /// counterpart keeping its own otherwise. Answers, by index, every task whose source holds
+    /// more than the one person a write names, where the copy would write them.
+    fn decide_assignees(
+        &self,
+        request: &CopyRequest,
+        planned: &mut [Planned],
+    ) -> Result<HashMap<usize, EngineError>, EngineError> {
+        let wanted = request.conditions.assignees.as_deref();
+        let mut refused = HashMap::new();
+        for (index, item) in planned.iter_mut().enumerate() {
+            let Item::Task(task) = &item.item else {
+                continue;
+            };
+            let held = match (&item.target, item.held.as_ref().map(|held| &held.item)) {
+                (Target::Update { .. }, Some(Item::Task(held))) => Some(held),
+                (Target::Update { .. }, _) => continue,
+                (Target::Create, _) => None,
+            };
+            let holds = self
+                .writable(&item.to)?
+                .source()
+                .capabilities()
+                .assignees
+                .is_native();
+            if let (Some(held), Some(wanted)) = (held, wanted) {
+                let held = held.assignees.clone().unwrap_or_default();
+                let met = super::assignees::same_people(&held, wanted);
+                item.assignee_condition = Some(super::AssigneeCondition { held, met });
+            }
+            let writes = match held {
+                None => true,
+                Some(_) => item
+                    .assignee_condition
+                    .as_ref()
+                    .is_some_and(|found| found.met),
+            };
+            let (true, true, Some(people)) = (holds, writes, task.assignees.as_ref()) else {
+                continue;
+            };
+            match super::assignees::one_person(&item.source.to_string(), people) {
+                Ok(()) => item.assignees = Some(people.clone()),
+                Err(error) => {
+                    refused.insert(index, error);
+                }
+            }
+        }
+        Ok(refused)
     }
 
     /// Why the destination cannot represent `item` — a task whose write it refuses at
@@ -7529,6 +7624,8 @@ impl Engine {
             skipped: false,
             status_condition: None,
             priority_condition: None,
+            assignee_condition: None,
+            assignees: None,
             intent: None,
             relist: false,
             links: None,
@@ -8138,6 +8235,7 @@ impl Engine {
             expected: ExpectedWrite::default(),
             status_condition: item.status_condition,
             priority_condition: item.priority_condition,
+            assignee_condition: item.assignee_condition.clone(),
             held: None,
         };
         // The one read of the destination item, made where its target was found, used to
@@ -10408,6 +10506,14 @@ fn changes(
     {
         return true;
     }
+    // An assignee the copy writes is decided against the destination as read, whatever the
+    // record says: a guard met over an assignee somebody else set is a change the record
+    // never saw.
+    if let (Item::Task(held), Item::Task(outgoing)) = (&held.item, &outgoing)
+        && !writes_held_assignees(held, outgoing)
+    {
+        return true;
+    }
     if recorded_unchanged(item, held, &outgoing, edges, destination.name(), covers) {
         return false;
     }
@@ -11303,6 +11409,7 @@ fn outgoing(
                 Some(Item::Task(held)) if item.keeps_priority() => held.priority,
                 _ => task.priority,
             },
+            assignees: item.assignees.clone(),
             metadata: {
                 let mut metadata = carried(&task.metadata);
                 created_with(&mut metadata, item, held);
@@ -12396,6 +12503,9 @@ fn same(held: &Item, outgoing: &Item, destination: &SourceName) -> bool {
                     == record::digest_metadata(&outgoing.metadata)
                 && held.repositories == outgoing.repositories
                 && held.classification == outgoing.classification
+                // Assignees only where the copy writes them: one it leaves alone is the
+                // destination's own, whatever it holds.
+                && writes_held_assignees(held, outgoing)
         }
         (Item::Project(held), Item::Project(outgoing)) => {
             held.title == outgoing.title
@@ -12418,6 +12528,13 @@ fn same(held: &Item, outgoing: &Item, destination: &SourceName) -> bool {
         }
         _ => false,
     }
+}
+
+/// Whether `held` already holds the assignees `outgoing` writes — always, when it writes none.
+fn writes_held_assignees(held: &Task, outgoing: &Task) -> bool {
+    outgoing.assignees.as_ref().is_none_or(|written| {
+        super::assignees::same_people(written, held.assignees.as_deref().unwrap_or_default())
+    })
 }
 
 /// Whether the destination's forward edges already say what this copy would write.

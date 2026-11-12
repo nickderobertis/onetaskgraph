@@ -1459,6 +1459,10 @@ impl Exposure {
                 .map(|repository| repository.as_str().to_owned()),
         );
         exposure
+            .fixed
+            .metadata
+            .extend(update.assignees.iter().flatten().cloned());
+        exposure
     }
 
     /// Everything a task carries that a reader of it would read.
@@ -1485,6 +1489,11 @@ impl Exposure {
                 .chain(&task.delivered_by)
                 .map(ToString::to_string),
         );
+        // A person a write names is a fixed entry: replacement never renames anybody.
+        exposure
+            .fixed
+            .metadata
+            .extend(task.assignees.iter().flatten().cloned());
         exposure
     }
 
@@ -1536,6 +1545,10 @@ impl Exposure {
                 index -= task.delivers.len();
                 if index < task.delivered_by.len() {
                     return ChangedField::DeliveredBy;
+                }
+                index -= task.delivered_by.len();
+                if index < task.assignees.as_ref().map_or(0, Vec::len) {
+                    return ChangedField::Assignees;
                 }
                 ChangedField::Id
             }
@@ -2902,6 +2915,7 @@ pub(super) enum ChangedField {
     Project,
     Delivers,
     DeliveredBy,
+    Assignees,
     Id,
     Content,
     Title,
@@ -3122,6 +3136,7 @@ pub(super) fn screened_field(
         ChangedField::Project => Locator::Plain("project".to_owned()),
         ChangedField::Delivers => Locator::Plain("delivers".to_owned()),
         ChangedField::DeliveredBy => Locator::Plain("delivered_by".to_owned()),
+        ChangedField::Assignees => Locator::Plain("assignees".to_owned()),
         ChangedField::Id => Locator::Plain("id".to_owned()),
         ChangedField::Content => Locator::Plain("content".to_owned()),
         ChangedField::Title => Locator::Plain("title".to_owned()),

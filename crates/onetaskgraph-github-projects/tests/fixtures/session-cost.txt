@@ -1,4 +1,4 @@
-requests 241
+requests 242
 node count 335160
 
 requests per call
@@ -36,6 +36,7 @@ requests per call
     1     915  node-count and point-cost reconciliation while looking up the items copied from one origin
     1    3100  node-count and point-cost reconciliation while looking up the items copied from several origins, and what creating one reads
     1    3123  node-count and point-cost reconciliation while looking up the items copied from several origins, with a project's members
+    1       0  node-count and point-cost reconciliation while looking up the people an assignee write names
     1     150  node-count and point-cost reconciliation while reading a batch of issues by their references
     1    7272  node-count and point-cost reconciliation while reading a batch of issues with their comments
     1    7463  node-count and point-cost reconciliation while reading a batch of issues with their comments and dependencies for a copy

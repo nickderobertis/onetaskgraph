@@ -1124,6 +1124,7 @@ async fn every_declared_capability_is_applied_to_the_held_work() {
             task_dependencies: DependencySupport::BothDirections,
             project_dependencies: DependencySupport::BothDirections,
             max_page_size: 100,
+            assignees: Support::Unsupported,
         }
     );
 

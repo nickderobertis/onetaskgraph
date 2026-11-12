@@ -202,7 +202,13 @@ impl LinearSource {
                 Some(std::sync::Arc::new(read));
         }
         let tasks = connection(&data, "originIssues", |v| {
-            map_task(v, &self.name, &self.statuses, self.spelling())
+            map_task(
+                v,
+                &self.name,
+                &self.statuses,
+                self.spelling(),
+                self.assignees,
+            )
         })?;
         let projects = connection(&data, "originProjects", |v| {
             map_project(v, &self.statuses, self.spelling())

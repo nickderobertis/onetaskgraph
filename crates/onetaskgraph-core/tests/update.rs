@@ -448,6 +448,7 @@ async fn an_update_the_task_already_holds_writes_nothing_and_says_so() {
                 kind: DependencyKind::Blocks,
             }]),
             repositories: Some(before.repositories.clone()),
+            assignees: None,
         };
         let answer = store.update(&update).await.expect("an answer");
         assert!(answer.written.is_empty(), "{kind:?}: {:?}", answer.written);
@@ -840,6 +841,7 @@ async fn a_task_the_source_wrote_with_steps_takes_an_update_of_another_key_byte_
             ]),
             assets: Vec::new(),
             classification: Default::default(),
+            assignee: None,
         })
         .await
         .expect("the task is created")
@@ -874,4 +876,77 @@ async fn a_task_the_source_wrote_with_steps_takes_an_update_of_another_key_byte_
         file,
         "{after}"
     );
+}
+
+#[tokio::test]
+async fn an_update_naming_assignees_is_refused_unasked_by_a_source_not_opted_in_and_beyond_one_person()
+ {
+    let assign = |people: &[&str]| TaskUpdate {
+        assignees: Some(people.iter().map(|person| (*person).to_owned()).collect()),
+        ..TaskUpdate::default()
+    };
+    // Neither source opts in: the write is refused naming the setting, and the source is never
+    // asked anything.
+    for kind in KINDS {
+        let store = Store::new(kind);
+        let refused = store.update(&assign(&["ana"])).await;
+        assert!(
+            matches!(&refused, Err(EngineError::NoAssignees { name, .. }) if name == "work"),
+            "{kind:?}: {refused:?}"
+        );
+        assert!(store.calls().is_empty(), "{kind:?}: {:?}", store.calls());
+        let refused = store
+            .engine
+            .set_task_assignee(&id("work:T-1"), Some("ana"))
+            .await;
+        assert!(
+            matches!(&refused, Err(EngineError::NoAssignees { .. })),
+            "{kind:?}: {refused:?}"
+        );
+        assert!(store.calls().is_empty(), "{kind:?}: {:?}", store.calls());
+    }
+
+    // Opted in, an update naming two people is refused before the source is asked, and one
+    // naming one replaces whatever the task held.
+    let name = SourceName::new("work").expect("a valid source name");
+    let mut config = in_memory();
+    config["assignees"] = json!(true);
+    let inner: Arc<dyn TaskSource> = Arc::from(
+        onetaskgraph_in_memory::Plugin
+            .build(&name, &config, &NoSecrets)
+            .expect("the in-memory plugin builds"),
+    );
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let engine = Engine::new(
+        vec![ConfiguredSource::Ready(ResolvedSource::adopt(
+            name.clone(),
+            Box::new(Watched {
+                inner: Arc::clone(&inner),
+                calls: Arc::clone(&calls),
+            }),
+        ))],
+        vec![name],
+    );
+    let refused = engine
+        .update_task(&id("work:T-1"), &assign(&["ana", "ben"]))
+        .await;
+    assert!(
+        matches!(
+            &refused,
+            Err(EngineError::SeveralAssignees { count: 2, .. })
+        ),
+        "{refused:?}"
+    );
+    assert!(calls.lock().expect("the record").is_empty());
+    let updated = engine
+        .update_task(&id("work:T-1"), &assign(&["ana"]))
+        .await
+        .expect("the update");
+    assert_eq!(updated.task.assignees, Some(vec!["ana".to_owned()]));
+    assert!(updated.written.contains(&UpdatedField::Assignees));
+    let set = engine
+        .set_task_assignee(&id("work:T-1"), None)
+        .await
+        .expect("the unassign");
+    assert!(set.assignees.is_empty());
 }

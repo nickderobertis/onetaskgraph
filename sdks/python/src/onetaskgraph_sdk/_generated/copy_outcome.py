@@ -194,6 +194,19 @@ class PriorityCondition(BaseModel):
     met: Annotated[bool, Field(description="Whether that priority is one the condition names.")]
 
 
+class AssigneeCondition(BaseModel):
+    held: Annotated[
+        list[str],
+        Field(
+            description="Every person the counterpart was assigned to, as the copy's own pre-write read held\nthem — empty when it was unassigned."
+        ),
+    ]
+    met: Annotated[
+        bool,
+        Field(description="Whether those are exactly the people the condition names."),
+    ]
+
+
 class Failure(BaseModel):
     class_: Annotated[
         FailureClass,
@@ -316,6 +329,12 @@ class CopyOutcomeCreatedOrWouldCreate(BaseModel):
             description="What `--when-destination-priority` found the counterpart's priority at, and whether\nthat met it — present only when the copy was given the condition and this item was an\nupdate of a task."
         ),
     ] = None
+    assignee_condition: Annotated[
+        AssigneeCondition | None,
+        Field(
+            description="What `--when-destination-assignees` found the counterpart's assignees at, and whether\nthat met it — present only when the copy was given the condition and this item was an\nupdate of a task."
+        ),
+    ] = None
     held: Annotated[
         WriteResult | None,
         Field(
@@ -415,6 +434,12 @@ class CopyOutcomeUpdated(BaseModel):
             description="What `--when-destination-priority` found the counterpart's priority at, and whether\nthat met it — present only when the copy was given the condition and this item was an\nupdate of a task."
         ),
     ] = None
+    assignee_condition: Annotated[
+        AssigneeCondition | None,
+        Field(
+            description="What `--when-destination-assignees` found the counterpart's assignees at, and whether\nthat met it — present only when the copy was given the condition and this item was an\nupdate of a task."
+        ),
+    ] = None
     held: Annotated[
         WriteResult | None,
         Field(
@@ -500,6 +525,12 @@ class CopyOutcomeUnchanged(BaseModel):
         PriorityCondition | None,
         Field(
             description="What `--when-destination-priority` found the counterpart's priority at, and whether\nthat met it — present only when the copy was given the condition and this item was an\nupdate of a task."
+        ),
+    ] = None
+    assignee_condition: Annotated[
+        AssigneeCondition | None,
+        Field(
+            description="What `--when-destination-assignees` found the counterpart's assignees at, and whether\nthat met it — present only when the copy was given the condition and this item was an\nupdate of a task."
         ),
     ] = None
     held: Annotated[
@@ -595,6 +626,12 @@ class CopyOutcomeOrphaned(BaseModel):
             description="What `--when-destination-priority` found the counterpart's priority at, and whether\nthat met it — present only when the copy was given the condition and this item was an\nupdate of a task."
         ),
     ] = None
+    assignee_condition: Annotated[
+        AssigneeCondition | None,
+        Field(
+            description="What `--when-destination-assignees` found the counterpart's assignees at, and whether\nthat met it — present only when the copy was given the condition and this item was an\nupdate of a task."
+        ),
+    ] = None
     held: Annotated[
         WriteResult | None,
         Field(
@@ -669,6 +706,12 @@ class CopyOutcomeFailed(BaseModel):
         PriorityCondition | None,
         Field(
             description="What `--when-destination-priority` found the counterpart's priority at, and whether\nthat met it — present only when the copy was given the condition and this item was an\nupdate of a task."
+        ),
+    ] = None
+    assignee_condition: Annotated[
+        AssigneeCondition | None,
+        Field(
+            description="What `--when-destination-assignees` found the counterpart's assignees at, and whether\nthat met it — present only when the copy was given the condition and this item was an\nupdate of a task."
         ),
     ] = None
     held: Annotated[
@@ -750,6 +793,12 @@ class CopyOutcomeSkipped(BaseModel):
             description="What `--when-destination-priority` found the counterpart's priority at, and whether\nthat met it — present only when the copy was given the condition and this item was an\nupdate of a task."
         ),
     ] = None
+    assignee_condition: Annotated[
+        AssigneeCondition | None,
+        Field(
+            description="What `--when-destination-assignees` found the counterpart's assignees at, and whether\nthat met it — present only when the copy was given the condition and this item was an\nupdate of a task."
+        ),
+    ] = None
     held: Annotated[
         WriteResult | None,
         Field(
@@ -827,6 +876,12 @@ class CopyOutcomeOversize(BaseModel):
         PriorityCondition | None,
         Field(
             description="What `--when-destination-priority` found the counterpart's priority at, and whether\nthat met it — present only when the copy was given the condition and this item was an\nupdate of a task."
+        ),
+    ] = None
+    assignee_condition: Annotated[
+        AssigneeCondition | None,
+        Field(
+            description="What `--when-destination-assignees` found the counterpart's assignees at, and whether\nthat met it — present only when the copy was given the condition and this item was an\nupdate of a task."
         ),
     ] = None
     held: Annotated[

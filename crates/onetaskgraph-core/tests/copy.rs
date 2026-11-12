@@ -2861,6 +2861,7 @@ fn reported(id: &NativeId) -> Task {
         delivers: Vec::new(),
         delivered_by: Vec::new(),
         classification: Default::default(),
+        assignees: None,
     }
 }
 
@@ -2963,6 +2964,7 @@ impl TaskSource for Misbehaving {
             task_dependencies: DependencySupport::BothDirections,
             project_dependencies: DependencySupport::BothDirections,
             max_page_size: self.ceiling,
+            assignees: Support::Unsupported,
         }
     }
 

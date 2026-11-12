@@ -16,3 +16,4 @@ class UpdatedField(StrEnum):
     UpdatedFieldDelivers = "delivers"
     UpdatedFieldDependsOn = "depends-on"
     UpdatedFieldRepositories = "repositories"
+    UpdatedFieldAssignees = "assignees"

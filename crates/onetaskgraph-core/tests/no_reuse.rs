@@ -87,6 +87,7 @@ fn task() -> Task {
         delivers: Vec::new(),
         delivered_by: Vec::new(),
         classification: Default::default(),
+        assignees: None,
     }
 }
 
@@ -139,6 +140,7 @@ impl TaskSource for Counting {
             task_dependencies: DependencySupport::BothDirections,
             project_dependencies: DependencySupport::BothDirections,
             max_page_size: 10,
+            assignees: Support::Unsupported,
         }
     }
 

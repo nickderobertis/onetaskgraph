@@ -157,6 +157,7 @@ export type RuntimeSchemaRoot =
   | "SweepReport"
   | "Task"
   | "TaskAssetNames"
+  | "TaskAssigneeSet"
   | "TaskContentSet"
   | "TaskDetail"
   | "TaskDetails"
@@ -1040,7 +1041,7 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
         "const": "written"
       },
       {
-        "description": "Its priority guard declined: the task held a priority the guard does not name, and\nnothing of it was written.",
+        "description": "Its guard declined: the task held a priority `when_priority` does not name, or not\nexactly the people `when_assignees` names, and nothing of it was written.",
         "type": "string",
         "const": "held"
       },
@@ -1172,6 +1173,11 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
       },
       "priority": {
         "description": "Whether the source's tasks hold a [`Priority`](crate::Priority) at all.\n\nRead exactly as [`documents`](Self::documents) and [`comments`](Self::comments) are:\nit says what the source *holds*, not which predicate it applies, so the second\ncapability rule does not reach it. A source declaring `Unsupported` reports every\ntask's priority as `none`, and the engine never hands it one that is not: a copy\ncarrying another priority to it, and a `task priority set` naming it, are both refused\nbefore the source is asked, naming the source and the field.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that\npredates priorities says nothing here and is never handed a priority it would drop.",
+        "$ref": "#/$defs/Support",
+        "default": "unsupported"
+      },
+      "assignees": {
+        "description": "Whether the source's tasks carry [`Task::assignees`](crate::Task::assignees): set by\nthe source's own `config.assignees: true`, and `unsupported` otherwise.\n\nRead exactly as [`priority`](Self::priority) is: it says what the source *holds*, not\nwhich predicate it applies. A source declaring `Unsupported` reports no assignees on\nany task and is never handed any: a write naming an assignee is refused before the\nsource is asked, naming the source and the setting, and a copy into it carries none.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, and left out of the\nwire while unsupported, so a plugin that predates assignees — and every source that has\nnot opted in — reads and is read exactly as it was.",
         "$ref": "#/$defs/Support",
         "default": "unsupported"
       },
@@ -2417,7 +2423,7 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "const": "written"
           },
           {
-            "description": "Its priority guard declined: the task held a priority the guard does not name, and\nnothing of it was written.",
+            "description": "Its guard declined: the task held a priority `when_priority` does not name, or not\nexactly the people `when_assignees` names, and nothing of it was written.",
             "type": "string",
             "const": "held"
           },
@@ -3074,6 +3080,16 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification: the engine tightens it by the task's own\nrepositories — any private or unknown one makes the task private — before it decides\nwhere the task may be written, and nothing written here can loosen that. The project\na task is filed under never tightens it: a task's visibility is its own.",
             "$ref": "#/$defs/Classification",
             "default": "public"
+          },
+          "assignees": {
+            "description": "Every person the task is assigned to, as its source names a person — a GitHub login, a\nLinear display name, the string as given in a folder or in memory — in the order the\nsource holds them; empty means unassigned.\n\n**Present only for a source that opted in** with `config.assignees: true`\n([`Capabilities::assignees`](crate::Capabilities::assignees) `native`): every other\nsource leaves it absent, and it is left out of the wire when absent, so a task of a\nsource that has not opted in reads, and is written, exactly as it was before the field\nexisted. On a write, absent leaves the item's assignees as they are, and present\nreplaces them with exactly the people it names — the engine never hands a source more\nthan one.",
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
           }
         },
         "required": [
@@ -3874,6 +3890,17 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
           }
         ]
       },
+      "assignee_condition": {
+        "description": "What `--when-destination-assignees` found the counterpart's assignees at, and whether\nthat met it — present only when the copy was given the condition and this item was an\nupdate of a task.",
+        "anyOf": [
+          {
+            "$ref": "#/$defs/AssigneeCondition"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
       "held": {
         "description": "What the counterpart held, as the copy's read of it before writing found it — present\nonly on an item the copy refused after that read, such as `destination-status`.",
         "anyOf": [
@@ -4667,6 +4694,27 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
           "held",
           "met"
         ]
+      },
+      "AssigneeCondition": {
+        "description": "What a guarded copy found a counterpart's assignees at, and whether that met the condition.",
+        "type": "object",
+        "properties": {
+          "held": {
+            "description": "Every person the counterpart was assigned to, as the copy's own pre-write read held\nthem — empty when it was unassigned.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "met": {
+            "description": "Whether those are exactly the people the condition names.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "held",
+          "met"
+        ]
       }
     }
   },
@@ -4813,6 +4861,17 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "anyOf": [
               {
                 "$ref": "#/$defs/PriorityCondition"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "assignee_condition": {
+            "description": "What `--when-destination-assignees` found the counterpart's assignees at, and whether\nthat met it — present only when the copy was given the condition and this item was an\nupdate of a task.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AssigneeCondition"
               },
               {
                 "type": "null"
@@ -5605,6 +5664,27 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
           },
           "met": {
             "description": "Whether that priority is one the condition names.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "held",
+          "met"
+        ]
+      },
+      "AssigneeCondition": {
+        "description": "What a guarded copy found a counterpart's assignees at, and whether that met the condition.",
+        "type": "object",
+        "properties": {
+          "held": {
+            "description": "Every person the counterpart was assigned to, as the copy's own pre-write read held\nthem — empty when it was unassigned.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "met": {
+            "description": "Whether those are exactly the people the condition names.",
             "type": "boolean"
           }
         },
@@ -9706,6 +9786,16 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification: the engine tightens it by the task's own\nrepositories — any private or unknown one makes the task private — before it decides\nwhere the task may be written, and nothing written here can loosen that. The project\na task is filed under never tightens it: a task's visibility is its own.",
             "$ref": "#/$defs/Classification",
             "default": "public"
+          },
+          "assignees": {
+            "description": "Every person the task is assigned to, as its source names a person — a GitHub login, a\nLinear display name, the string as given in a folder or in memory — in the order the\nsource holds them; empty means unassigned.\n\n**Present only for a source that opted in** with `config.assignees: true`\n([`Capabilities::assignees`](crate::Capabilities::assignees) `native`): every other\nsource leaves it absent, and it is left out of the wire when absent, so a task of a\nsource that has not opted in reads, and is written, exactly as it was before the field\nexisted. On a write, absent leaves the item's assignees as they are, and present\nreplaces them with exactly the people it names — the engine never hands a source more\nthan one.",
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
           }
         },
         "required": [
@@ -11587,6 +11677,11 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
           "$ref": "#/$defs/LinkTypeConfig"
         },
         "default": {}
+      },
+      "assignees": {
+        "description": "Whether this source's tasks carry their assignee: `false`, the default, reads every task\nwithout an `assignees` member, refuses every write naming one and sends Linear exactly\nthe documents it sent before assignees existed; `true` reads each issue's\n`assignee{displayName}` — a Linear user's display name, unique within its workspace —\nand writes one person, or none, as the issue's `assigneeId`.",
+        "type": "boolean",
+        "default": false
       }
     },
     "additionalProperties": false,
@@ -14248,6 +14343,16 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification: the engine tightens it by the task's own\nrepositories — any private or unknown one makes the task private — before it decides\nwhere the task may be written, and nothing written here can loosen that. The project\na task is filed under never tightens it: a task's visibility is its own.",
             "$ref": "#/$defs/Classification",
             "default": "public"
+          },
+          "assignees": {
+            "description": "Every person the task is assigned to, as its source names a person — a GitHub login, a\nLinear display name, the string as given in a folder or in memory — in the order the\nsource holds them; empty means unassigned.\n\n**Present only for a source that opted in** with `config.assignees: true`\n([`Capabilities::assignees`](crate::Capabilities::assignees) `native`): every other\nsource leaves it absent, and it is left out of the wire when absent, so a task of a\nsource that has not opted in reads, and is written, exactly as it was before the field\nexisted. On a write, absent leaves the item's assignees as they are, and present\nreplaces them with exactly the people it names — the engine never hands a source more\nthan one.",
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
           }
         },
         "required": [
@@ -17160,6 +17265,16 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification: the engine tightens it by the task's own\nrepositories — any private or unknown one makes the task private — before it decides\nwhere the task may be written, and nothing written here can loosen that. The project\na task is filed under never tightens it: a task's visibility is its own.",
             "$ref": "#/$defs/Classification",
             "default": "public"
+          },
+          "assignees": {
+            "description": "Every person the task is assigned to, as its source names a person — a GitHub login, a\nLinear display name, the string as given in a folder or in memory — in the order the\nsource holds them; empty means unassigned.\n\n**Present only for a source that opted in** with `config.assignees: true`\n([`Capabilities::assignees`](crate::Capabilities::assignees) `native`): every other\nsource leaves it absent, and it is left out of the wire when absent, so a task of a\nsource that has not opted in reads, and is written, exactly as it was before the field\nexisted. On a write, absent leaves the item's assignees as they are, and present\nreplaces them with exactly the people it names — the engine never hands a source more\nthan one.",
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
           }
         },
         "required": [
@@ -20019,6 +20134,16 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification: the engine tightens it by the task's own\nrepositories — any private or unknown one makes the task private — before it decides\nwhere the task may be written, and nothing written here can loosen that. The project\na task is filed under never tightens it: a task's visibility is its own.",
             "$ref": "#/$defs/Classification",
             "default": "public"
+          },
+          "assignees": {
+            "description": "Every person the task is assigned to, as its source names a person — a GitHub login, a\nLinear display name, the string as given in a folder or in memory — in the order the\nsource holds them; empty means unassigned.\n\n**Present only for a source that opted in** with `config.assignees: true`\n([`Capabilities::assignees`](crate::Capabilities::assignees) `native`): every other\nsource leaves it absent, and it is left out of the wire when absent, so a task of a\nsource that has not opted in reads, and is written, exactly as it was before the field\nexisted. On a write, absent leaves the item's assignees as they are, and present\nreplaces them with exactly the people it names — the engine never hands a source more\nthan one.",
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
           }
         },
         "required": [
@@ -20773,6 +20898,16 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification: the engine tightens it by the task's own\nrepositories — any private or unknown one makes the task private — before it decides\nwhere the task may be written, and nothing written here can loosen that. The project\na task is filed under never tightens it: a task's visibility is its own.",
             "$ref": "#/$defs/Classification",
             "default": "public"
+          },
+          "assignees": {
+            "description": "Every person the task is assigned to, as its source names a person — a GitHub login, a\nLinear display name, the string as given in a folder or in memory — in the order the\nsource holds them; empty means unassigned.\n\n**Present only for a source that opted in** with `config.assignees: true`\n([`Capabilities::assignees`](crate::Capabilities::assignees) `native`): every other\nsource leaves it absent, and it is left out of the wire when absent, so a task of a\nsource that has not opted in reads, and is written, exactly as it was before the field\nexisted. On a write, absent leaves the item's assignees as they are, and present\nreplaces them with exactly the people it names — the engine never hands a source more\nthan one.",
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
           }
         },
         "required": [
@@ -22446,6 +22581,16 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification: the engine tightens it by the task's own\nrepositories — any private or unknown one makes the task private — before it decides\nwhere the task may be written, and nothing written here can loosen that. The project\na task is filed under never tightens it: a task's visibility is its own.",
             "$ref": "#/$defs/Classification",
             "default": "public"
+          },
+          "assignees": {
+            "description": "Every person the task is assigned to, as its source names a person — a GitHub login, a\nLinear display name, the string as given in a folder or in memory — in the order the\nsource holds them; empty means unassigned.\n\n**Present only for a source that opted in** with `config.assignees: true`\n([`Capabilities::assignees`](crate::Capabilities::assignees) `native`): every other\nsource leaves it absent, and it is left out of the wire when absent, so a task of a\nsource that has not opted in reads, and is written, exactly as it was before the field\nexisted. On a write, absent leaves the item's assignees as they are, and present\nreplaces them with exactly the people it names — the engine never hands a source more\nthan one.",
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
           }
         },
         "required": [
@@ -23365,6 +23510,11 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "$ref": "#/$defs/Support",
             "default": "unsupported"
           },
+          "assignees": {
+            "description": "Whether the source's tasks carry [`Task::assignees`](crate::Task::assignees): set by\nthe source's own `config.assignees: true`, and `unsupported` otherwise.\n\nRead exactly as [`priority`](Self::priority) is: it says what the source *holds*, not\nwhich predicate it applies. A source declaring `Unsupported` reports no assignees on\nany task and is never handed any: a write naming an assignee is refused before the\nsource is asked, naming the source and the setting, and a copy into it carries none.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, and left out of the\nwire while unsupported, so a plugin that predates assignees — and every source that has\nnot opted in — reads and is read exactly as it was.",
+            "$ref": "#/$defs/Support",
+            "default": "unsupported"
+          },
           "filter_by_priority": {
             "description": "Whether the source keeps only the tasks whose priority a query lists, itself.\n\nA predicate, and so one the second capability rule reaches: a source declaring\n`Unsupported` ignores [`TaskQuery::priorities`](crate::TaskQuery::priorities) and\nreturns the wider set, and the engine narrows it. Its own member rather than a reading\nof [`priority`](Self::priority), because holding a priority and filtering by one are\ntwo abilities — a board holds a priority on a field it cannot be asked to filter by.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that\npredates priorities is narrowed by the engine rather than trusted to have filtered.",
             "$ref": "#/$defs/Support",
@@ -23692,6 +23842,11 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
           },
           "priority": {
             "description": "Whether the source's tasks hold a [`Priority`](crate::Priority) at all.\n\nRead exactly as [`documents`](Self::documents) and [`comments`](Self::comments) are:\nit says what the source *holds*, not which predicate it applies, so the second\ncapability rule does not reach it. A source declaring `Unsupported` reports every\ntask's priority as `none`, and the engine never hands it one that is not: a copy\ncarrying another priority to it, and a `task priority set` naming it, are both refused\nbefore the source is asked, naming the source and the field.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that\npredates priorities says nothing here and is never handed a priority it would drop.",
+            "$ref": "#/$defs/Support",
+            "default": "unsupported"
+          },
+          "assignees": {
+            "description": "Whether the source's tasks carry [`Task::assignees`](crate::Task::assignees): set by\nthe source's own `config.assignees: true`, and `unsupported` otherwise.\n\nRead exactly as [`priority`](Self::priority) is: it says what the source *holds*, not\nwhich predicate it applies. A source declaring `Unsupported` reports no assignees on\nany task and is never handed any: a write naming an assignee is refused before the\nsource is asked, naming the source and the setting, and a copy into it carries none.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, and left out of the\nwire while unsupported, so a plugin that predates assignees — and every source that has\nnot opted in — reads and is read exactly as it was.",
             "$ref": "#/$defs/Support",
             "default": "unsupported"
           },
@@ -24425,6 +24580,16 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification: the engine tightens it by the task's own\nrepositories — any private or unknown one makes the task private — before it decides\nwhere the task may be written, and nothing written here can loosen that. The project\na task is filed under never tightens it: a task's visibility is its own.",
             "$ref": "#/$defs/Classification",
             "default": "public"
+          },
+          "assignees": {
+            "description": "Every person the task is assigned to, as its source names a person — a GitHub login, a\nLinear display name, the string as given in a folder or in memory — in the order the\nsource holds them; empty means unassigned.\n\n**Present only for a source that opted in** with `config.assignees: true`\n([`Capabilities::assignees`](crate::Capabilities::assignees) `native`): every other\nsource leaves it absent, and it is left out of the wire when absent, so a task of a\nsource that has not opted in reads, and is written, exactly as it was before the field\nexisted. On a write, absent leaves the item's assignees as they are, and present\nreplaces them with exactly the people it names — the engine never hands a source more\nthan one.",
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
           }
         },
         "required": [
@@ -25899,6 +26064,16 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
         "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification: the engine tightens it by the task's own\nrepositories — any private or unknown one makes the task private — before it decides\nwhere the task may be written, and nothing written here can loosen that. The project\na task is filed under never tightens it: a task's visibility is its own.",
         "$ref": "#/$defs/Classification",
         "default": "public"
+      },
+      "assignees": {
+        "description": "Every person the task is assigned to, as its source names a person — a GitHub login, a\nLinear display name, the string as given in a folder or in memory — in the order the\nsource holds them; empty means unassigned.\n\n**Present only for a source that opted in** with `config.assignees: true`\n([`Capabilities::assignees`](crate::Capabilities::assignees) `native`): every other\nsource leaves it absent, and it is left out of the wire when absent, so a task of a\nsource that has not opted in reads, and is written, exactly as it was before the field\nexisted. On a write, absent leaves the item's assignees as they are, and present\nreplaces them with exactly the people it names — the engine never hands a source more\nthan one.",
+        "type": [
+          "array",
+          "null"
+        ],
+        "items": {
+          "type": "string"
+        }
       }
     },
     "required": [
@@ -26098,6 +26273,386 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
       "AssetName": {
         "description": "One asset's name: a bare file name ending in an accepted image extension.\n\nValidated wherever one is built, deserialized included: non-empty, no `/`, no `\\`, no\n`..`, no whitespace, control character or parenthesis — none of which a bare Markdown link\ntarget can hold — and ending, case-insensitively, in `.png`, `.jpg`, `.jpeg`, `.gif` or\n`.webp` after a non-empty stem. The name is kept exactly as written, case included: it is\nthe text a reference names and the file name a source stores the bytes under.",
         "type": "string"
+      }
+    }
+  },
+  "TaskAssigneeSet": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "TaskAssigneeSet",
+    "description": "What `task assignee set` answers with.",
+    "type": "object",
+    "properties": {
+      "id": {
+        "description": "The task whose assignee was set.",
+        "$ref": "#/$defs/GlobalId"
+      },
+      "assignees": {
+        "description": "Every person the task is assigned to as its source reads it back after the write —\nthe one person named, or none.",
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "result": {
+        "description": "What the task holds after the write — its version where the write's own answers\ndetermine it.",
+        "anyOf": [
+          {
+            "$ref": "#/$defs/WriteResult"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "sanitization": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Sanitization"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "required": [
+      "id",
+      "assignees"
+    ],
+    "$defs": {
+      "GlobalId": {
+        "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
+        "type": "string"
+      },
+      "WriteResult": {
+        "description": "What an item holds once a write is done, read off the write's own responses — and, for an\nexpected write, what each mutation it sent came to.\n\nEvery write verb and every item a copy lands answers one, with no request added for it: a\nfield the write kept is what the read before it held. `version` is `null` where the source\ncannot vouch for a token from its write's responses — a GitHub board for an item it has just\nwritten, a stdio-hosted plugin, an in-memory source — and otherwise the token a read would\nthen give.",
+        "type": "object",
+        "properties": {
+          "version": {
+            "description": "The item's version after the write, where the write's responses determine it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "parts": {
+            "description": "One per mutation an expected write sent, in the order sent — absent for a write made\nwithout `--expect`.",
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/$defs/WritePart"
+            }
+          },
+          "status": {
+            "description": "The item's status after the write, exactly as `task show` spells it — `null` for a\ndocument, which has none, and where an expected write that failed cannot say.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Status"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "priority": {
+            "description": "A task's priority after the write — `null` for a project or a document, which carry\nnone, and where an expected write that failed cannot say.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Priority"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        }
+      },
+      "WritePart": {
+        "description": "One mutation of an expected write.",
+        "type": "object",
+        "properties": {
+          "part": {
+            "description": "Which part it was, in the source's words: `fields`, `issue`, `comment`.",
+            "type": "string"
+          },
+          "fields": {
+            "description": "Each field it set, with the value the response shows.",
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "part",
+          "fields"
+        ],
+        "oneOf": [
+          {
+            "description": "The backend answered that it was applied.",
+            "type": "object",
+            "properties": {
+              "outcome": {
+                "type": "string",
+                "const": "landed"
+              }
+            },
+            "required": [
+              "outcome"
+            ]
+          },
+          {
+            "description": "The backend answered that it was refused.",
+            "type": "object",
+            "properties": {
+              "error": {
+                "description": "What the backend said.",
+                "type": "string"
+              },
+              "stale": {
+                "description": "Whether it was refused because an id the write took from a primed context — an\nitem's node id, a field's or an option's — no longer resolves. Such a part is\nsent again once, after one read.",
+                "type": "boolean",
+                "default": false
+              },
+              "outcome": {
+                "type": "string",
+                "const": "rejected"
+              }
+            },
+            "required": [
+              "outcome",
+              "error"
+            ]
+          },
+          {
+            "description": "The request left and no answer came back, so whether it was applied cannot be known.\nNever sent again: doing so could apply it twice.",
+            "type": "object",
+            "properties": {
+              "error": {
+                "description": "What went wrong.",
+                "type": "string"
+              },
+              "outcome": {
+                "type": "string",
+                "const": "unknown"
+              }
+            },
+            "required": [
+              "outcome",
+              "error"
+            ]
+          }
+        ]
+      },
+      "Status": {
+        "description": "A source's status, kept in both normalised and original form.\n\n`category` is what every filter compares against; `name` is the source's own\nwording, preserved so display never flattens \"In Review\" into \"In Progress\".",
+        "type": "object",
+        "properties": {
+          "category": {
+            "description": "The normalised value filters compare against.",
+            "$ref": "#/$defs/StatusCategory"
+          },
+          "name": {
+            "description": "The source's own label for this status.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "category",
+          "name"
+        ]
+      },
+      "StatusCategory": {
+        "description": "The normalised status vocabulary shared across every source.",
+        "oneOf": [
+          {
+            "description": "Written down but not yet committed to as work.",
+            "type": "string",
+            "const": "draft"
+          },
+          {
+            "description": "Known about, not yet accepted as ready to work.",
+            "type": "string",
+            "const": "backlog"
+          },
+          {
+            "description": "Accepted and ready to be picked up, and nothing has claimed it.",
+            "type": "string",
+            "const": "todo"
+          },
+          {
+            "description": "Claimed by work that will do it, and not yet started.",
+            "type": "string",
+            "const": "queued"
+          },
+          {
+            "description": "Being worked on.",
+            "type": "string",
+            "const": "in-progress"
+          },
+          {
+            "description": "Finished.",
+            "type": "string",
+            "const": "done"
+          },
+          {
+            "description": "Abandoned.",
+            "type": "string",
+            "const": "cancelled"
+          },
+          {
+            "description": "The source reported a status this vocabulary cannot place.",
+            "type": "string",
+            "const": "unknown"
+          }
+        ]
+      },
+      "Priority": {
+        "description": "How much a task matters, in the one vocabulary every source is normalised into.\n\nFive values, most pressing first after [`None`](Self::None): Linear's own priority has\nexactly these, and a source whose backend has none of its own maps its representation\nonto them. `none` is a value rather than an absent field, because \"no priority is set\" is\nsomething a person sets — writing `none` clears a priority — and a reader tells it apart\nfrom nothing by the value alone.",
+        "oneOf": [
+          {
+            "description": "No priority is set.",
+            "type": "string",
+            "const": "none"
+          },
+          {
+            "description": "Drop everything for it.",
+            "type": "string",
+            "const": "urgent"
+          },
+          {
+            "description": "Next, before the rest.",
+            "type": "string",
+            "const": "high"
+          },
+          {
+            "description": "In its turn.",
+            "type": "string",
+            "const": "medium"
+          },
+          {
+            "description": "When there is nothing more pressing.",
+            "type": "string",
+            "const": "low"
+          }
+        ]
+      },
+      "Sanitization": {
+        "description": "What the screened writes of one command replaced, and what sanitise-on-refusal changed:\nthe `sanitization` member a write's answer carries when it is not empty.",
+        "type": "object",
+        "properties": {
+          "replaced": {
+            "description": "Spans the writes' own sanitisations rewrote.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "side_effect": {
+            "description": "Each field or comment of an item sanitisation changed beyond the write itself.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/SideEffect"
+            }
+          },
+          "dry_run": {
+            "description": "Whether nothing was written, the changes only reported.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "replaced",
+          "side_effect",
+          "dry_run"
+        ]
+      },
+      "SideEffect": {
+        "description": "One field or comment of an item a sanitisation changed, named by screened locators.",
+        "type": "object",
+        "properties": {
+          "item": {
+            "description": "The item, by its qualified id as screened.",
+            "$ref": "#/$defs/Locator"
+          },
+          "field": {
+            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`.",
+            "$ref": "#/$defs/Locator"
+          }
+        },
+        "required": [
+          "item",
+          "field"
+        ]
+      },
+      "Locator": {
+        "description": "A screened locator: the string verbatim, or its redacted form.",
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "redacted": {
+                "const": true
+              },
+              "kind": {
+                "$ref": "#/$defs/LocatorKind"
+              },
+              "ordinal": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "redacted",
+              "kind",
+              "ordinal"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "LocatorKind": {
+        "description": "What a locator names.",
+        "oneOf": [
+          {
+            "description": "A source name.",
+            "type": "string",
+            "const": "source"
+          },
+          {
+            "description": "An item id.",
+            "type": "string",
+            "const": "item"
+          },
+          {
+            "description": "A user-defined field name.",
+            "type": "string",
+            "const": "field"
+          },
+          {
+            "description": "A metadata key.",
+            "type": "string",
+            "const": "metadata-key"
+          },
+          {
+            "description": "A comment id.",
+            "type": "string",
+            "const": "comment"
+          },
+          {
+            "description": "A file path.",
+            "type": "string",
+            "const": "path"
+          },
+          {
+            "description": "A repository identity.",
+            "type": "string",
+            "const": "identity"
+          }
+        ]
       }
     }
   },
@@ -26824,6 +27379,16 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification: the engine tightens it by the task's own\nrepositories — any private or unknown one makes the task private — before it decides\nwhere the task may be written, and nothing written here can loosen that. The project\na task is filed under never tightens it: a task's visibility is its own.",
             "$ref": "#/$defs/Classification",
             "default": "public"
+          },
+          "assignees": {
+            "description": "Every person the task is assigned to, as its source names a person — a GitHub login, a\nLinear display name, the string as given in a folder or in memory — in the order the\nsource holds them; empty means unassigned.\n\n**Present only for a source that opted in** with `config.assignees: true`\n([`Capabilities::assignees`](crate::Capabilities::assignees) `native`): every other\nsource leaves it absent, and it is left out of the wire when absent, so a task of a\nsource that has not opted in reads, and is written, exactly as it was before the field\nexisted. On a write, absent leaves the item's assignees as they are, and present\nreplaces them with exactly the people it names — the engine never hands a source more\nthan one.",
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
           }
         },
         "required": [
@@ -28007,6 +28572,16 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification: the engine tightens it by the task's own\nrepositories — any private or unknown one makes the task private — before it decides\nwhere the task may be written, and nothing written here can loosen that. The project\na task is filed under never tightens it: a task's visibility is its own.",
             "$ref": "#/$defs/Classification",
             "default": "public"
+          },
+          "assignees": {
+            "description": "Every person the task is assigned to, as its source names a person — a GitHub login, a\nLinear display name, the string as given in a folder or in memory — in the order the\nsource holds them; empty means unassigned.\n\n**Present only for a source that opted in** with `config.assignees: true`\n([`Capabilities::assignees`](crate::Capabilities::assignees) `native`): every other\nsource leaves it absent, and it is left out of the wire when absent, so a task of a\nsource that has not opted in reads, and is written, exactly as it was before the field\nexisted. On a write, absent leaves the item's assignees as they are, and present\nreplaces them with exactly the people it names — the engine never hands a source more\nthan one.",
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
           }
         },
         "required": [
@@ -30567,6 +31142,16 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
         "items": {
           "$ref": "#/$defs/Repository"
         }
+      },
+      "assignees": {
+        "description": "Replaces every person the task is assigned to with exactly these — empty unassigns.\nThe engine names at most one, and only to a source declaring\n[`Capabilities::assignees`](crate::Capabilities::assignees). A source refuses a person\nit cannot assign, naming them, rather than writing the rest without them.",
+        "type": [
+          "array",
+          "null"
+        ],
+        "items": {
+          "type": "string"
+        }
       }
     },
     "$defs": {
@@ -30933,6 +31518,16 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification: the engine tightens it by the task's own\nrepositories — any private or unknown one makes the task private — before it decides\nwhere the task may be written, and nothing written here can loosen that. The project\na task is filed under never tightens it: a task's visibility is its own.",
             "$ref": "#/$defs/Classification",
             "default": "public"
+          },
+          "assignees": {
+            "description": "Every person the task is assigned to, as its source names a person — a GitHub login, a\nLinear display name, the string as given in a folder or in memory — in the order the\nsource holds them; empty means unassigned.\n\n**Present only for a source that opted in** with `config.assignees: true`\n([`Capabilities::assignees`](crate::Capabilities::assignees) `native`): every other\nsource leaves it absent, and it is left out of the wire when absent, so a task of a\nsource that has not opted in reads, and is written, exactly as it was before the field\nexisted. On a write, absent leaves the item's assignees as they are, and present\nreplaces them with exactly the people it names — the engine never hands a source more\nthan one.",
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
           }
         },
         "required": [
@@ -31160,6 +31755,11 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "description": "[`TaskUpdate::repositories`].",
             "type": "string",
             "const": "repositories"
+          },
+          {
+            "description": "[`TaskUpdate::assignees`].",
+            "type": "string",
+            "const": "assignees"
           }
         ]
       }
@@ -31401,6 +32001,16 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "description": "Who may read this task, as it was declared (see [`Classification`]).\n\nDefaulted and left out of the wire while `public`, so a task written before this\nfield existed reads as public and a reader written before it reads what it always\nread. It is the *declared* classification: the engine tightens it by the task's own\nrepositories — any private or unknown one makes the task private — before it decides\nwhere the task may be written, and nothing written here can loosen that. The project\na task is filed under never tightens it: a task's visibility is its own.",
             "$ref": "#/$defs/Classification",
             "default": "public"
+          },
+          "assignees": {
+            "description": "Every person the task is assigned to, as its source names a person — a GitHub login, a\nLinear display name, the string as given in a folder or in memory — in the order the\nsource holds them; empty means unassigned.\n\n**Present only for a source that opted in** with `config.assignees: true`\n([`Capabilities::assignees`](crate::Capabilities::assignees) `native`): every other\nsource leaves it absent, and it is left out of the wire when absent, so a task of a\nsource that has not opted in reads, and is written, exactly as it was before the field\nexisted. On a write, absent leaves the item's assignees as they are, and present\nreplaces them with exactly the people it names — the engine never hands a source more\nthan one.",
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
           }
         },
         "required": [
@@ -31628,6 +32238,11 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "description": "[`TaskUpdate::repositories`].",
             "type": "string",
             "const": "repositories"
+          },
+          {
+            "description": "[`TaskUpdate::assignees`].",
+            "type": "string",
+            "const": "assignees"
           }
         ]
       },
@@ -32268,7 +32883,7 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "const": "written"
           },
           {
-            "description": "Its priority guard declined: the task held a priority the guard does not name, and\nnothing of it was written.",
+            "description": "Its guard declined: the task held a priority `when_priority` does not name, or not\nexactly the people `when_assignees` names, and nothing of it was written.",
             "type": "string",
             "const": "held"
           },
@@ -32816,6 +33431,24 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
               "$ref": "#/$defs/Repository"
             },
             "default": null
+          },
+          "assignee": {
+            "description": "The one person it is assigned to, replacing every person it holds — `null` unassigns\nit, and leaving the member out leaves its assignees as they are. Only for a source that\nopted in with `config.assignees: true`.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "x-null-unsets": true
+          },
+          "when_assignees": {
+            "description": "Write only while the task is assigned to exactly these people, whatever their order —\n`[]` only while it is unassigned. Otherwise nothing of the update is written and it\nanswers `held`. Left out, it sets no guard.",
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
           }
         },
         "additionalProperties": false,
@@ -32948,6 +33581,11 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
         "description": "[`TaskUpdate::repositories`].",
         "type": "string",
         "const": "repositories"
+      },
+      {
+        "description": "[`TaskUpdate::assignees`].",
+        "type": "string",
+        "const": "assignees"
       }
     ]
   },

@@ -815,6 +815,9 @@ pub fn dry_run_variables(document: &str) -> Value {
     for slot in 0..onetaskgraph_github_projects::COPY_DETAIL_BATCH {
         bind(&format!("read{slot}"), json!(true));
     }
+    // A lookup of the people an assignee write names, in its inventoried one-person form, asks
+    // for a login GitHub knows, so the probe prices the lookup it would answer.
+    bind("login0", json!("octocat"));
     // A batched search asks every one of its search slots and its origin slots, each at the
     // page its largest round asks (`reconciliation_page_sizes`).
     for slot in 0..onetaskgraph_github_projects::SEARCH_BATCH {
@@ -2732,6 +2735,7 @@ fn artifact_task(
         delivers: Vec::new(),
         delivered_by: Vec::new(),
         classification: Default::default(),
+        assignees: None,
     }
 }
 
@@ -5073,6 +5077,7 @@ pub async fn run(nomination: Nomination) {
             task_dependencies: DependencySupport::BothDirections,
             project_dependencies: DependencySupport::BothDirections,
             max_page_size: onetaskgraph_github_projects::MAX_PAGE_SIZE,
+            assignees: Support::Unsupported,
         }
     );
     // A board is a container of projects now, so how many it holds is the board's business.

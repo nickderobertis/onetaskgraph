@@ -50,6 +50,7 @@
 //! | `search_content` | **Supported and proven,** on the same terms, `description:{containsIgnoreCase:…}`, confirmed over the visible content — the trailing metadata slot Linear's comparator also reads is not part of what the rule confirms. A `title-or-content` search sends the two under one `or`. |
 //! | `task_dependencies` | **Supported and proven,** in both directions: `relations` and `inverseRelations`. |
 //! | `project_dependencies` | **Supported and proven,** in both directions, by the project relations of the same shape. Linear types every one of them `dependency`; see the ruling below on the edge that has no spelling here. |
+//! | `assignees` | **Supported and proven when `config.assignees: true`,** unsupported otherwise: an issue's `assignee{displayName}`, read on every issue an opted-in source reads, and written as one person or none through `assigneeId` in the `issueCreate`/`issueUpdate` input the write already sends. See [`assignees`] for how a person is resolved and what a write's answer is held to. |
 //! | `max_page_size` | **Supported and proven.** 100; every read pages with Relay `first`/`after`. Linear's connection maximum is 250 and its complexity budget is the tighter bound — see [`MAX_PAGE_SIZE`]. |
 //!
 //! ## Ruling: the follow-up searches are native, and what each rests on
@@ -565,6 +566,7 @@ pub const LIVE_ARTIFACT_TITLE_PREFIX: &str = "onetaskgraph live cleanup ";
 /// Exact ownership grammar shared by live lanes and their cleanup.
 pub mod live_artifact;
 
+mod assignees;
 mod batch;
 mod origins;
 mod relations;
@@ -946,6 +948,47 @@ pub mod graphql {
     /// Set or remove one issue's parent — `parentId: null` removes it — reading the issue back.
     pub const ISSUE_PARENT_UPDATE: &str = "mutation($id:String!,$input:IssueUpdateInput!){ issueUpdate(id:$id,input:$input){success issue{ id identifier title description descriptionState url createdAt updatedAt archivedAt state{name type} priority labels{nodes{id name color}} project{id} parent{id} }} }";
 
+    /// Resolve Linear users by their display names — `User.displayName`, which Linear's published
+    /// schema documents as "Must be unique within the workspace" — for an assignee write: every
+    /// name one call needs and this process has not resolved, in one request. `in` is Linear's
+    /// case-sensitive list operator, so a name matches only as the user spells it. Sent by a
+    /// source with `config.assignees: true` alone.
+    pub const USERS: &str = "query($names:[String!]!,$first:Int){ users(first:$first,filter:{displayName:{in:$names}}){nodes{id displayName}} }";
+
+    /// What every issue selection a task is read from ends with, and so what [`with_assignees`]
+    /// widens.
+    pub const ISSUE_SELECTION_TAIL: &str = "priority labels{nodes{id name color}} project{id}";
+
+    /// What a source with `config.assignees: true` selects beside [`ISSUE_SELECTION_TAIL`] on every
+    /// issue it reads or writes: the assignee's display name, `null` for an unassigned issue.
+    pub const ASSIGNEE_SELECTION: &str = " assignee{displayName}";
+
+    /// `document` as a source with `config.assignees: true` sends it: every issue selection a task
+    /// is read from — each ends in [`ISSUE_SELECTION_TAIL`], which no project, document or comment
+    /// selection does — selecting [`ASSIGNEE_SELECTION`] too. A document with no such selection
+    /// comes back as it was, and a source that has not opted in sends every document unchanged.
+    #[must_use]
+    pub fn with_assignees(document: &str) -> std::borrow::Cow<'_, str> {
+        if document.contains(ISSUE_SELECTION_TAIL) {
+            std::borrow::Cow::Owned(document.replace(
+                ISSUE_SELECTION_TAIL,
+                &format!("{ISSUE_SELECTION_TAIL}{ASSIGNEE_SELECTION}"),
+            ))
+        } else {
+            std::borrow::Cow::Borrowed(document)
+        }
+    }
+
+    /// The document [`with_assignees`] widened `document` from, when it widened one — what a
+    /// server answering the plain document answers it as.
+    #[must_use]
+    pub fn without_assignees(document: &str) -> Option<String> {
+        let widened = format!("{ISSUE_SELECTION_TAIL}{ASSIGNEE_SELECTION}");
+        document
+            .contains(&widened)
+            .then(|| document.replace(&widened, ISSUE_SELECTION_TAIL))
+    }
+
     /// The documents this source sends batched by [`composed`], each the single-root document it
     /// batches.
     pub const BATCHED: [&str; 17] = [
@@ -1148,6 +1191,12 @@ pub struct LinearConfig {
     /// `<type>: {"native": "related"}` — the one word a Linear source mirrors a link as. A type
     /// not named here is kept in the store's metadata alone.
     link_types: std::collections::BTreeMap<String, onetaskgraph_plugin_api::LinkTypeConfig>,
+    /// Whether this source's tasks carry their assignee: `false`, the default, reads every task
+    /// without an `assignees` member, refuses every write naming one and sends Linear exactly
+    /// the documents it sent before assignees existed; `true` reads each issue's
+    /// `assignee{displayName}` — a Linear user's display name, unique within its workspace —
+    /// and writes one person, or none, as the issue's `assigneeId`.
+    assignees: bool,
 }
 
 /// The id of one Linear project, which a scoped source holds alone.
@@ -1243,6 +1292,7 @@ impl Default for LinearConfig {
             status_mapping: StatusMapping::default(),
             project: None,
             link_types: std::collections::BTreeMap::new(),
+            assignees: false,
         }
     }
 }
@@ -1908,6 +1958,14 @@ struct LinearSource {
     origins_ahead: std::sync::Mutex<origins::OriginsAhead>,
     /// The link types this source mirrors as Linear's `related` relation.
     link_types: onetaskgraph_plugin_api::LinkTypes,
+    /// Whether this source's configuration opted in to assignees; see [`assignees`].
+    assignees: bool,
+    /// The display names this instance asked Linear for and Linear holds no user under, until
+    /// [`TaskSource::end_command`]: each is refused again without another request.
+    unknown_people: std::sync::Mutex<std::collections::BTreeSet<String>>,
+    /// Whether a failed or mismatched assignee write of this call asked for every resolved person
+    /// to be let go of when the call ends.
+    forget_at_end: std::sync::Mutex<bool>,
 }
 
 /// One item's dependency read in one direction, as [`LinearSource::edges_versions`] keys it.
@@ -1975,6 +2033,9 @@ impl LinearSource {
             answered: std::sync::Mutex::new(std::collections::HashMap::new()),
             origins_ahead: std::sync::Mutex::new(origins::OriginsAhead::default()),
             link_types,
+            assignees: config.assignees,
+            unknown_people: std::sync::Mutex::new(std::collections::BTreeSet::new()),
+            forget_at_end: std::sync::Mutex::new(false),
         })
     }
 }
@@ -2542,6 +2603,7 @@ impl LinearSource {
         // Every body crosses here, so this is the one place the engine's markup is applied: each
         // one sent is written in it, and each one answered read back out of it.
         let markup = self.body_markup.get();
+        let assigning = assignees::carried(&variables);
         let variables = match markup {
             Some(markup) => marked(variables, &|body| markup.written(body)),
             None => variables,
@@ -2558,6 +2620,11 @@ impl LinearSource {
             (Ok(Ok(data)), Some(markup)) => Ok(Ok(marked(data, &|body| markup.read(body)))),
             (answered, _) => answered,
         };
+        // A write naming an assignee's id that failed may have failed for that id, so the next
+        // one resolves the person afresh rather than sending it again.
+        if assigning && !matches!(answered, Ok(Ok(_))) {
+            self.forget_people();
+        }
         match answered {
             Err(SourceError::RateLimited {
                 retry_after_seconds,
@@ -2613,6 +2680,13 @@ impl LinearSource {
         {
             <dyn onetaskgraph_plugin_api::WriteGuard>::check().await?;
         }
+        // A source that opted in to assignees reads each issue's with it; one that has not sends
+        // every document exactly as it was.
+        let query = if self.assignees {
+            graphql::with_assignees(query)
+        } else {
+            std::borrow::Cow::Borrowed(query)
+        };
         let response = client
             .post(&self.endpoint.0)
             .header("Authorization", self.key.expose_secret())
@@ -3406,6 +3480,14 @@ impl LinearSource {
         {
             input.insert("priority".into(), json!(linear_priority(priority)));
         }
+        // Nothing for people the issue already holds; otherwise the one person, or `null`.
+        if let Some(people) = update
+            .assignees
+            .as_deref()
+            .filter(|people| *people != before.assignees.as_deref().unwrap_or_default())
+        {
+            input.insert("assigneeId".into(), self.assignee_id(people).await?);
+        }
         Ok(Composed {
             before,
             input,
@@ -3452,6 +3534,7 @@ impl LinearSource {
     /// which Linear could answer differently for another issue.
     fn update_checked(&self, id: &NativeId, update: &TaskUpdate) -> Result<(), SourceError> {
         update.consistent()?;
+        self.assignees_writable(update.assignees.as_deref())?;
         if let Some(delivers) = &update.delivers {
             TaskRef::listed(
                 TaskRef::DELIVERS_KEY,
@@ -3494,7 +3577,10 @@ impl LinearSource {
                 .await
                 .and_then(|data| self.updated_issue(&data, &before.id));
             match answered {
-                Ok(Some(task)) => task,
+                Ok(Some(task)) => {
+                    self.assigned_as(id, update.assignees.as_deref(), &task)?;
+                    task
+                }
                 Ok(None) => {
                     return Err(SourceError::Malformed {
                         message: format!("task {id} was updated and then answered as no issue"),
@@ -3579,7 +3665,13 @@ impl LinearSource {
         }
         self.remember_context(asked, issue);
         let task = optional(&json!({ "issue": issue }), "issue", |v| {
-            map_task(v, &self.name, &self.statuses, self.spelling())
+            map_task(
+                v,
+                &self.name,
+                &self.statuses,
+                self.spelling(),
+                self.assignees,
+            )
         })?;
         if let Some(task) = &task {
             self.answered().insert(
@@ -3962,7 +4054,13 @@ impl LinearSource {
                         )
                     } else {
                         let page = connection(&data, "issues", |v| {
-                            map_task(v, &self.name, &self.statuses, self.spelling())
+                            map_task(
+                                v,
+                                &self.name,
+                                &self.statuses,
+                                self.spelling(),
+                                self.assignees,
+                            )
                         })?;
                         (
                             page.items
@@ -4046,6 +4144,9 @@ impl LinearSource {
                 .map_err(|message| SourceError::Refused { message })?;
         }
         let project = self.filed_in(write.item.project.as_ref(), "task")?;
+        // An assignee on a source that has not opted in, or more than one, before any request.
+        let assignees = write.item.assignees.as_deref();
+        self.assignees_writable(assignees)?;
         // The status is resolved before anything else is sent: a category the mapping gives a
         // task no name for is refused before any request, and a name the team lacks before any
         // mutation. The mapping decides alone; the status's own name plays no part.
@@ -4089,7 +4190,13 @@ impl LinearSource {
         // `priority` on a create and on an update alike, `0` included: an update that left
         // it out would keep whatever the destination held, so a copy moving an issue back to
         // no priority would report success for a priority the destination still carries.
-        let input = json!({"title":write.item.title,"description":description,"stateId":state,"priority":linear_priority(write.item.priority),"labelIds":labels,"projectId":project});
+        let mut input = json!({"title":write.item.title,"description":description,"stateId":state,"priority":linear_priority(write.item.priority),"labelIds":labels,"projectId":project});
+        // The people the write names replace the issue's assignee, in this same input; a write
+        // naming none leaves it as it is. A create of an unassigned task leaves the member out
+        // when it is sent — see `create_input` — so Linear applies its own default.
+        if let Some(people) = assignees {
+            input["assigneeId"] = self.assignee_id(people).await?;
+        }
         // The write a copy makes of an issue it has just created together with others, saying
         // exactly what that create wrote and naming no edge, writes nothing: what Linear answered
         // the create stands as this write's answer.
@@ -4118,7 +4225,7 @@ impl LinearSource {
             None => (
                 graphql::ISSUE_CREATE,
                 {
-                    let mut input = input;
+                    let mut input = assignees::create_input(input);
                     input["teamId"] = Value::String(team.0);
                     json!({"input":input})
                 },
@@ -4168,6 +4275,13 @@ impl LinearSource {
             sent.as_ref(),
             "issue",
         )?;
+        if self.assignees {
+            self.answered_as(
+                &id,
+                assignees::asked(assignees, write.target.is_none()),
+                &assignees::read(issue)?,
+            )?;
+        }
         self.hold_stored(MetadataRecord::Task, &id, issue)?;
         let held = held_relations(write.target.as_ref(), issue)?;
         self.write_relations(&id, &edges, WriteKind::Task, held)
@@ -4279,6 +4393,11 @@ impl TaskSource for LinearSource {
             task_dependencies: DependencySupport::BothDirections,
             project_dependencies: DependencySupport::BothDirections,
             max_page_size: MAX_PAGE_SIZE,
+            assignees: if self.assignees {
+                Support::Native
+            } else {
+                Support::Unsupported
+            },
         }
     }
     fn writes(&self) -> WriteSupport {
@@ -4491,7 +4610,13 @@ impl TaskSource for LinearSource {
         }
         let d=self.send(self.read_document(ISSUES),json!({"first":page.limit.min(MAX_PAGE_SIZE),"after":page.cursor.as_ref().map(|c|&c.0),"filter":self.issue_filter(query)?})).await?;
         let listed = connection(&d, "issues", |v| {
-            map_task(v, &self.name, &self.statuses, self.spelling())
+            map_task(
+                v,
+                &self.name,
+                &self.statuses,
+                self.spelling(),
+                self.assignees,
+            )
         })?;
         let listed = Page {
             items: listed
@@ -5219,7 +5344,13 @@ impl TaskSource for LinearSource {
         // read refused as any read's would be — or, from an answer selecting only the priority,
         // the issue as read before with the priority it answered, at no token.
         let answered = if issue.get("title").is_some() {
-            let written = map_task(issue, &self.name, &self.statuses, self.spelling())?;
+            let written = map_task(
+                issue,
+                &self.name,
+                &self.statuses,
+                self.spelling(),
+                self.assignees,
+            )?;
             Answered {
                 version: written.version.clone(),
                 task: Some(written),
@@ -5359,7 +5490,14 @@ impl TaskSource for LinearSource {
             .await?;
         // The issue as the write's own answer selected it, which is what a read of it answers:
         // nothing is read after the write.
-        map_task(&issue, &self.name, &self.statuses, self.spelling()).map(Some)
+        map_task(
+            &issue,
+            &self.name,
+            &self.statuses,
+            self.spelling(),
+            self.assignees,
+        )
+        .map(Some)
     }
     /// One metadata key of a project, on the terms of `set_task_metadata`: one read, and one
     /// `projectUpdate` carrying the content alone.
@@ -5649,8 +5787,14 @@ impl TaskSource for LinearSource {
     /// so a write of what differs sends its `issueUpdate` and nothing before it. A context that
     /// does not read as this issue — another issue's included — is not taken.
     fn prime_write(&self, id: &NativeId, context: &Value, _board: Option<&Value>) -> bool {
-        let reads = map_task(context, &self.name, &self.statuses, self.spelling())
-            .is_ok_and(|task| task.id == *id)
+        let reads = map_task(
+            context,
+            &self.name,
+            &self.statuses,
+            self.spelling(),
+            self.assignees,
+        )
+        .is_ok_and(|task| task.id == *id)
             && context.get("description").is_some();
         if reads {
             self.written
@@ -5738,6 +5882,9 @@ impl TaskSource for LinearSource {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clear();
         self.answered().clear();
+        // A person may join the workspace between commands under a name refused before.
+        self.forget_people_at_end_of_call();
+        self.forget_unknown_people();
         Ok(())
     }
 }
@@ -6006,7 +6153,14 @@ impl LinearSource {
     fn note_answered(&self, record: MetadataRecord, id: &NativeId, payload: Option<&Value>) {
         let answered = payload.map(|payload| match record {
             MetadataRecord::Task => {
-                let task = map_task(payload, &self.name, &self.statuses, self.spelling()).ok();
+                let task = map_task(
+                    payload,
+                    &self.name,
+                    &self.statuses,
+                    self.spelling(),
+                    self.assignees,
+                )
+                .ok();
                 Answered {
                     version: task.as_ref().and_then(|task| task.version.clone()),
                     task,
@@ -6206,7 +6360,13 @@ impl LinearSource {
         if let Some(issue) = self.take_ahead(MetadataRecord::Task, id) {
             return Ok(optional(&json!({"issue": issue}), "issue", |v| {
                 Ok((
-                    map_task(v, &self.name, &self.statuses, self.spelling())?,
+                    map_task(
+                        v,
+                        &self.name,
+                        &self.statuses,
+                        self.spelling(),
+                        self.assignees,
+                    )?,
                     optional_string(v, "description")?,
                 ))
             })?
@@ -6217,7 +6377,13 @@ impl LinearSource {
             Read::ForWrite => {
                 if let Some(issue) = self.take_written(MetadataRecord::Task, id) {
                     return Ok(Some((
-                        map_task(&issue, &self.name, &self.statuses, self.spelling())?,
+                        map_task(
+                            &issue,
+                            &self.name,
+                            &self.statuses,
+                            self.spelling(),
+                            self.assignees,
+                        )?,
                         optional_string(&issue, "description")?,
                     ))
                     .filter(|(task, _)| self.in_scope(task.project.as_ref())));
@@ -6236,7 +6402,13 @@ impl LinearSource {
         }
         Ok(optional(&data, "issue", |v| {
             Ok((
-                map_task(v, &self.name, &self.statuses, self.spelling())?,
+                map_task(
+                    v,
+                    &self.name,
+                    &self.statuses,
+                    self.spelling(),
+                    self.assignees,
+                )?,
                 optional_string(v, "description")?,
             ))
         })?
@@ -6284,7 +6456,13 @@ impl LinearSource {
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(read);
         Ok(optional(&data, "issue", |v| {
             Ok((
-                map_task(v, &self.name, &self.statuses, self.spelling())?,
+                map_task(
+                    v,
+                    &self.name,
+                    &self.statuses,
+                    self.spelling(),
+                    self.assignees,
+                )?,
                 optional_string(v, "description")?,
             ))
         })?
@@ -6314,7 +6492,13 @@ impl LinearSource {
             return Ok(None);
         };
         Ok(optional(&data, "issue", |v| {
-            let mut task = map_task(v, &self.name, &self.statuses, self.spelling())?;
+            let mut task = map_task(
+                v,
+                &self.name,
+                &self.statuses,
+                self.spelling(),
+                self.assignees,
+            )?;
             // A page resumed from a cursor is not the whole of the comments, so with the cache
             // attached — whose token carries their digest — it vouches for no version.
             if self.attached() && page.cursor.is_some() {
@@ -6992,6 +7176,7 @@ fn map_task(
     source: &SourceName,
     statuses: &StatusMapping,
     spelling: change_token::Spelling,
+    assignees: bool,
 ) -> Result<Task, SourceError> {
     let (content, mut metadata) = metadata_description(optional_string(v, "description")?)?;
     let repositories = Repository::from_metadata(&metadata)
@@ -7035,6 +7220,11 @@ fn map_task(
         delivers,
         delivered_by,
         classification,
+        assignees: if assignees {
+            Some(assignees::read(v)?)
+        } else {
+            None
+        },
     })
 }
 /// A priority as Linear's `Issue.priority` and its two input members spell it.

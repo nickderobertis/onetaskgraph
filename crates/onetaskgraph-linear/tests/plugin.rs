@@ -190,6 +190,8 @@ fn pinned_schema_checks_selected_fields_arguments_and_fixture_keys() {
                 "priority",
                 "labelIds",
                 "projectId",
+                // The one person a source with `assignees: true` assigns a new issue to.
+                "assigneeId",
             ][..],
         ),
         (
@@ -203,6 +205,8 @@ fn pinned_schema_checks_selected_fields_arguments_and_fixture_keys() {
                 "projectId",
                 // A parent written, or removed with null, by `task parent set-many`.
                 "parentId",
+                // The one person a source with `assignees: true` assigns, or `null` unassigning.
+                "assigneeId",
             ][..],
         ),
         (
@@ -383,22 +387,44 @@ fn pinned_schema_checks_selected_fields_arguments_and_fixture_keys() {
         // What a copy asks before it looks for each origin's counterpart.
         (graphql::COUNTERPART_LOOKUPS, None),
         (graphql::COUNTERPART_LOOKUPS_CACHED, None),
+        // What a source with `assignees: true` resolves a person's display name with, and that
+        // document aliased once a 250 names — up to the 33 connections one request carries.
+        (graphql::USERS, None),
+        (
+            Box::leak(graphql::aliased(graphql::USERS, 2).into_boxed_str()),
+            None,
+        ),
+        (
+            Box::leak(graphql::aliased(graphql::USERS, 33).into_boxed_str()),
+            None,
+        ),
     ] {
-        let document = query::parse_query::<String>(operation).unwrap();
-        let fixture =
-            fixture.map(|fixture| serde_json::from_str::<serde_json::Value>(fixture).unwrap());
-        let query::Definition::Operation(query::OperationDefinition::Query(operation)) =
-            &document.definitions[0]
-        else {
-            panic!("expected query")
-        };
-        validate(
-            &objects,
-            "Query",
-            &operation.selection_set,
-            fixture.as_ref().map(|fixture| &fixture["data"]),
-            &operation.variable_definitions,
+        // Each as a source with `assignees: true` sends it too, its issue selections widened
+        // by the assignee — held to the schema, not to a fixture recorded without it.
+        // Leaked so it lives as long as the schema's borrows: one short string per document,
+        // in a test process.
+        let widened: &'static str = Box::leak(
+            graphql::with_assignees(operation)
+                .into_owned()
+                .into_boxed_str(),
         );
+        for (operation, fixture) in [(operation, fixture), (widened, None)] {
+            let document = query::parse_query::<String>(operation).unwrap();
+            let fixture =
+                fixture.map(|fixture| serde_json::from_str::<serde_json::Value>(fixture).unwrap());
+            let query::Definition::Operation(query::OperationDefinition::Query(operation)) =
+                &document.definitions[0]
+            else {
+                panic!("expected query")
+            };
+            validate(
+                &objects,
+                "Query",
+                &operation.selection_set,
+                fixture.as_ref().map(|fixture| &fixture["data"]),
+                &operation.variable_definitions,
+            );
+        }
     }
 }
 
@@ -581,7 +607,17 @@ fn pinned_schema_names_every_write_operation_the_plugin_sends() {
         (graphql::COMMENT_CREATE, true),
         (graphql::COMMENT_UPDATE, true),
         (graphql::COMMENT_DELETE, true),
-    ] {
+        (graphql::USERS, false),
+    ]
+    .into_iter()
+    .flat_map(|(document, mutation)| {
+        // Each as a source with `assignees: true` sends it, its issue selections widened.
+        [
+            (std::borrow::Cow::Borrowed(document), mutation),
+            (graphql::with_assignees(document), mutation),
+        ]
+    }) {
+        let document = &*document;
         let parsed = query::parse_query::<String>(document).unwrap();
         let (selection_set, variables) = match &parsed.definitions[0] {
             query::Definition::Operation(query::OperationDefinition::Query(operation)) => {
@@ -672,7 +708,7 @@ fn superset_server() -> (String, mpsc::Receiver<String>) {
         "viewer": {"id":"U"},
         "issue": {"id":"I","identifier":"ENG-1","title":"issue","description":null,"url":null,"createdAt":null,
                   "updatedAt":null,"state":{"name":"Todo","type":"unstarted"},"priority":0,
-                  "labels":{"nodes":[]},"project":null,
+                  "labels":{"nodes":[]},"project":null,"assignee":{"displayName":"ada"},
                   "relations":relations("blocks","relatedIssue","issue","IR"),
                   "inverseRelations":relations("blocks","relatedIssue","issue","IR2"),
                   "comments":{"nodes":[{"id":"C","body":"comment","url":"u","createdAt":null,
@@ -710,7 +746,10 @@ fn superset_server() -> (String, mpsc::Receiver<String>) {
                             "pageInfo":{"hasNextPage":false}},
         "workflowStateCreate": {"success":true,"workflowState":{"id":"NEW-STATE","name":"Queued","type":"unstarted"}},
         "projectStatusCreate": {"success":true,"status":{"id":"NEW-STATUS","name":"Queued","type":"planned","position":2.0}},
-        "issueCreate": {"success":true,"issue":{"id":"I","description":null}},
+        "issueCreate": {"success":true,"issue":{"id":"I","description":null,
+                        "assignee":{"displayName":"ada"}}},
+        // The one user a source with `assignees: true` resolves.
+        "users": {"nodes":[{"id":"U-ADA","displayName":"ada"}]},
         // The whole issue, for a status write and a targeted update, which answer the task
         // this payload reports; `priority` for the narrow priority write. Every other issue
         // write reads the id alone and passes over the rest.
@@ -718,6 +757,7 @@ fn superset_server() -> (String, mpsc::Receiver<String>) {
                         "description":null,"url":null,"createdAt":null,"updatedAt":null,
                         "archivedAt":null,"state":{"name":"In Progress","type":"started"},
                         "priority":2,"labels":{"nodes":[]},"project":null,
+                        "assignee":{"displayName":"ada"},
                         "relations":relations("blocks","relatedIssue","issue","IR")}},
         "projectCreate": {"success":true,"project":{"id":"P","content":null}},
         "projectUpdate": {"success":true,"project":{"id":"P","name":"project","content":null,
@@ -1057,6 +1097,38 @@ async fn every_variables_object_this_source_sends_conforms_to_the_pinned_schema(
         .set_delivered_by(&"I".into(), &[TaskRef::new("plan:T-1").unwrap()])
         .await
         .unwrap();
+    // A source with `assignees: true`: a person resolved and assigned on a create, and an
+    // update unassigning — whose answer, still naming the superset's one person, is refused,
+    // after its variables went out.
+    let assigning = onetaskgraph_linear::Plugin
+        .build(
+            &SourceName::new("work").unwrap(),
+            &serde_json::json!({"endpoint":endpoint,"team":"ENG",
+                "status_mapping":writable_mapping(),"assignees":true}),
+            &Secrets(Some("fixture-key".into())),
+        )
+        .unwrap();
+    assigning
+        .write_task(&ItemWrite {
+            target: None,
+            item: Task {
+                assignees: Some(vec!["ada".into()]),
+                ..task.clone()
+            },
+            depends_on: Vec::new(),
+        })
+        .await
+        .unwrap();
+    assigning
+        .update_task(
+            &"I".into(),
+            &TaskUpdate {
+                assignees: Some(Vec::new()),
+                ..TaskUpdate::default()
+            },
+        )
+        .await
+        .expect_err("the superset answers the update still assigned");
     // A source whose `status_mapping` names states and that is scoped to one project: its
     // status narrowing by name, by type-but-not-name and by a type none of the five, its
     // project and document reads narrowed to the scope, and a status written by name.
@@ -1309,6 +1381,8 @@ async fn every_variables_object_this_source_sends_conforms_to_the_pinned_schema(
         onetaskgraph_linear::graphql::COMMENT_UPDATE,
         onetaskgraph_linear::graphql::COMMENT_DELETE,
         onetaskgraph_linear::graphql::COUNTERPART_LOOKUPS,
+        // Sent by a source with `assignees: true` alone, which the surface above drives.
+        onetaskgraph_linear::graphql::USERS,
     ] {
         let parsed = query::parse_query::<String>(document).unwrap();
         let selection = match &parsed.definitions[0] {

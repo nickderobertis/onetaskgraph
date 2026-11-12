@@ -83,6 +83,19 @@
 # `totalCount`s, before it writes anything, and `deleteProjectV2Field` with that same input and
 # payload whenever it removes the origin field it created, and GitHub fails a document naming a
 # member its schema lacks with `GRAPHQL_VALIDATION_FAILED`, which fails the required check.
+#
+# `Query.user(login: String!): User` ("Lookup a user by login."), `User.login: String!`,
+# `Issue.assignees(after, before, first, last): UserConnection!` and the same member of
+# `DraftIssue`, `UserConnection.nodes: [User]`, `CreateIssueInput.assigneeIds: [ID!]` ("The Node
+# ID of assignees for this issue.") and `UpdateIssueInput.assigneeIds: [ID!]` ("An array of Node
+# IDs of users or bots for this issue.") were read from GitHub.com's own published schema
+# artifact <https://docs.github.com/public/fpt/schema.docs.graphql> — `github-schema.docs.graphql`
+# beside this file — on 2026-11-11, reduced to the members sent and selected. A source opted in
+# to assignees selects `assignees` beside every issue it reads and in each `createIssue` and
+# `updateIssue` answer (`graphql::with_assignees`), and looks a login up with `user(login:)`
+# before naming it in `assigneeIds`; a source that has not opted in sends none of them. GitHub's
+# REST documentation of the same write says a person who cannot be assigned is "silently
+# ignored", which is why each write's own answer is held to whom it asked for.
 schema {
   query: Query
   mutation: Mutation
@@ -97,6 +110,7 @@ type Query {
   repository(owner: String!, name: String!, followRenames: Boolean = true): Repository
   node(id: ID!): Node
   search(query: String!, type: SearchType!, first: Int, after: String): SearchResultItemConnection!
+  user(login: String!): User
 }
 enum SearchType {
   ISSUE
@@ -218,6 +232,7 @@ type DeleteIssueCommentPayload {
 }
 input CreateIssueInput {
   repositoryId: ID!
+  assigneeIds: [ID!]
   title: String!
   body: String
   labelIds: [ID!]
@@ -230,6 +245,7 @@ input AddProjectV2ItemByIdInput {
 }
 input UpdateIssueInput {
   id: ID!
+  assigneeIds: [ID!]
   title: String
   body: String
   state: IssueState
@@ -371,6 +387,7 @@ type Organization implements Node & RepositoryOwner & ProjectV2Owner {
 }
 type User implements Node & RepositoryOwner & ProjectV2Owner {
   id: ID!
+  login: String!
   projectV2(number: Int!): ProjectV2
   projectsV2(after: String, first: Int, query: String): ProjectV2Connection!
 }
@@ -465,6 +482,7 @@ type Issue implements Node {
   labels(first: Int, after: String): LabelConnection
   blockedBy(first: Int, after: String): IssueConnection!
   blocking(first: Int, after: String): IssueConnection!
+  assignees(after: String, before: String, first: Int, last: Int): UserConnection!
   comments(first: Int, after: String, orderBy: IssueCommentOrder): IssueCommentConnection!
   timelineItems(
     since: DateTime
@@ -549,6 +567,12 @@ type DraftIssue implements Node {
   createdAt: DateTime!
   updatedAt: DateTime!
   projectV2Items(first: Int, after: String): ProjectV2ItemConnection!
+  assignees(after: String, before: String, first: Int, last: Int): UserConnection!
+}
+type UserConnection {
+  nodes: [User]
+  pageInfo: PageInfo!
+  totalCount: Int!
 }
 type RedactedProjectV2Item implements Node {
   id: ID!

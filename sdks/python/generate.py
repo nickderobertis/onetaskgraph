@@ -43,6 +43,8 @@ RESPONSE_ROOTS = {
     # The items the configured sources hold for the issues a landing closed, moved to `done`.
     "task_status_complete": "IssuesCompleted",
     "task_priority_set": "TaskPrioritySet",
+    # The one person a task is assigned to after the write, or none.
+    "task_assignee_set": "TaskAssigneeSet",
     "task_content_set": "TaskContentSet",
     "task_metadata_set": "MetadataSet",
     # The attestation record written, on the item it was written to.
@@ -326,6 +328,10 @@ OPTION_TYPES = {
     "when_destination_status": "choice_list",
     "otherwise": "choices",
     "when_destination_priority": "choice_list",
+    # The people a copy writes an assignee over at its destination — `none` alone for nobody —
+    # and the one person a created task is assigned to.
+    "when_destination_assignees": "list[str] | tuple[str, ...]",
+    "assignee": "str",
     # The version of the item a write (an attestation's included) is held to: refused as
     # `version-moved` at any other.
     "if_version": "VersionToken",
@@ -423,6 +429,8 @@ OPTION_PLACEHOLDERS = {
     "when_destination_status": "CATEGORY",
     "otherwise": "WHAT",
     "when_destination_priority": "PRIORITY",
+    "when_destination_assignees": "PERSON|none",
+    "assignee": "PERSON",
     "if_version": "VERSION",
     "when_priority": "PRIORITY",
     "no_repositories": None,
@@ -976,6 +984,8 @@ def operands(command: tuple[str, ...]) -> tuple[str, ...]:
             return ("id", "category")
         case ("task", "priority", "set"):
             return ("id", "priority")
+        case ("task", "assignee", "set"):
+            return ("id", "person")
         case ("task", "content", "set"):
             return ("id",)
         case ("task", "update"):
@@ -1109,6 +1119,10 @@ TEMPLATE_FILE_COMMANDS = {("template", "variables"), ("template", "render")}
 # empties, which is every source's cache when left out.
 OPTIONAL_OPERAND_COMMANDS = TEMPLATE_FILE_COMMANDS | {("cache", "clear")}
 
+# The one operand of a command that may be left out while the ones before it are required:
+# `task assignee set` names no person to unassign the task.
+OPTIONAL_TRAILING_OPERANDS = {("task", "assignee", "set"): "person"}
+
 # The repeated options generated methods check are strings before the binary is started: see
 # `_strings` below.
 TEMPLATE_STRING_LISTS = {
@@ -1119,10 +1133,42 @@ TEMPLATE_STRING_LISTS = {
     "repository",
     "remove_metadata",
     "term_scope",
+    "when_destination_assignees",
 }
 
 
-def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
+def null_unsets(bundle: SchemaBundle) -> dict[str, list[str]]:
+    """Each model's members whose `null` the binary reads as a value, not as absent.
+
+    The schema marks one with `x-null-unsets` — an update's `assignee`, whose `null` unassigns
+    while leaving it out leaves the task's assignees as they are — so a caller who sets it to
+    `None` explicitly is written `null` rather than having the member left out.
+    """
+    found: dict[str, set[str]] = {}
+
+    def visit(name: str, schema: object) -> None:
+        if not isinstance(schema, dict):
+            return
+        properties = schema.get("properties")
+        if isinstance(properties, dict):
+            for key, member in properties.items():
+                if isinstance(member, dict) and member.get("x-null-unsets") is True:
+                    found.setdefault(name, set()).add(key)
+        definitions = schema.get("$defs")
+        if isinstance(definitions, dict):
+            for inner, definition in definitions.items():
+                visit(inner, definition)
+
+    for root, schema in bundle["roots"].items():
+        visit(root, schema)
+    return {name: sorted(keys) for name, keys in sorted(found.items())}
+
+
+def generate_client(
+    commands: list[tuple[str, ...]],
+    destination: Path,
+    unsets: dict[str, list[str]] | None = None,
+) -> None:
     """Generate one typed method per discovered public command."""
     names = {"_".join(command).replace("-", "_"): command for command in commands}
     missing = sorted(set(names) - set(RESPONSE_ROOTS))
@@ -1245,12 +1291,20 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         "    return json.dumps(written, allow_nan=False, ensure_ascii=False, separators=compact)",
         "",
         "",
+        "# Each model's members whose `null` the binary reads as a value: written `null` when the",
+        "# caller set them to `None`, rather than left out, which the binary reads as absent.",
+        "_NULL_UNSETS: dict[str, frozenset[str]] = {"
+        + ", ".join(f"{name!r}: frozenset({keys!r})" for name, keys in (unsets or {}).items())
+        + "}",
+        "",
+        "",
         "def _required_nulls(value: object, dumped: object) -> object:",
         '    """`dumped`, with every required member of `value` that is `None` written as `null`.',
         "",
         "    `exclude_none` leaves out every `None`, which the binary reads as absent; a member it",
         "    requires and reads `null` in — a parent edge's `parent`, whose `null` removes the",
-        "    parent — would then be refused as missing rather than read as what it says.",
+        "    parent — would then be refused as missing rather than read as what it says. So is a",
+        "    member `_NULL_UNSETS` names that the caller set to `None`: its `null` is a value.",
         '    """',
         "    match value, dumped:",
         "        case RootModel() as root, _:",
@@ -1260,7 +1314,9 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         "                key = field.serialization_alias or field.alias or name",
         "                member = getattr(model, name)",
         "                if member is None:",
-        "                    if field.is_required():",
+        "                    unsets = _NULL_UNSETS.get(type(model).__name__, frozenset())",
+        "                    explicit = key in unsets and name in model.model_fields_set",
+        "                    if field.is_required() or explicit:",
         "                        out[key] = None",
         "                elif key in out:",
         "                    out[key] = _required_nulls(member, out[key])",
@@ -1422,7 +1478,11 @@ def generate_client(commands: list[tuple[str, ...]], destination: Path) -> None:
         parameters = (
             [
                 f"{positional}: {positional_types.get(positional, 'str')}"
-                + (" | None = None" if optional else "")
+                + (
+                    " | None = None"
+                    if optional or OPTIONAL_TRAILING_OPERANDS.get(command) == positional
+                    else ""
+                )
                 for positional in taken
             ]
             + (
@@ -1943,7 +2003,7 @@ def generate(bundle: SchemaBundle, *, check: bool, destination: Path = GENERATED
     with tempfile.TemporaryDirectory() as temporary:
         target = Path(temporary) if check else destination
         generate_models(bundle, target)
-        generate_client(commands, target)
+        generate_client(commands, target, null_unsets(bundle))
         format_generated(target)
         if disagreements := nullability_disagreements(bundle, target):
             raise SystemExit(

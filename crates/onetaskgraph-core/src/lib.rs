@@ -67,6 +67,7 @@ pub use engine::{
     CommentBatchItem, CommentsAdded, FindAnswer, FindIn, FindQuery, FindRequest, FoundTasks,
     TasksUpdated, UpdateBatch, UpdateBatchItem, UpdateResult,
 };
+pub use engine::{AssigneeCondition, TaskAssigneeSet};
 pub use engine::{AttestRequest, PlanCreated, PlanMember, PlannedMember, PlannedProject};
 pub use engine::{
     Body, BudgetSpent, COMMENTS_SINCE_SCHEMA_VERSION, CommentActivity, CommentCounts, CommentList,

@@ -107,6 +107,7 @@ PARTIAL_WRITE_COMMANDS: frozenset[tuple[str, ...]] = frozenset(
         ("task", "status", "reconcile"),
         ("task", "status", "complete"),
         ("task", "priority", "set"),
+        ("task", "assignee", "set"),
         ("task", "content", "set"),
         ("task", "metadata", "set"),
         ("project", "metadata", "set"),

@@ -353,6 +353,7 @@ async fn drive_every_declared_capability(
         delivers: Vec::new(),
         delivered_by: Vec::new(),
         classification: Default::default(),
+        assignees: None,
     };
 
     let alpha_id = source
@@ -1035,6 +1036,7 @@ async fn drive_follow_ups(
         delivers: Vec::new(),
         delivered_by: Vec::new(),
         classification: Default::default(),
+        assignees: None,
     };
     // `caller.live` is a key Linear autolinks anywhere but a code span, and `caller.site`
     // holds a URL-like value, an emphasis-shaped one and an array: each is something Linear
@@ -1803,6 +1805,7 @@ async fn real_linear_applies_every_declared_capability_and_leaves_no_residue() {
             task_dependencies: DependencySupport::BothDirections,
             project_dependencies: DependencySupport::BothDirections,
             max_page_size: onetaskgraph_linear::MAX_PAGE_SIZE,
+            assignees: Support::Unsupported,
         }
     );
 

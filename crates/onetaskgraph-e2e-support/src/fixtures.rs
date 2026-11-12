@@ -28,7 +28,9 @@ use std::{
 use crate::common::{Sandbox, SourceBoundary};
 use crate::loopback;
 
+mod github_assignees;
 mod github_relations;
+pub use github_assignees::{GITHUB_PEOPLE, github_person_id};
 
 /// One row: a source kind, in one configuration, over the shared dataset.
 pub struct Row {
@@ -235,6 +237,7 @@ impl Declared {
             task_dependencies: self.task_dependencies,
             project_dependencies: self.project_dependencies,
             max_page_size: self.max_page_size,
+            assignees: Support::Unsupported,
         }
     }
 
@@ -1345,6 +1348,8 @@ struct GitHubBoard {
     /// The board's issues' relations: its `relates-to` pairs, and how its next relation write
     /// is cut short (`github_relations`).
     relations: github_relations::Relations,
+    /// The board's issues' assignees, and how it answers writes of them (`github_assignees`).
+    assignees: github_assignees::Assignees,
 }
 
 /// Whether one request — its document and its variables — is one a [`BoardHook`] counts.
@@ -4040,6 +4045,7 @@ fn github_projects_board_at(
         refusing_search_pages: Vec::new(),
         rejecting: Vec::new(),
         relations: github_relations::Relations::default(),
+        assignees: github_assignees::Assignees::default(),
     }));
     let mut owed_failures: Vec<&'static str> = fail_first.to_vec();
     let watched = Arc::clone(&board);
@@ -4109,6 +4115,11 @@ fn github_projects_board_at(
                 body.len()
             ));
         }
+        // A document a source opted in to assignees spelled with them is answered as the
+        // document it was written as, and then with each issue's assignees (`github_assignees`).
+        let unspelled = onetaskgraph_github_projects::graphql::without_assignees(query);
+        let spelled = unspelled.is_some();
+        let query = unspelled.as_deref().unwrap_or(query);
         {
             let mut served = board.lock().unwrap();
             served.membership_first = ["memberships", "boardItems"]
@@ -4207,7 +4218,10 @@ fn github_projects_board_at(
                        "errors":[{"message":format!(
                            "Something went wrong while executing your query: {operation}")}]})
                 .to_string()
+            } else if let Some(refused) = github_assignees::refused(&board, query, &variables) {
+                refused.to_string()
             } else {
+                let variables = github_assignees::applied(&board, query, &variables);
                 // A document selecting the whole issue it writes is answered as its plain twin
                 // is, and then with that issue as a read of it by its own id shows it.
                 let plain = github_plain_of(query);
@@ -4216,6 +4230,7 @@ fn github_projects_board_at(
                     Some(_) => board.lock().unwrap().whole(query, data, &variables),
                     None => data,
                 };
+                let data = github_assignees::answered(&board, query, &variables, data, spelled);
                 {
                     let mut held = board.lock().unwrap();
                     if let Some(at) = held
@@ -4705,6 +4720,9 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         return answer;
     }
     board.lock().unwrap().counted_types = TimelineEvent::counted_by(query);
+    if let Some(answer) = github_assignees::answer(board, query, variables) {
+        return answer;
+    }
     if let Some(answer) = github_relations::answer(board, query, variables) {
         return answer;
     }
@@ -6541,6 +6559,7 @@ pub fn linear_workspace_failing(
         answers: Arc::new(Mutex::new(Vec::new())),
         hooks: Arc::new(Mutex::new(Vec::new())),
         bends: Arc::new(Mutex::new(Vec::new())),
+        late_bends: Arc::new(Mutex::new(Vec::new())),
         limits: Arc::new(Mutex::new(std::collections::VecDeque::new())),
         lost: Arc::new(Mutex::new(Vec::new())),
     };
@@ -6700,6 +6719,9 @@ pub struct LinearWorkspace {
     answers: Arc<Mutex<Vec<Value>>>,
     hooks: Arc<Mutex<Vec<LinearHook>>>,
     bends: Arc<Mutex<Vec<LinearBend>>>,
+    /// Bends applied to an answer once every other layer — assignees included — has made it,
+    /// matched against the document as the plugin sent it.
+    late_bends: Arc<Mutex<Vec<LinearBend>>>,
     /// How each of the next requests is answered, in order: `Some(wait)` refused `429` naming
     /// a reset `wait` seconds ahead, `None` answered as usual.
     limits: Arc<Mutex<std::collections::VecDeque<Option<u64>>>>,
@@ -6734,6 +6756,23 @@ impl LinearWorkspace {
         bend: impl FnMut(&Value, &mut Value) + Send + 'static,
     ) {
         self.bends.lock().unwrap().push(LinearBend {
+            matches: Box::new(matches),
+            times,
+            bend: Box::new(bend),
+        });
+    }
+
+    /// [`Self::bend_answers`], applied once every other layer of this workspace — the people
+    /// an opted-in source reads included — has made the answer, and matched against the
+    /// document exactly as the plugin sent it.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] As `bend_answers`: a control of the loopback Linear's answers, which only its request loop here makes.
+    pub fn bend_answers_as_sent(
+        &self,
+        matches: impl Fn(&str, &Value) -> bool + Send + 'static,
+        times: usize,
+        bend: impl FnMut(&Value, &mut Value) + Send + 'static,
+    ) {
+        self.late_bends.lock().unwrap().push(LinearBend {
             matches: Box::new(matches),
             times,
             bend: Box::new(bend),
@@ -7432,6 +7471,7 @@ fn linear_server_over(
         answers: Arc::new(Mutex::new(Vec::new())),
         hooks: Arc::new(Mutex::new(Vec::new())),
         bends: Arc::new(Mutex::new(Vec::new())),
+        late_bends: Arc::new(Mutex::new(Vec::new())),
         limits: Arc::new(Mutex::new(std::collections::VecDeque::new())),
         lost: Arc::new(Mutex::new(Vec::new())),
     };
@@ -7622,10 +7662,16 @@ fn linear_serve(
                 continue;
             }
             let request = linear_identifiers_resolved(request, &state.lock().unwrap());
+            let sent_query = request["query"].as_str().unwrap_or_default().to_owned();
+            // An assignee taken out, for `linear_assignees::after` to answer with.
+            let (request, assigning) =
+                crate::linear_assignees::before(request, &mut state.lock().unwrap());
             let aliased = onetaskgraph_linear::graphql::decomposed(
                 request["query"].as_str().unwrap_or_default(),
             );
-            let (status, response) = if let Some(singles) = aliased {
+            let (status, response) = if let Some(answered) = assigning.answered() {
+                answered
+            } else if let Some(singles) = aliased {
                 let mut answered = linear_aliased(
                     &singles,
                     &request,
@@ -7705,6 +7751,19 @@ fn linear_serve(
                     Err(message) => ("400 Bad Request", json!({"errors":[{"message":message}]})),
                 }
             };
+            let mut response =
+                crate::linear_assignees::after(assigning, response, &mut state.lock().unwrap());
+            if let Some(data) = response.get_mut("data").filter(|data| !data.is_null()) {
+                let variables = request.get("variables").cloned().unwrap_or(Value::Null);
+                let mut bends = workspace.late_bends.lock().unwrap();
+                if let Some(bend) = bends
+                    .iter_mut()
+                    .find(|bend| bend.times > 0 && (bend.matches)(&sent_query, &variables))
+                {
+                    bend.times -= 1;
+                    (bend.bend)(&variables, data);
+                }
+            }
             answers.lock().unwrap().push(response.clone());
             // Answered, and not yet sent: a change made here is one the next request sees and
             // this one did not.

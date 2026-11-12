@@ -154,6 +154,7 @@ fn task(arrangement: Arrangement, value: &Value) -> Task {
         },
         delivered_by: Vec::new(),
         classification: Default::default(),
+        assignees: None,
     }
 }
 

@@ -311,7 +311,8 @@ fn pinned_schema_checks_selected_fields_arguments_types_fragments_and_fixture_ke
         }
     }
 
-    for (operation, fixture_pointer, fixture) in [
+    let listed = [
+        (graphql::USER_IDS, None, None),
         (
             graphql::BOARD,
             Some("/data/owner"),
@@ -395,7 +396,17 @@ fn pinned_schema_checks_selected_fields_arguments_types_fragments_and_fixture_ke
         (graphql::ADD_COMMENT, None, None),
         (graphql::UPDATE_COMMENT, None, None),
         (graphql::DELETE_COMMENT, None, None),
-    ] {
+    ];
+    // Each as a source opted in to assignees sends it, too: the same pin holds what it adds.
+    let with_assignees: Vec<String> = listed
+        .iter()
+        .filter_map(|(operation, _, _)| graphql::with_assignees(operation))
+        .collect();
+    for (operation, fixture_pointer, fixture) in listed.into_iter().chain(
+        with_assignees
+            .iter()
+            .map(|operation| (operation.as_str(), None, None)),
+    ) {
         let document = query::parse_query::<String>(operation).unwrap();
         let fragments = document
             .definitions
@@ -1061,6 +1072,78 @@ fn every_production_document_validates_against_githubs_complete_published_schema
         refused.is_empty(),
         "GitHub would refuse:\n{}",
         refused.join("\n")
+    );
+}
+
+/// Every production document a source opted in to assignees rewrites holds to GitHub's complete
+/// published schema as it is sent, and is read back by the inverse the loopback board answers it
+/// by as exactly the document it was written as; the rewrite reaches every document that reads an
+/// issue or answers a `createIssue` or `updateIssue`, and a document reading none is not touched.
+#[test]
+fn every_document_an_opted_in_source_sends_validates_and_reads_back_as_written() {
+    use onetaskgraph_github_projects::graphql;
+    let mut rewritten = 0;
+    let mut refused = Vec::new();
+    for (document, doing) in graphql::DOCUMENTS {
+        let reads_issues = document.contains("commentCount:comments{totalCount}")
+            || document.contains("title body createdAt updatedAt")
+            || document.contains("createIssue(")
+            || document.contains("updateIssue(");
+        let Some(spelled) = graphql::with_assignees(document) else {
+            assert!(
+                !reads_issues,
+                "{doing}: reads an issue and is not spelled with its assignees"
+            );
+            continue;
+        };
+        rewritten += 1;
+        assert!(spelled.contains("assignees(first:$assigneeFirst){nodes{id login}}"));
+        assert_eq!(
+            graphql::without_assignees(&spelled).as_deref(),
+            Some(document),
+            "{doing}: the inverse does not give back the document"
+        );
+        if let Err(errors) = github_schema::validate_document(&spelled) {
+            refused.push(format!("{doing}: {errors:?}"));
+        }
+    }
+    assert!(
+        rewritten > 20,
+        "only {rewritten} documents were spelled with assignees"
+    );
+    assert!(
+        refused.is_empty(),
+        "GitHub would refuse:\n{}",
+        refused.join("\n")
+    );
+    assert_eq!(graphql::with_assignees(graphql::USER_IDS), None);
+    assert_eq!(graphql::without_assignees(graphql::USER_IDS), None);
+}
+
+/// The lookup of the people an assignee write names, sized to a call: one person is the
+/// inventoried document itself, and any number is a document GitHub's complete published schema
+/// accepts, each `$login<n>` declared and answered at `u<n>`, recognised as that document.
+#[test]
+fn a_lookup_sized_to_any_number_of_people_is_the_inventoried_document_github_accepts() {
+    use onetaskgraph_github_projects::graphql;
+    assert_eq!(graphql::user_ids(1), graphql::USER_IDS);
+    for people in [1, 2, 22, 300] {
+        let document = graphql::user_ids(people);
+        github_schema::validate_document(&document)
+            .unwrap_or_else(|errors| panic!("{people} people: {errors:?}"));
+        assert_eq!(document.matches(":user(login:$login").count(), people);
+        assert!(document.contains(&format!("u{}:user(login:$login{})", people - 1, people - 1)));
+        assert_eq!(graphql::inventoried(&document), graphql::USER_IDS);
+        let variables: serde_json::Value = (0..people)
+            .map(|slot| (format!("login{slot}"), serde_json::json!("octocat")))
+            .collect::<serde_json::Map<_, _>>()
+            .into();
+        assert_eq!(graphql::sized(graphql::USER_IDS, &variables), document);
+    }
+    assert_eq!(graphql::inventoried(graphql::ISSUE), graphql::ISSUE);
+    assert_eq!(
+        graphql::sized(graphql::ISSUE, &serde_json::json!({"login0": "x"})),
+        graphql::ISSUE
     );
 }
 
@@ -2452,4 +2535,25 @@ fn the_schema_check_replaces_a_graphql_copy_that_is_not_the_pinned_tarballs() {
             "{marker}: the stale copy's code is gone"
         );
     }
+}
+
+/// The README's row for how many people one GitHub lookup names is the plugin's own limit.
+#[test]
+fn the_readme_states_the_lookup_limit_this_plugin_splits_at() {
+    let readme = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../README.md"));
+    let limit = onetaskgraph_github_projects::PEOPLE_PER_LOOKUP;
+    let spelled = limit
+        .to_string()
+        .as_bytes()
+        .rchunks(3)
+        .rev()
+        .map(|digits| std::str::from_utf8(digits).expect("digits"))
+        .collect::<Vec<_>>()
+        .join(",");
+    assert_eq!(
+        u64::try_from(limit).expect("a count"),
+        onetaskgraph_github_projects::NODE_COUNT_LIMIT
+    );
+    let row = format!("| `github-projects` | {spelled} logins | GitHub's limit of {spelled} nodes");
+    assert!(readme.contains(&row), "the README states {row:?}");
 }

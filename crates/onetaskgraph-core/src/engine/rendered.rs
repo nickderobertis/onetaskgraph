@@ -189,6 +189,11 @@ pub struct TaskCreate {
     /// Who may read it, as declared. It is tightened by its repositories and its project
     /// before it is placed, and a private one filed under a project held public is refused.
     pub classification: Classification,
+    /// The one person it is assigned to, as its source names a person; `None` names nobody,
+    /// leaving any default its destination applies — a Linear team's template or triage rule —
+    /// in place. Refused, before anything is read, for a source that has not opted in to
+    /// assignees.
+    pub assignee: Option<String>,
 }
 
 /// One project document to create, or replace, in one source.
@@ -623,6 +628,9 @@ impl Engine {
         // never the project it is filed under, though a private task under a public project is
         // refused.
         let named = self.creatable(&request.source, MetadataRecord::Task)?;
+        if request.assignee.is_some() {
+            super::assignees::holds_assignees(named, &record)?;
+        }
         let classification = self
             .classify(request.classification, &request.repositories)
             .await;
@@ -644,6 +652,9 @@ impl Engine {
                 .place_classified(&request.source, classification, &request.repositories);
         let near = &placement.destination;
         let source = self.creatable(near, MetadataRecord::Task)?;
+        if request.assignee.is_some() {
+            super::assignees::holds_assignees(source, &record)?;
+        }
         let id = offered
             .cloned()
             .unwrap_or_else(|| NativeId::from(slug(&request.title, "task").as_str()));
@@ -708,6 +719,7 @@ impl Engine {
                     .collect(),
                 delivered_by: Vec::new(),
                 classification,
+                assignees: request.assignee.clone().map(|person| vec![person]),
             },
             depends_on,
         };

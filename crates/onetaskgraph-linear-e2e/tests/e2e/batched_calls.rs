@@ -915,6 +915,7 @@ fn two_instances_of_one_tracker_share_label_ids_until_a_refused_write_drops_them
         metadata: std::collections::BTreeMap::new(),
         assets: Vec::new(),
         classification: Default::default(),
+        assignee: None,
     };
     let lookups = |mark: usize| -> usize {
         workspace
@@ -1233,6 +1234,7 @@ fn two_sources_of_one_endpoint_with_different_keys_share_no_vocabulary_or_label_
         metadata: std::collections::BTreeMap::new(),
         assets: Vec::new(),
         classification: Default::default(),
+        assignee: None,
     };
     for source in ["north", "south"] {
         let mark = workspace.served_count();

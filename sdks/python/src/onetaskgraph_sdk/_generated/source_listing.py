@@ -130,6 +130,12 @@ class Capabilities(BaseModel):
             description="Whether the source's tasks hold a [`Priority`](crate::Priority) at all.\n\nRead exactly as [`documents`](Self::documents) and [`comments`](Self::comments) are:\nit says what the source *holds*, not which predicate it applies, so the second\ncapability rule does not reach it. A source declaring `Unsupported` reports every\ntask's priority as `none`, and the engine never hands it one that is not: a copy\ncarrying another priority to it, and a `task priority set` naming it, are both refused\nbefore the source is asked, naming the source and the field.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, so a plugin that\npredates priorities says nothing here and is never handed a priority it would drop."
         ),
     ] = Support.SupportUnsupported
+    assignees: Annotated[
+        Support,
+        Field(
+            description="Whether the source's tasks carry [`Task::assignees`](crate::Task::assignees): set by\nthe source's own `config.assignees: true`, and `unsupported` otherwise.\n\nRead exactly as [`priority`](Self::priority) is: it says what the source *holds*, not\nwhich predicate it applies. A source declaring `Unsupported` reports no assignees on\nany task and is never handed any: a write naming an assignee is refused before the\nsource is asked, naming the source and the setting, and a copy into it carries none.\n\nDefaulted to [`Support::Unsupported`] when a wire value omits it, and left out of the\nwire while unsupported, so a plugin that predates assignees — and every source that has\nnot opted in — reads and is read exactly as it was."
+        ),
+    ] = Support.SupportUnsupported
     filter_by_priority: Annotated[
         Support,
         Field(

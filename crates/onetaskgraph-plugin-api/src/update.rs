@@ -67,6 +67,13 @@ pub struct TaskUpdate {
     /// reports it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repositories: Option<Vec<Repository>>,
+    /// Replaces every person the task is assigned to with exactly these — empty unassigns.
+    /// The engine names at most one, and only to a source declaring
+    /// [`Capabilities::assignees`](crate::Capabilities::assignees). A source refuses a person
+    /// it cannot assign, naming them, rather than writing the rest without them.
+    // llmlint: ignore[invalid_states_unrepresentable] The same list `Task::assignees` reads, so `applied_to` and `changed` compare one shape and a source checks its write's answer against what it asked for; the one-person rule is the engine's, refused before any source is asked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assignees: Option<Vec<String>>,
 }
 
 impl TaskUpdate {
@@ -82,6 +89,7 @@ impl TaskUpdate {
             && self.delivers.is_none()
             && self.depends_on.is_none()
             && self.repositories.is_none()
+            && self.assignees.is_none()
     }
 
     /// Whether this update names `field`, which is the only way a source may report it written.
@@ -98,6 +106,7 @@ impl TaskUpdate {
             UpdatedField::Delivers => self.delivers.is_some(),
             UpdatedField::DependsOn => self.depends_on.is_some(),
             UpdatedField::Repositories => self.repositories.is_some(),
+            UpdatedField::Assignees => self.assignees.is_some(),
         }
     }
 
@@ -170,6 +179,9 @@ impl TaskUpdate {
         if let Some(repositories) = &self.repositories {
             updated.repositories.clone_from(repositories);
         }
+        if let Some(assignees) = &self.assignees {
+            updated.assignees = Some(assignees.clone());
+        }
         updated
     }
 
@@ -209,6 +221,14 @@ impl TaskUpdate {
         }
         if self.repositories.is_some() && before.repositories != after.repositories {
             written.insert(UpdatedField::Repositories);
+        }
+        if self.assignees.is_some()
+            && !crate::work::same_assignees(
+                before.assignees.as_deref().unwrap_or_default(),
+                after.assignees.as_deref().unwrap_or_default(),
+            )
+        {
+            written.insert(UpdatedField::Assignees);
         }
         written
     }
@@ -317,6 +337,8 @@ pub enum UpdatedField {
     DependsOn,
     /// [`TaskUpdate::repositories`].
     Repositories,
+    /// [`TaskUpdate::assignees`].
+    Assignees,
 }
 
 /// What a source answers a [`TaskUpdate`] of a task it holds with.

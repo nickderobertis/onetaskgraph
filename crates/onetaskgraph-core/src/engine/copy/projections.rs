@@ -695,6 +695,7 @@ impl Projected {
             delivered_by: Vec::new(),
             version: None,
             classification: Classification::Public,
+            assignees: None,
         }
     }
 

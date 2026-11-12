@@ -71,6 +71,24 @@ pub struct Capabilities {
     // llmlint: ignore[names_match_behavior, invalid_states_unrepresentable] the reason recorded at `documents` above, at a new field: the contract says whether a source holds a kind of thing in the shape `projects`, `documents` and `comments` already use, and a second enum here would say the same thing four ways for four sibling fields. Whether a priority can be *written* is `TaskSource::writes`, the one write declaration every write of this contract already reads.
     #[serde(default = "no_priority")]
     pub priority: Support,
+    /// Whether the source's tasks carry [`Task::assignees`](crate::Task::assignees): set by
+    /// the source's own `config.assignees: true`, and `unsupported` otherwise.
+    ///
+    /// Read exactly as [`priority`](Self::priority) is: it says what the source *holds*, not
+    /// which predicate it applies. A source declaring `Unsupported` reports no assignees on
+    /// any task and is never handed any: a write naming an assignee is refused before the
+    /// source is asked, naming the source and the setting, and a copy into it carries none.
+    ///
+    /// Defaulted to [`Support::Unsupported`] when a wire value omits it, and left out of the
+    /// wire while unsupported, so a plugin that predates assignees — and every source that has
+    /// not opted in — reads and is read exactly as it was.
+    // llmlint: ignore[names_match_behavior, invalid_states_unrepresentable] the reason recorded at `documents` above, at a new field: the contract says whether a source holds a kind of thing in the shape `projects`, `documents`, `comments`, `assets` and `priority` already use, and a second enum here would say the same thing a seventh way.
+    #[serde(
+        default = "no_assignees",
+        skip_serializing_if = "Support::is_unsupported"
+    )]
+    #[schemars(!skip_serializing_if)]
+    pub assignees: Support,
     /// Whether the source keeps only the tasks whose priority a query lists, itself.
     ///
     /// A predicate, and so one the second capability rule reaches: a source declaring
@@ -195,6 +213,13 @@ fn no_priority() -> Support {
     Support::Unsupported
 }
 
+/// What [`Capabilities::assignees`] means when a wire value does not carry it: a plugin
+/// written before there were assignees, or a source that has not opted in, on the terms
+/// [`no_documents`] gives.
+fn no_assignees() -> Support {
+    Support::Unsupported
+}
+
 /// What [`Capabilities::filter_by_priority`] means when a wire value does not carry it: a
 /// plugin that has never heard of the predicate, and so ignores it — which rule 2 already
 /// makes the one safe reading.
@@ -252,6 +277,12 @@ impl Support {
     #[must_use]
     pub fn is_native(self) -> bool {
         matches!(self, Self::Native)
+    }
+
+    /// Whether the source ignores the predicate, or does not hold the thing at all.
+    #[must_use]
+    pub fn is_unsupported(&self) -> bool {
+        matches!(self, Self::Unsupported)
     }
 }
 

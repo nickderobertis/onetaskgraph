@@ -293,7 +293,9 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     # read from the raw document and the roots from the validated one.
     bundle = generate.validate_schema_bundle(emitted_bundle)
 
-    assert emitted_bundle["version"] == 62
+    assert emitted_bundle["version"] == 63
+    # Version 63: what `task assignee set` answers.
+    assert "TaskAssigneeSet" in bundle["roots"]
     # Version 62: the documents the relation calls read and answer.
     assert {
         "ParentBatch",

@@ -314,6 +314,8 @@ impl Engine {
                     skipped: false,
                     status_condition: None,
                     priority_condition: None,
+                    assignee_condition: None,
+                    assignees: None,
                     intent: None,
                     relist: false,
                     links: None,

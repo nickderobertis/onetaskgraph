@@ -71,6 +71,7 @@ impl TaskSource for Rewritten {
             // One edge a page, so a default that stopped after the first page would carry
             // half the edges through a rewrite.
             max_page_size: 1,
+            assignees: Support::Unsupported,
         }
     }
     async fn health(&self) -> Result<Health, SourceError> {
@@ -187,6 +188,7 @@ fn held() -> Task {
         delivers: vec![TaskRef::new("T-9".to_owned()).expect("a task id")],
         delivered_by: vec![TaskRef::new("work:T-8".to_owned()).expect("a task id")],
         classification: Default::default(),
+        assignees: None,
     }
 }
 
@@ -373,6 +375,7 @@ fn an_update_names_on_the_wire_only_what_it_names_and_round_trips() {
             Repository::try_from("github.com/acme/widgets".to_owned())
                 .expect("a repository origin"),
         ]),
+        assignees: None,
     };
     let wire = serde_json::to_value(&whole).expect("serialises");
     assert_eq!(wire["delivers"], json!([]), "an empty list is named");

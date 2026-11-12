@@ -302,7 +302,13 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
     let bundle: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("schema output is valid JSON");
 
-    assert_eq!(bundle["version"], 62);
+    assert_eq!(bundle["version"], 63);
+    // Version 63: what `task assignee set` answers, and assignees on a task, its update, a
+    // batch update and a copy outcome.
+    assert!(
+        bundle["roots"]["TaskAssigneeSet"].is_object(),
+        "TaskAssigneeSet is a root"
+    );
     // Version 62: the relation calls' documents and outcomes.
     for root in [
         "ParentBatch",
@@ -446,6 +452,7 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
             "task status reconcile",
             "task status complete",
             "task priority set",
+            "task assignee set",
             "task content set",
             "task metadata set",
             "task attest",

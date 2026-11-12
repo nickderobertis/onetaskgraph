@@ -66,6 +66,7 @@ fn task(native: &str, content: &str) -> Task {
         delivers: Vec::new(),
         delivered_by: Vec::new(),
         classification: Default::default(),
+        assignees: None,
     }
 }
 
