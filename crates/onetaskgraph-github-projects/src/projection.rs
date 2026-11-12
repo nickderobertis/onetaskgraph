@@ -260,6 +260,7 @@ impl WrittenIds {
             fields,
             board_fields: Some(self.board_fields.into()),
             blocked_by: None,
+            assignees: None,
         })
     }
 }

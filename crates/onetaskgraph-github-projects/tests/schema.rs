@@ -311,7 +311,8 @@ fn pinned_schema_checks_selected_fields_arguments_types_fragments_and_fixture_ke
         }
     }
 
-    for (operation, fixture_pointer, fixture) in [
+    let listed = [
+        (graphql::USER_IDS, None, None),
         (
             graphql::BOARD,
             Some("/data/owner"),
@@ -395,7 +396,17 @@ fn pinned_schema_checks_selected_fields_arguments_types_fragments_and_fixture_ke
         (graphql::ADD_COMMENT, None, None),
         (graphql::UPDATE_COMMENT, None, None),
         (graphql::DELETE_COMMENT, None, None),
-    ] {
+    ];
+    // Each as a source opted in to assignees sends it, too: the same pin holds what it adds.
+    let with_assignees: Vec<String> = listed
+        .iter()
+        .filter_map(|(operation, _, _)| graphql::with_assignees(operation))
+        .collect();
+    for (operation, fixture_pointer, fixture) in listed.into_iter().chain(
+        with_assignees
+            .iter()
+            .map(|operation| (operation.as_str(), None, None)),
+    ) {
         let document = query::parse_query::<String>(operation).unwrap();
         let fragments = document
             .definitions
@@ -1062,6 +1073,51 @@ fn every_production_document_validates_against_githubs_complete_published_schema
         "GitHub would refuse:\n{}",
         refused.join("\n")
     );
+}
+
+/// Every production document a source opted in to assignees rewrites holds to GitHub's complete
+/// published schema as it is sent, and is read back by the inverse the loopback board answers it
+/// by as exactly the document it was written as; the rewrite reaches every document that reads an
+/// issue or answers a `createIssue` or `updateIssue`, and a document reading none is not touched.
+#[test]
+fn every_document_an_opted_in_source_sends_validates_and_reads_back_as_written() {
+    use onetaskgraph_github_projects::graphql;
+    let mut rewritten = 0;
+    let mut refused = Vec::new();
+    for (document, doing) in graphql::DOCUMENTS {
+        let reads_issues = document.contains("commentCount:comments{totalCount}")
+            || document.contains("title body createdAt updatedAt")
+            || document.contains("createIssue(")
+            || document.contains("updateIssue(");
+        let Some(spelled) = graphql::with_assignees(document) else {
+            assert!(
+                !reads_issues,
+                "{doing}: reads an issue and is not spelled with its assignees"
+            );
+            continue;
+        };
+        rewritten += 1;
+        assert!(spelled.contains("assignees(first:$assigneeFirst){nodes{id login}}"));
+        assert_eq!(
+            graphql::without_assignees(&spelled).as_deref(),
+            Some(document),
+            "{doing}: the inverse does not give back the document"
+        );
+        if let Err(errors) = github_schema::validate_document(&spelled) {
+            refused.push(format!("{doing}: {errors:?}"));
+        }
+    }
+    assert!(
+        rewritten > 20,
+        "only {rewritten} documents were spelled with assignees"
+    );
+    assert!(
+        refused.is_empty(),
+        "GitHub would refuse:\n{}",
+        refused.join("\n")
+    );
+    assert_eq!(graphql::with_assignees(graphql::USER_IDS), None);
+    assert_eq!(graphql::without_assignees(graphql::USER_IDS), None);
 }
 
 /// The field setup's two writes, with the variables it sends, are what GitHub accepts — and

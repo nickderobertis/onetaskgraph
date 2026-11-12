@@ -656,6 +656,7 @@ use serde_json::{Value, json};
 
 pub mod accounting;
 mod assets;
+mod assignees;
 mod batch;
 pub mod change_token;
 mod expected;
@@ -710,6 +711,11 @@ pub const COPY_DETAIL_BATCH: usize = 21;
 /// kinds, three `createIssue`, three `addProjectV2ItemById`, three field updates, an
 /// `addSubIssue` and an `addBlockedBy`, and every one ran — and no more was established.
 pub const MUTATION_BATCH: usize = 11;
+
+/// How many people one [`graphql::USER_IDS`] request looks up by login: more than any one call
+/// names in practice — each item of a write names one person at most — so a call naming people
+/// not yet resolved costs one request.
+pub const PEOPLE_BATCH: usize = 20;
 
 /// The most relation writes — `addSubIssue`, `removeSubIssue`, `addRelatesTo`,
 /// `removeRelatesTo` — one request carries: a 60-alias `addRelatesTo` answered HTTP 504 after
@@ -2570,6 +2576,114 @@ pub mod graphql {
         .map(|(_, whole)| whole)
     }
 
+    /// The node id of up to [`PEOPLE_BATCH`](super::PEOPLE_BATCH) people by their logins, each
+    /// as an aliased `user(login:)` field, `u<n>` answering `$login<n>`: what an assignee write
+    /// names a person by, since `assigneeIds` takes node ids and a person is named by login.
+    ///
+    /// Fixed-size, as [`ISSUE_DETAILS`] is: a call naming fewer people binds the slots it has no
+    /// person for to the last one it does. GitHub answers a login it does not know with `null`
+    /// at that alias beside a `NOT_FOUND` error naming it, and the others' ids beside them.
+    pub const USER_IDS: &str = "query($login0:String!,$login1:String!,$login2:String!,$login3:String!,$login4:String!,$login5:String!,$login6:String!,$login7:String!,$login8:String!,$login9:String!,$login10:String!,$login11:String!,$login12:String!,$login13:String!,$login14:String!,$login15:String!,$login16:String!,$login17:String!,$login18:String!,$login19:String!){ u0:user(login:$login0){id login} u1:user(login:$login1){id login} u2:user(login:$login2){id login} u3:user(login:$login3){id login} u4:user(login:$login4){id login} u5:user(login:$login5){id login} u6:user(login:$login6){id login} u7:user(login:$login7){id login} u8:user(login:$login8){id login} u9:user(login:$login9){id login} u10:user(login:$login10){id login} u11:user(login:$login11){id login} u12:user(login:$login12){id login} u13:user(login:$login13){id login} u14:user(login:$login14){id login} u15:user(login:$login15){id login} u16:user(login:$login16){id login} u17:user(login:$login17){id login} u18:user(login:$login18){id login} u19:user(login:$login19){id login}}";
+
+    /// The selection of an issue's — or a draft's — assignees, as a source opted in to them
+    /// (`config.assignees: true`) adds it to every document that reads one; see
+    /// [`with_assignees`].
+    const ASSIGNEES: &str = " assignees(first:$assigneeFirst){nodes{id login}}";
+    /// The variable [`ASSIGNEES`] pages by, declared with its value as its default — the most
+    /// people GitHub assigns one issue — so no caller binds it, and inserted first among a
+    /// document's variables.
+    const ASSIGNEE_VARIABLE: &str = "$assigneeFirst:Int!=10 ";
+    /// [`ASSIGNEE_VARIABLE`] for a document declaring no variables of its own.
+    const ASSIGNEE_VARIABLES: &str = "($assigneeFirst:Int!=10)";
+    /// Where [`ASSIGNEES`] goes: straight after each of these, wherever an issue or a draft is
+    /// read — what every read of an issue selects of it — and inside the answer of each
+    /// `createIssue` and `updateIssue`, so a write's own answer says whom GitHub assigned.
+    const ASSIGNEE_MARKERS: [&str; 2] = [
+        "commentCount:comments{totalCount}",
+        "title body createdAt updatedAt",
+    ];
+
+    /// `document` as a source opted in to assignees sends it: [`ASSIGNEES`] selected wherever
+    /// it reads an issue or a draft and in every `createIssue` and `updateIssue` answer, with the
+    /// variable it pages by declared — or `None` when it reads and writes neither, and is sent
+    /// as written.
+    ///
+    /// A rewrite of the one text sent rather than a second set of documents, so a source that
+    /// has not opted in sends every document byte for byte as it did, and an opted-in one rides
+    /// its assignees on the very reads and writes it already makes. [`without_assignees`] is its
+    /// exact inverse, which the loopback board answers a document by.
+    #[must_use]
+    pub fn with_assignees(document: &str) -> Option<String> {
+        let mut spelled = String::with_capacity(document.len() + 256);
+        let mut inserted = false;
+        let mut rest = document;
+        while !rest.is_empty() {
+            // The earliest place one is due, of every kind.
+            let next = ASSIGNEE_MARKERS
+                .iter()
+                .filter_map(|marker| rest.find(marker).map(|at| (at + marker.len(), true)))
+                .chain(["createIssue(", "updateIssue("].iter().filter_map(|write| {
+                    let at = rest.find(write)?;
+                    let open = at + rest[at..].find('{')?;
+                    rest[open..]
+                        .starts_with("{issue{id")
+                        .then_some((open + "{issue{id".len(), true))
+                        .or(Some((open, false)))
+                }))
+                .min_by_key(|(at, _)| *at);
+            let Some((at, insert)) = next else {
+                spelled.push_str(rest);
+                break;
+            };
+            spelled.push_str(&rest[..at]);
+            if insert {
+                spelled.push_str(ASSIGNEES);
+                inserted = true;
+            }
+            rest = &rest[at..];
+            if !insert {
+                // A write whose answer reads no issue's id first: past its opening brace.
+                spelled.push('{');
+                rest = &rest[1..];
+            }
+        }
+        if !inserted {
+            return None;
+        }
+        let open = spelled.find('(');
+        let body = spelled.find('{');
+        Some(match (open, body) {
+            (Some(open), Some(body)) if open < body => {
+                format!(
+                    "{}{ASSIGNEE_VARIABLE}{}",
+                    &spelled[..=open],
+                    &spelled[open + 1..]
+                )
+            }
+            (_, Some(body)) => format!(
+                "{}{ASSIGNEE_VARIABLES}{}",
+                &spelled[..body],
+                &spelled[body..]
+            ),
+            _ => return None,
+        })
+    }
+
+    /// `document` as [`with_assignees`] spelled it, back as the document it was written as — or
+    /// `None` for a document it did not rewrite.
+    #[must_use]
+    pub fn without_assignees(document: &str) -> Option<String> {
+        if !document.contains(ASSIGNEES) {
+            return None;
+        }
+        let plain = document.replace(ASSIGNEES, "");
+        Some(if plain.contains(ASSIGNEE_VARIABLES) {
+            plain.replacen(ASSIGNEE_VARIABLES, "", 1)
+        } else {
+            plain.replacen(ASSIGNEE_VARIABLE, "", 1)
+        })
+    }
+
     /// Every document above, with what this source is doing when it sends one.
     ///
     /// One list rather than a `match` beside the constants: a rate-limit diagnostic has to
@@ -2579,7 +2693,8 @@ pub mod graphql {
     /// `documents_are_all_inventoried` reads this file back and fails naming any `pub
     /// const` here that this list omits, so the two cannot part — which is the same guard
     /// `CATEGORIES` carries, in the one shape available to a set of `&str` constants.
-    pub const DOCUMENTS: [(&str, &str); 68] = [
+    pub const DOCUMENTS: [(&str, &str); 69] = [
+        (USER_IDS, "looking up the people an assignee write names"),
         (
             ISSUE_RELATIONS,
             "reading several issues with their parents and sub-issues",
@@ -3383,6 +3498,17 @@ pub struct GitHubProjectsConfig {
     // map out, so both SDKs model an absent map as an empty one rather than as `null`.
     #[schemars(!skip_serializing_if)]
     pub link_types: BTreeMap<String, onetaskgraph_plugin_api::LinkTypeConfig>,
+    /// Whether this source's tasks carry the GitHub users each issue is assigned to, and
+    /// take an assignee write. `false`, the default, reads no issue's assignees and writes
+    /// none: every request this source sends is then exactly what it was before assignees
+    /// existed. `true` reads each issue's assignees on the reads it already makes, and writes
+    /// one person or none — by login — in the `createIssue` or `updateIssue` the write already
+    /// sends, refusing a person GitHub does not know or leaves off the issue.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    // Kept in the schema as `"default": false` although a serialized configuration leaves a
+    // `false` out, so both SDKs model an absent setting as `false` rather than as `null`.
+    #[schemars(!skip_serializing_if)]
+    pub assignees: bool,
 }
 
 /// What an issue's sub-issues mean on a GitHub Projects board: see
@@ -4369,6 +4495,14 @@ pub struct GitHubProjectsSource {
     sub_issues: SubIssues,
     /// The link types this source mirrors as `relates-to`.
     link_types: onetaskgraph_plugin_api::LinkTypes,
+    /// Whether this source's configuration opted in to assignees: every document it sends is
+    /// then spelled by [`graphql::with_assignees`], and every task it reads carries them.
+    assignees: bool,
+    /// The GitHub node id of each person an assignee write of this process has named, by
+    /// lowercased login — `None` for a login GitHub said it does not know — so a later call
+    /// naming one sends no lookup. Each write that fails forgets the people it named, so the
+    /// next call naming them asks GitHub again.
+    people: Mutex<BTreeMap<String, Option<String>>>,
     /// Built on the first request rather than with the source, as [`Self::client`] says.
     client: std::sync::OnceLock<Client>,
     /// Built on the first attachment request, as [`Self::asset_client`] says.
@@ -5730,6 +5864,8 @@ impl GitHubProjectsSource {
                 .transpose()?,
             metadata_fields: MetadataField::resolve(config.metadata_fields, name)?,
             sub_issues: config.sub_issues,
+            assignees: config.assignees,
+            people: Mutex::new(BTreeMap::new()),
             link_types: onetaskgraph_plugin_api::LinkTypes::checked(
                 KIND,
                 &config.link_types,
@@ -6186,9 +6322,17 @@ impl GitHubProjectsSource {
         let mut limits = accounting::RateLimit::default();
         let mut reported_cost = None;
         let mut response_outcome = accounting::ResponseOutcome::TransportError;
+        // Spelled here, at the one place a document leaves for GitHub, and nowhere earlier:
+        // everything that decides how a document is retried or how its answer is read compares
+        // it with the constant it was written as.
+        let spelled = self
+            .assignees
+            .then(|| graphql::with_assignees(query))
+            .flatten();
         let result = self
             .attempted(
                 query,
+                spelled.as_deref().unwrap_or(query),
                 variables,
                 &mut limits,
                 &mut reported_cost,
@@ -6207,6 +6351,7 @@ impl GitHubProjectsSource {
     async fn attempted(
         &self,
         query: &str,
+        sent: &str,
         variables: &Value,
         limits: &mut accounting::RateLimit,
         reported_cost: &mut Option<u64>,
@@ -6217,7 +6362,7 @@ impl GitHubProjectsSource {
             .map_err(Attempt::Failed)?
             .post(self.endpoint.clone())
             .bearer_auth(self.token.expose_secret())
-            .json(&json!({"query": query, "variables": variables}))
+            .json(&json!({"query": sent, "variables": variables}))
             .send()
             .await
             .map_err(|e| {
@@ -6319,6 +6464,7 @@ impl GitHubProjectsSource {
         } else if [
             graphql::CREATE_ISSUES,
             graphql::SEARCH_BATCH,
+            graphql::USER_IDS,
             graphql::ADD_COMMENTS,
             graphql::WRITE_TASKS,
             graphql::SET_PARENTS,
@@ -8393,6 +8539,11 @@ impl GitHubProjectsSource {
             fields: field_definitions(nodes),
             board_fields: Self::carried_board_fields(content, board_id)?,
             blocked_by: carried_blocked_by(content)?,
+            assignees: if self.assignees {
+                assignees::assignee_logins(content)?
+            } else {
+                None
+            },
         };
         Ok(Some(resolved))
     }
@@ -9238,6 +9389,9 @@ impl GitHubProjectsSource {
         // Everything this source can refuse without reading the item is refused first, in the
         // words a whole write of the same fields is refused with.
         update.consistent()?;
+        if update.assignees.is_some() && !self.assignees {
+            return Err(onetaskgraph_plugin_api::unwritable_field(KIND, "assignees"));
+        }
         if update
             .title
             .as_deref()
@@ -9281,6 +9435,24 @@ impl GitHubProjectsSource {
             return Ok(None);
         };
         let before = item.task()?;
+        // The people it is to be assigned to, by node id, when they are not exactly whom it
+        // holds: looked up — unless this process already has — and refused for a login GitHub
+        // does not know, before anything is sent.
+        let assignee_ids = match &update.assignees {
+            Some(people)
+                if item
+                    .assignees
+                    .as_deref()
+                    .is_none_or(|held| !assignees::same_people(held, people)) =>
+            {
+                if item.content_kind == ContentKind::DraftIssue {
+                    return Err(self.assigns_a_draft());
+                }
+                self.resolve_people(people).await?;
+                Some(self.people_ids(people, &item.written_name())?)
+            }
+            _ => None,
+        };
 
         let mut status_move = None;
         if let (Some(status), Some(target)) = (&update.status, target) {
@@ -9518,6 +9690,11 @@ impl GitHubProjectsSource {
         if let Some(moving) = status_move.as_ref().filter(|moving| moving.moves.state()) {
             fields.insert("stateInput".to_owned(), state_input(Some(&moving.target)));
         }
+        // The assignees ride the same mutation: replacing whoever the issue holds, in the one
+        // `updateIssue` this update already ends with — or as the one it sends for them alone.
+        if let Some(ids) = &assignee_ids {
+            fields.insert("assigneeIds".to_owned(), json!(ids));
+        }
         // **The body is written last, and that is the guarantee a refusal part-way keeps.**
         // GitHub runs no two requests as one, and runs one document's mutation fields in order
         // without undoing an earlier field when a later one fails — so a body written before a
@@ -9623,6 +9800,9 @@ impl GitHubProjectsSource {
         }
         if let Some((_, _, projected)) = projection_move {
             item.projected = projected;
+        }
+        if let Some(people) = &update.assignees {
+            item.assignees = Some(people.clone());
         }
         let mut task = item.task()?;
         let mut written = update.changed(&before, &task);
@@ -10482,6 +10662,27 @@ impl GitHubProjectsSource {
                 });
             }
         }
+        // The people it is to be assigned to are looked up — unless this process already has —
+        // and a login GitHub does not know refused, while nothing has been written.
+        if let Some(people) = incoming.assignees
+            && existing.is_none_or(|item| {
+                item.assignees
+                    .as_deref()
+                    .is_none_or(|held| !assignees::same_people(held, people))
+            })
+        {
+            if content_kind == ContentKind::DraftIssue {
+                return Err(self.assigns_a_draft());
+            }
+            self.resolve_people(people).await?;
+            self.people_ids(
+                people,
+                &existing.map_or_else(
+                    || format!("the new {}", incoming.title),
+                    Resolved::written_name,
+                ),
+            )?;
+        }
         match existing {
             Some(item) if content_kind == ContentKind::Issue => {
                 if item.labels != incoming.labels {
@@ -10869,6 +11070,17 @@ impl GitHubProjectsSource {
             // What this write left the relationship holding is known by id alone, and a
             // later read of its edges needs each far end's kind, so it reads them again.
             blocked_by: None,
+            // The people it named, which its own answer was held to; none named keeps the
+            // item's, and creates a task of an opted-in source unassigned.
+            assignees: match incoming.assignees {
+                Some(people) => Some(people.to_vec()),
+                None => match existing {
+                    Some(item) => item.assignees.clone(),
+                    None => (self.assignees
+                        && matches!(incoming.written, Written::Work(ItemKind::Task, _)))
+                    .then(Vec::new),
+                },
+            },
         };
         self.remember_written(remembered, existing.is_none())?;
         Ok(onetaskgraph_plugin_api::AssetsWritten {
@@ -10988,19 +11200,29 @@ impl GitHubProjectsSource {
         body: &Option<String>,
     ) -> Result<Landed, SourceError> {
         let repository_id = self.repository_id(repository, incoming).await?;
-        let data = self
-            .graphql(
-                graphql::CREATE_ISSUE,
-                json!({"input": filed_input(&repository_id, board_id, incoming, body)}),
-            )
-            .await?;
+        let mut input = filed_input(&repository_id, board_id, incoming, body);
+        self.assigning(&mut input, incoming)?;
+        let data = match self
+            .graphql(graphql::CREATE_ISSUE, json!({"input": &input}))
+            .await
+        {
+            Ok(data) => data,
+            Err(error) => return Err(self.refusing_people(&input, error)),
+        };
         let created = data
             .pointer("/createIssue/issue")
             .filter(|value| !value.is_null())
             .ok_or_else(|| SourceError::Malformed {
                 message: "GitHub issue creation returned no issue".into(),
             })?;
-        self.created_landed(created).await
+        let landed = self.created_landed(created).await?;
+        // An issue GitHub created assigned otherwise than asked is taken back, as one whose
+        // number cannot be read is: the write is refused, and leaves nothing behind.
+        if let Err(error) = self.assigned_as_asked(&input, Some(created)) {
+            let _ = self.delete_issue(&landed.content_id).await;
+            return Err(error);
+        }
+        Ok(landed)
     }
 
     /// Keep the address `createIssue` answered for the issue `content`, for
@@ -11135,6 +11357,13 @@ impl GitHubProjectsSource {
             .iter()
             .map(|write| self.task_incoming(write, None))
             .collect::<Result<_, _>>()?;
+        // Every person these creates assign, looked up together rather than one write at a time.
+        let people: Vec<String> = writes
+            .iter()
+            .filter_map(|write| write.item.assignees.clone())
+            .flatten()
+            .collect();
+        self.resolve_people(&people).await?;
         let mut prepared = Vec::with_capacity(writes.len());
         for (incoming, write) in incomings.iter().zip(writes) {
             if write.target.is_some() {
@@ -11156,12 +11385,14 @@ impl GitHubProjectsSource {
                 });
             };
             let repository_id = self.repository_id(target, incoming).await?;
-            inputs.push(filed_input(
+            let mut input = filed_input(
                 &repository_id,
                 prepared.board.id.as_str(),
                 incoming,
                 &prepared.body,
-            ));
+            );
+            self.assigning(&mut input, incoming)?;
+            inputs.push(input);
         }
         let mut landed: Vec<Landed> = Vec::with_capacity(inputs.len());
         let refused = 'create: {
@@ -11196,13 +11427,19 @@ impl GitHubProjectsSource {
                         },
                     }
                 });
-                for slot in 0..chunk.len() {
+                for (slot, input) in chunk.iter().enumerate() {
                     match data
                         .pointer(&format!("/create{slot}/issue"))
                         .filter(|value| !value.is_null())
                     {
                         Some(created) => match self.created_landed(created).await {
-                            Ok(created) => landed.push(created),
+                            Ok(landed_one) => {
+                                landed.push(landed_one);
+                                // Taken back with the rest, as any refusal here is.
+                                if let Err(error) = self.assigned_as_asked(input, Some(created)) {
+                                    refusal.get_or_insert(error);
+                                }
+                            }
                             Err(error) => {
                                 refusal.get_or_insert(error);
                             }
@@ -11310,9 +11547,18 @@ impl GitHubProjectsSource {
                 );
                 variables.insert(format!("send{slot}"), json!(slot < chunk.len()));
             }
-            let data = self
+            let data = match self
                 .graphql(graphql::UPDATE_ISSUES, Value::Object(variables))
-                .await?;
+                .await
+            {
+                Ok(data) => data,
+                Err(error) => {
+                    for held in chunk {
+                        self.forget_people(&held.input);
+                    }
+                    return Err(error);
+                }
+            };
             let inputs: Vec<&Value> = chunk.iter().map(|held| &held.input).collect();
             check_aliased_answers(
                 graphql::UPDATE_ISSUES,
@@ -11321,6 +11567,9 @@ impl GitHubProjectsSource {
                 &inputs,
                 &[("issue", "id")],
             )?;
+            for (slot, held) in chunk.iter().enumerate() {
+                self.assigned_as_asked(&held.input, data.pointer(&format!("/update{slot}/issue")))?;
+            }
         }
         Ok(())
     }
@@ -12315,6 +12564,19 @@ impl GitHubProjectsSource {
             ContentKind::Issue => json!({"title":title,"body":body,
                                          "stateInput":state_input(status_target)}),
         };
+        // The people it is to be assigned to, replacing whoever it holds — sent only when they
+        // are not exactly those, and looked up before anything of this write was sent.
+        if let Some(people) = incoming.assignees
+            && item
+                .assignees
+                .as_deref()
+                .is_none_or(|held| !assignees::same_people(held, people))
+        {
+            if item.content_kind == ContentKind::DraftIssue {
+                return Err(self.assigns_a_draft());
+            }
+            fields["assigneeIds"] = json!(self.people_ids(people, &item.written_name())?);
+        }
         // Only the members whose value differs from the item as this write read it are sent,
         // and nothing at all when none does — whether or not the store's cache expects a
         // version of it. A member left out is one GitHub leaves as it is, so a person's edit
@@ -12395,7 +12657,10 @@ impl GitHubProjectsSource {
         id: &NativeId,
         input: Value,
     ) -> Result<(), SourceError> {
-        let data = self.graphql(operation, json!({"input":input})).await?;
+        let data = match self.graphql(operation, json!({"input":&input})).await {
+            Ok(data) => data,
+            Err(error) => return Err(self.refusing_people(&input, error)),
+        };
         let returned = data
             .pointer(pointer)
             .ok_or_else(|| SourceError::Malformed {
@@ -12406,7 +12671,7 @@ impl GitHubProjectsSource {
                 message: "GitHub item update returned the wrong item".into(),
             });
         }
-        Ok(())
+        self.assigned_as_asked(&input, Some(returned))
     }
 
     /// Creates one issue, files it on the board, and reports what a read of it would say:
@@ -12432,14 +12697,17 @@ impl GitHubProjectsSource {
         body: &Option<String>,
     ) -> Result<Landed, SourceError> {
         let repository_id = self.repository_id(repository, incoming).await?;
-        let data = self
-            .graphql(
-                graphql::CREATE_ISSUE,
-                json!({"input":{
-                    "repositoryId":repository_id,"title":incoming.written_title(),"body":body
-                }}),
-            )
-            .await?;
+        let mut input = json!({
+            "repositoryId":repository_id,"title":incoming.written_title(),"body":body
+        });
+        self.assigning(&mut input, incoming)?;
+        let data = match self
+            .graphql(graphql::CREATE_ISSUE, json!({"input": &input}))
+            .await
+        {
+            Ok(data) => data,
+            Err(error) => return Err(self.refusing_people(&input, error)),
+        };
         let created = data
             .pointer("/createIssue/issue")
             .filter(|value| !value.is_null())
@@ -12447,6 +12715,10 @@ impl GitHubProjectsSource {
                 message: "GitHub issue creation returned no issue".into(),
             })?;
         let content_id = NativeId(required_str(created, "id")?.to_owned());
+        if let Err(error) = self.assigned_as_asked(&input, Some(created)) {
+            let _ = self.delete_issue(&content_id).await;
+            return Err(error);
+        }
         // Optional although GitHub's schema makes it non-null: the issue exists by now, so
         // a response without it is not worth failing a landed write over — the item simply
         // reports no location until the board read catches up, which is what it did before.
@@ -13422,6 +13694,11 @@ struct Resolved {
     /// write reconciles that relationship against, and what a read of its forward edges in
     /// the same command answers with.
     blocked_by: Option<Vec<Value>>,
+    /// Every person the item is assigned to, by login in the order GitHub answered them — read
+    /// only by a source opted in to assignees, and `None` for any other, and for a record no
+    /// read or write of this process showed them on.
+    #[serde(default)]
+    assignees: Option<Vec<String>>,
 }
 
 impl Resolved {
@@ -13585,7 +13862,7 @@ impl Resolved {
             delivers: self.delivers.clone(),
             delivered_by: self.delivered_by.clone(),
             classification: self.classification,
-            assignees: None,
+            assignees: self.assignees.clone(),
         })
     }
 
@@ -13746,6 +14023,10 @@ struct Incoming<'a> {
     /// project, a document, and every write to an instance with no `priority_mapping` —
     /// which is what keeps such a write's requests exactly what they were before.
     priority: Option<Priority>,
+    /// [`Task::assignees`] of a task written to a source opted in to them — the people it is
+    /// to be assigned to, replacing whoever it holds — and `None` for everything else, which
+    /// leaves an existing item's as they are and creates one unassigned.
+    assignees: Option<&'a [String]>,
 }
 
 /// What one write does to one projected metadata text field, by the field's id.
@@ -14402,7 +14683,11 @@ impl TaskSource for GitHubProjectsSource {
             task_dependencies: DependencySupport::BothDirections,
             project_dependencies: DependencySupport::BothDirections,
             max_page_size: MAX_PAGE_SIZE,
-            assignees: Support::Unsupported,
+            assignees: if self.assignees {
+                Support::Native
+            } else {
+                Support::Unsupported
+            },
         }
     }
     async fn visibility(
@@ -15165,6 +15450,7 @@ impl TaskSource for GitHubProjectsSource {
                 delivers: &[],
                 delivered_by: &[],
                 priority: None,
+                assignees: None,
             },
             write.target.as_ref(),
             &write.depends_on,
@@ -15198,6 +15484,7 @@ impl TaskSource for GitHubProjectsSource {
             delivers: &[],
             delivered_by: &[],
             priority: None,
+            assignees: None,
         }))
     }
 
@@ -15219,6 +15506,7 @@ impl TaskSource for GitHubProjectsSource {
             delivers: &[],
             delivered_by: &[],
             priority: None,
+            assignees: None,
         }))
     }
 
@@ -17115,6 +17403,9 @@ impl GitHubProjectsSource {
         if self.priorities.is_none() && write.item.priority != Priority::None {
             return Err(self.holds_no_priority());
         }
+        if write.item.assignees.is_some() && !self.assignees {
+            return Err(onetaskgraph_plugin_api::unwritable_field(KIND, "assignees"));
+        }
         Ok(Incoming {
             written: Written::Work(ItemKind::Task, &write.item.status),
             title: &write.item.title,
@@ -17128,6 +17419,7 @@ impl GitHubProjectsSource {
             delivers: &write.item.delivers,
             delivered_by: &write.item.delivered_by,
             priority: self.priorities.as_ref().map(|_| write.item.priority),
+            assignees: write.item.assignees.as_deref(),
         })
     }
     async fn write_document_assets(
@@ -17163,6 +17455,7 @@ impl GitHubProjectsSource {
                 delivers: &[],
                 delivered_by: &[],
                 priority: None,
+                assignees: None,
             },
             write.target.as_ref(),
             &[],

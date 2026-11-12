@@ -150,3 +150,22 @@ fn the_count_sums_sibling_paths_rather_than_taking_the_deepest_one() {
         770_400
     );
 }
+
+/// Every document a source opted in to assignees sends — each read spelled with the people of
+/// every issue it reaches — stays under the same limit, with the most people GitHub assigns
+/// one issue on every one.
+#[test]
+fn every_document_an_opted_in_source_sends_stays_under_githubs_node_limit() {
+    let over: Vec<String> = graphql::DOCUMENTS
+        .iter()
+        .filter_map(|(document, doing)| {
+            let spelled = graphql::with_assignees(document)?;
+            let mut sizes = onetaskgraph_github_projects::largest_page_sizes();
+            sizes.insert("assigneeFirst".to_owned(), 10);
+            let count = onetaskgraph_github_projects::node_count(&spelled, &sizes)
+                .unwrap_or_else(|error| panic!("{doing} with assignees: {error}"));
+            (count >= NODE_COUNT_LIMIT).then(|| format!("{doing}: {count} nodes"))
+        })
+        .collect();
+    assert!(over.is_empty(), "{}", over.join("\n"));
+}

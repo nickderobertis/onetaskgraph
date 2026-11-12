@@ -348,3 +348,12 @@ polling spreads 52-57 between runs, so by the manager's ruling of 2026-11-11 the
 
 The first two columns are CI sessions (the second, run 43001415572); the third is a credentialed
 local session of both entry points over the template's 60 items.
+
+## People looked up for an assignee write, 2026-11-11
+
+A source opted in to assignees (`config.assignees: true`) looks a person up by login with
+`graphql::USER_IDS` before naming them in `assigneeIds`. The session's reconciliation of every
+document's node count and point cost now covers that lookup too — bound to a login GitHub knows
+in every slot — so the record moved by that one reconciliation call, to 242 requests, with the
+same worst-case node count: the lookup selects no connection. The journey's own sources do not
+opt in, so no other request moved.
