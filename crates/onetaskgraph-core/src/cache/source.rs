@@ -126,6 +126,17 @@ impl CachedSource {
             .cloned()
     }
 
+    /// The entry of task `id`, unless it was recorded under another assignees setting than
+    /// the source now has: an entry written before a source opted in to assignees holds none,
+    /// and one written while it had holds some a source that has since opted out never reports,
+    /// so either is a miss rather than an answer the source would not give.
+    fn entry(&self, id: &NativeId) -> Option<Entry> {
+        let holds = self.inner.capabilities().assignees.is_native();
+        self.cache
+            .read(id)
+            .filter(|entry| entry.task.assignees.is_some() == holds)
+    }
+
     /// Whether `held` is at `pin` or a later version of the same task.
     fn fresh(&self, held: &str, pin: &str) -> bool {
         matches!(
@@ -143,7 +154,7 @@ impl CachedSource {
         if comments && let Some(reason) = self.cache.coverage.comments.reason() {
             return Err(Miss::Bypassed(reason.to_owned()));
         }
-        let entry = self.cache.read(id).ok_or(Miss::Behind)?;
+        let entry = self.entry(id).ok_or(Miss::Behind)?;
         let fresh = entry.version().is_some_and(|held| self.fresh(held, &pin));
         if fresh && (!comments || entry.comments.is_some()) {
             Ok(entry)
@@ -229,7 +240,7 @@ impl CachedSource {
         let Some(read) = read else {
             return;
         };
-        let Some(mut entry) = self.cache.read(id) else {
+        let Some(mut entry) = self.entry(id) else {
             return;
         };
         if entry.version() != Some(read.as_str()) {
@@ -401,7 +412,7 @@ impl CachedSource {
             }
             expected.version.clone()
         };
-        let entry = self.cache.read(id);
+        let entry = self.entry(id);
         let decided = match &entry {
             None => Priming::Unprimed {
                 reason: "the cache holds no entry for this task, so its target was read".to_owned(),
@@ -690,7 +701,7 @@ impl CachedSource {
             return entry.assets;
         }
         let read = self.cache.command().read.get(id).cloned()?;
-        let entry = self.cache.read(id)?;
+        let entry = self.entry(id)?;
         (entry.version() == Some(read.as_str())).then_some(())?;
         entry.assets
     }
@@ -2700,6 +2711,79 @@ mod tests {
             cache,
             probe,
         )
+    }
+
+    /// A caching source in `dir` over a source that holds assignees when `assignees` is set,
+    /// whose every read by id answers `answer`.
+    fn cached_holding(dir: &std::path::Path, answer: Task, assignees: bool) -> CachedSource {
+        let cache = SourceCache::new(
+            CacheLocation {
+                dir: dir.to_path_buf(),
+                remote: "remote".to_owned(),
+            },
+            VersionCoverage::whole(),
+            ProjectVersionCoverage::whole(),
+            DocumentVersionCoverage::whole(),
+        );
+        let inner = Answering {
+            inner: InMemorySource::new(InMemoryConfig {
+                assignees,
+                ..InMemoryConfig::default()
+            })
+            .expect("an empty source"),
+            answer,
+            probe: Arc::default(),
+            watching: another_process(dir),
+        };
+        CachedSource::over(Box::new(inner), cache)
+    }
+
+    /// The title a pinned read of `T-1` at `v1` answers, through `source`.
+    async fn pinned_title(source: &CachedSource) -> String {
+        source
+            .cache
+            .command()
+            .pins
+            .insert(id("T-1"), "v1".to_owned());
+        source
+            .get_task(&id("T-1"))
+            .await
+            .expect("the read")
+            .expect("the task")
+            .title
+    }
+
+    #[tokio::test]
+    async fn an_entry_recorded_under_another_assignees_setting_is_never_served() {
+        let fresh = |assignees: Option<Vec<String>>| Task {
+            title: "From the source".to_owned(),
+            assignees,
+            ..task("T-1", "v1")
+        };
+        // Recorded while the source did not hold assignees: served to it again at its pin...
+        let dir = tempfile::tempdir().expect("a directory");
+        cached_holding(dir.path(), task("T-1", "v1"), false)
+            .get_task(&id("T-1"))
+            .await
+            .expect("the first read");
+        let same = cached_holding(dir.path(), fresh(None), false);
+        assert_eq!(pinned_title(&same).await, "Task T-1", "the entry answers");
+        // ...and never to it once it opts in, though the token is the same.
+        let opted = cached_holding(dir.path(), fresh(Some(vec!["ana".to_owned()])), true);
+        assert_eq!(pinned_title(&opted).await, "From the source");
+
+        // Recorded while it held assignees, and read after it opted out: also a miss.
+        let dir = tempfile::tempdir().expect("a directory");
+        let held = Task {
+            assignees: Some(vec!["ana".to_owned()]),
+            ..task("T-1", "v1")
+        };
+        cached_holding(dir.path(), held, true)
+            .get_task(&id("T-1"))
+            .await
+            .expect("the first read");
+        let out = cached_holding(dir.path(), fresh(None), false);
+        assert_eq!(pinned_title(&out).await, "From the source");
     }
 
     #[tokio::test]
