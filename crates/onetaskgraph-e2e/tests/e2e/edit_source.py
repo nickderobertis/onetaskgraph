@@ -128,6 +128,8 @@ class Task(TypedDict):
     delivers: NotRequired[list[str]]
     delivered_by: NotRequired[list[str]]
     classification: NotRequired[Classification]
+    # Every person the task is assigned to, for a source that opted in; absent otherwise.
+    assignees: NotRequired[list[str] | None]
 
 
 class Comment(TypedDict):
@@ -402,6 +404,11 @@ def _task_fields_valid(task: dict[str, Any]) -> bool:
         if task.get(key) is not None and not isinstance(task[key], str):
             return False
     if task.get("classification", "public") not in get_args(Classification):
+        return False
+    assignees = task.get("assignees")
+    if assignees is not None and (
+        not isinstance(assignees, list) or not all(isinstance(person, str) for person in assignees)
+    ):
         return False
     for key in ("repositories", "delivers", "delivered_by"):
         values = task.get(key, [])

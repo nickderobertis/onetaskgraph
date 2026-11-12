@@ -114,6 +114,8 @@ onetaskgraph task status complete --issue <OWNER/NAME#N>... [--source <SOURCE>].
 onetaskgraph task priority set <ID> none|urgent|high|medium|low [--expect VERSION]
                                [--if-version VERSION] [--when-priority PRIORITY]...
                                # --when-priority: write only over these; else `outcome: held`
+onetaskgraph task assignee set <ID> [<PERSON>] [--if-version VERSION]
+                               # replaces every assignee; no PERSON unassigns — see "Assignees"
 onetaskgraph task content set <ID> --file PATH [--expect VERSION] [--if-version VERSION]
 onetaskgraph task metadata set <ID> <KEY> <VALUE> [--expect VERSION] [--if-version VERSION]
 onetaskgraph task update <ID> [--title TITLE] [--body-file PATH]
@@ -130,7 +132,7 @@ onetaskgraph task create <SOURCE> --project P --title TITLE
                          [--answers FILE] [--var NAME=VALUE]... [--status CATEGORY]
                          [--label L]... [--repository R]... [--depends-on ID]...
                          [--delivers ID]... [--metadata KEY=JSON]... [--asset PATH]...
-                         [--classification public|private]
+                         [--classification public|private] [--assignee PERSON]
                          [--term-scope REPOSITORY... | --term-scope-empty]
 onetaskgraph task render <ID> [--template FILE | --template-loader FILE] [--search-path DIR]...
                          [--answers FILE] [--var NAME=VALUE]... [--unset NAME]... [--dry-run]
@@ -859,6 +861,7 @@ copied from, which is what makes the next copy of it an update.
 | `--when-destination-status CATEGORY` | `task copy` only, repeatable: write over an existing destination task only while it is at one of these categories. Decided on the copy's own read of the destination task — from the cache under `--expect` — so it adds no request; a create is unaffected. A task at another category is handled by `--otherwise`. Each updated task's outcome carries `status_condition: {"held": <category>, "met": <bool>}`. Refused before anything is read beside `--status-policy preserve-destination`, which writes no status to guard. |
 | `--otherwise refuse\|preserve-destination` | With `--when-destination-status`, and refused without it: what a task at another category gets. `refuse`, the default, writes nothing for it and answers it `{"action": "failed", "error": {"kind": "destination-status", …}, "held": …}` — naming the item, its category and the set — while every other item lands; the copy then exits `4`, with the report on standard output, as for any item left unwritten. `preserve-destination` copies it as `--status-policy preserve-destination` would, keeping its status. |
 | `--when-destination-priority PRIORITY` | `task copy` only, repeatable: write the source's priority over an existing destination task only while that task is at one of these priorities (`none`, `urgent`, `high`, `medium`, `low`); at any other it keeps its own — a priority a person set — and every other field is written as without the flag. Nothing is refused for it. Taken beside either `--status-policy` and beside `--when-destination-status`; a task a status condition refuses is written nothing. Decided on the same read, so it adds no request; a create takes the source's priority. Each updated task's outcome carries `priority_condition: {"held": <priority>, "met": <bool>}`. A later copy of the unchanged source without the flag writes the source's priority. |
+| `--when-destination-assignees PERSON\|none` | `task copy` only, repeatable: write the source's assignee over an existing destination task only while that task is assigned to exactly these people (`none` alone: to nobody); holding any other set it keeps its own, and every other field is written as without the flag. Without it a copy never writes an assignee over an existing task. Both sources must opt in with `config.assignees: true`; one that has not carries no assignee. Decided on the same read, so it adds no request; a create takes the source's assignee, and a source task holding several people is refused for that task. Each updated task's outcome carries `assignee_condition: {"held": [<person>...], "met": <bool>}`. See "Assignees: one person, or none". |
 | `--no-tasks` | Copy a project on its own. By default `project copy` copies the project and every task in it — a home's members' tasks included — matching each task independently. |
 | `--documents` | `project copy` only: copy the documents filed under the project too, in the same copy — read, put to the write policy and sized together with the project and its tasks before anything is written, and landed after them, filed under the project's copy, each reference to a task of the plan pointed at that task's copy. Without it `project copy` reads and writes no document, exactly as before, and `document copy` carries them. Refused beside `--member`. |
 | `--comments` | `task copy` and `project copy`: keep the destination's copies of each task's comments in step with the source's, as [below](#carrying-comments-and-copying-only-what-changed). Without it a copy reads and writes no comment. |
