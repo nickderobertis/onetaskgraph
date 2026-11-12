@@ -205,8 +205,10 @@ fn every_janitor_document_is_valid_against_the_pinned_schema() {
 fn a_field_github_does_not_have_is_refused() {
     for (drifted, reason) in [
         (
-            BOARD_DOCUMENT.replace("repositoryOwner(", "user("),
-            "Query lacks field user",
+            // `owner`, not `user`: GitHub's `Query` has `user(login:)`, which the assignee
+            // lookup sends, and its published schema has no `owner`.
+            BOARD_DOCUMENT.replace("repositoryOwner(", "owner("),
+            "Query lacks field owner",
         ),
         (
             DELETE_ISSUE_DOCUMENT.replace("repository{nameWithOwner}", "clientMutationId"),
