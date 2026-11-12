@@ -658,3 +658,110 @@ fn a_task_of_a_source_without_the_setting_is_stored_and_read_exactly_as_before_a
         include_str!("fixtures/relations/unrelated-in-memory.json"),
     );
 }
+
+#[test]
+fn a_person_reading_a_terminal_is_told_every_assignee_and_nothing_for_a_source_without_them() {
+    let store = Store::new();
+    store.task(&store.work, "w1", "Pair", "assignees: [ana, ben]\n");
+    store.task(&store.plain, "p1", "Plain", "assignees: [ana]\n");
+    let text = |arguments: &[&str]| {
+        let output = store
+            .sandbox
+            .command()
+            .args(arguments)
+            .assert()
+            .get_output()
+            .clone();
+        assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+        stdout(&output)
+    };
+    let shown = text(&["task", "show", "work:w1"]);
+    assert!(
+        shown
+            .lines()
+            .any(|line| line.starts_with("assignees:") && line.ends_with("ana, ben")),
+        "{shown}"
+    );
+    // A folder that has not opted in prints the lines it always printed, whatever its file says.
+    let shown = text(&["task", "show", "plain:p1"]);
+    assert!(!shown.contains("assignees"), "{shown}");
+
+    let set = text(&["task", "assignee", "set", "work:w1", "cara"]);
+    assert!(
+        set.lines()
+            .any(|line| line.starts_with("assignees:") && line.ends_with("cara")),
+        "{set}"
+    );
+    let set = text(&["task", "assignee", "set", "work:w1"]);
+    assert!(
+        set.lines()
+            .any(|line| line.starts_with("assignees:") && line.ends_with("none")),
+        "{set}"
+    );
+}
+
+#[test]
+fn an_in_memory_source_configured_with_assignees_it_has_not_opted_in_to_is_refused_at_load() {
+    let sandbox = Sandbox::new();
+    let status = json!({"category": "todo", "name": "todo"});
+    sandbox.project_document(
+        &json!({"sources": {"bare": {"plugin": "in-memory", "config": {"tasks": [
+            {"id": "b1", "title": "Bare", "labels": [], "status": status, "assignees": ["ana"]},
+        ]}}}})
+        .to_string(),
+    );
+    let output = sandbox
+        .command()
+        .args(["task", "show", "bare:b1"])
+        .assert()
+        .get_output()
+        .clone();
+    assert_ne!(output.status.code(), Some(0), "{}", stdout(&output));
+    let said = stderr(&output);
+    assert!(
+        said.contains("b1") && said.contains("assignees: true"),
+        "names the task and the setting: {said}"
+    );
+}
+
+#[test]
+fn a_project_copy_holding_a_task_assigned_to_two_is_refused_whole_writing_nothing() {
+    let store = Store::new();
+    std::fs::create_dir_all(store.work.join("projects")).expect("a project folder");
+    std::fs::write(
+        store.work.join("projects").join("plan.md"),
+        "---\ntitle: Plan\nstatus: todo\n---\nThe plan.\n",
+    )
+    .expect("a project file");
+    store.task(
+        &store.work,
+        "w1",
+        "Single",
+        "project: plan\nassignees: [ana]\n",
+    );
+    store.task(
+        &store.work,
+        "w2",
+        "Pair",
+        "project: plan\nassignees: [ana, ben]\n",
+    );
+    let output = store.run(&["project", "copy", "work:plan", "--to", "copies"], None);
+    assert_ne!(output.status.code(), Some(0), "{}", stdout(&output));
+    let said = format!("{}{}", stdout(&output), stderr(&output));
+    assert!(
+        said.contains("work:w2") && said.contains("2 assignees"),
+        "names the task and how many it holds: {said}"
+    );
+    assert!(
+        Store::files(&store.copies).is_empty(),
+        "no task was written"
+    );
+    assert!(
+        !store.copies.join("projects").exists()
+            || std::fs::read_dir(store.copies.join("projects"))
+                .expect("the project folder")
+                .next()
+                .is_none(),
+        "no project was written"
+    );
+}
