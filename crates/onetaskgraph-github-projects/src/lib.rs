@@ -712,10 +712,15 @@ pub const COPY_DETAIL_BATCH: usize = 21;
 /// `addSubIssue` and an `addBlockedBy`, and every one ran — and no more was established.
 pub const MUTATION_BATCH: usize = 11;
 
-/// How many people one [`graphql::USER_IDS`] request looks up by login: more than any one call
-/// names in practice — each item of a write names one person at most — so a call naming people
-/// not yet resolved costs one request.
-pub const PEOPLE_BATCH: usize = 20;
+/// The most people one lookup ([`graphql::user_ids`]) asks for: GitHub's documented limit of
+/// [`NODE_COUNT_LIMIT`] nodes a request, each `user(login:)` field being one. Every person a
+/// call names that this process has not resolved is looked up in one request below it — so a
+/// call is split only past it.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "500,000 fits every target's usize"
+)]
+pub const PEOPLE_PER_LOOKUP: usize = NODE_COUNT_LIMIT as usize;
 
 /// The most relation writes — `addSubIssue`, `removeSubIssue`, `addRelatesTo`,
 /// `removeRelatesTo` — one request carries: a 60-alias `addRelatesTo` answered HTTP 504 after
@@ -2576,14 +2581,58 @@ pub mod graphql {
         .map(|(_, whole)| whole)
     }
 
-    /// The node id of up to [`PEOPLE_BATCH`](super::PEOPLE_BATCH) people by their logins, each
-    /// as an aliased `user(login:)` field, `u<n>` answering `$login<n>`: what an assignee write
-    /// names a person by, since `assigneeIds` takes node ids and a person is named by login.
+    /// The node id of one person by their login, as the aliased field `u0` answering `$login0`:
+    /// what an assignee write names a person by, since `assigneeIds` takes node ids and a person
+    /// is named by login.
     ///
-    /// Fixed-size, as [`ISSUE_DETAILS`] is: a call naming fewer people binds the slots it has no
-    /// person for to the last one it does. GitHub answers a login it does not know with `null`
-    /// at that alias beside a `NOT_FOUND` error naming it, and the others' ids beside them.
-    pub const USER_IDS: &str = "query($login0:String!,$login1:String!,$login2:String!,$login3:String!,$login4:String!,$login5:String!,$login6:String!,$login7:String!,$login8:String!,$login9:String!,$login10:String!,$login11:String!,$login12:String!,$login13:String!,$login14:String!,$login15:String!,$login16:String!,$login17:String!,$login18:String!,$login19:String!){ u0:user(login:$login0){id login} u1:user(login:$login1){id login} u2:user(login:$login2){id login} u3:user(login:$login3){id login} u4:user(login:$login4){id login} u5:user(login:$login5){id login} u6:user(login:$login6){id login} u7:user(login:$login7){id login} u8:user(login:$login8){id login} u9:user(login:$login9){id login} u10:user(login:$login10){id login} u11:user(login:$login11){id login} u12:user(login:$login12){id login} u13:user(login:$login13){id login} u14:user(login:$login14){id login} u15:user(login:$login15){id login} u16:user(login:$login16){id login} u17:user(login:$login17){id login} u18:user(login:$login18){id login} u19:user(login:$login19){id login}}";
+    /// The inventoried form of the lookup. What is sent is this document sized to the call
+    /// ([`user_ids`]): one `u<n>:user(login:$login<n>)` field per person the call names that
+    /// this process has not resolved, so one request answers every one of them. GitHub answers a
+    /// login it does not know with `null` at that alias beside a `NOT_FOUND` error naming it,
+    /// and the others' ids beside them.
+    pub const USER_IDS: &str = "query($login0:String!){ u0:user(login:$login0){id login}}";
+
+    /// [`USER_IDS`] for `people` logins — `$login0` to `$login<people - 1>`, each answered at
+    /// its own alias — and [`USER_IDS`] itself for one.
+    #[must_use]
+    pub fn user_ids(people: usize) -> String {
+        let people = people.max(1);
+        let declared: Vec<String> = (0..people)
+            .map(|slot| format!("$login{slot}:String!"))
+            .collect();
+        let fields: Vec<String> = (0..people)
+            .map(|slot| format!("u{slot}:user(login:$login{slot}){{id login}}"))
+            .collect();
+        format!("query({}){{ {}}}", declared.join(","), fields.join(" "))
+    }
+
+    /// The document a request sending `document` with `variables` really sends: [`USER_IDS`]
+    /// sized to the logins `variables` binds, and every other document as it is.
+    #[must_use]
+    pub fn sized<'a>(
+        document: &'a str,
+        variables: &serde_json::Value,
+    ) -> std::borrow::Cow<'a, str> {
+        if document != USER_IDS {
+            return std::borrow::Cow::Borrowed(document);
+        }
+        let people = (0..)
+            .take_while(|slot| variables.get(format!("login{slot}")).is_some())
+            .count();
+        std::borrow::Cow::Owned(user_ids(people))
+    }
+
+    /// The inventoried document `document` is an instance of: [`USER_IDS`] for any lookup
+    /// [`user_ids`] sized, and `document` itself otherwise.
+    #[must_use]
+    pub fn inventoried(document: &str) -> &str {
+        let people = document.matches(":user(login:$login").count();
+        if people > 0 && user_ids(people) == document {
+            USER_IDS
+        } else {
+            document
+        }
+    }
 
     /// The selection of an issue's — or a draft's — assignees, as a source opted in to them
     /// (`config.assignees: true`) adds it to every document that reads one; see
@@ -3272,6 +3321,7 @@ pub(crate) fn is_mutation(query: &str) -> bool {
 /// a document added without a description is caught by that list's own gate instead of
 /// falling through to the vague arm below.
 fn operation_description(query: &str) -> &'static str {
+    let query = graphql::inventoried(query);
     graphql::DOCUMENTS
         .iter()
         .find(|(document, _)| *document == query)
@@ -4500,9 +4550,13 @@ pub struct GitHubProjectsSource {
     assignees: bool,
     /// The GitHub node id of each person an assignee write of this process has named, by
     /// lowercased login — `None` for a login GitHub said it does not know — so a later call
-    /// naming one sends no lookup. Each write that fails forgets the people it named, so the
-    /// next call naming them asks GitHub again.
+    /// naming one sends no lookup. A write that fails, or is answered with other people, has the
+    /// people it named forgotten when its call ends ([`Self::forgotten`]), so the next call
+    /// naming them asks GitHub again while the rest of its own call does not.
     people: Mutex<BTreeMap<String, Option<String>>>,
+    /// The node ids of the people a failed or mismatched assignee write of this call named,
+    /// forgotten from [`Self::people`] when the call ends.
+    forgotten: Mutex<Vec<String>>,
     /// Built on the first request rather than with the source, as [`Self::client`] says.
     client: std::sync::OnceLock<Client>,
     /// Built on the first attachment request, as [`Self::asset_client`] says.
@@ -5866,6 +5920,7 @@ impl GitHubProjectsSource {
             sub_issues: config.sub_issues,
             assignees: config.assignees,
             people: Mutex::new(BTreeMap::new()),
+            forgotten: Mutex::new(Vec::new()),
             link_types: onetaskgraph_plugin_api::LinkTypes::checked(
                 KIND,
                 &config.link_types,
@@ -6289,7 +6344,11 @@ impl GitHubProjectsSource {
         variables: &Value,
         number: u32,
     ) -> Result<Value, Attempt> {
-        let executed = self.ledger.priced_document(query);
+        // A lookup goes out sized to the people it names, and the record names and counts it as
+        // what it is; everything that decides how it is retried or read compares `query`, the
+        // constant it was written as.
+        let sized = graphql::sized(query, variables);
+        let executed = self.ledger.priced_document(sized.as_ref());
         let Attempted {
             result,
             limits,
@@ -6298,7 +6357,7 @@ impl GitHubProjectsSource {
         } = self.attempt(executed.as_ref(), variables).await;
         // No `otherwise` name: every document this source sends is one of its own, and the
         // inventory gate on `graphql::DOCUMENTS` is what keeps that true.
-        let sending = accounting::Request::graphql(query, variables, None, reported_cost);
+        let sending = accounting::Request::graphql(sized.as_ref(), variables, None, reported_cost);
         let outcome = match &result {
             Ok(_) => accounting::Outcome::Answered,
             Err(Attempt::Limited(_)) => accounting::Outcome::RateLimited,
@@ -6459,6 +6518,8 @@ impl GitHubProjectsSource {
         {
             return Err(Attempt::Conflicted(said));
         }
+        // A lookup is read as the inventoried document it was sized from.
+        let query = graphql::inventoried(query);
         let answered = if query == graphql::ISSUES_BY_REFERENCE {
             self.answer_unresolved(&body)
         } else if [
@@ -16384,6 +16445,7 @@ impl TaskSource for GitHubProjectsSource {
         clear(&self.held_comments);
         clear(&self.task_writes);
         clear(&self.written_tokens);
+        self.forget_at_end_of_call();
         self.expected.end_command();
         Ok(())
     }

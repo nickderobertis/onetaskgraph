@@ -106,18 +106,22 @@ fn people_of(input: &Value) -> Vec<String> {
         .collect()
 }
 
-/// The answer to [`graphql::USER_IDS`], or `None` for any other document.
+/// The answer to a lookup of people by login — [`graphql::USER_IDS`] sized to the call — or
+/// `None` for any other document.
 pub(super) fn answer(
     board: &Arc<Mutex<GitHubBoard>>,
     query: &str,
     variables: &Value,
 ) -> Option<Value> {
-    if query != graphql::USER_IDS {
+    if graphql::inventoried(query) != graphql::USER_IDS {
         return None;
     }
     let mut held = board.lock().unwrap();
     let mut data = json!({});
-    for slot in 0..onetaskgraph_github_projects::PEOPLE_BATCH {
+    let people = (0..)
+        .take_while(|slot| variables.get(format!("login{slot}")).is_some())
+        .count();
+    for slot in 0..people {
         let alias = format!("u{slot}");
         let login = variables[format!("login{slot}")]
             .as_str()

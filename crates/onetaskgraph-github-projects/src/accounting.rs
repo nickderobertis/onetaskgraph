@@ -882,6 +882,7 @@ impl Request {
 
 /// What this source calls the document it just sent, from the inventory rather than a copy.
 fn document_name(document: &str) -> &str {
+    let document = graphql::inventoried(document);
     graphql::DOCUMENTS
         .iter()
         .find(|(known, _)| *known == document)

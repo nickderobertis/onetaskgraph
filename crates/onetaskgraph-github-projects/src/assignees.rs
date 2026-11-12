@@ -8,8 +8,11 @@
 //! **Written** as one person or none, by login, replacing whoever the issue holds: in the
 //! `assigneeIds` of the `createIssue` or `updateIssue` the write already sends. GitHub takes node
 //! ids there, so each login is looked up first — every login a call names that this process has
-//! not resolved, in one [`graphql::USER_IDS`] request — and kept for the rest of the process; a
-//! write that fails forgets the people it named. GitHub silently leaves off a person who cannot
+//! not resolved, in one request of [`graphql::USER_IDS`] sized to them ([`graphql::user_ids`]),
+//! split only past GitHub's own node limit — and kept for the rest of the process. A write that
+//! fails, or is answered with other people, has the people it named forgotten when its call ends:
+//! the rest of the call does not look them up again, and the next call does. GitHub silently
+//! leaves off a person who cannot
 //! be assigned to the issue's repository, so the success of the call is never taken as the
 //! answer: each write's own answer selects the people the issue holds afterwards, and an answer
 //! that differs from what was asked refuses that item, naming the person.
@@ -20,7 +23,7 @@ use std::sync::MutexGuard;
 use onetaskgraph_plugin_api::SourceError;
 use serde_json::{Map, Value, json};
 
-use super::{ANSWER_ERRORS, GitHubProjectsSource, PEOPLE_BATCH, graphql, required_str};
+use super::{ANSWER_ERRORS, GitHubProjectsSource, PEOPLE_PER_LOOKUP, graphql, required_str};
 
 /// Every login an issue's — or a draft's — `assignees` connection holds, in the order GitHub
 /// answered them, read by a source opted in to assignees: every document such a source sends
@@ -149,10 +152,10 @@ impl GitHubProjectsSource {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// Look up every login of `logins` this process has not resolved yet, in one
-    /// [`graphql::USER_IDS`] request per [`PEOPLE_BATCH`] of them — none at all when every one is
-    /// resolved. A login GitHub does not know is kept as such, and refused by
-    /// [`Self::people_ids`] for the write naming it alone.
+    /// Look up every login of `logins` this process has not resolved yet in one
+    /// [`graphql::USER_IDS`] request sized to them — split only past [`PEOPLE_PER_LOOKUP`],
+    /// GitHub's own limit — and none at all when every one is resolved. A login GitHub does not
+    /// know is kept as such, and refused by [`Self::people_ids`] for the write naming it alone.
     pub(super) async fn resolve_people<'a>(
         &self,
         logins: impl IntoIterator<Item = &'a String>,
@@ -168,10 +171,9 @@ impl GitHubProjectsSource {
                 }
             }
         }
-        for chunk in wanted.chunks(PEOPLE_BATCH) {
+        for chunk in wanted.chunks(PEOPLE_PER_LOOKUP) {
             let mut variables = Map::new();
-            for slot in 0..PEOPLE_BATCH {
-                let login = chunk.get(slot).or(chunk.last()).copied();
+            for (slot, login) in chunk.iter().enumerate() {
                 variables.insert(format!("login{slot}"), json!(login));
             }
             let data = self
@@ -249,16 +251,35 @@ impl GitHubProjectsSource {
             .collect()
     }
 
-    /// Forget every person `input`'s `assigneeIds` names, after a write naming them failed: the
-    /// next call naming them looks them up again.
+    /// Mark every person `input`'s `assigneeIds` names to be forgotten when this call ends,
+    /// after a write naming them failed or was answered with other people: the rest of this
+    /// call does not look them up again, and the next call naming them does.
     pub(super) fn forget_people(&self, input: &Value) {
         let Some(ids) = input.get("assigneeIds").and_then(Value::as_array) else {
             return;
         };
+        self.forgotten
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .extend(ids.iter().filter_map(Value::as_str).map(str::to_owned));
+    }
+
+    /// Forget every person a failed or mismatched write of the call now ending named, so the
+    /// next call naming them looks them up again.
+    pub(super) fn forget_at_end_of_call(&self) {
+        let ids = std::mem::take(
+            &mut *self
+                .forgotten
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        if ids.is_empty() {
+            return;
+        }
         self.people().retain(|_, held| {
             !held
                 .as_deref()
-                .is_some_and(|held| ids.iter().any(|id| id.as_str() == Some(held)))
+                .is_some_and(|held| ids.iter().any(|id| id == held))
         });
     }
 

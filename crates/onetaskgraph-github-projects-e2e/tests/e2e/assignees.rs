@@ -617,10 +617,10 @@ fn a_draft_reads_as_assigned_to_nobody_and_an_assignee_written_to_it_is_refused_
 }
 
 #[test]
-fn a_failed_assignment_forgets_the_person_and_the_next_write_in_the_process_looks_them_up_again() {
+fn a_failed_assignment_sends_no_second_lookup_for_its_person_within_the_same_call() {
     // Two updates of one task in one call are written one after the other, the second on what
-    // the first left: so a second write naming the same person is a later write of the same
-    // process, and how many lookups the call sent says whether it remembered them.
+    // the first left: a later write of the same call, whose lookups say whether the call looked
+    // its person up once.
     let store = Assigning::new();
     let twice = |id: &str, person: &str| {
         json!([
@@ -633,12 +633,13 @@ fn a_failed_assignment_forgets_the_person_and_the_next_write_in_the_process_look
     assert_eq!(outcomes(&answer), ["written", "written"], "{answer}");
     assert_eq!(lookups(&kept), 1, "{kept:#?}");
 
-    // A person the board leaves off fails the first write, which forgets them, so the second
-    // write looks them up again — and fails the same way.
+    // A person the board leaves off fails the first write, which forgets them only once the
+    // call ends: the second write of the same call is sent with the id the call's one lookup
+    // found, and fails the same way.
     store.board.leave_off_when_assigned("pat");
-    let (answer, forgot) = store.update_many(&twice("A-4", "pat"), 4);
+    let (answer, failed) = store.update_many(&twice("A-4", "pat"), 4);
     assert_eq!(outcomes(&answer), ["error", "error"], "{answer}");
-    assert_eq!(lookups(&forgot), 2, "{forgot:#?}");
+    assert_eq!(lookups(&failed), 1, "{failed:#?}");
     assert_eq!(store.people("board:A-4"), json!([]));
 }
 
@@ -716,9 +717,9 @@ fn a_create_github_answers_assigned_otherwise_takes_the_new_issue_back_on_either
 }
 
 #[test]
-fn more_people_than_one_lookup_asks_for_are_resolved_in_two_and_the_second_answers_its_people() {
-    // Twenty people GitHub does not know fill the first lookup; the two it knows come after
-    // them, so only the second lookup can answer them.
+fn twenty_two_unseen_people_are_resolved_in_one_lookup_that_answers_each_of_them() {
+    // Twenty people GitHub does not know, then two it knows: one lookup asks for all twenty-two
+    // and answers the last two as well as the first.
     let store = Assigning::new();
     let mut updates: Vec<Value> = (0..20)
         .map(
@@ -728,7 +729,13 @@ fn more_people_than_one_lookup_asks_for_are_resolved_in_two_and_the_second_answe
     updates.push(json!({"item": "board:A-1", "assignee": "octocat"}));
     updates.push(json!({"item": "board:A-2", "assignee": "hubot"}));
     let (answer, served) = store.update_many(&Value::Array(updates), 4);
-    assert_eq!(lookups(&served), 2, "{served:#?}");
+    assert_eq!(lookups(&served), 1, "{served:#?}");
+    let asked = served
+        .iter()
+        .find(|(document, _)| document.contains(":user(login:"))
+        .map(|(_, variables)| variables.as_object().map_or(0, serde_json::Map::len))
+        .unwrap_or_default();
+    assert_eq!(asked, 22, "the one lookup names every one of them");
     let outcomes = outcomes(&answer);
     assert_eq!(&outcomes[..20], ["error"; 20], "{answer}");
     assert_eq!(&outcomes[20..], ["written", "written"], "{answer}");
@@ -736,6 +743,63 @@ fn more_people_than_one_lookup_asks_for_are_resolved_in_two_and_the_second_answe
     assert!(reason.contains("ghost0"), "{reason}");
     assert_eq!(store.people("board:A-1"), json!(["octocat"]));
     assert_eq!(store.people("board:A-2"), json!(["hubot"]));
+}
+
+#[test]
+fn a_person_a_failed_write_named_is_looked_up_again_by_the_next_call_and_not_before() {
+    // One engine is one process; `end_command` is where one of its calls ends and the next
+    // begins.
+    let store = Assigning::new();
+    store.board.leave_off_when_assigned("pat");
+    let environment = onetaskgraph_core::Environment::from_pairs([
+        (
+            "XDG_CONFIG_HOME",
+            store.sandbox.config_home().to_string_lossy().into_owned(),
+        ),
+        (
+            "XDG_CACHE_HOME",
+            store.cache_home.to_string_lossy().into_owned(),
+        ),
+    ]);
+    let loaded = onetaskgraph_core::config::load(
+        &store.sandbox.project(),
+        &environment,
+        &onetaskgraph_core::config::Layer::default(),
+    )
+    .expect("the configuration loads");
+    let engine = onetaskgraph_core::Engine::build(&loaded.config, &loaded.secrets);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a runtime");
+    let assign = |id: &str, person: &str| {
+        let mark = store.board.served_count();
+        let id: onetaskgraph_core::GlobalId = id.parse().expect("an id");
+        let answer = runtime.block_on(engine.set_task_assignee(&id, Some(person)));
+        (answer, lookups(&store.board.served_since(mark)))
+    };
+    let (failed, looked) = assign("board:A-4", "pat");
+    assert!(failed.is_err(), "pat is left off: {failed:?}");
+    assert_eq!(looked, 1, "the call resolves pat");
+    let (failed, looked) = assign("board:A-5", "pat");
+    assert!(failed.is_err(), "{failed:?}");
+    assert_eq!(looked, 0, "the same call does not look pat up again");
+    runtime
+        .block_on(engine.end_command())
+        .expect("the call ends");
+    let (failed, looked) = assign("board:A-6", "pat");
+    assert!(failed.is_err(), "{failed:?}");
+    assert_eq!(looked, 1, "the next call looks pat up afresh");
+    // A person whose write landed is kept across calls.
+    let (written, looked) = assign("board:A-7", "hubot");
+    assert!(written.is_ok(), "{written:?}");
+    assert_eq!(looked, 1);
+    runtime
+        .block_on(engine.end_command())
+        .expect("the call ends");
+    let (written, looked) = assign("board:A-8", "hubot");
+    assert!(written.is_ok(), "{written:?}");
+    assert_eq!(looked, 0, "hubot stays resolved");
 }
 
 /// Apply `change` to every `assignees` connection `data` holds, wherever it is.
@@ -848,12 +912,12 @@ fn a_lookup_answered_without_an_id_or_without_its_not_found_error_is_refused_as_
 }
 
 #[test]
-fn a_write_answered_with_a_person_missing_an_id_or_login_is_refused_and_forgets_the_people_it_named()
+fn a_write_answered_with_a_person_missing_an_id_or_login_is_refused_and_the_call_looks_nobody_up_twice()
  {
     // Updates of one task in one call are written one after the other, each on what the one
     // before left: the first lands but is answered malformed, the second unassigns, and the
-    // third assigns the same person again — a later write of the same process, whose lookup says
-    // whether the first forgot them.
+    // third assigns the same person again — a later write of the same call, which the call's one
+    // lookup still answers.
     let store = Assigning::new();
     store
         .board
@@ -879,8 +943,8 @@ fn a_write_answered_with_a_person_missing_an_id_or_login_is_refused_and_forgets_
     assert!(reason.contains("no id or no login"), "{reason}");
     assert_eq!(
         lookups(&served),
-        2,
-        "the person was looked up again: {served:#?}"
+        1,
+        "the call's one lookup answers its later writes too: {served:#?}"
     );
     assert_eq!(store.people("board:A-6"), json!(["hubot"]));
 }

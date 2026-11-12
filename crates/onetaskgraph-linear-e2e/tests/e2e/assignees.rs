@@ -19,6 +19,13 @@ use crate::linear::{eng_mapping, held, issue, linear};
 /// The workspace's three users, by id and display name.
 const USERS: [(&str, &str); 3] = [("U-ADA", "ada"), ("U-BOB", "bob"), ("U-CY", "cy")];
 
+/// Whether `query` is a lookup of people by display name: `USERS` itself, or that document
+/// aliased once a page of 250 names.
+fn is_lookup(query: &str) -> bool {
+    query == graphql::USERS
+        || (2..=40).any(|connections| graphql::aliased(graphql::USERS, connections) == query)
+}
+
 /// Five issues in the project `P-1` — `A-1` assigned to ada, the rest to nobody — and the
 /// workspace's users.
 fn workspace() -> Value {
@@ -74,7 +81,7 @@ impl Ran {
     fn lookups(&self) -> usize {
         self.sent
             .iter()
-            .filter(|(query, _)| query == graphql::USERS)
+            .filter(|(query, _)| is_lookup(query))
             .count()
     }
 
@@ -99,7 +106,7 @@ impl Ran {
     fn without_assignees(&self) -> Vec<(String, Value)> {
         self.sent
             .iter()
-            .filter(|(query, _)| query != graphql::USERS)
+            .filter(|(query, _)| !is_lookup(query))
             .map(|(query, variables)| {
                 let mut variables = variables.clone();
                 for (name, input) in variables.as_object_mut().into_iter().flatten() {
@@ -493,7 +500,7 @@ fn a_person_resolved_once_is_not_looked_up_again_by_a_later_call_of_the_same_pro
         team.workspace
             .served_since(mark)
             .iter()
-            .filter(|(query, _)| query == graphql::USERS)
+            .filter(|(query, _)| is_lookup(query))
             .count()
     };
     let assign = |id: &str, person: Option<&str>| {
@@ -876,22 +883,26 @@ fn attempt(
         .workspace
         .served_since(mark)
         .iter()
-        .filter(|(query, _)| query == graphql::USERS)
+        .filter(|(query, _)| is_lookup(query))
         .count();
     (answered, lookups)
 }
 
 #[test]
-fn a_mismatched_or_failed_assignment_lets_go_of_every_person_resolved_so_the_next_resolves_afresh()
-{
+fn a_mismatched_or_failed_assignment_lets_go_of_the_people_resolved_when_its_call_ends() {
     let team = Team::new();
     let (engine, runtime) = long_lived(&team);
     let attempt = |id: &str, person: &str| attempt(&team, &engine, &runtime, id, person);
+    let end_call = || {
+        runtime
+            .block_on(engine.end_command())
+            .expect("the call ends");
+    };
     assert_eq!(attempt("team:A-2", "bob"), (Ok(vec!["bob".to_owned()]), 1));
     assert_eq!(
         attempt("team:A-3", "bob"),
         (Ok(vec!["bob".to_owned()]), 0),
-        "held: a later call naming bob resolves nothing"
+        "held: a later write naming bob resolves nothing"
     );
 
     // Linear answers the assignment with another person than it was sent.
@@ -906,14 +917,21 @@ fn a_mismatched_or_failed_assignment_lets_go_of_every_person_resolved_so_the_nex
     team.workspace.assign_instead("U-BOB", None);
     assert_eq!(
         attempt("team:A-5", "bob"),
+        (Ok(vec!["bob".to_owned()]), 0),
+        "the same call goes on with what its lookup found"
+    );
+    end_call();
+    assert_eq!(
+        attempt("team:A-4", "bob"),
         (Ok(vec!["bob".to_owned()]), 1),
-        "after the mismatch, bob is resolved afresh"
+        "the next call resolves bob afresh"
     );
     assert_eq!(
         attempt("team:A-2", "cy"),
         (Ok(vec!["cy".to_owned()]), 1),
         "cy is resolved, and held from here"
     );
+    end_call();
 
     // Linear refuses a write naming an assignee.
     team.workspace.refuse_writes_of("A-1");
@@ -923,10 +941,17 @@ fn a_mismatched_or_failed_assignment_lets_go_of_every_person_resolved_so_the_nex
     assert_eq!(team.workspace.assignee_of("A-1").as_deref(), Some("ada"));
     assert_eq!(
         attempt("team:A-3", "cy"),
+        (Ok(vec!["cy".to_owned()]), 0),
+        "the same call resolves nobody twice"
+    );
+    end_call();
+    assert_eq!(
+        attempt("team:A-4", "cy"),
         (Ok(vec!["cy".to_owned()]), 1),
-        "after the failure, cy is resolved afresh"
+        "after the call with the failure ends, cy is resolved afresh"
     );
     assert_eq!(team.assignees("team:A-3"), json!(["cy"]));
+    assert_eq!(team.assignees("team:A-4"), json!(["cy"]));
     assert_eq!(team.assignees("team:A-5"), json!(["bob"]));
 }
 
@@ -964,9 +989,9 @@ fn a_display_name_unknown_in_one_command_is_assignable_after_the_command_ends() 
 }
 
 #[test]
-fn more_names_than_one_lookup_asks_for_are_resolved_in_two_and_the_second_answers_its_people() {
-    // Two hundred and fifty names Linear holds no user under fill the first lookup; the two it
-    // knows come after them, so only the second lookup can answer them.
+fn two_hundred_fifty_two_unseen_names_are_resolved_in_one_lookup_that_answers_each_of_them() {
+    // Two hundred and fifty names Linear holds no user under, then two it knows: one lookup —
+    // two `users` connections of one document — asks for all 252 and answers the last two.
     let team = Team::new();
     let mut updates: Vec<Value> = (0..250)
         .map(|n| json!({"item": format!("team:A-{}", n % 3 + 3), "assignee": format!("stranger{n}")}))
@@ -979,7 +1004,21 @@ fn more_names_than_one_lookup_asks_for_are_resolved_in_two_and_the_second_answer
     );
     let ran = team.run(&["task", "update-many", "team", "--input", &input]);
     assert_ne!(ran.code, Some(0), "{}", ran.json);
-    assert_eq!(ran.lookups(), 2, "{:#?}", ran.sent.len());
+    assert_eq!(ran.lookups(), 1, "{:#?}", ran.sent.len());
+    let asked: usize = ran
+        .sent
+        .iter()
+        .filter(|(query, _)| is_lookup(query))
+        .flat_map(|(_, variables)| {
+            variables
+                .as_object()
+                .into_iter()
+                .flatten()
+                .filter(|(name, _)| name.starts_with("names"))
+                .map(|(_, names)| names.as_array().map_or(0, Vec::len))
+        })
+        .sum();
+    assert_eq!(asked, 252, "the one lookup names every one of them");
     let results = ran.json["results"].as_array().expect("results");
     assert_eq!(results.len(), 252);
     assert!(
@@ -1135,4 +1174,31 @@ fn a_lookup_answered_malformed_or_naming_one_display_name_twice_is_refused_writi
         assert!(ran.mutations().is_empty(), "{what}: {:#?}", ran.sent);
     }
     assert_eq!(team.assignees("team:A-2"), json!([]));
+}
+
+#[test]
+fn a_failed_assignment_followed_by_a_later_item_naming_the_same_person_costs_one_lookup() {
+    // One update-many is one call: the write of A-1 naming bob is refused, and the later item
+    // naming bob is written with the id the call's one lookup found.
+    let team = Team::new();
+    team.workspace.refuse_writes_of("A-1");
+    let input = team.file(
+        "failed.json",
+        &json!({"schema_version": 1, "updates": [
+            {"item": "team:A-1", "assignee": "bob"},
+            {"item": "team:A-2", "assignee": "bob"},
+        ]}),
+    );
+    let ran = team.run(&["task", "update-many", "team", "--input", &input]);
+    assert_ne!(ran.code, Some(0), "{}", ran.json);
+    assert_eq!(result(&ran, "team:A-1")["outcome"], "error", "{}", ran.json);
+    assert_eq!(
+        result(&ran, "team:A-2")["outcome"],
+        "written",
+        "{}",
+        ran.json
+    );
+    assert_eq!(ran.lookups(), 1, "{:#?}", ran.sent);
+    assert_eq!(team.assignees("team:A-1"), json!(["ada"]));
+    assert_eq!(team.assignees("team:A-2"), json!(["bob"]));
 }

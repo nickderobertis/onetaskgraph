@@ -1120,6 +1120,33 @@ fn every_document_an_opted_in_source_sends_validates_and_reads_back_as_written()
     assert_eq!(graphql::without_assignees(graphql::USER_IDS), None);
 }
 
+/// The lookup of the people an assignee write names, sized to a call: one person is the
+/// inventoried document itself, and any number is a document GitHub's complete published schema
+/// accepts, each `$login<n>` declared and answered at `u<n>`, recognised as that document.
+#[test]
+fn a_lookup_sized_to_any_number_of_people_is_the_inventoried_document_github_accepts() {
+    use onetaskgraph_github_projects::graphql;
+    assert_eq!(graphql::user_ids(1), graphql::USER_IDS);
+    for people in [1, 2, 22, 300] {
+        let document = graphql::user_ids(people);
+        github_schema::validate_document(&document)
+            .unwrap_or_else(|errors| panic!("{people} people: {errors:?}"));
+        assert_eq!(document.matches(":user(login:$login").count(), people);
+        assert!(document.contains(&format!("u{}:user(login:$login{})", people - 1, people - 1)));
+        assert_eq!(graphql::inventoried(&document), graphql::USER_IDS);
+        let variables: serde_json::Value = (0..people)
+            .map(|slot| (format!("login{slot}"), serde_json::json!("octocat")))
+            .collect::<serde_json::Map<_, _>>()
+            .into();
+        assert_eq!(graphql::sized(graphql::USER_IDS, &variables), document);
+    }
+    assert_eq!(graphql::inventoried(graphql::ISSUE), graphql::ISSUE);
+    assert_eq!(
+        graphql::sized(graphql::ISSUE, &serde_json::json!({"login0": "x"})),
+        graphql::ISSUE
+    );
+}
+
 /// The field setup's two writes, with the variables it sends, are what GitHub accepts — and
 /// the input 0.12.13 sent is refused with the message GitHub answered it with.
 #[test]

@@ -1963,6 +1963,9 @@ struct LinearSource {
     /// The display names this instance asked Linear for and Linear holds no user under, until
     /// [`TaskSource::end_command`]: each is refused again without another request.
     unknown_people: std::sync::Mutex<std::collections::BTreeSet<String>>,
+    /// Whether a failed or mismatched assignee write of this call asked for every resolved person
+    /// to be let go of when the call ends.
+    forget_at_end: std::sync::Mutex<bool>,
 }
 
 /// One item's dependency read in one direction, as [`LinearSource::edges_versions`] keys it.
@@ -2032,6 +2035,7 @@ impl LinearSource {
             link_types,
             assignees: config.assignees,
             unknown_people: std::sync::Mutex::new(std::collections::BTreeSet::new()),
+            forget_at_end: std::sync::Mutex::new(false),
         })
     }
 }
@@ -5879,6 +5883,7 @@ impl TaskSource for LinearSource {
             .clear();
         self.answered().clear();
         // A person may join the workspace between commands under a name refused before.
+        self.forget_people_at_end_of_call();
         self.forget_unknown_people();
         Ok(())
     }

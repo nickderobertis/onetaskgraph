@@ -387,8 +387,17 @@ fn pinned_schema_checks_selected_fields_arguments_and_fixture_keys() {
         // What a copy asks before it looks for each origin's counterpart.
         (graphql::COUNTERPART_LOOKUPS, None),
         (graphql::COUNTERPART_LOOKUPS_CACHED, None),
-        // What a source with `assignees: true` resolves a person's display name with.
+        // What a source with `assignees: true` resolves a person's display name with, and that
+        // document aliased once a 250 names — up to the 33 connections one request carries.
         (graphql::USERS, None),
+        (
+            Box::leak(graphql::aliased(graphql::USERS, 2).into_boxed_str()),
+            None,
+        ),
+        (
+            Box::leak(graphql::aliased(graphql::USERS, 33).into_boxed_str()),
+            None,
+        ),
     ] {
         // Each as a source with `assignees: true` sends it too, its issue selections widened
         // by the assignee — held to the schema, not to a fixture recorded without it.

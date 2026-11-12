@@ -60,16 +60,36 @@ impl Assigning {
 pub(crate) fn before(mut request: Value, data: &mut Value) -> (Value, Assigning) {
     let mut assigning = Assigning::default();
     let query = request["query"].as_str().unwrap_or_default().to_owned();
-    if query == graphql::USERS {
-        let names: Vec<&str> = request["variables"]["names"]
-            .as_array()
-            .map(|names| names.iter().filter_map(Value::as_str).collect())
-            .unwrap_or_default();
-        let nodes: Vec<Value> = users(data)
-            .into_iter()
-            .filter(|user| names.contains(&user["displayName"].as_str().unwrap_or_default()))
-            .collect();
-        assigning.users = Some(json!({"users": {"nodes": nodes}}));
+    // A lookup: `USERS` itself, or that document aliased once a page of names.
+    let connections = (1..)
+        .take_while(|count| query.contains(&format!(" a{}: ", count - 1)))
+        .last()
+        .filter(|count| graphql::aliased(graphql::USERS, *count) == query);
+    if query == graphql::USERS || connections.is_some() {
+        let answered = |names: &Value| -> Value {
+            let names: Vec<&str> = names
+                .as_array()
+                .map(|names| names.iter().filter_map(Value::as_str).collect())
+                .unwrap_or_default();
+            let nodes: Vec<Value> = users(data)
+                .into_iter()
+                .filter(|user| names.contains(&user["displayName"].as_str().unwrap_or_default()))
+                .collect();
+            json!({"nodes": nodes})
+        };
+        assigning.users = Some(match connections {
+            None => json!({"users": answered(&request["variables"]["names"])}),
+            Some(count) => Value::Object(
+                (0..count)
+                    .map(|at| {
+                        (
+                            format!("a{at}"),
+                            answered(&request["variables"][format!("names_{at}")]),
+                        )
+                    })
+                    .collect(),
+            ),
+        });
         return (request, assigning);
     }
     if let Some(plain) = graphql::without_assignees(&query) {
