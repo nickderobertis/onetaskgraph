@@ -65,11 +65,15 @@ pub enum BatchAnswer<T> {
         /// The version the source found the task at.
         found: Option<String>,
     },
-    /// The task did not hold what the write's guard names — a priority `when_priority` names,
-    /// or exactly the people `when_assignees` names — so nothing was written; this is the task
-    /// as the source read it.
+    /// Its priority was not one the write's guard names, so nothing was written; this is the
+    /// task as the source read it.
     // llmlint: ignore[invalid_states_unrepresentable] One answer type serves both batched writes so the plugin contract names one type, not two; a comment carries no guard, so no source answers a comment `PriorityHeld` (`comment_each` never does, and each override decides comments without one). A second answer type would rebuild every plugin for a variant nothing produces.
     PriorityHeld(Box<Task>),
+    /// It was not assigned to exactly the people the write's `when_assignees` names, so nothing
+    /// was written; this is the task as the source read it. Answered only once its priority
+    /// guard, when it has one, held.
+    // llmlint: ignore[invalid_states_unrepresentable] As `PriorityHeld`: a comment carries no guard, so no source answers a comment `AssigneesHeld`.
+    AssigneesHeld(Box<Task>),
     /// The source holds no such task.
     Missing,
 }
@@ -195,13 +199,17 @@ impl<'a> Guards<'a> {
         self.priority.is_empty() && self.assignees.is_none()
     }
 
-    /// Whether `task` holds what every guard set names.
+    /// The answer a guard that `task` does not meet writes in place of the write — its
+    /// priority guard decided first — or `None` when every guard set holds of it.
     #[must_use]
-    pub fn met_by(&self, task: &Task) -> bool {
-        (self.priority.is_empty() || self.priority.contains(&task.priority))
-            && self.assignees.is_none_or(|wanted| {
-                crate::work::same_assignees(task.assignees.as_deref().unwrap_or_default(), wanted)
-            })
+    pub fn held_by<T>(&self, task: &Task) -> Option<BatchAnswer<T>> {
+        if !self.priority.is_empty() && !self.priority.contains(&task.priority) {
+            return Some(BatchAnswer::PriorityHeld(Box::new(task.clone())));
+        }
+        let assigned = task.assignees.as_deref().unwrap_or_default();
+        self.assignees
+            .is_some_and(|wanted| !crate::work::same_assignees(assigned, wanted))
+            .then(|| BatchAnswer::AssigneesHeld(Box::new(task.clone())))
     }
 }
 
@@ -240,8 +248,8 @@ async fn decide<S: TaskSource + ?Sized, T>(
             found: task.version,
         }));
     }
-    if !guards.met_by(&task) {
-        return Ok(Decided::Answer(BatchAnswer::PriorityHeld(Box::new(task))));
+    if let Some(held) = guards.held_by(&task) {
+        return Ok(Decided::Answer(held));
     }
     Ok(Decided::Write(task.version))
 }
@@ -278,8 +286,5 @@ pub fn decided_on<S: TaskSource + ?Sized, T>(
             found: task.version.clone(),
         });
     }
-    if !guards.met_by(task) {
-        return Some(BatchAnswer::PriorityHeld(Box::new(task.clone())));
-    }
-    None
+    guards.held_by(task)
 }

@@ -654,7 +654,11 @@ impl Engine {
                     current_version: Some(found.unwrap_or_default()),
                     reason: None,
                 },
-                Ok(BatchAnswer::Missing | BatchAnswer::PriorityHeld(_)) => {
+                Ok(
+                    BatchAnswer::Missing
+                    | BatchAnswer::PriorityHeld(_)
+                    | BatchAnswer::AssigneesHeld(_),
+                ) => {
                     let reason = format!(
                         "{source} holds no task {}, so nothing was written on it",
                         GlobalId::new(source.clone(), written.task.clone())
@@ -802,7 +806,7 @@ impl Engine {
                     current_version: Some(found.unwrap_or_default()),
                     reason: None,
                 },
-                Ok(BatchAnswer::PriorityHeld(_)) => UpdateResult {
+                Ok(BatchAnswer::PriorityHeld(_) | BatchAnswer::AssigneesHeld(_)) => UpdateResult {
                     item,
                     outcome: BatchOutcome::Held,
                     version: None,
@@ -1003,6 +1007,16 @@ impl Engine {
                 found.unwrap_or_default(),
             )),
             BatchAnswer::Missing => Err(EngineError::NoSuchTask { id: id.to_string() }),
+            // This write names no assignee guard, so a source answering one held it by a guard
+            // it was never sent.
+            BatchAnswer::AssigneesHeld(_) => Err(super::delivery::source_failed(
+                resolved,
+                onetaskgraph_plugin_api::SourceError::Malformed {
+                    message: format!(
+                        "{id} was answered held by an assignee guard this update never set"
+                    ),
+                },
+            )),
         }
     }
 }
