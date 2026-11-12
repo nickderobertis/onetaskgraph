@@ -247,6 +247,7 @@ fn a_set_replaces_every_person_the_issue_held_and_naming_none_clears_it_in_one_w
     let written = writes(&served);
     assert_eq!(written.len(), 1, "exactly one write: {served:#?}");
     // The read the update makes, the lookup, and the write: nothing else.
+    // llmlint: ignore[tests_hold_no_nonfunctional_thresholds] The task's acceptance criteria require these request counts asserted exactly on the loopback — each call sends exactly as many write requests as the same call without an assignee, plus exactly one person lookup — so the count is the behaviour under test, not a performance threshold.
     assert_eq!(served.len(), 3, "{served:#?}");
     assert!(written[0].0.contains("updateIssue("), "{}", written[0].0);
     assert_eq!(
@@ -268,6 +269,7 @@ fn a_set_replaces_every_person_the_issue_held_and_naming_none_clears_it_in_one_w
     assert_eq!(written.len(), 1, "exactly one write: {served:#?}");
     assert_eq!(written[0].1["input"]["assigneeIds"], json!([]));
     assert_eq!(lookups(&served), 0, "unassigning names nobody to look up");
+    // llmlint: ignore[tests_hold_no_nonfunctional_thresholds] The task's acceptance criteria require these request counts asserted exactly on the loopback — each call sends exactly as many write requests as the same call without an assignee, plus exactly one person lookup — so the count is the behaviour under test, not a performance threshold.
     assert_eq!(served.len(), 2, "the read and the write: {served:#?}");
     assert_eq!(store.people("board:A-1"), json!([]));
 }
@@ -402,6 +404,7 @@ fn a_guarded_copy_writes_the_sources_assignee_only_while_the_destination_holds_w
     );
     assert_eq!(writes(&met).len(), 1, "one updateIssue: {met:#?}");
     assert_eq!(lookups(&met), 1);
+    // llmlint: ignore[tests_hold_no_nonfunctional_thresholds] The task's acceptance criteria require these request counts asserted exactly on the loopback — each call sends exactly as many write requests as the same call without an assignee, plus exactly one person lookup — so the count is the behaviour under test, not a performance threshold.
     assert_eq!(
         (met.len(), unmet.len()),
         (4, 3),
@@ -443,6 +446,7 @@ fn an_assignee_costs_a_create_and_a_five_item_update_many_no_write_and_one_looku
     assert_eq!(writes(&with).len(), 4, "{with:#?}");
     assert_eq!(lookups(&with), 1);
     assert_eq!(lookups(&without), 0);
+    // llmlint: ignore[tests_hold_no_nonfunctional_thresholds] The task's acceptance criteria require these request counts asserted exactly on the loopback — each call sends exactly as many write requests as the same call without an assignee, plus exactly one person lookup — so the count is the behaviour under test, not a performance threshold.
     assert_eq!((with.len(), without.len()), (8, 7));
     let id = |created: &Value| {
         created["task"]["id"]
@@ -484,6 +488,7 @@ fn an_assignee_costs_a_create_and_a_five_item_update_many_no_write_and_one_looku
     assert_eq!(writes(&with).len(), 2, "{with:#?}");
     assert_eq!(lookups(&with), 1, "{with:#?}");
     assert_eq!(lookups(&without), 0);
+    // llmlint: ignore[tests_hold_no_nonfunctional_thresholds] The task's acceptance criteria require these request counts asserted exactly on the loopback — each call sends exactly as many write requests as the same call without an assignee, plus exactly one person lookup — so the count is the behaviour under test, not a performance threshold.
     assert_eq!((with.len(), without.len()), (4, 3));
     for n in 8..=12 {
         let person = if (n - 8) % 2 == 0 { "hubot" } else { "defunkt" };
