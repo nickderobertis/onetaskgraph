@@ -4557,6 +4557,9 @@ pub struct GitHubProjectsSource {
     /// The node ids of the people a failed or mismatched assignee write of this call named,
     /// forgotten from [`Self::people`] when the call ends.
     forgotten: Mutex<Vec<String>>,
+    /// GitHub's own spelling of each login this process looked up, by lowercased login: what a
+    /// write that assigned a person reports them as, however the caller spelled them.
+    spellings: Mutex<BTreeMap<String, String>>,
     /// Built on the first request rather than with the source, as [`Self::client`] says.
     client: std::sync::OnceLock<Client>,
     /// Built on the first attachment request, as [`Self::asset_client`] says.
@@ -5921,6 +5924,7 @@ impl GitHubProjectsSource {
             assignees: config.assignees,
             people: Mutex::new(BTreeMap::new()),
             forgotten: Mutex::new(Vec::new()),
+            spellings: Mutex::new(BTreeMap::new()),
             link_types: onetaskgraph_plugin_api::LinkTypes::checked(
                 KIND,
                 &config.link_types,
@@ -9862,8 +9866,10 @@ impl GitHubProjectsSource {
         if let Some((_, _, projected)) = projection_move {
             item.projected = projected;
         }
-        if let Some(people) = &update.assignees {
-            item.assignees = Some(people.clone());
+        // Only a write that assigned anyone moves whom the item holds, and they are who GitHub
+        // says they are; one naming the people it already holds leaves its read as it was.
+        if let (Some(people), Some(_)) = (&update.assignees, &assignee_ids) {
+            item.assignees = Some(self.spelled(people));
         }
         let mut task = item.task()?;
         let mut written = update.changed(&before, &task);

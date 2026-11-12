@@ -1010,3 +1010,106 @@ fn an_entry_cached_before_the_board_opted_in_is_read_again_rather_than_served_wi
         "{plain}"
     );
 }
+
+/// The destination each copied item landed at, by the item it was copied from.
+fn landed(report: &Value, source: &str) -> String {
+    report["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .find(|item| item["source"] == source)
+        .and_then(|item| item["destination"].as_str())
+        .unwrap_or_else(|| panic!("{source} landed nowhere: {report}"))
+        .to_owned()
+}
+
+#[test]
+fn tasks_created_together_resolve_every_person_in_one_lookup_whatever_case_names_them() {
+    let store = Assigning::new();
+    store.plan("p1", "one", "octocat");
+    store.plan("p2", "two", "HuBot");
+    store.plan("p3", "three", "hubot");
+    let (report, served) = store.ok(&[
+        "task", "copy", "plans:p1", "plans:p2", "plans:p3", "--to", "board",
+    ]);
+    // One lookup, naming each person once however the plan spelled them.
+    let lookups: Vec<&Value> = served
+        .iter()
+        .filter(|(document, _)| document.contains(":user(login:"))
+        .map(|(_, variables)| variables)
+        .collect();
+    assert_eq!(lookups.len(), 1, "{served:#?}");
+    assert_eq!(
+        lookups[0].as_object().map_or(0, serde_json::Map::len),
+        2,
+        "{}",
+        lookups[0]
+    );
+    // One document creates all three, each with its person's id.
+    let creates: Vec<&Value> = served
+        .iter()
+        .filter(|(document, _)| document.contains("createIssue(input:$create2)"))
+        .map(|(_, variables)| variables)
+        .collect();
+    assert_eq!(
+        creates.len(),
+        1,
+        "the three are created together: {served:#?}"
+    );
+    for (at, id) in [(0, "U_octocat"), (1, "U_hubot"), (2, "U_hubot")] {
+        assert_eq!(
+            creates[0][format!("create{at}")]["assigneeIds"],
+            json!([id]),
+            "{}",
+            creates[0]
+        );
+    }
+    for (plan, person) in [
+        ("plans:p1", "octocat"),
+        ("plans:p2", "hubot"),
+        ("plans:p3", "hubot"),
+    ] {
+        assert_eq!(
+            store.people(&landed(&report, plan)),
+            json!([person]),
+            "{plan}"
+        );
+    }
+    // Asked for the person it holds, in another case, an issue is written nothing.
+    let hubot = landed(&report, "plans:p3");
+    let (set, served) = store.ok(&["task", "assignee", "set", &hubot, "HUBOT"]);
+    assert_eq!(set["assignees"], json!(["hubot"]), "{set}");
+    assert!(writes(&served).is_empty(), "{served:#?}");
+}
+
+#[test]
+fn tasks_created_together_are_all_taken_back_when_github_leaves_one_person_off() {
+    let store = Assigning::new();
+    store.board.leave_off_when_assigned("pat");
+    store.plan("p1", "one", "octocat");
+    store.plan("p2", "two", "pat");
+    let (output, served) = store.run(
+        &["task", "copy", "plans:p1", "plans:p2", "--to", "board"],
+        None,
+    );
+    let said = format!("{}{}", stdout(&output), stderr(&output));
+    assert_ne!(output.status.code(), Some(0), "{said}");
+    assert!(said.contains("pat"), "{said}");
+    assert_eq!(
+        served
+            .iter()
+            .filter(|(document, _)| document.contains(":user(login:"))
+            .count(),
+        1,
+        "{served:#?}"
+    );
+    assert!(
+        served
+            .iter()
+            .any(|(document, _)| document.contains("createIssue(input:$create1)")),
+        "the two were created together: {served:#?}"
+    );
+    // Neither issue is left on the board: the copy took back both it created.
+    assert!(!store.board.holds_titled("Plan p1"), "{said}");
+    assert!(!store.board.holds_titled("Plan p2"), "{said}");
+}

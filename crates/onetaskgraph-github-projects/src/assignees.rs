@@ -200,6 +200,10 @@ impl GitHubProjectsSource {
                             login.to_lowercase(),
                             Some(required_str(user, "id")?.to_owned()),
                         ));
+                        self.spellings
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .insert(login.to_lowercase(), answered.to_owned());
                     }
                     None if not_found_at(&data, &alias) => found.push((login.to_lowercase(), None)),
                     None => {
@@ -246,6 +250,24 @@ impl GitHubProjectsSource {
 
     /// The login of the person whose node id is `id`, as this process looked them up — or the id
     /// itself, for one it never did.
+    /// `people` as GitHub spells each of them: its own login for every person this process
+    /// looked up, and as given otherwise.
+    pub(super) fn spelled(&self, people: &[String]) -> Vec<String> {
+        let spellings = self
+            .spellings
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        people
+            .iter()
+            .map(|person| {
+                spellings
+                    .get(&person.to_lowercase())
+                    .cloned()
+                    .unwrap_or_else(|| person.clone())
+            })
+            .collect()
+    }
+
     fn login_of(&self, id: &str) -> String {
         self.people()
             .iter()

@@ -1202,3 +1202,112 @@ fn a_failed_assignment_followed_by_a_later_item_naming_the_same_person_costs_one
     assert_eq!(team.assignees("team:A-1"), json!(["ada"]));
     assert_eq!(team.assignees("team:A-2"), json!(["bob"]));
 }
+
+/// Write the note `N-<at>` of `notes`, titled `title` and assigned to `person`.
+fn noted(team: &Team, at: usize, title: &str, person: &str) {
+    std::fs::write(
+        team.notes.join(format!("tasks/N-{at}.md")),
+        format!("---\ntitle: {title}\nstatus: todo\nassignees: [{person}]\n---\nA note.\n"),
+    )
+    .expect("a note");
+}
+
+/// The issue each copied note landed at, by note.
+fn landed(ran: &Ran, note: &str) -> String {
+    ran.json["items"]
+        .as_array()
+        .unwrap_or_else(|| panic!("items: {}", ran.json))
+        .iter()
+        .find(|item| item["source"] == note)
+        .and_then(|item| item["destination"].as_str())
+        .unwrap_or_else(|| panic!("{note} landed nowhere: {}", ran.json))
+        .to_owned()
+}
+
+#[test]
+fn tasks_created_together_resolve_every_person_in_one_lookup_and_each_holds_its_own() {
+    let team = Team::new();
+    noted(&team, 1, "Together one", "bob");
+    noted(&team, 2, "Together two", "cy");
+    noted(&team, 3, "Together three", "bob");
+    let ran = team.ok(&[
+        "task",
+        "copy",
+        "notes:N-1",
+        "notes:N-2",
+        "notes:N-3",
+        "--to",
+        "team",
+    ]);
+    assert_eq!(ran.lookups(), 1, "{:#?}", ran.sent);
+    let creates: Vec<&(String, Value)> = ran
+        .mutations()
+        .into_iter()
+        .filter(|(query, _)| query.contains("issueCreate"))
+        .collect();
+    assert_eq!(
+        creates.len(),
+        1,
+        "the three are created together: {:#?}",
+        ran.sent
+    );
+    assert_eq!(creates[0].0.matches("issueCreate(").count(), 3);
+    let named: Vec<Value> = ran
+        .sent
+        .iter()
+        .filter(|(query, _)| is_lookup(query))
+        .flat_map(|(_, variables)| variables["names"].as_array().cloned().unwrap_or_default())
+        .collect();
+    assert_eq!(named.len(), 2, "each person named once: {named:?}");
+    let mut sent = ran.assignee_ids();
+    sent.sort_by_key(ToString::to_string);
+    assert_eq!(
+        sent,
+        [json!("U-BOB"), json!("U-BOB"), json!("U-CY")],
+        "{:#?}",
+        ran.sent
+    );
+    for (note, person) in [
+        ("notes:N-1", "bob"),
+        ("notes:N-2", "cy"),
+        ("notes:N-3", "bob"),
+    ] {
+        assert_eq!(
+            team.assignees(&landed(&ran, note)),
+            json!([person]),
+            "{note}"
+        );
+    }
+}
+
+#[test]
+fn tasks_created_together_are_all_taken_back_when_linear_assigns_one_to_somebody_else() {
+    let team = Team::new();
+    team.workspace.assign_instead("U-CY", Some("U-ADA"));
+    noted(&team, 1, "Kept back one", "bob");
+    noted(&team, 2, "Kept back two", "cy");
+    let ran = team.run(&["task", "copy", "notes:N-1", "notes:N-2", "--to", "team"]);
+    assert_ne!(ran.code, Some(0), "{}", ran.json);
+    let said = format!("{}{}", ran.json, ran.stderr);
+    assert!(
+        said.contains("cy") && said.contains("ada"),
+        "names both: {said}"
+    );
+    assert_eq!(ran.lookups(), 1, "{:#?}", ran.sent);
+    team.workspace.assign_instead("U-CY", None);
+    let listed = team.ok(&["task", "list", "--source", "team", "--all"]);
+    let left: Vec<&Value> = listed.json["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .filter(|item| {
+            item["item"]["title"]
+                .as_str()
+                .is_some_and(|title| title.starts_with("Kept back"))
+        })
+        .collect();
+    assert!(
+        left.is_empty(),
+        "the copy took back what it created: {left:?}"
+    );
+}
