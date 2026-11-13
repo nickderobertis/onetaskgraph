@@ -606,7 +606,11 @@ fn every_value_is_one_code_span_whatever_backticks_spaces_or_line_breaks_it_hold
 fn a_caller_quoting_the_marker_keeps_every_byte_of_it_with_a_section_or_without() {
     // The marker quoted inline, and alone on a line before prose rather than a block: neither is
     // a section of the source's, so both read back as written.
-    let content = format!("Quoting {MARKER} inline.\n\n{MARKER}\n\nJust prose after it.");
+    // So is one opening a line with a block's opening after it on that same line.
+    let content = format!(
+        "Quoting {MARKER} inline.\n\n{MARKER}\n\nJust prose after it.\n\n{MARKER} +++ Fields\n\n\
+         More prose."
+    );
     let setup = Setup::new(true);
     let (id, sent) = copied_task(&setup, &content, &record());
     assert!(sent.contains("\n\n+++ Fields\n\n- **Host**"), "{sent}");
@@ -615,7 +619,12 @@ fn a_caller_quoting_the_marker_keeps_every_byte_of_it_with_a_section_or_without(
     let target = format!("linear:{id}");
     setup.run(&["task", "metadata", "set", &target, KEY, &empty, "--json"]);
     let stored = setup.workspace.long_form("tasks", &id).unwrap();
-    assert!(!stored.contains("+++ Fields"), "no section: {stored}");
+    assert!(!stored.contains("* **Host**"), "no section: {stored}");
+    assert_eq!(
+        stored.matches(MARKER).count(),
+        3,
+        "the caller's three, and no fourth: {stored}"
+    );
     assert_eq!(setup.show("task", &id)["content"], content.as_str());
     assert_eq!(
         setup.show_from("bare", "task", &id)["content"],
@@ -674,7 +683,7 @@ fn a_field_name_holding_markup_is_shown_as_written_and_keeps_the_section_whole()
 }
 
 #[test]
-fn every_entry_a_github_projects_source_refuses_a_linear_source_refuses_at_configuration_read() {
+fn the_entries_both_sources_refuse_a_linear_source_refuses_at_configuration_read() {
     let host = json!({"field": "Host", "key": KEY, "path": ["host"]});
     for (entries, said) in [
         (json!([{"field": " ", "key": KEY}]), "names a blank field"),
@@ -703,4 +712,56 @@ fn every_entry_a_github_projects_source_refuses_a_linear_source_refuses_at_confi
         }
         assert!(setup.workspace.served().is_empty(), "{entries}: no request");
     }
+}
+
+#[test]
+fn a_section_a_person_edited_is_never_read_and_is_written_afresh_by_the_next_write() {
+    let setup = Setup::new(true);
+    let (id, _) = copied_task(&setup, "Prose.", &record());
+    // A person edits the section's text in Linear, leaving the rest of the description as it is.
+    let held = setup.workspace.long_form("tasks", &id).unwrap();
+    let edited = held.replace(
+        "* **Host**: `workstation-1`",
+        "* **Host**: `edited by hand`",
+    );
+    assert_ne!(edited, held, "the section holds the host: {held}");
+    setup.workspace.edit_description(&id, &edited);
+    assert!(
+        setup
+            .workspace
+            .long_form("tasks", &id)
+            .unwrap()
+            .contains("edited by hand"),
+        "the person's edit is held"
+    );
+    // A read is the caller's content and the slot's metadata, as before the edit.
+    let shown = setup.show("task", &id);
+    assert_eq!(shown["content"], "Prose.");
+    assert_eq!(shown["metadata"][KEY], record());
+    // An unchanged copy sends no update for it.
+    let (_, unchanged) = setup.run(&["task", "copy", "plan:T-1", "--to", "linear", "--json"]);
+    assert_eq!(updates(&unchanged), 0, "{unchanged:#?}");
+    // The next write of the long form writes the section afresh from the slot.
+    let mut moved = record();
+    moved["host"] = json!("workstation-2");
+    let target = format!("linear:{id}");
+    let (_, served) = setup.run(&[
+        "task",
+        "metadata",
+        "set",
+        &target,
+        KEY,
+        &moved.to_string(),
+        "--json",
+    ]);
+    let sent = long_forms_sent(&served);
+    assert_eq!(sent.len(), 1, "{sent:#?}");
+    assert!(
+        sent[0].contains("- **Host**: `workstation-2`") && !sent[0].contains("edited by hand"),
+        "{}",
+        sent[0]
+    );
+    let stored = setup.workspace.long_form("tasks", &id).unwrap();
+    assert!(!stored.contains("edited by hand"), "{stored}");
+    assert_eq!(setup.show("task", &id)["content"], "Prose.");
 }

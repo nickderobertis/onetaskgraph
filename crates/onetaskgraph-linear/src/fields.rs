@@ -249,12 +249,14 @@ pub(crate) fn section(
 /// Where a section of this source's sits in `above` — the text of a long form above its
 /// metadata slot: the byte its marker starts at, or `None` when it holds none.
 ///
-/// A marker counts only on a line of its own, followed after blank lines by an expandable
-/// block in either form, so prose quoting the marker is never taken for one.
+/// A marker counts only alone on a line of its own, followed after blank lines by an
+/// expandable block in either form, so prose quoting the marker is never taken for one.
 pub(crate) fn marker_at(above: &str) -> Option<usize> {
     let at = above.rfind(MARKER)?;
     let own_line = at == 0 || above[..at].ends_with('\n');
-    let after = above[at + MARKER.len()..].trim_start_matches(['\n', ' ']);
+    // The marker ends its line, and only blank lines stand between it and the block.
+    let after = above[at + MARKER.len()..].strip_prefix('\n')?;
+    let after = after.trim_start_matches('\n');
     let block = after.starts_with("<details>\n") || after.starts_with("+++ ");
     (own_line && block).then_some(at)
 }
