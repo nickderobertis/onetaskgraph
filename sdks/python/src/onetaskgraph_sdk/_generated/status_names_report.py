@@ -62,6 +62,10 @@ class RefusedCreate(BaseModel):
     message: Annotated[str, Field(description="What Linear said.")]
 
 
+class SectionCarried(StrEnum):
+    SectionCarriedSection = "section"
+
+
 class MappedStatusName(BaseModel):
     kind: Annotated[
         ItemKind,
@@ -97,6 +101,23 @@ class MappedStatusName(BaseModel):
     ] = False
 
 
+class SectionFieldReport(BaseModel):
+    field: Annotated[str, Field(description="The name the value is shown under.")]
+    key: Annotated[str, Field(description="The top-level metadata key the value is read from.")]
+    path: Annotated[
+        list[str],
+        Field(
+            description="Object keys walked inside that key's value; absent when the key's own value is shown."
+        ),
+    ]
+    carried: Annotated[
+        SectionCarried,
+        Field(
+            description="Where the value is carried: always `section`, the item's `Fields` section."
+        ),
+    ]
+
+
 class StatusNamesReport(BaseModel):
     source: Annotated[SourceName, Field(description="The configured source name.")]
     team: Annotated[LinearTeam, Field(description="The configured team, as `team` names it.")]
@@ -112,3 +133,10 @@ class StatusNamesReport(BaseModel):
             description="The create Linear refused, which stopped an `--apply`; absent when nothing was refused."
         ),
     ] = None
+    metadata_fields: Annotated[
+        list[SectionFieldReport],
+        Field(
+            description="Each `metadata_fields` entry, in configuration order: each is shown in an item's\n`Fields` section rather than in a field Linear holds, so none is ever missing and\n`--apply` creates nothing for it. Absent when the source configures none.",
+            validate_default=True,
+        ),
+    ] = []

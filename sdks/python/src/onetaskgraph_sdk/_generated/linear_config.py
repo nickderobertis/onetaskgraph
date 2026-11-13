@@ -56,6 +56,30 @@ class LinkTypeConfig(BaseModel):
     ] = None
 
 
+class LinearMetadataField(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    field: Annotated[
+        str,
+        Field(
+            description="The name the value is shown under, in bold, in the item's `Fields` section."
+        ),
+    ]
+    key: Annotated[
+        str,
+        Field(
+            description="The top-level metadata key the value is read from. A key under the reserved\n`onetaskgraph.` prefix is refused."
+        ),
+    ]
+    path: Annotated[
+        list[str],
+        Field(
+            description="Object keys walked inside that key's value, outermost first. Absent or empty, the\nkey's own value is the one shown. Left out of a serialized entry when empty."
+        ),
+    ] = []
+
+
 class StatusNames1(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
@@ -137,3 +161,10 @@ class LinearConfig(BaseModel):
             description="Whether this source's tasks carry their assignee: `false`, the default, reads every task\nwithout an `assignees` member, refuses every write naming one and sends Linear exactly\nthe documents it sent before assignees existed; `true` reads each issue's\n`assignee{displayName}` — a Linear user's display name, unique within its workspace —\nand writes one person, or none, as the issue's `assigneeId`."
         ),
     ] = False
+    metadata_fields: Annotated[
+        list[LinearMetadataField],
+        Field(
+            description="Caller metadata values this source shows in one collapsed `Fields` section at the end\nof each task's, project's and document's visible description, since Linear has no\ncustom fields and never renders the slot the metadata is kept in.\n\nAbsent or empty, no section is written. Each entry names the `field` a value is shown\nunder, a top-level metadata `key` and an optional `path` of object keys walked inside\nthat key's value — the entries a `github-projects` source takes, refused at read for the\nsame reasons but for that source's own board field names. A string, an array of strings\nand an object of string values are shown, an empty one or nothing not at all; any other\nJSON type is refused before any mutation. The section is display only: the slot stays\nthe metadata's one home, every read gives back the caller's content without it, and\nevery write regenerates it. `docs/metadata.md` states its shape.",
+            validate_default=True,
+        ),
+    ] = []

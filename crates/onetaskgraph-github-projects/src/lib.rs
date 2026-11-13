@@ -89,10 +89,13 @@
 //! on it: each [`GitHubProjectsConfig::metadata_fields`] entry names a text field, a top-level
 //! metadata key and a path inside its value. The slot stays the value's one home — every read
 //! reports metadata from it alone — and the field follows it on every write of an item, a
-//! create, an update and a copy alike: a string is written, and not sent again while the field
-//! holds it — an empty string included, which is written as itself; nothing there or `null`
-//! clears a field holding a value; any other
-//! JSON type is refused before any mutation. It rides the ordered [`graphql::UPDATE_FIELDS`]
+//! create, an update and a copy alike: a string is written, an array of strings as one line per
+//! element and an object of string values as one `KEY: VALUE` line per entry in byte order of
+//! the keys, shortened past [`TEXT_FIELD_LIMIT`] to its leading whole lines and a line counting
+//! the rest, and none of them sent again while the field holds that text — an empty string,
+//! array or object included, which writes the empty string; nothing there or `null` clears a
+//! field holding a value; any other JSON type is refused before any mutation, the shared rule
+//! [`ProjectedValue`] decides. It rides the ordered [`graphql::UPDATE_FIELDS`]
 //! write beside `Status`, `Priority` and the origin, so it adds no request; a key set on its
 //! own moves its field first and the body last, as every write of an existing item does. A
 //! board without the field, or with a non-text field of that name, is refused before any
@@ -637,6 +640,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use onetaskgraph_plugin_api::ProjectedValue;
 use onetaskgraph_plugin_api::{
     Capabilities, Classification, ClosedAs, Comment, CommentBody, CommentOrigin, Completion,
     ContradictedItem, Coverage, Cursor, DependencyEdge, DependencyEndpoint, DependencyKind,
@@ -3510,9 +3514,12 @@ pub struct GitHubProjectsConfig {
     /// Absent or empty, nothing is projected. Each entry names a board text `field`, a
     /// top-level metadata `key` and an optional `path` of object keys walked inside that key's
     /// value. On every item write — create, update and copy, of a task, a project or a
-    /// document — a string found there is written to the field, and nothing is sent when the
-    /// field already holds it; nothing there, or `null`, clears the field when it holds a
-    /// value; any other JSON type is refused before any mutation. The metadata comment in the
+    /// document — a string found there is written to the field, an array of strings as one
+    /// line per element and an object of string values as one `KEY: VALUE` line per entry in
+    /// byte order of the keys, shortened to whole lines and a count of the rest past the
+    /// field's 1,024-byte limit; nothing is sent when the field already holds that text;
+    /// nothing there, or `null`, clears the field when it holds a value; any other JSON type
+    /// is refused before any mutation. `docs/metadata.md` states the rule. The metadata comment in the
     /// issue body stays the one home of the value, and every read reports metadata from it.
     /// Reads and writes never create the field: `onetaskgraph sources fields <source>
     /// --apply` does, as a text field, and a write to a board lacking it, or holding a
@@ -3809,18 +3816,13 @@ impl MetadataField {
                     entry.field, entry.key
                 ),
             };
-            if entry.field.trim().is_empty() {
-                return Err(refuse("names a blank field".to_owned()));
-            }
-            if entry.key.trim().is_empty() {
-                return Err(refuse("names a blank key".to_owned()));
-            }
-            if entry.key.split('.').next() == Some(MetadataKey::RESERVED_NAMESPACE) {
-                return Err(refuse(format!(
-                    "names a key under the reserved \"{}.\" prefix, which this product keeps \
-                     for its own keys; next: project a caller key instead",
-                    MetadataKey::RESERVED_NAMESPACE
-                )));
+            if let Some(why) = ProjectedValue::entry_refusal(
+                &entry.field,
+                &entry.key,
+                resolved.iter().map(|other| &*other.field),
+                "board field",
+            ) {
+                return Err(refuse(why));
             }
             if let Some(owned) = UNPROJECTABLE_FIELDS
                 .iter()
@@ -3829,15 +3831,6 @@ impl MetadataField {
                 return Err(refuse(format!(
                     "names the board field {owned:?}, which this source or GitHub already \
                      writes; next: name a text field of your own"
-                )));
-            }
-            if let Some(earlier) = resolved
-                .iter()
-                .position(|other| other.field.eq_ignore_ascii_case(&entry.field))
-            {
-                return Err(refuse(format!(
-                    "names the same board field as metadata_fields[{earlier}]; one field \
-                     cannot hold two values"
                 )));
             }
             resolved.push(Self {
@@ -3861,30 +3854,76 @@ impl MetadataField {
         metadata: &BTreeMap<String, Value>,
         instance: &SourceName,
     ) -> Result<Projected, SourceError> {
-        let mut value = metadata.get(&*self.key);
-        for step in &self.path {
-            value = value.and_then(|held| held.get(step.as_str()));
-        }
-        let found = match value {
-            None | Some(Value::Null) => return Ok(Projected::Nothing),
-            Some(Value::String(text)) => return Ok(Projected::Text(text.clone())),
-            Some(Value::Bool(_)) => "a boolean",
-            Some(Value::Number(_)) => "a number",
-            Some(Value::Array(_)) => "an array",
-            Some(Value::Object(_)) => "an object",
+        let found = match ProjectedValue::read(metadata, &self.key, &self.path) {
+            Ok(None) => return Ok(Projected::Nothing),
+            Ok(Some(value)) => return Ok(Projected::Text(field_text(&value))),
+            Err(found) => found,
         };
         Err(SourceError::Refused {
             message: format!(
                 "source {instance} projects metadata key {:?} at path {} onto its board text \
-                 field {:?}, and this item holds {found} there; only a string, null or nothing \
-                 can be written to a text field; next: store a string there, or remove the \
-                 value",
+                 field {:?}, and this item holds {found} there; only a string, an array of \
+                 strings, an object of string values, null or nothing can be written to a text \
+                 field; next: store one of those there, or remove the value",
                 &*self.key,
                 self.spelled_path(),
                 &*self.field
             ),
         })
     }
+}
+
+/// The most a ProjectV2 text field holds, in UTF-8 bytes.
+///
+/// Spike `spike-sample-ticket` measured it on a live board through this store with ASCII
+/// values: 1,024 accepted, 1,025 refused whole with `Column value must be a valid value for
+/// text column`, and nothing on the item changed. GitHub documents neither the limit nor its
+/// unit, so this source counts UTF-8 bytes — at least as many as characters or UTF-16 units —
+/// which can only shorten a non-ASCII value earlier than GitHub would, never send one it
+/// refuses.
+// llmlint: ignore[contracts_have_one_source_or_a_drift_gate] GitHub publishes no machine-readable statement of this limit — neither its documentation nor its GraphQL schema (`ProjectV2FieldValue.text: String`) names one — so the only source is the measurement above, and a live probe would spend the credentialed lane's budget, which is a decision outside this change. Drift cannot pass silently either way: a raised limit only shortens a value earlier than needed, and a lowered one makes GitHub refuse the write, which fails the command naming the field.
+pub const TEXT_FIELD_LIMIT: usize = 1024;
+
+/// The text a board text field holds for `value`, as `docs/metadata.md` states it: a string as
+/// itself, an array's elements and an object's `KEY: VALUE` entries — in byte order of the
+/// keys — one per line, joined by one line feed; and, over [`TEXT_FIELD_LIMIT`], the longest
+/// prefix of whole lines that fits beside one line feed and the line counting the rest.
+fn field_text(value: &ProjectedValue) -> String {
+    let rendered = match value {
+        ProjectedValue::Text(text) => text.clone(),
+        ProjectedValue::List(list) => list.join("\n"),
+        ProjectedValue::Map(map) => map
+            .iter()
+            .map(|(key, value)| format!("{key}: {value}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    };
+    if rendered.len() <= TEXT_FIELD_LIMIT {
+        return rendered;
+    }
+    let lines: Vec<&str> = rendered.split('\n').collect();
+    let elided = |left_out: usize| {
+        let noun = if left_out == 1 { "line" } else { "lines" };
+        format!("\u{2026} {left_out} more {noun} in this item's metadata")
+    };
+    // The bytes the first `kept` lines take with the line feeds between them.
+    let mut prefix = 0;
+    let mut fits = 0;
+    for (kept, line) in lines.iter().enumerate().map(|(at, line)| (at + 1, line)) {
+        prefix += line.len() + usize::from(kept > 1);
+        if kept == lines.len() || prefix + 1 + elided(lines.len() - kept).len() > TEXT_FIELD_LIMIT {
+            break;
+        }
+        fits = kept;
+    }
+    if fits == 0 {
+        return elided(lines.len());
+    }
+    format!(
+        "{}\n{}",
+        lines[..fits].join("\n"),
+        elided(lines.len() - fits)
+    )
 }
 
 /// What one item's `Priority` field says, read through this instance's mapping.
@@ -17729,6 +17768,25 @@ mod unprojectable_fields_tests {
             )
             .map(str::to_owned)
             .collect()
+    }
+
+    /// `docs/metadata.md` states the text field's limit a caller is held to; it is this source's
+    /// own constant, so the two cannot part.
+    #[test]
+    fn the_documented_text_field_limit_is_the_one_the_source_shortens_at() {
+        let document = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/metadata.md"),
+        )
+        .expect("docs/metadata.md is readable");
+        let lead = "**A text field holds at most ";
+        let start = document.find(lead).expect("the limit sentence") + lead.len();
+        let stated = &document[start..start + document[start..].find(',').unwrap() + 4];
+        assert_eq!(
+            stated.replace(',', "").parse::<usize>().ok(),
+            Some(TEXT_FIELD_LIMIT),
+            "docs/metadata.md states {stated:?}"
+        );
+        assert!(document[start..].starts_with(&format!("{stated}, counted here in UTF-8 bytes.")));
     }
 
     #[test]
