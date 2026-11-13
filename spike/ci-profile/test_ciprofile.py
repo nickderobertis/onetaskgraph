@@ -19,6 +19,8 @@ sys.path.insert(0, str(HERE))
 
 import measurement_only  # noqa: E402
 import profile as prof  # noqa: E402
+import replay  # noqa: E402
+import sampler  # noqa: E402
 
 JOB = {
     "id": 1, "name": "test-macos", "conclusion": "success",
@@ -108,6 +110,28 @@ class RecorderTests(unittest.TestCase):
         self.assertIn("test result: failed", proc.stdout)
         events = [json.loads(x) for x in record.read_text().splitlines()]
         self.assertEqual([e["exec_time"] for e in events if e.get("type") == "test"], [1.5])
+
+
+class ReplayTests(unittest.TestCase):
+    def test_each_option_replays_only_a_task_its_rule_takes_every_match_from(self):
+        task = "onetaskgraph-e2e:test"
+        self.assertTrue(replay.options(task, ["biome.json", "AGENTS.md"], {"biome.json", "AGENTS.md"})["non-semantic-globals-out-of-rust-keys"])
+        self.assertFalse(replay.options(task, ["biome.json", "crates/onetaskgraph-core/src/lib.rs"], set())["non-semantic-globals-out-of-rust-keys"])
+        self.assertTrue(replay.options(task, ["crates/onetaskgraph-core/tests/engine.rs"], set())["dependents-skip-dependency-tests"])
+        self.assertFalse(replay.options(task, ["crates/onetaskgraph-e2e/tests/e2e/main.rs"], set())["dependents-skip-dependency-tests"])
+        self.assertTrue(replay.options("scripts:distribution-test", [], {"AGENTS.md", ".github/workflows/ci.yml"})["distribution-only-when-publishable-changes"])
+        self.assertFalse(replay.options("scripts:distribution-test", [], {"crates/onetaskgraph-core/src/lib.rs"})["distribution-only-when-publishable-changes"])
+        self.assertEqual(replay.most_specific({"dep-src", "own-tests", "scripts"}), "own-tests")
+
+
+class SamplerTests(unittest.TestCase):
+    def test_processes_are_classified_by_what_the_job_spends_on(self):
+        cases = [("rustc", [], "compile"), ("ld64", [], "link"), ("link.exe", [], "link"),
+                 ("onetaskgraph.exe", [], "cli-under-test"), ("e2e-0123456789abcdef", [], "test-binary"),
+                 ("node", ["node", "/w/node_modules/nx/bin/nx.js", "run"], "nx"), ("node", ["node", "x.test.mjs"], "node"),
+                 ("python3.13", [], "python"), ("git", [], "git"), ("bun", [], "bun"), ("gtar", [], "archive")]
+        for name, cmd, want in cases:
+            self.assertEqual(sampler.classify(name, cmd), want, name)
 
 
 class MeasurementOnlyTests(unittest.TestCase):
