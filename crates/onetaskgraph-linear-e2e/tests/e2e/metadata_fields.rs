@@ -672,3 +672,35 @@ fn a_field_name_holding_markup_is_shown_as_written_and_keeps_the_section_whole()
     );
     assert!(refused.workspace.served().is_empty());
 }
+
+#[test]
+fn every_entry_a_github_projects_source_refuses_a_linear_source_refuses_at_configuration_read() {
+    let host = json!({"field": "Host", "key": KEY, "path": ["host"]});
+    for (entries, said) in [
+        (json!([{"field": " ", "key": KEY}]), "names a blank field"),
+        (json!([{"field": "Host", "key": ""}]), "names a blank key"),
+        (
+            json!([{"field": "Host", "key": "onetaskgraph.origin"}]),
+            "reserved \"onetaskgraph.\" prefix",
+        ),
+        (
+            json!([host, {"field": "HOST", "key": "team.machine"}]),
+            "names the same field as metadata_fields[0]",
+        ),
+    ] {
+        let setup = Setup::configured(Some(entries.clone()));
+        let output = setup
+            .sandbox
+            .command()
+            .args(["task", "list", "--source", "linear"])
+            .assert()
+            .failure()
+            .get_output()
+            .clone();
+        let refused = stderr(&output);
+        for named in ["source linear", "metadata_fields[", said] {
+            assert!(refused.contains(named), "{entries}: {named}: {refused}");
+        }
+        assert!(setup.workspace.served().is_empty(), "{entries}: no request");
+    }
+}
