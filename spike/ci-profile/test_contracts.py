@@ -56,6 +56,19 @@ class ProducerContractTests(unittest.TestCase):
         for field in ("task", "result", "started_at", "finished_at"):
             self.assertRegex(pushed.group(1), rf"\b{field}\b")
 
+    def test_every_event_the_runner_kept_from_real_libtest_binaries_parses(self):
+        recorded = (HERE / "data/libtest/run-43378506851-macos-events.jsonl").read_text().splitlines()
+        events = [models.LibtestEvent.parse(json.loads(line)) for line in recorded]
+        self.assertIn(models.LibtestOutcome.TIMEOUT, {e.outcome for e in events})
+        self.assertTrue(
+            all(
+                e.exec_time is not None
+                for e in events
+                if e.kind is models.LibtestKind.TEST
+                and e.outcome in (models.LibtestOutcome.OK, models.LibtestOutcome.FAILED)
+            )
+        )
+
     def test_a_libtest_event_libtest_never_emits_is_refused(self):
         with self.assertRaisesRegex(models.Invalid, "emits no suite ignored event"):
             models.LibtestEvent.parse({"type": "suite", "event": "ignored"}, "b")
@@ -63,6 +76,12 @@ class ProducerContractTests(unittest.TestCase):
             models.LibtestEvent.parse({"type": "test", "event": "ignored", "name": "t"}, "b").outcome,
             models.LibtestOutcome.IGNORED,
         )
+
+    def test_a_process_seen_once_within_a_tick_reads_as_a_zero_lifetime(self):
+        seen_once = models.sampler_record({"kind": "exit", "category": "git", "start": 10.3, "end": 10.0, "cpu": 0.0})
+        self.assertEqual(seen_once, models.Exit(models.Category.GIT, 10.3, 10.3, 0.0))
+        with self.assertRaisesRegex(models.Invalid, "ends before it starts"):
+            models.sampler_record({"kind": "exit", "category": "git", "start": 20.0, "end": 10.0, "cpu": 0.0})
 
     def test_sampler_records_read_back_as_they_were_written(self):
         tick = models.Tick(5.0, 1.0, {models.Category.COMPILE: 2}, {models.Category.COMPILE: 1.5})
@@ -1110,6 +1129,15 @@ class LatestPathTests(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 2)
         self.assertIn("FileNotFoundError", proc.stderr)
+
+    def test_a_time_or_a_pull_request_list_that_is_falsy_but_not_null_is_refused(self):
+        with self.assertRaisesRegex(models.Invalid, "not an ISO-8601 time"):
+            models.Job.parse({**JOB, "completed_at": 0})
+        with self.assertRaisesRegex(models.Invalid, "not an ISO-8601 time"):
+            models.Job.parse({**JOB, "steps": [{**STEPS[0], "started_at": ""}]})
+        with self.assertRaisesRegex(models.Invalid, "expected a list"):
+            models.Run.parse({**RUN_RECORD, "pull_requests": {}})
+        self.assertIsNone(models.Step.parse({"name": "x", "started_at": None, "completed_at": None}, "s"))
 
     def test_identifiers_must_be_positive(self):
         with self.assertRaisesRegex(models.Invalid, "positive"):

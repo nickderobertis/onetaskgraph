@@ -135,6 +135,12 @@ def count(value: Any, where: str) -> int:
     return value
 
 
+def optional_time(record: dict[str, Any], key: str, where: str) -> float | None:
+    """A time GitHub leaves null (or out) until it happens; anything else must be an ISO-8601 time."""
+    value = record.get(key)
+    return None if value is None else timestamp(value, f"{where} {key}")
+
+
 def positive(value: int, where: str) -> int:
     """A GitHub identifier, or a count that cannot be zero."""
     if value < 1:
@@ -197,13 +203,9 @@ class Step:
     def parse(cls, raw: Any, where: str) -> Step | None:
         record = obj(raw, where)
         name = take(record, "name", str, where)
-        if (
-            conclusion(record.get("conclusion"), where) == "skipped"
-            or not record.get("started_at")
-            or not record.get("completed_at")
-        ):
+        start, end = optional_time(record, "started_at", where), optional_time(record, "completed_at", where)
+        if conclusion(record.get("conclusion"), where) is Conclusion.SKIPPED or start is None or end is None:
             return None
-        start, end = timestamp(record["started_at"], where), timestamp(record["completed_at"], where)
         if end < start:
             raise Invalid(f"{where}: step {name!r} ends before it starts")
         return cls(name, start, end)
@@ -230,8 +232,7 @@ class Job:
     def parse(cls, raw: Any) -> Job:
         record = obj(raw, "job")
         where = f"job {record.get('id')}"
-        start = timestamp(record["started_at"], where) if record.get("started_at") else None
-        end = timestamp(record["completed_at"], where) if record.get("completed_at") else None
+        start, end = optional_time(record, "started_at", where), optional_time(record, "completed_at", where)
         if conclusion(record.get("conclusion"), where) is Conclusion.SKIPPED:
             # GitHub stamps a skipped job as completing a second before it starts: it never ran.
             start = end = None
@@ -270,7 +271,7 @@ class Run:
         timestamp(created, where)
         numbers = tuple(
             positive(take(obj(p, where), "number", int, where), where)
-            for p in items(record.get("pull_requests") or [], where)
+            for p in ([] if record.get("pull_requests") is None else items(record["pull_requests"], where))
         )
         return cls(
             RunId(positive(take(record, "id", int, where), where)),
@@ -346,9 +347,11 @@ class LibtestOutcome(StrEnum):
     OK = "ok"
     FAILED = "failed"
     IGNORED = "ignored"
+    TIMEOUT = "timeout"  # libtest's notice that a test has run past its warning time; it is still running
 
 
-# What libtest's JSON format emits: a suite starts and ends ok or failed; a test also may be ignored.
+# What libtest's JSON format emits: a suite starts and ends ok or failed; a test may also be ignored, or
+# be noticed as running long (`timeout`, which --report-time emits after 60 s).
 LIBTEST_EVENTS = frozenset(
     {(LibtestKind.SUITE, o) for o in (LibtestOutcome.STARTED, LibtestOutcome.OK, LibtestOutcome.FAILED)}
     | {(LibtestKind.TEST, o) for o in LibtestOutcome}
@@ -491,6 +494,11 @@ class Exit:
         return out
 
 
+# A sampler stamps a tick before it walks the process table, so a process started during the walk is
+# seen once with its start up to a tick after that stamp: its lifetime reads as zero, not as an error.
+SEEN_ONCE = 2.0
+
+
 def sampler_record(raw: Any) -> Tick | Exit | None:
     match raw:
         case {"kind": "tick", "t": t, "dt": dt, "leaves": dict(leaves), "cpu": dict(cpu)}:
@@ -502,8 +510,9 @@ def sampler_record(raw: Any) -> Tick | Exit | None:
             )
         case {"kind": "exit", "category": name, "start": start, "end": end, "cpu": cpu}:
             begin, finish = seconds(start, "exit"), seconds(end, "exit")
-            if finish < begin:
+            if finish < begin - SEEN_ONCE:
                 raise Invalid("exit: ends before it starts")
+            finish = max(finish, begin)
             pid = raw.get("pid")
             return Exit(
                 category(name, "exit"),
