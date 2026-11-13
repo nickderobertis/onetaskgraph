@@ -292,7 +292,7 @@ NOT_A_STORE = {
         "whole, given a status and spliced back — and `tests/plan_store` compares this release's "
         "observation of the same records with it by an exact equality per record."
     ),
-    "crates/onetaskgraph-core/tests/fixtures/template-front-matter.expected.json": (
+    "crates/onetaskgraph-template/tests/fixtures/template-front-matter.expected.json": (
         "Not a store: it holds no items and no query is answered from it. It is the order the "
         "release before the YAML crate moved asked each template under "
         "`tests/fixtures/template-front-matter` its variables in, and "
