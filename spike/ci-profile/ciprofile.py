@@ -11,8 +11,11 @@ job stored, and the slowest tests and test binaries. Reads are cached under targ
 (or $CIPROFILE_CACHE) and refused below the dispatch's rate-limit floor.
 
 Other subcommands, used to build the report:
-    durations <since> <until>      median job durations of successful PR runs in a window
-    reuse <pr>...                   tasks replayed and run per job on each PR's first run
+    durations <since> <until>      median durations of successful test jobs of PR runs in a window
+    history <prs.json> --out F      each PR's first (or --which last) CI run, task by task, per job
+
+Exit status: 0 the measurement printed; 2 a usage error; 3 a read refused below the rate floor
+(REST 2,500 or GraphQL 2,000 remaining) — wait for the reset and run it again.
 """
 
 from __future__ import annotations
@@ -26,6 +29,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+# E402: the harness's own modules are found through the sys.path entry above, so they cannot be imported first.
 import ghcache  # noqa: E402
 import profile as prof  # noqa: E402
 

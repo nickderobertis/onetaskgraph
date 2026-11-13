@@ -98,6 +98,9 @@ def apply(text: str, exclude: str) -> str:
 def main() -> int:
     path = sys.argv[1]
     exclude = next((a.split("=", 1)[1] for a in sys.argv[2:] if a.startswith("--exclude=")), "")
+    # The list is written into a bash line of the workflow: Nx project names only.
+    if exclude and not re.fullmatch(r"[A-Za-z0-9_.@/-]+(,[A-Za-z0-9_.@/-]+)*", exclude):
+        raise SystemExit("measurement_only: --exclude takes comma-separated Nx project names only")
     with open(path, encoding="utf-8") as handle:
         text = handle.read()
     with open(path, "w", encoding="utf-8", newline="\n") as handle:

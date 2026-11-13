@@ -17,6 +17,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
+# E402: the modules under test sit beside this file and are found through the sys.path entry above.
 import measurement_only  # noqa: E402
 import profile as prof  # noqa: E402
 import replay  # noqa: E402

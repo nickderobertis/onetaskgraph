@@ -134,8 +134,10 @@ def artifact_member(run_id: int, name: str, member: str) -> bytes | None:
         names = archive.namelist()
         target.parent.mkdir(parents=True, exist_ok=True)
         for entry in names:
+            out = (target.parent / entry).resolve()
+            if not out.is_relative_to(target.parent.resolve()):
+                raise RuntimeError(f"artifact {name} holds an entry outside its directory: {entry}")
             if entry.endswith((".json", ".jsonl", ".xml", ".txt", ".csv")):
-                out = target.parent / entry
                 out.parent.mkdir(parents=True, exist_ok=True)
                 out.write_bytes(archive.read(entry))
     if not target.exists():

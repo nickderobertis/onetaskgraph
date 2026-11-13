@@ -26,6 +26,7 @@ def main() -> int:
     argv = sys.argv[1:]
     record = os.environ.get("SPIKE_TEST_RECORD")
     if not argv:
+        print("testrunner: cargo runs this as `testrunner.py <test binary> [args]`; exit 2 is this usage error", file=sys.stderr)
         return 2
     binary, args = argv[0], argv[1:]
     name = os.path.basename(binary)
