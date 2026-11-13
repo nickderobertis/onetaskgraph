@@ -315,6 +315,17 @@ class ClientTests(unittest.TestCase):
             self.assertIsNone(asyncio.run(gh.artifact_member(models.RunId(RUN), "spike-profile-test-macos", "big.tar")))
         self.assertEqual(sum("artifacts/3/zip" in c for c in self.calls(root)), 1)
 
+    def test_a_cargo_timings_report_in_its_subdirectory_is_kept(self):
+        root = scratch(self)
+        env = self.artifact_gh(root, {"cargo-timings/cargo-timing.html": b"<html>units</html>"})
+        with unittest.mock.patch.dict("os.environ", env):
+            got = asyncio.run(
+                self.client(root).artifact_member(
+                    models.RunId(RUN), "spike-profile-test-macos", "cargo-timings/cargo-timing.html"
+                )
+            )
+        self.assertEqual(got, b"<html>units</html>")
+
     def test_an_entry_outside_its_directory_and_an_expired_artifact_are_refused(self):
         root = scratch(self)
         env = self.artifact_gh(root, {"../escape.json": b"{}"})

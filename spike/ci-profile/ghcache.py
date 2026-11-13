@@ -30,7 +30,7 @@ GRAPHQL_FLOOR = 2000
 CHECK_EVERY = 25
 PAGE = 100
 COMPLETE = ".complete"
-KEPT_SUFFIXES = (".json", ".jsonl", ".xml", ".txt", ".csv", ".spawns")
+KEPT_SUFFIXES = (".json", ".jsonl", ".xml", ".txt", ".csv", ".spawns", ".html")
 
 
 class RateFloor(RuntimeError):
