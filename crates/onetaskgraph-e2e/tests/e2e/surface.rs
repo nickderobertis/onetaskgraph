@@ -302,7 +302,12 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
     let bundle: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("schema output is valid JSON");
 
-    assert_eq!(bundle["version"], 63);
+    assert_eq!(bundle["version"], 64);
+    // Version 64: a Linear configuration's `metadata_fields`.
+    assert!(
+        bundle["roots"]["LinearConfig"]["properties"]["metadata_fields"].is_object(),
+        "LinearConfig takes metadata_fields"
+    );
     // Version 63: what `task assignee set` answers, and assignees on a task, its update, a
     // batch update and a copy outcome.
     assert!(
