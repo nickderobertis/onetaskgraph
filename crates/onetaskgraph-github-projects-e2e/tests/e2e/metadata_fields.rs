@@ -1135,3 +1135,72 @@ fn every_shape_no_text_field_can_hold_is_refused_before_any_mutation_naming_what
         );
     }
 }
+
+/// `task create` on the board with `record` as its follow-up metadata: the created id, and the
+/// requests the create sent.
+fn task_created(setup: &Setup, record: &Value) -> (String, Vec<(String, Value)>) {
+    let body = setup.root.join("body.md");
+    std::fs::write(&body, "Seen twice tonight.\n").expect("a body");
+    let metadata = format!("orchestrator.follow-up={record}");
+    let (created, served) = setup.run(&[
+        "task",
+        "create",
+        "board",
+        "--project",
+        "P-1",
+        "--title",
+        "Disk filling",
+        "--body-file",
+        body.to_str().expect("a path"),
+        "--metadata",
+        &metadata,
+        "--json",
+    ]);
+    let id = created["task"]["id"]
+        .as_str()
+        .or_else(|| created["id"].as_str())
+        .or_else(|| created["items"][0]["id"].as_str())
+        .unwrap_or_else(|| panic!("a created id: {created}"));
+    let id = id.strip_prefix("board:").unwrap_or(id).to_owned();
+    (id, served)
+}
+
+#[test]
+fn task_create_lands_a_list_and_a_map_on_their_text_fields_as_a_string_create_would() {
+    let lists = shaped(
+        true,
+        &["run-b", "run-a"],
+        &[("zeta.example/b", "2"), ("alpha", "3"), ("Alpha", "1")],
+    );
+    let strings = shaped(
+        false,
+        &["run-b", "run-a"],
+        &[("zeta.example/b", "2"), ("alpha", "3"), ("Alpha", "1")],
+    );
+    let mut spent = Vec::new();
+    for record in [&lists, &strings] {
+        let setup = record_setup();
+        let (id, served) = task_created(&setup, record);
+        assert_eq!(
+            setup.board.text_of(&id, "Runs").as_deref(),
+            Some("run-b\nrun-a"),
+            "{record}"
+        );
+        assert_eq!(
+            setup.board.text_of(&id, "Basis").as_deref(),
+            Some("Alpha: 1\nalpha: 3\nzeta.example/b: 2"),
+            "{record}"
+        );
+        assert_eq!(
+            text_writes(&setup.board, &served, "Runs"),
+            [Some("run-b\nrun-a".to_owned())]
+        );
+        assert_eq!(setup.read_record(Kind::Task, &id), *record, "kept whole");
+        spent.push(Spent::of(&served));
+    }
+    assert_eq!(
+        (spent[0].requests, spent[0].operations),
+        (spent[1].requests, spent[1].operations),
+        "a list and a map against the strings rendering the same: {spent:?}"
+    );
+}
