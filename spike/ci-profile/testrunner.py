@@ -29,7 +29,13 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+# E402: models sits beside this file and is found through the sys.path entry above.
+from models import Invalid, LibtestEvent, LibtestKind, LibtestOutcome  # noqa: E402
+
 USAGE_EXIT = 2
+TERSE = {LibtestOutcome.OK: ".", LibtestOutcome.IGNORED: "i", LibtestOutcome.FAILED: "F"}
 SHIM_SOURCE = r"""
 use std::process::Command;
 fn main() {
@@ -55,8 +61,11 @@ class Invocation:
 
     @property
     def wants_passthrough(self) -> bool:
-        return ("NEXTEST_RUN_ID" in os.environ or "NEXTEST_EXECUTION_MODE" in os.environ
-                or any(a in ("--list", "--help") or a.startswith("--format") for a in self.args))
+        return (
+            "NEXTEST_RUN_ID" in os.environ
+            or "NEXTEST_EXECUTION_MODE" in os.environ
+            or any(a in ("--list", "--help") or a.startswith("--format") for a in self.args)
+        )
 
 
 def parse(argv: list[str]) -> Invocation | None:
@@ -107,22 +116,34 @@ def append(path: Path, entry: dict) -> None:
         out.write(json.dumps(entry) + "\n")
 
 
-def relay(event: dict, failures: list[dict]) -> None:
-    """Print what libtest's terse format would have printed for one JSON event."""
-    match event:
-        case {"type": "suite", "event": "started", "test_count": int(count)}:
-            print(f"\nrunning {count} tests", flush=True)
-        case {"type": "test", "event": "ok" | "ignored" | "failed" as outcome}:
-            sys.stdout.write({"ok": ".", "ignored": "i", "failed": "F"}[outcome])
+def relay(event: LibtestEvent, failures: list[LibtestEvent]) -> None:
+    """Print what libtest's terse format would have printed for one event."""
+    match (event.kind, event.outcome):
+        case (LibtestKind.SUITE, LibtestOutcome.STARTED):
+            print(f"\nrunning {event.test_count or 0} tests", flush=True)
+        case (LibtestKind.TEST, LibtestOutcome.OK | LibtestOutcome.IGNORED | LibtestOutcome.FAILED as outcome):
+            sys.stdout.write(TERSE[outcome])
             sys.stdout.flush()
-            if outcome == "failed":
+            if outcome is LibtestOutcome.FAILED:
                 failures.append(event)
-        case {"type": "suite", "event": "ok" | "failed" as outcome}:
+        case (LibtestKind.SUITE, LibtestOutcome.OK | LibtestOutcome.FAILED as outcome):
             for failure in failures:
-                print(f"\n---- {failure.get('name')} stdout ----\n{failure.get('stdout', '')}")
-            print(f"\ntest result: {outcome}. {event.get('passed', 0)} passed; {event.get('failed', 0)} failed; "
-                  f"{event.get('ignored', 0)} ignored; 0 measured; {event.get('filtered_out', 0)} filtered out; "
-                  f"finished in {float(event.get('exec_time', 0)):.2f}s", flush=True)
+                print(f"\n---- {failure.name} stdout ----\n{failure.stdout}")
+            print(
+                f"\ntest result: {outcome.value}. {event.passed} passed; {event.failed} failed; "
+                f"{event.ignored} ignored; 0 measured; {event.filtered_out} filtered out; "
+                f"finished in {event.exec_time or 0:.2f}s",
+                flush=True,
+            )
+        case _:
+            pass
+
+
+def decode(line: str, binary: str) -> LibtestEvent | None:
+    try:
+        return LibtestEvent.parse(json.loads(line), binary)
+    except (ValueError, Invalid):
+        return None
 
 
 def run_recorded(invocation: Invocation, record: Path) -> int:
@@ -130,24 +151,21 @@ def run_recorded(invocation: Invocation, record: Path) -> int:
     command = [str(invocation.binary), *args, "-Zunstable-options", "--format=json", "--report-time"]
     start = time.time()
     proc = subprocess.Popen(command, stdout=subprocess.PIPE, env=instrumented_env(record))
-    failures: list[dict] = []
+    failures: list[LibtestEvent] = []
     assert proc.stdout is not None
     for raw in proc.stdout:
         line = raw.decode("utf-8", "replace").rstrip("\r\n")
-        try:
-            event = json.loads(line)
-        except ValueError:
-            event = None
-        if not isinstance(event, dict):
+        event = decode(line, invocation.name)
+        if event is None:
             print(line, flush=True)
             continue
-        event["binary"] = invocation.name
-        event["t"] = time.time()
-        append(record, event)
+        append(record, event.to_json(time.time()))
         relay(event, failures)
     code = proc.wait()
-    append(record.with_name(record.name + ".spawns"),
-           {"binary": invocation.name, "start": start, "end": time.time(), "mode": "json", "code": code})
+    append(
+        record.with_name(record.name + ".spawns"),
+        {"binary": invocation.name, "start": start, "end": time.time(), "mode": "json", "code": code},
+    )
     return code
 
 
@@ -161,8 +179,10 @@ def main(argv: list[str]) -> int:
         start = time.time()
         code = subprocess.call([str(invocation.binary), *invocation.args])
         if record:
-            append(Path(record + ".spawns"), {"binary": invocation.name, "start": start, "end": time.time(),
-                                               "mode": "passthrough", "code": code})
+            append(
+                Path(record + ".spawns"),
+                {"binary": invocation.name, "start": start, "end": time.time(), "mode": "passthrough", "code": code},
+            )
         return code
     return run_recorded(invocation, Path(record))
 

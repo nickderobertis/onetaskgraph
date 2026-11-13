@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Apply the spike's measurement-only changes to a tree's `.github/workflows/ci.yml`.
 
-    python3 spike/ci-profile/measurement_only.py <ci.yml> [--exclude=P,Q] [--step-env=[JOB:]NAME=VALUE]... [--no-recorders]
+    python3 spike/ci-profile/measurement_only.py <ci.yml> [--exclude=P,Q]
+        [--step-env=[JOB:]NAME=VALUE]... [--no-recorders]
 
 The same text edits apply to today's workflow and to the workflow of #3956 and its parent, so
 both sides of a comparison carry byte-identical measurement changes:
@@ -28,8 +29,11 @@ import re
 import sys
 from dataclasses import dataclass, field
 
-TRIPLES = {"test-linux": "X86_64_UNKNOWN_LINUX_GNU", "test-macos": "AARCH64_APPLE_DARWIN",
-           "test-windows": "X86_64_PC_WINDOWS_MSVC"}
+TRIPLES = {
+    "test-linux": "X86_64_UNKNOWN_LINUX_GNU",
+    "test-macos": "AARCH64_APPLE_DARWIN",
+    "test-windows": "X86_64_PC_WINDOWS_MSVC",
+}
 PROJECT_LIST = re.compile(r"[A-Za-z0-9_.@/-]+(,[A-Za-z0-9_.@/-]+)*")
 STEP_ENV = re.compile(r"(?:(test-linux|test-macos|test-windows):)?([A-Z][A-Z0-9_]*)=([A-Za-z0-9_.:/+-]*)")
 USAGE_EXIT = 2
@@ -55,30 +59,41 @@ def sub(pattern: str, replacement: str, text: str, what: str, minimum: int = 1) 
 
 def install_step(job: str) -> str:
     py = "python" if job == "test-windows" else "python3"
-    venv_py = "$RUNNER_TEMP/spikevenv/Scripts/python.exe" if job == "test-windows" else "$RUNNER_TEMP/spikevenv/bin/python"
-    return (f'      - name: "spike: install the process sampler"\n        shell: bash\n        run: |\n'
-            f'          {py} -m venv "$RUNNER_TEMP/spikevenv"\n'
-            f'          "{venv_py}" -m pip install --quiet psutil==7.1.3\n'
-            f'          mkdir -p "$RUNNER_TEMP/spike"\n')
+    venv_py = (
+        "$RUNNER_TEMP/spikevenv/Scripts/python.exe" if job == "test-windows" else "$RUNNER_TEMP/spikevenv/bin/python"
+    )
+    return (
+        f'      - name: "spike: install the process sampler"\n        shell: bash\n        run: |\n'
+        f'          {py} -m venv "$RUNNER_TEMP/spikevenv"\n'
+        f'          "{venv_py}" -m pip install --quiet psutil==7.1.3\n'
+        f'          mkdir -p "$RUNNER_TEMP/spike"\n'
+    )
 
 
 def upload_step(job: str) -> str:
-    return (f'      - name: "spike: upload the profile records"\n        if: always()\n'
-            f'        uses: actions/upload-artifact@v7\n        with:\n          name: spike-profile-{job}\n'
-            f'          path: ${{{{ runner.temp }}}}/spike/\n          if-no-files-found: warn\n          retention-days: 14\n')
+    return (
+        f'      - name: "spike: upload the profile records"\n        if: always()\n'
+        f"        uses: actions/upload-artifact@v7\n        with:\n          name: spike-profile-{job}\n"
+        f"          path: ${{{{ runner.temp }}}}/spike/\n"
+        "          if-no-files-found: warn\n          retention-days: 14\n"
+    )
 
 
 def test_step(job: str, options: Options) -> str:
     py = "python" if job == "test-windows" else "python3"
-    venv_py = "$RUNNER_TEMP/spikevenv/Scripts/python.exe" if job == "test-windows" else "$RUNNER_TEMP/spikevenv/bin/python"
+    venv_py = (
+        "$RUNNER_TEMP/spikevenv/Scripts/python.exe" if job == "test-windows" else "$RUNNER_TEMP/spikevenv/bin/python"
+    )
     command = f"just ci-{job}" + (f" --exclude={options.exclude}" if options.exclude else "")
     lines = [f"export {name}={value}" for only, name, value in options.step_env if only in (None, job)]
     if options.recorders:
-        lines += ['mkdir -p "$RUNNER_TEMP/spike"',
-                  'export SPIKE_TEST_RECORD="$RUNNER_TEMP/spike/tests.jsonl"',
-                  f'export CARGO_TARGET_{TRIPLES[job]}_RUNNER="{py} $GITHUB_WORKSPACE/spike/ci-profile/testrunner.py"',
-                  f'"{venv_py}" spike/ci-profile/sampler.py "$RUNNER_TEMP/spike/samples.jsonl" --tick 1.0 &',
-                  "sampler=$!"]
+        lines += [
+            'mkdir -p "$RUNNER_TEMP/spike"',
+            'export SPIKE_TEST_RECORD="$RUNNER_TEMP/spike/tests.jsonl"',
+            f'export CARGO_TARGET_{TRIPLES[job]}_RUNNER="{py} $GITHUB_WORKSPACE/spike/ci-profile/testrunner.py"',
+            f'"{venv_py}" spike/ci-profile/sampler.py "$RUNNER_TEMP/spike/samples.jsonl" --tick 1.0 &',
+            "sampler=$!",
+        ]
     lines += ["status=0", f"{command} || status=$?"]
     if options.recorders:
         lines += ['touch "$RUNNER_TEMP/spike/samples.jsonl.stop"', 'wait "$sampler" || true']
@@ -92,8 +107,13 @@ def apply(text: str, options: Options) -> str:
     text = sub(r"cache-save-if: [^\n]+", "cache-save-if: false", text, "rust cache-save-if", 4)
     text = sub(r"(- uses: actions/cache/save@v\d+\n\s+)if: [^\n]+", r"\1if: false", text, "actions/cache/save", 2)
     text = sub(r"CACHE_READ_ONLY: [^\n]+", "CACHE_READ_ONLY: '1'", text, "Nx sidecar read-only", 4)
-    text = sub(r"name: nx-cache-entries-\$\{\{ github\.job \}\}", "name: spike-nx-executions-${{ github.job }}", text,
-               "Nx report artifact name", 4)
+    text = sub(
+        r"name: nx-cache-entries-\$\{\{ github\.job \}\}",
+        "name: spike-nx-executions-${{ github.job }}",
+        text,
+        "Nx report artifact name",
+        4,
+    )
     text = sub(r"(\n  lint:\n    )if: [^\n]+", r"\1if: false", text, "lint off")
     text = sub(r"(\n  budgets:\n    needs: [^\n]*\n    )if: [^\n]+", r"\1if: false", text, "budgets off")
     for job in TRIPLES:
@@ -103,17 +123,26 @@ def apply(text: str, options: Options) -> str:
         body = sub(rf"        run: just ci-{job}\n", test_step(job, options), block.group(0), f"{job} test step")
         body = sub(r"(\n    timeout-minutes: )\d+", r"\g<1>60", body, f"{job} timeout")
         if options.recorders:
-            body = sub(r"(\n      - name: Test the affected projects\n)", "\n" + install_step(job).rstrip("\n") + r"\1",
-                       body, f"{job} recorder install")
-            body = sub(r"(\n      - name: Report cache entries and task executions\n)",
-                       "\n" + upload_step(job).rstrip("\n") + r"\1", body, f"{job} upload")
+            body = sub(
+                r"(\n      - name: Test the affected projects\n)",
+                "\n" + install_step(job).rstrip("\n") + r"\1",
+                body,
+                f"{job} recorder install",
+            )
+            body = sub(
+                r"(\n      - name: Report cache entries and task executions\n)",
+                "\n" + upload_step(job).rstrip("\n") + r"\1",
+                body,
+                f"{job} upload",
+            )
         text = text.replace(block.group(0), body)
     return text
 
 
 def parse(argv: list[str]) -> tuple[str, Options]:
-    parser = argparse.ArgumentParser(prog="measurement_only.py", description=__doc__,
-                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        prog="measurement_only.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument("workflow")
     parser.add_argument("--exclude", default="")
     parser.add_argument("--step-env", action="append", default=[])

@@ -42,8 +42,26 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 # E402: the harness's own modules are found through the sys.path entry above.
 import ghcache  # noqa: E402
 import jobprofile as prof  # noqa: E402
-from models import (Invalid, Job, JobName, NxExecution, RunId, Seconds, SuiteTime, TestTime, items, obj,  # noqa: E402
-                    take, test_record, timestamp)
+from models import (  # noqa: E402
+    FirstRunRecord,
+    Invalid,
+    Job,
+    JobName,
+    JobRecord,
+    LibtestEvent,
+    LibtestKind,
+    LibtestOutcome,
+    NxExecution,
+    Run,
+    RunId,
+    Seconds,
+    TaskRecord,
+    TestTime,
+    items,
+    obj,
+    take,
+    timestamp,
+)
 
 USAGE_EXIT, FLOOR_EXIT, MISSING_EXIT = 2, 3, 4
 
@@ -78,22 +96,21 @@ async def spike_record(gh: ghcache.GitHub, run_id: RunId, job: str, member: str)
     return data.decode("utf-8", "replace").splitlines() if data else []
 
 
-def test_times(runner_lines: list[str], nextest: list[tuple[str, Seconds]]) -> TestTimes:
+def test_times(runner_lines: list[str], nextest: list[TestTime]) -> TestTimes:
+    """Every test binary's seconds and the slowest tests, from the runner's record and nextest's log lines."""
     per_binary: dict[str, Seconds] = defaultdict(float)
-    tests: list[TestTime] = []
-    for line in runner_lines:
-        match test_record(json.loads(line)) if line.strip() else None:
-            case TestTime() as t:
-                tests.append(t)
-            case SuiteTime() as s:
-                per_binary[s.binary] += s.seconds
+    tests: list[TestTime] = list(nextest)
+    for line in filter(str.strip, runner_lines):
+        event = LibtestEvent.parse(json.loads(line))
+        match (event.kind, event.outcome):
+            case (LibtestKind.TEST, LibtestOutcome.OK | LibtestOutcome.FAILED) if event.exec_time is not None:
+                tests.append(TestTime(event.binary, event.name or "", event.exec_time))
+            case (LibtestKind.SUITE, LibtestOutcome.OK | LibtestOutcome.FAILED):
+                per_binary[event.binary] += event.exec_time or 0.0
             case _:
                 pass
-    # Linux's instrumented runs print nextest's own per-test times in the log, replays too.
-    for name, secs in nextest:
-        binary = "instrumented:" + name.split("$")[0]
-        tests.append(TestTime(binary, name.split("$")[-1], secs))
-        per_binary[binary] += secs
+    for t in nextest:
+        per_binary[t.binary] += t.seconds
     return TestTimes(dict(per_binary), sorted(tests, key=lambda t: -t.seconds)[:20], len(tests))
 
 
@@ -101,17 +118,33 @@ def minutes(value: Seconds) -> str:
     return f"{value / 60:6.2f}"
 
 
-def print_job(name: str, p: prof.JobProfile, executions: bool, division: prof.ProcessDivision | None,
-              times: TestTimes, top: int) -> None:
+@dataclass(frozen=True)
+class JobView:
+    """Everything one job's section of the measurement prints."""
+
+    name: str
+    profile: prof.JobProfile
+    from_executions: bool
+    division: prof.ProcessDivision | None
+    times: TestTimes
+
+
+def print_job(view: JobView, top: int) -> None:
+    name, p, executions, division, times = view.name, view.profile, view.from_executions, view.division, view.times
     executed = [t for t in p.tasks if not t.result.replayed]
-    print(f"\n== {name} (job {p.job.id}, {p.job.conclusion}) wall {p.wall / 60:.2f} min; Nx tasks: {len(executed)} run, "
-          f"{len(p.tasks) - len(executed)} replayed [{'executions artifact' if executions else 'log headers'}]")
+    print(
+        f"\n== {name} (job {p.job.id}, {p.job.conclusion}) wall {p.wall / 60:.2f} min; Nx tasks: {len(executed)} run, "
+        f"{len(p.tasks) - len(executed)} replayed [{'executions artifact' if executions else 'log headers'}]"
+    )
     print("  category                          minutes   share")
     for k, v in sorted(p.buckets.items(), key=lambda kv: -kv[1]):
         print(f"  {k.value:32s} {minutes(v)}  {100 * v / p.wall:5.1f}%")
     print(f"  {'(sum)':32s} {minutes(sum(p.buckets.values()))}")
     if p.rust_cache:
-        print(f"  rust-cache restore: {p.rust_cache.seconds} s, {p.rust_cache.size}, {'hit' if p.rust_cache.hit else 'miss'}")
+        print(
+            f"  rust-cache restore: {p.rust_cache.seconds} s, {p.rust_cache.size}, "
+            f"{'hit' if p.rust_cache.hit else 'miss'}"
+        )
     if p.stored:
         print(f"  Nx sidecar: stored {p.stored.entries} entries ({p.stored.bytes} bytes), replayed {p.stored.replayed}")
     print("  Nx tasks by share of wall clock (own seconds, result):")
@@ -120,7 +153,10 @@ def print_job(name: str, p: prof.JobProfile, executions: bool, division: prof.Pr
         compiled = f", compile {t.compile_end - t.start:.0f}s" if t.compile_end else ""
         print(f"    {task_id:55s} {minutes(share)} min  ({t.end - t.start:6.0f}s {t.result.value}{compiled})")
     if p.test_step:
-        print(f"  latest-finishing chain ({len(p.latest_chain)} links, {sum(t.end - t.start for t in p.latest_chain) / 60:.2f} min):")
+        print(
+            f"  latest-finishing chain ({len(p.latest_chain)} links, "
+            f"{sum(t.end - t.start for t in p.latest_chain) / 60:.2f} min):"
+        )
         for t in p.latest_chain:
             print(f"    +{(t.start - p.test_step.start) / 60:5.2f} → +{(t.end - p.test_step.start) / 60:5.2f}  {t.id}")
     if division:
@@ -128,8 +164,8 @@ def print_job(name: str, p: prof.JobProfile, executions: bool, division: prof.Pr
         for k, v in sorted(division.seconds.items(), key=lambda kv: -kv[1]):
             print(f"    {k:40s} {minutes(v)}  {100 * v / p.wall:5.1f}% of job")
         print("  sampler: processes that ended in the test step (count, summed lifetime s, CPU s):")
-        for k, (count, life, cpu) in sorted(division.exits.items(), key=lambda kv: -kv[1][1]):
-            print(f"    {k.value:20s} {count:6d} {life:9.1f} {cpu:8.1f}")
+        for k, totals in sorted(division.exits.items(), key=lambda kv: -kv[1].lifetime):
+            print(f"    {k.value:20s} {totals.count:6d} {totals.lifetime:9.1f} {totals.cpu:8.1f}")
     if times.per_binary:
         print(f"  test binaries ({len(times.per_binary)}, seconds):")
         for binary, secs in sorted(times.per_binary.items(), key=lambda kv: -kv[1])[:top]:
@@ -157,30 +193,49 @@ async def profile_run(gh: ghcache.GitHub, run_id: RunId, wanted: list[str], as_j
         samples = await spike_record(gh, run_id, name, "samples.jsonl")
         division = prof.by_process(prof.sampler_records(samples), p.test_step) if samples and p.test_step else None
         times = test_times(await spike_record(gh, run_id, name, "tests.jsonl"), p.nextest)
-        print_job(name, p, executions is not None, division, times, top)
+        print_job(JobView(name, p, executions is not None, division, times), top)
         summary["jobs"][name] = {
-            "job_id": job.id, "wall_s": round(p.wall, 1), "buckets_s": {k.value: round(v, 1) for k, v in p.buckets.items()},
-            "tasks": [{"task": t.id, "result": t.result.value, "start": t.start, "end": t.end,
-                       "share_s": round(p.task_share.get(t.id, 0), 1)} for t in p.tasks],
-            "binaries_s": times.per_binary, "slowest": [[t.qualified, t.seconds] for t in times.slowest],
-            "sampler": None if division is None else {"seconds": division.seconds,
-                                                      "exits": {k.value: list(v) for k, v in division.exits.items()}},
+            "job_id": job.id,
+            "wall_s": round(p.wall, 1),
+            "buckets_s": {k.value: round(v, 1) for k, v in p.buckets.items()},
+            "tasks": [
+                {
+                    "task": t.id,
+                    "result": t.result.value,
+                    "start": t.start,
+                    "end": t.end,
+                    "share_s": round(p.task_share.get(t.id, 0), 1),
+                }
+                for t in p.tasks
+            ],
+            "binaries_s": times.per_binary,
+            "slowest": [[t.qualified, t.seconds] for t in times.slowest],
+            "sampler": None
+            if division is None
+            else {"seconds": division.seconds, "exits": {k.value: vars(v) for k, v in division.exits.items()}},
             "rust_cache": None if p.rust_cache is None else vars(p.rust_cache),
-            "stored": None if p.stored is None else vars(p.stored)}
+            "stored": None if p.stored is None else vars(p.stored),
+        }
     print(f"\n(GitHub reads this invocation: {gh.reads})")
     if as_json:
         target = gh.cache / f"profile-{run_id}.json"
         target.write_text(json.dumps(summary, indent=1))
         print(f"(json: {target})")
     if missing:
-        print(f"ciprofile: run {run_id} has no finished {', '.join(missing)}; name jobs it ran with --jobs", file=sys.stderr)
+        print(
+            f"ciprofile: run {run_id} has no finished {', '.join(missing)}; name jobs it ran with --jobs",
+            file=sys.stderr,
+        )
         return MISSING_EXIT
     return 0
 
 
 async def durations(gh: ghcache.GitHub, since: str, until: str) -> int:
-    runs = [r for r in await gh.runs_list(f"event=pull_request&created={since}..{until}", pages=3)
-            if r.conclusion in ("success", "failure") and not r.head_branch.startswith("release-plz")]
+    runs = [
+        r
+        for r in await gh.runs_list(f"event=pull_request&created={since}..{until}", pages=3)
+        if r.conclusion in ("success", "failure") and not r.head_branch.startswith("release-plz")
+    ]
     per: dict[str, list[float]] = defaultdict(list)
     for run in runs:
         for job in await gh.jobs(run.id):
@@ -191,8 +246,10 @@ async def durations(gh: ghcache.GitHub, since: str, until: str) -> int:
         values = per[name.value]
         if len(values) >= 2:
             q = statistics.quantiles(values, n=4)
-            print(f"  {name.value:13s} n={len(values):3d} median {statistics.median(values):5.1f} min  "
-                  f"p25 {q[0]:5.1f}  p75 {q[2]:5.1f}  max {max(values):5.1f}")
+            print(
+                f"  {name.value:13s} n={len(values):3d} median {statistics.median(values):5.1f} min  "
+                f"p25 {q[0]:5.1f}  p75 {q[2]:5.1f}  max {max(values):5.1f}"
+            )
         else:
             print(f"  {name.value:13s} n={len(values):3d} (too few for quartiles)")
     return 0
@@ -207,45 +264,61 @@ class PullRequest:
     @classmethod
     def parse(cls, raw: object) -> PullRequest:
         record = obj(raw, "prs.json entry")
-        return cls(take(record, "pr", int, "prs.json"), take(record, "head", str, "prs.json"),
-                   take(record, "branch", str, "prs.json"))
+        return cls(
+            take(record, "pr", int, "prs.json"),
+            take(record, "head", str, "prs.json"),
+            take(record, "branch", str, "prs.json"),
+        )
 
 
-async def job_tasks(gh: ghcache.GitHub, run_id: RunId, job: Job) -> dict:
+async def job_record(gh: ghcache.GitHub, run_id: RunId, job: Job) -> JobRecord:
     executions = await executions_for(gh, run_id, job.name)
     p = prof.profile_job(job, await gh.job_log(run_id, job), executions)
-    return {"job_id": job.id, "conclusion": job.conclusion, "wall_s": round(p.wall, 1),
-            "source": "executions" if executions is not None else "log",
-            "buckets_s": {k.value: round(v, 1) for k, v in p.buckets.items()},
-            "tasks": {t.id: {"result": t.result.value, "seconds": round(t.end - t.start, 1),
-                             "share_s": round(p.task_share.get(t.id, 0), 1)} for t in p.tasks}}
+    return JobRecord(
+        job.id,
+        job.conclusion,
+        p.wall,
+        "executions" if executions is not None else "log",
+        {k.value: v for k, v in p.buckets.items()},
+        {t.id: TaskRecord(t.result, t.end - t.start, p.task_share.get(t.id, 0.0)) for t in p.tasks},
+    )
+
+
+def runs_of(pr: PullRequest, runs: list[Run]) -> list[Run]:
+    """The PR's runs, oldest first: those GitHub attributes to it, and any on its final head."""
+    mine = {r.id: r for r in runs if pr.pr in r.pull_requests or r.head_sha == pr.head}
+    return sorted(mine.values(), key=lambda r: r.created_at)
 
 
 async def history(gh: ghcache.GitHub, prs_file: Path, since: str, out_file: Path, which: str) -> int:
     prs = [PullRequest.parse(p) for p in items(json.loads(prs_file.read_text()), str(prs_file))]
     runs = await gh.runs_list(f"event=pull_request&created=>={since}", pages=4)
-    out = {}
+    out: dict[int, FirstRunRecord] = {}
+    unmatched = []
     for pr in prs:
-        mine = sorted({r.id: r for r in runs if any(x.number == pr.pr for x in r.pull_requests)
-                       or r.head_sha == pr.head}.values(), key=lambda r: r.created_at)
+        mine = runs_of(pr, runs)
         if not mine:
-            print(f"#{pr.pr}: no run found since {since}")
+            unmatched.append(pr.pr)
             continue
         run = mine[0] if which == "first" else mine[-1]
         jobs = {j.name: j for j in await gh.jobs(run.id)}
-        entry = {"run": run.id, "head_sha": run.head_sha, "created_at": run.created_at, "conclusion": run.conclusion,
-                 "runs_of_pr": len(mine), "jobs": {}}
+        record = FirstRunRecord(run.id, run.head_sha, run.created_at, run.conclusion, len(mine))
         for name in JobName:
             job = jobs.get(name.value)
             if job is not None and job.finished:
-                entry["jobs"][name.value] = await job_tasks(gh, run.id, job)
-        out[str(pr.pr)] = entry
-        print(f"#{pr.pr} run {run.id} ({run.conclusion}): " + "  ".join(
-            f"{n}: {sum(t['result'] == 'executed' for t in j['tasks'].values())} run/"
-            f"{sum(t['result'] != 'executed' for t in j['tasks'].values())} replayed {j['wall_s'] / 60:.1f}m"
-            for n, j in entry["jobs"].items()))
-        out_file.write_text(json.dumps(out, indent=1))
+                record.jobs[name] = await job_record(gh, run.id, job)
+        out[pr.pr] = record
+        summary = "  ".join(
+            f"{n.value}: {sum(not t.result.replayed for t in j.tasks.values())} run/"
+            f"{sum(t.result.replayed for t in j.tasks.values())} replayed {j.wall_s / 60:.1f}m"
+            for n, j in record.jobs.items()
+        )
+        print(f"#{pr.pr} run {run.id} ({run.conclusion}): {summary}")
+        out_file.write_text(json.dumps({str(k): v.to_json() for k, v in out.items()}, indent=1))
     print(f"(GitHub reads this invocation: {gh.reads}; written {out_file})")
+    if unmatched:
+        print(f"ciprofile: no run since {since} for #{', #'.join(map(str, unmatched))}; widen --since", file=sys.stderr)
+        return MISSING_EXIT
     return 0
 
 
@@ -256,7 +329,10 @@ def positive(text: str) -> int:
 
 
 def instant(text: str) -> str:
-    timestamp(text, "a window bound")
+    try:
+        timestamp(text if "T" in text else f"{text}T00:00:00Z", "a window bound")
+    except Invalid as error:
+        raise argparse.ArgumentTypeError(str(error)) from error
     return text
 
 
@@ -269,7 +345,9 @@ def job_list(text: str) -> list[str]:
 
 
 def parser() -> argparse.ArgumentParser:
-    ap = argparse.ArgumentParser(prog="ciprofile.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        prog="ciprofile.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     sub = ap.add_subparsers(dest="cmd", required=True)
     a = sub.add_parser("profile")
     a.add_argument("run", type=positive)
@@ -309,7 +387,7 @@ def main(argv: list[str]) -> int:
     except ghcache.RateFloor as error:
         print(f"ciprofile: {error}", file=sys.stderr)
         return FLOOR_EXIT
-    except (ghcache.Offline, ghcache.ReadFailed, Invalid) as error:
+    except (ghcache.Offline, ghcache.ReadFailed, Invalid, OSError, ValueError) as error:
         print(f"ciprofile: {type(error).__name__}: {error}", file=sys.stderr)
         return MISSING_EXIT
 

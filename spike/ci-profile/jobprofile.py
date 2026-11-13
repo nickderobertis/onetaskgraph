@@ -18,17 +18,34 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from enum import StrEnum
 
-from models import (ORCHESTRATION, Category, Exit, Job, NxExecution, Seconds, TaskId, TaskResult, Tick,
-                    sampler_record, timestamp)
+from models import (
+    ORCHESTRATION,
+    Category,
+    Exit,
+    Job,
+    NxExecution,
+    Seconds,
+    TaskId,
+    TaskResult,
+    TestTime,
+    Tick,
+    sampler_record,
+    timestamp,
+)
 
 ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 LINE = re.compile(r"^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?)Z ?(.*)$")
-HEADER = re.compile(r"^\[(?P<phase>[^\]]+)\] (?P<replay>🔁 )?> nx run (?P<task>[\w.@/-]+:[\w-]+)(?P<remote>\s+\[(?:remote|local) cache\])?")
+HEADER = re.compile(
+    r"^\[(?P<phase>[^\]]+)\] (?P<replay>🔁 )?> nx run (?P<task>[\w.@/-]+:[\w-]+)"
+    r"(?P<remote>\s+\[(?:remote|local) cache\])?"
+)
 PREFIXED = re.compile(r"^\[[^\]]+\] (?P<project>[\w.@/-]+): +(?P<text>.*)$")
 TEST_START = re.compile(r"^(?:\[[^\]]+\] )?(?P<project>[\w.@/-]+): (?:running \d+ tests?|\s*Starting \d+ tests?)")
 JSON_TEST = re.compile(r'^\[[^\]]+\] (?:(?P<project>[\w.@/-]+): )?\{"type":"(?:test|suite)".*?"name":"(?P<name>[^"]+)"')
-NEXTEST_DONE = re.compile(r'^\[[^\]]+\] (?:[\w.@/-]+: )?\{"type":"test","event":"(?:ok|failed|ignored)","name":"(?P<name>[^"]+)"'
-                          r'(?:,"exec_time":(?P<secs>[0-9.]+))?')
+NEXTEST_DONE = re.compile(
+    r'^\[[^\]]+\] (?:[\w.@/-]+: )?\{"type":"test","event":"(?:ok|failed|ignored)","name":"(?P<name>[^"]+)"'
+    r'(?:,"exec_time":(?P<secs>[0-9.]+))?'
+)
 CARGO_BUILD = re.compile(r"^(?P<word>Compiling|Finished) (?:`(?P<profile>\w+)` profile)?")
 STORED = re.compile(r"Nx cache: stored (?P<n>\d+) entries, (?P<bytes>\d+) bytes; replayed (?P<r>\d+) entries")
 CACHE_SIZE = re.compile(r"Cache Size: ~?([0-9.]+ ?[MG]B)")
@@ -109,11 +126,21 @@ class Task:
         if any(w.start <= instant < w.end for w in self.lock_waits):
             return Bucket.LOCK_WAIT
         if build is not None:
-            return (Bucket.COMPILE_RELEASE if build.profile == "release"
-                    else Bucket.COMPILE_INSTRUMENTED if self.instrumented else Bucket.COMPILE_PLAIN)
+            return (
+                Bucket.COMPILE_RELEASE
+                if build.profile == "release"
+                else Bucket.COMPILE_INSTRUMENTED
+                if self.instrumented
+                else Bucket.COMPILE_PLAIN
+            )
         if self.compile_end is not None and instant < self.compile_end:
             return Bucket.COMPILE_INSTRUMENTED if self.instrumented else Bucket.COMPILE_PLAIN
-        if self.project in ("workspace", "scripts") or self.target not in ("test", "coverage", "test-uncovered", "budgets"):
+        if self.project in ("workspace", "scripts") or self.target not in (
+            "test",
+            "coverage",
+            "test-uncovered",
+            "budgets",
+        ):
             return Bucket.SCRIPTS
         if self.target == "budgets":
             return Bucket.BUDGETS
@@ -140,7 +167,7 @@ class JobProfile:
     buckets: dict[Bucket, Seconds] = field(default_factory=lambda: defaultdict(float))
     tasks: list[Task] = field(default_factory=list)
     task_share: dict[TaskId, Seconds] = field(default_factory=lambda: defaultdict(float))
-    nextest: list[tuple[str, Seconds]] = field(default_factory=list)
+    nextest: list[TestTime] = field(default_factory=list)
     stored: Stored | None = None
     rust_cache: RustCache | None = None
     latest_chain: list[Task] = field(default_factory=list)
@@ -175,34 +202,58 @@ def step_kind(name: str) -> StepKind:
             return StepKind.CACHE_SAVE
         case _ if n.startswith("test the affected"):
             return StepKind.TEST
-        case _ if any(w in n for w in ("upload-artifact", "report cache", "budget", "cancell", "live artifacts", "linear leases")) \
-                or n == "complete job":
+        case _ if (
+            any(
+                w in n
+                for w in ("upload-artifact", "report cache", "budget", "cancell", "live artifacts", "linear leases")
+            )
+            or n == "complete job"
+        ):
             return StepKind.REPORT
         case _:
             return StepKind.SETUP
 
 
-def groups(log: list[LogLine]) -> list[tuple[Interval, str]]:
-    """Each top-level `##[group]Run` section of the log and its title."""
-    marks = [(line.t, line.text[len("##[group]Run "):]) for line in log if line.text.startswith("##[group]Run ")]
-    return [(Interval(t, marks[i + 1][0] if i + 1 < len(marks) else log[-1].t), title) for i, (t, title) in enumerate(marks)]
+@dataclass(frozen=True)
+class Section:
+    """One top-level `##[group]Run` section of a job log: a step, or a step of a composite action."""
+
+    span: Interval
+    title: str
+
+
+def groups(log: list[LogLine]) -> list[Section]:
+    marks = [
+        LogLine(line.t, line.text[len("##[group]Run ") :]) for line in log if line.text.startswith("##[group]Run ")
+    ]
+    return [
+        Section(Interval(m.t, marks[i + 1].t if i + 1 < len(marks) else log[-1].t), m.text) for i, m in enumerate(marks)
+    ]
 
 
 def restore_inside(log: list[LogLine], span: Interval) -> Seconds:
-    hits = [line.t for line in log if span.start <= line.t <= span.end
-            and re.search(r"restor|cache key|Cache (hit|not found)|Received \d+ of", line.text, re.I)]
+    hits = [
+        line.t
+        for line in log
+        if span.start <= line.t <= span.end
+        and re.search(r"restor|cache key|Cache (hit|not found)|Received \d+ of", line.text, re.I)
+    ]
     return (max(hits) - min(hits)) if len(hits) >= 2 else 0.0
 
 
 def account_steps(p: JobProfile, log: list[LogLine]) -> None:
     sections = groups(log)
     restore = 0.0
-    for span, title in sections:
+    for section in sections:
+        span, title = section.span, section.title
         if title.startswith("Swatinem/rust-cache"):
             text = "\n".join(line.text for line in log if span.start <= line.t <= span.end)
             size = CACHE_SIZE.search(text)
-            p.rust_cache = RustCache(round(span.end - span.start, 1), size.group(1) if size else None,
-                                     "restored from" in text.lower() and "No cache found" not in text)
+            p.rust_cache = RustCache(
+                round(span.end - span.start, 1),
+                size.group(1) if size else None,
+                "restored from" in text.lower() and "No cache found" not in text,
+            )
             restore += span.end - span.start
         elif title.startswith(("astral-sh/setup-uv", "oven-sh/setup-bun")):
             restore += restore_inside(log, span)
@@ -210,8 +261,10 @@ def account_steps(p: JobProfile, log: list[LogLine]) -> None:
         kind = step_kind(step.name)
         if kind is StepKind.TEST:
             # The step API keeps whole seconds; the log's own group for the step is exact.
-            near = [span for span, _title in sections if abs(span.start - step.start) <= 2]
-            p.test_step = min(near, key=lambda span: abs(span.start - step.start)) if near else Interval(step.start, step.end)
+            near = [x.span for x in sections if abs(x.span.start - step.start) <= 2]
+            p.test_step = (
+                min(near, key=lambda span: abs(span.start - step.start)) if near else Interval(step.start, step.end)
+            )
         elif kind is not StepKind.BACKGROUND:
             p.buckets[Bucket(kind.value)] += step.end - step.start
     p.buckets[Bucket.SETUP] -= restore
@@ -244,8 +297,11 @@ def place_tasks(p: JobProfile, log: list[LogLine], executions: tuple[NxExecution
     window = p.test_step
     tasks: list[Task] = []
     if executions is not None:
-        tasks = [Task(e.task, e.start, e.end, e.result) for e in executions
-                 if not e.task.endswith(":bootstrap") and (window is None or window.start - 2 <= e.start <= window.end + 2)]
+        tasks = [
+            Task(e.task, e.start, e.end, e.result)
+            for e in executions
+            if not e.task.endswith(":bootstrap") and (window is None or window.start - 2 <= e.start <= window.end + 2)
+        ]
         # A cancelled job's unfinished Nx invocations never wrote their executions.
         recorded = {t.id for t in tasks}
         tasks += [t for t in tasks_from_log(log, window) if t.id not in recorded]
@@ -277,7 +333,7 @@ def read_builds(task: Task, lines: list[LogLine]) -> None:
     opened: float | None = None
     for i, line in enumerate(lines):
         if line.text.startswith("Blocking waiting for file lock"):
-            later = next((x.t for x in lines[i + 1:] if not x.text.startswith("Blocking waiting")), None)
+            later = next((x.t for x in lines[i + 1 :] if not x.text.startswith("Blocking waiting")), None)
             if later is not None and later > line.t and not (task.lock_waits and task.lock_waits[-1].end >= line.t):
                 task.lock_waits.append(Interval(line.t, later))
             continue
@@ -295,12 +351,17 @@ def attribute_test_step(p: JobProfile) -> None:
     assert p.test_step is not None
     edges = {p.test_step.start, p.test_step.end}
     for t in p.tasks:
-        for x in (t.start, t.end, t.compile_end, *[e for b in t.builds for e in (b.start, b.end)],
-                  *[e for w in t.lock_waits for e in (w.start, w.end)]):
+        for x in (
+            t.start,
+            t.end,
+            t.compile_end,
+            *[e for b in t.builds for e in (b.start, b.end)],
+            *[e for w in t.lock_waits for e in (w.start, w.end)],
+        ):
             if x is not None and p.test_step.start < x < p.test_step.end:
                 edges.add(x)
     ordered = sorted(edges)
-    for lo, hi in zip(ordered, ordered[1:]):
+    for lo, hi in zip(ordered, ordered[1:], strict=False):
         mid = (lo + hi) / 2
         active = [t for t in p.tasks if t.start <= mid < t.end]
         if not active:
@@ -334,7 +395,8 @@ def profile_job(job: Job, log_text: str, executions: tuple[NxExecution, ...] | N
     place_tasks(p, log, executions)
     for line in log:
         if (m := NEXTEST_DONE.match(line.text)) and m.group("secs"):
-            p.nextest.append((m.group("name"), float(m.group("secs"))))
+            binary, _, name = m.group("name").rpartition("$")
+            p.nextest.append(TestTime(f"instrumented:{binary}", name, float(m.group("secs"))))
         if m := STORED.search(line.text):
             p.stored = Stored(int(m.group("n")), int(m.group("bytes")), int(m.group("r")))
     if p.test_step:
@@ -344,29 +406,38 @@ def profile_job(job: Job, log_text: str, executions: tuple[NxExecution, ...] | N
     return p
 
 
+@dataclass
+class ExitTotals:
+    """The processes of one category that ended in a window."""
+
+    count: int = 0
+    lifetime: Seconds = 0.0
+    cpu: Seconds = 0.0
+
+
 @dataclass(frozen=True)
 class ProcessDivision:
     seconds: dict[str, Seconds]
-    exits: dict[Category, tuple[int, Seconds, Seconds]]  # count, summed lifetime, summed CPU
+    exits: dict[Category, ExitTotals]
 
 
 def by_process(records: list, window: Interval) -> ProcessDivision:
     """Divide `window` by the sampler's leaves. A tick whose work processes spent under
     IDLE_CPU_SHARE of one CPU is a wait (sleep, poll, network or timeout), named by what waited."""
     buckets: dict[str, Seconds] = defaultdict(float)
-    exits: dict[Category, list[float]] = defaultdict(lambda: [0, 0.0, 0.0])
+    exits: dict[Category, ExitTotals] = defaultdict(ExitTotals)
     for record in records:
         match record:
             case Exit() if window.start <= record.end <= window.end:
-                entry = exits[record.category]
-                entry[0] += 1
-                entry[1] += record.end - record.start
-                entry[2] += record.cpu
+                totals = exits[record.category]
+                totals.count += 1
+                totals.lifetime += record.end - record.start
+                totals.cpu += record.cpu
             case Tick() if window.start <= record.t <= window.end:
                 divide_tick(record, buckets)
             case _:
                 pass
-    return ProcessDivision(dict(buckets), {k: (int(v[0]), v[1], v[2]) for k, v in exits.items()})
+    return ProcessDivision(dict(buckets), dict(exits))
 
 
 def divide_tick(tick: Tick, buckets: dict[str, Seconds]) -> None:
@@ -375,8 +446,11 @@ def divide_tick(tick: Tick, buckets: dict[str, Seconds]) -> None:
     leaves = {k for k, n in tick.leaves.items() if n and k not in ORCHESTRATION}
     if work_cpu < IDLE_CPU_SHARE * dt:
         waiting = {Category.TEST_BINARY, Category.CLI_UNDER_TEST} & leaves
-        label = "wait:in-tests(network,sleep,poll)" if waiting else \
-            "wait:subprocess(" + ",".join(sorted(k.value for k in leaves) or ["none"]) + ")"
+        label = (
+            "wait:in-tests(network,sleep,poll)"
+            if waiting
+            else "wait:subprocess(" + ",".join(sorted(k.value for k in leaves) or ["none"]) + ")"
+        )
         buckets[label] += dt
     elif not leaves:
         buckets["orchestration(nx,shell)"] += dt
@@ -387,4 +461,5 @@ def divide_tick(tick: Tick, buckets: dict[str, Seconds]) -> None:
 
 def sampler_records(lines: list[str]) -> list:
     import json  # noqa: PLC0415 — only a demonstration run carries a sampler record
+
     return [r for line in lines if line.strip() and (r := sampler_record(json.loads(line))) is not None]

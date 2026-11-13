@@ -26,18 +26,51 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # E402: models sits beside this file and is found through the sys.path entry above.
-from models import Category  # noqa: E402
+from models import Category, Exit, Tick  # noqa: E402
 
 TEST_BINARY = re.compile(r"^[a-z0-9_]+-[0-9a-f]{16}$")
-LINKERS = frozenset({"ld", "ld64", "cc", "clang", "gcc", "link", "lld", "rust-lld", "ld.lld", "mold", "collect2",
-                     "lld-link", "ld.bfd", "x86_64-linux-gnu-ld", "ld-classic"})
+LINKERS = frozenset(
+    {
+        "ld",
+        "ld64",
+        "cc",
+        "clang",
+        "gcc",
+        "link",
+        "lld",
+        "rust-lld",
+        "ld.lld",
+        "mold",
+        "collect2",
+        "lld-link",
+        "ld.bfd",
+        "x86_64-linux-gnu-ld",
+        "ld-classic",
+    }
+)
 SHELLS = frozenset({"sh", "bash", "zsh", "dash", "pwsh", "powershell", "cmd", "conhost"})
 PYTHON_TOOLS = frozenset({"uv", "uvx", "pytest", "maturin"})
-NAMED = {"rustdoc": Category.DOCTEST, "cargo": Category.CARGO, "cargo-nextest": Category.CARGO,
-         "cargo-llvm-cov": Category.CARGO, "llvm-profdata": Category.COVERAGE_REPORT, "llvm-cov": Category.COVERAGE_REPORT,
-         "npm": Category.NODE, "npx": Category.NODE, "bun": Category.BUN, "onevcs": Category.ONEVCS, "gh": Category.GH,
-         "curl": Category.NETWORK, "wget": Category.NETWORK, "tar": Category.ARCHIVE, "gtar": Category.ARCHIVE,
-         "zstd": Category.ARCHIVE, "bsdtar": Category.ARCHIVE, "7z": Category.ARCHIVE, "just": Category.JUST}
+NAMED = {
+    "rustdoc": Category.DOCTEST,
+    "cargo": Category.CARGO,
+    "cargo-nextest": Category.CARGO,
+    "cargo-llvm-cov": Category.CARGO,
+    "llvm-profdata": Category.COVERAGE_REPORT,
+    "llvm-cov": Category.COVERAGE_REPORT,
+    "npm": Category.NODE,
+    "npx": Category.NODE,
+    "bun": Category.BUN,
+    "onevcs": Category.ONEVCS,
+    "gh": Category.GH,
+    "curl": Category.NETWORK,
+    "wget": Category.NETWORK,
+    "tar": Category.ARCHIVE,
+    "gtar": Category.ARCHIVE,
+    "zstd": Category.ARCHIVE,
+    "bsdtar": Category.ARCHIVE,
+    "7z": Category.ARCHIVE,
+    "just": Category.JUST,
+}
 USAGE_EXIT = 2
 
 
@@ -77,6 +110,8 @@ def classify(name: str, cmdline: list[str]) -> Category:
 
 @dataclass
 class Seen:
+    """A process the sampler has classified, with what it last read of it."""
+
     category: Category
     created: float
     first_cpu: float
@@ -84,36 +119,59 @@ class Seen:
     last_seen: float
 
 
-def leaves(alive: dict[int, tuple[int, Category]]) -> dict[str, int]:
-    """Count, per category, the work processes no live descendant of which is itself work."""
+@dataclass(frozen=True)
+class Alive:
+    """A process present in this tick's table."""
+
+    parent: int
+    category: Category
+
+
+@dataclass(frozen=True)
+class Sample:
+    at: float
+    alive: dict[int, Alive]
+    cpu: dict[Category, float]
+
+
+def leaves(alive: dict[int, Alive]) -> dict[Category, int]:
+    """Count, per category, the processes none of whose live descendants is itself working."""
     has_working_child: set[int] = set()
-    for _pid, (ppid, kind) in alive.items():
-        if kind is Category.NX_CACHE_SIDECAR:  # a background server, never anyone's work
+    for process in alive.values():
+        if process.category is Category.NX_CACHE_SIDECAR:  # a background server, never anyone's work
             continue
-        parent, hops = ppid, 0
+        parent, hops = process.parent, 0
         while parent in alive and hops < 64:
             has_working_child.add(parent)
-            parent, hops = alive[parent][0], hops + 1
-    counts: dict[str, int] = {}
-    for pid, (_ppid, kind) in alive.items():
+            parent, hops = alive[parent].parent, hops + 1
+    counts: dict[Category, int] = {}
+    for pid, process in alive.items():
         if pid not in has_working_child:
-            counts[kind.value] = counts.get(kind.value, 0) + 1
+            counts[process.category] = counts.get(process.category, 0) + 1
     return counts
 
 
-def record_exits(seen: dict[int, Seen], alive: dict[int, tuple[int, Category]], out) -> None:
+def exits(seen: dict[int, Seen], alive: dict[int, Alive]) -> list[Exit]:
+    """Forget each process no longer alive; a brief unclassified one is not worth a record."""
+    out = []
     for pid in [p for p in seen if p not in alive]:
         gone = seen.pop(pid)
         if gone.category is not Category.OTHER or gone.last_seen - gone.created > 1:
-            out.write(json.dumps({"kind": "exit", "pid": pid, "category": gone.category.value,
-                                  "start": gone.created, "end": max(gone.last_seen, gone.created),
-                                  "cpu": round(max(0.0, gone.last_cpu - gone.first_cpu), 4)}) + "\n")
+            out.append(
+                Exit(
+                    gone.category,
+                    gone.created,
+                    max(gone.last_seen, gone.created),
+                    max(0.0, gone.last_cpu - gone.first_cpu),
+                )
+            )
+    return out
 
 
-def sample(psutil, seen: dict[int, Seen], me: int, previous: float, tick: float):
+def sample(psutil, seen: dict[int, Seen], me: int, previous: float, tick: float) -> Sample:
     now = time.time()
-    alive: dict[int, tuple[int, Category]] = {}
-    cpu: dict[str, float] = {}
+    alive: dict[int, Alive] = {}
+    cpu: dict[Category, float] = {}
     for proc in psutil.process_iter(["pid", "ppid", "name", "create_time"]):
         info = proc.info
         pid, created = info["pid"], info["create_time"] or now
@@ -125,16 +183,15 @@ def sample(psutil, seen: dict[int, Seen], me: int, previous: float, tick: float)
                 command = proc.cmdline()
             except (psutil.Error, OSError):
                 command = []
-            fresh = created >= previous - tick
             known = Seen(classify(info["name"] or "", command), created, 0.0, 0.0, now)
             seen[pid] = known
-            if not fresh:
+            if created < previous - tick:  # it was running before this sampler saw it: count only its CPU from now
                 known.first_cpu = known.last_cpu = cpu_of(psutil, proc, 0.0)
         total = cpu_of(psutil, proc, known.last_cpu)
-        cpu[known.category.value] = cpu.get(known.category.value, 0.0) + max(0.0, total - known.last_cpu)
+        cpu[known.category] = cpu.get(known.category, 0.0) + max(0.0, total - known.last_cpu)
         known.last_cpu, known.last_seen = total, now
-        alive[pid] = (info["ppid"] or 0, known.category)
-    return now, alive, cpu
+        alive[pid] = Alive(info["ppid"] or 0, known.category)
+    return Sample(now, alive, cpu)
 
 
 def cpu_of(psutil, proc, fallback: float) -> float:
@@ -153,25 +210,27 @@ def positive_seconds(text: str) -> float:
 
 
 def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="sampler.py", description=__doc__,
-                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        prog="sampler.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument("out")
     parser.add_argument("--tick", type=positive_seconds, default=1.0)
     args = parser.parse_args(argv)
-    import psutil  # noqa: PLC0415 — installed only where the recorder runs, after the usage check
+    # Installed only where the recorder runs (the demonstration's own venv), so imported after the usage check.
+    import psutil  # noqa: PLC0415  # ty: ignore[unresolved-import]
+
     stop = Path(args.out + ".stop")
     seen: dict[int, Seen] = {}
     with open(args.out, "a", encoding="utf-8") as out:
         out.write(json.dumps({"kind": "start", "t": time.time(), "tick": args.tick, "platform": sys.platform}) + "\n")
         previous = time.time()
         while not stop.exists():
-            now, alive, cpu = sample(psutil, seen, os.getpid(), previous, args.tick)
-            out.write(json.dumps({"kind": "tick", "t": now, "dt": now - previous, "leaves": leaves(alive),
-                                  "cpu": {k: round(v, 4) for k, v in cpu.items() if v}}) + "\n")
-            record_exits(seen, alive, out)
+            taken = sample(psutil, seen, os.getpid(), previous, args.tick)
+            records = [Tick(taken.at, taken.at - previous, leaves(taken.alive), taken.cpu), *exits(seen, taken.alive)]
+            out.writelines(json.dumps(r.to_json()) + "\n" for r in records)
             out.flush()
-            previous = now
-            time.sleep(max(0.0, args.tick - (time.time() - now)))
+            previous = taken.at
+            time.sleep(max(0.0, args.tick - (time.time() - taken.at)))
         out.write(json.dumps({"kind": "stop", "t": time.time()}) + "\n")
     return 0
 

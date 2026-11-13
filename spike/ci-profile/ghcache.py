@@ -53,8 +53,9 @@ class GitHub:
     reads: int = 0
 
     async def _gh(self, *args: str) -> bytes:
-        proc = await asyncio.create_subprocess_exec("gh", *args, stdout=asyncio.subprocess.PIPE,
-                                                    stderr=asyncio.subprocess.PIPE)
+        proc = await asyncio.create_subprocess_exec(
+            "gh", *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        )
         out, err = await proc.communicate()
         if proc.returncode != 0:
             raise ReadFailed(f"gh {' '.join(args)}: {err.decode(errors='replace').strip()}")
@@ -71,7 +72,9 @@ class GitHub:
             if limit.rest < REST_FLOOR:
                 raise RateFloor(f"only {limit.rest} REST core requests remain (floor {REST_FLOOR}); wait for the reset")
             if limit.graphql < GRAPHQL_FLOOR:
-                raise RateFloor(f"only {limit.graphql} GraphQL points remain (floor {GRAPHQL_FLOOR}); wait for the reset")
+                raise RateFloor(
+                    f"only {limit.graphql} GraphQL points remain (floor {GRAPHQL_FLOOR}); wait for the reset"
+                )
         self.reads += 1
         return await self._gh("api", "--allow-escape-sequences", f"repos/{REPO}/{path}")
 
@@ -88,7 +91,9 @@ class GitHub:
         found: list[Any] = []
         page = 1
         while True:
-            body = obj(json.loads(await self._cached(f"{name}.{page}.json", f"{path}per_page={PAGE}&page={page}")), path)
+            body = obj(
+                json.loads(await self._cached(f"{name}.{page}.json", f"{path}per_page={PAGE}&page={page}")), path
+            )
             batch = items(body.get(key), f"{path} {key}")
             found += batch
             total = body.get("total_count")
@@ -100,7 +105,9 @@ class GitHub:
         target = self.cache / f"runs/{run_id}/run.json"
         if not target.exists():
             for listing in sorted((self.cache / "lists").glob("*.json")):
-                for entry in items(obj(json.loads(listing.read_text()), str(listing)).get("workflow_runs"), str(listing)):
+                for entry in items(
+                    obj(json.loads(listing.read_text()), str(listing)).get("workflow_runs"), str(listing)
+                ):
                     if isinstance(entry, dict) and entry.get("id") == run_id:
                         target.parent.mkdir(parents=True, exist_ok=True)
                         target.write_text(json.dumps(entry))
@@ -147,8 +154,14 @@ class GitHub:
         name = "lists/" + query.replace("/", "_").replace("&", "_").replace("=", "_")
         out: list[Run] = []
         for page in range(1, pages + 1):
-            body = obj(json.loads(await self._cached(f"{name}.{page}.json",
-                                                     f"actions/workflows/ci.yml/runs?{query}&per_page={PAGE}&page={page}")), query)
+            body = obj(
+                json.loads(
+                    await self._cached(
+                        f"{name}.{page}.json", f"actions/workflows/ci.yml/runs?{query}&per_page={PAGE}&page={page}"
+                    )
+                ),
+                query,
+            )
             batch = items(body.get("workflow_runs"), "workflow_runs")
             out += [Run.parse(r) for r in batch]
             if len(batch) < PAGE:
