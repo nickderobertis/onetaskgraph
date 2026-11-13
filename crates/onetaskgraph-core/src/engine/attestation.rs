@@ -583,8 +583,8 @@ impl Engine {
 
     /// The tasks of `source` whose [`MetadataKey::COPIES_KEY`] link names `copy`, through the
     /// engine's own task query, which narrows a source that cannot apply the predicate itself
-    /// and fills a page before it says more follow — so one page answers: a page with more to
-    /// come holds more than one.
+    /// and fills a page before it says more follow — so its first page answers: one with more
+    /// to come already holds a page of links, which is several.
     async fn tasks_linking(
         &self,
         source: &SourceName,
@@ -616,9 +616,6 @@ impl Engine {
                 name: failure.source.to_string(),
                 error: failure.error,
             });
-        }
-        if response.next.is_some() {
-            return Ok(Linked::Several);
         }
         Ok(response
             .items
@@ -671,7 +668,6 @@ impl Engine {
 
 /// What the sources declared private hold that links to a copy.
 enum Linked {
-    /// Nothing.
     Nothing,
     /// One item, with its metadata, which says what its root is.
     One(GlobalId, std::collections::BTreeMap<String, Value>),

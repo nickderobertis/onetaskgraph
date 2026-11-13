@@ -2551,6 +2551,69 @@ fn the_item_a_private_copy_was_made_from_is_found_only_when_its_link_says_so_una
         Value::Null,
         "its edge names the copy of the project it depended on",
     );
+    // A second project of the same private source linking to that copy — on the page before
+    // the one `authoring:upstream` is listed on — is no confident answer either.
+    write(
+        &plan.notes,
+        "projects/aa-decoy.md",
+        &format!(
+            "---\ntitle: Decoy\nstatus: todo\n\
+             metadata:\n  \"onetaskgraph.copies\": {{\"published\": \"{upstream}\"}}\n---\n"
+        ),
+    );
+    plan.holds(
+        "project",
+        &downstream,
+        "void",
+        json!("content-moved"),
+        "two projects link to its far end",
+    );
+    std::fs::remove_file(plan.notes.join("projects/aa-decoy.md")).expect("the decoy goes");
+
+    // Copied on, the copy of `upstream`'s copy records it, and it is read for the root behind
+    // it; a read of it that fails fails the check.
+    let onward_upstream = landed(&copy_plan(&plan, &upstream, "onward"), &upstream);
+    let onward_downstream = landed(&copy_plan(&plan, &downstream, "onward"), &downstream);
+    let file = onward.join(format!(
+        "projects/{}.md",
+        onward_downstream.split_once(':').expect("qualified").1
+    ));
+    let text = std::fs::read_to_string(&file).expect("downstream's onward copy");
+    let onward_native = onward_upstream.split_once(':').expect("qualified").1;
+    assert!(
+        text.contains("depends_on:") && text.contains(onward_native),
+        "a copy between public sources carries the edge to the onward copy of `upstream`: {text}"
+    );
+    plan.holds(
+        "project",
+        &onward_downstream,
+        "valid",
+        Value::Null,
+        "two copies on, by the root behind the project its far end records",
+    );
+    let upstream_file = published.join(format!("projects/{upstream_native}.md"));
+    let upstream_text = std::fs::read_to_string(&upstream_file).expect("upstream's copy");
+    std::fs::write(&upstream_file, "---\ntitle: [unclosed\n---\n").expect("a broken file");
+    let unread = plan.run(&[
+        "project",
+        "attestation",
+        "check",
+        &onward_downstream,
+        "--kind",
+        KIND,
+    ]);
+    assert_ne!(
+        unread.status.code(),
+        Some(0),
+        "the recorded project unreadable: {}",
+        stdout(&unread)
+    );
+    assert!(
+        stderr(&unread).contains("published"),
+        "the failure names the source holding it: {}",
+        stderr(&unread)
+    );
+    std::fs::write(&upstream_file, upstream_text).expect("restored");
 
     // A far end in a public source that nothing private links to is named by its own id, so a
     // record taken over it holds; a private source failing for any other reason than being

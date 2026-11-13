@@ -5749,3 +5749,73 @@ async fn a_dependents_attestation_holds_on_every_copy_its_far_end_is_withheld_fr
         "the copy's edge pointed at another item"
     );
 }
+
+#[tokio::test]
+async fn a_copy_more_than_one_private_item_links_to_is_named_by_its_own_id() {
+    // `into:Y` depends on `into:X`, which records no root. Over a private `vault` holding no
+    // task linking to `into:X`, the record a Rust caller writes on Y names X by its own id; one
+    // linking task names it by that task instead, and a page of them — more than fit on one —
+    // is no confident answer, so the record is the one nothing linking gives.
+    use onetaskgraph_core::AttestRequest;
+    use onetaskgraph_core::attestation::{AttestationKind, AttestationLabel};
+    use onetaskgraph_plugin_api::MetadataRecord;
+
+    let status = json!({"category": "todo", "name": "Todo"});
+    let digest = async |links: usize| {
+        let vault: Vec<Value> = (0..links)
+            .map(|n| {
+                json!({"id": format!("L-{n}"), "title": format!("Linked {n}"),
+                       "status": status, "labels": [],
+                       "metadata": {"onetaskgraph.copies": {"into": "into:X"}}})
+            })
+            .collect();
+        let engine = engine_over(json!({
+            "vault": {"plugin": "in-memory", "visibility": "private",
+                      "config": {"tasks": vault}},
+            "into": {"plugin": "in-memory", "visibility": "public", "config": {
+                "tasks": [
+                    {"id": "X", "title": "X", "status": status, "labels": []},
+                    {"id": "Y", "title": "Y", "status": status, "labels": []},
+                ],
+                "task_dependencies": [
+                    {"from": {"id": "Y", "kind": "task"}, "to": {"id": "X", "kind": "task"},
+                     "kind": "blocks"},
+                ],
+            }},
+        }))
+        .with_write_policy(Arc::new(NothingPrivate));
+        engine
+            .attest(
+                MetadataRecord::Task,
+                &AttestRequest {
+                    id: id("into:Y"),
+                    kind: AttestationKind::new("plan-review").expect("a kind"),
+                    by: AttestationLabel::new("--by", "review-plan").expect("a label"),
+                    bar: AttestationLabel::new("--bar", "bar-1").expect("a bar"),
+                    excludes: Vec::new(),
+                    note: None,
+                    if_version: None,
+                },
+            )
+            .await
+            .expect("the record is written")
+            .record
+            .content_digest
+    };
+    let unlinked = digest(0).await;
+    assert_ne!(
+        digest(1).await,
+        unlinked,
+        "one link names X by the item linking to it"
+    );
+    assert_eq!(
+        digest(2).await,
+        unlinked,
+        "two links are no confident answer"
+    );
+    assert_eq!(
+        digest(51).await,
+        unlinked,
+        "more links than one page holds are no confident answer"
+    );
+}
