@@ -179,7 +179,12 @@ def profile_job(job: dict, log_text: str, executions: dict | None) -> JobProfile
             a, b = ts(t["started_at"]), ts(t["finished_at"])
             if p.test_step and not (p.test_step[0] - 2 <= a <= p.test_step[1] + 2):
                 continue
-            tasks.append(Task(t["task"], a, b, t["result"]))
+            # A task that ran and failed was executed all the same.
+            tasks.append(Task(t["task"], a, b, "executed" if t["result"] == "failed" else t["result"]))
+        # A cancelled job's unfinished Nx invocations never wrote their executions: place
+        # those tasks from the log's own headers.
+        recorded = {t.name for t in tasks}
+        tasks += [t for t in tasks_from_log(log, p.test_step) if t.name not in recorded]
     else:
         tasks = tasks_from_log(log, p.test_step)
     # compile end: first test start for that project after the task started

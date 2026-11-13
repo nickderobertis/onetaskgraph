@@ -11,6 +11,8 @@ so both sides of an A/B carry byte-identical measurement changes:
 - `lint` and `budgets` do not run (they measure nothing this spike reads);
 - each test job's test step runs inside the process sampler, every libtest binary runs under
   the recording runner, and the records are uploaded as `spike-profile-<job>`;
+- each test job may run 60 minutes, so a recorded job finishes and is measured whole (the
+  recorders' overhead is reported beside it; the shipped 40-minute limit is not changed);
 - `--exclude` passes projects to `ci-job.sh --exclude=` (the tasks only the workflow edit
   itself selected), so the demonstration runs the selection its source edit makes.
 It exits non-zero, naming the edit, when an expected site is missing.
@@ -76,7 +78,7 @@ def apply(text: str, exclude: str) -> str:
         body = block.group(0)
         command = f"just ci-{job}" + (f" --exclude={exclude}" if exclude else "")
         wrapped = (f"        shell: bash\n        run: |\n"
-                   f"          \"$SPIKE_PY\" spike/ci-profile/sampler.py \"$RUNNER_TEMP/spike/samples.jsonl\" &\n"
+                   f"          \"$SPIKE_PY\" spike/ci-profile/sampler.py \"$RUNNER_TEMP/spike/samples.jsonl\" --tick 1.0 &\n"
                    f"          sampler=$!\n"
                    f"          status=0\n"
                    f"          {command} || status=$?\n"
@@ -84,6 +86,7 @@ def apply(text: str, exclude: str) -> str:
                    f"          wait \"$sampler\" || true\n"
                    f"          exit \"$status\"\n")
         body = sub(rf"        run: just ci-{job}\n", wrapped, body, f"{job} test step")
+        body = sub(r"(\n    timeout-minutes: )\d+", r"\g<1>60", body, f"{job} timeout")
         body = sub(r"(\n      - name: Test the affected projects\n)", "\n" + recorder_steps(job).rstrip("\n") + r"\1",
                    body, f"{job} recorder install")
         body = sub(r"(\n      - name: Report cache entries and task executions\n)", "\n" + upload_step(job).rstrip("\n") + r"\1",
