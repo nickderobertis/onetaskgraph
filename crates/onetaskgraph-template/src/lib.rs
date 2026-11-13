@@ -67,6 +67,7 @@ mod members;
 mod provenance;
 mod scan;
 mod schema;
+mod yaml;
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fmt;
