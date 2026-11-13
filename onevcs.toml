@@ -11,7 +11,14 @@
 # modified more than 2 days ago, and keeps each unit's newest build and every build
 # modified within those 2 days, so a rebuild in the slot stays warm.
 # pool-maintenance/budgets.yaml holds how long one pass takes.
-schema_version = 1
+schema_version = 2
+
+[policy]
+publication = "change-auto"
+approvals = "none"
+
+[policy.checks]
+wait_seconds = 6300  # recorded max 4807 s (run 39466309432) + 25% margin
 
 [pool.maintain]
 command = ["just", "pool-maintenance"]
