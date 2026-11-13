@@ -1,8 +1,8 @@
 pyramid: runs [43422794958, 43422857812] against control [43422783410, 43422844825]
-  test-linux   measured: wall  25.5 ->  25.9 min, chain  23.4 ->  23.8 min; predicted shortening +0.00 min/PR over 30, +0.00 over the 18 typical (0 without intervals)
-  test-macos   measured: wall  30.5 ->  29.4 min, chain  27.7 ->  26.9 min; predicted shortening +0.15 min/PR over 30, +0.21 over the 18 typical (0 without intervals)
-  test-windows measured: wall  30.2 ->  33.4 min, chain  26.7 ->  29.3 min; predicted shortening -0.36 min/PR over 30, -0.47 over the 18 typical (0 without intervals)
-split: runs [43445553591, 43445585382] against control [43445538503, 43445570366]
-  test-linux   measured: wall  25.7 ->  24.6 min, chain  23.8 ->  22.5 min; predicted shortening +0.01 min/PR over 30, +0.02 over the 18 typical (0 without intervals)
-  test-macos   measured: wall  31.0 ->  28.3 min, chain  27.9 ->  25.7 min; predicted shortening -0.04 min/PR over 30, -0.07 over the 18 typical (0 without intervals)
-  test-windows measured: wall  27.3 ->  27.1 min, chain  23.8 ->  23.8 min; predicted shortening +0.25 min/PR over 30, +0.38 over the 18 typical (0 without intervals)
+  test-linux   measured gate span (min) 24.0, 23.3 -> 23.3, 24.8, wall 25.9, 25.0 -> 25.0, 26.8; estimated shortening +0.00 min/PR over 30, +0.00 over the 18 typical (0 without intervals)
+  test-macos   measured gate span (min) 29.1, 26.5 -> 27.3, 26.7, wall 32.0, 29.0 -> 29.5, 29.2; estimated shortening +0.00 min/PR over 30, +0.00 over the 18 typical (0 without intervals)
+  test-windows measured gate span (min) 23.5, 30.3 -> 29.9, 29.2, wall 26.5, 34.0 -> 33.6, 33.1; estimated shortening -0.32 min/PR over 30, -0.40 over the 18 typical (0 without intervals)
+split: runs [43457723269, 43457727138] against control [43457659504, 43457450179]
+  test-linux   measured gate span (min) 27.9, 22.9 -> 23.1, 22.0, wall 29.9, 24.7 -> 24.7, 23.6; estimated shortening +0.00 min/PR over 30, +0.00 over the 18 typical (0 without intervals)
+  test-macos   measured gate span (min) 34.4, 27.5 -> 11.4, wall 37.6, 30.1 -> 12.8; estimated shortening +0.00 min/PR over 30, +0.00 over the 18 typical (0 without intervals)
+  test-windows measured gate span (min) 31.5, 28.6 -> 29.7, 21.8, wall 35.4, 32.5 -> 33.9, 25.0; estimated shortening +0.00 min/PR over 30, +0.00 over the 18 typical (0 without intervals)
