@@ -2,6 +2,7 @@
 """Price the measured prototypes over the 30-PR population, in elapsed job minutes.
 
     python3 spike/ci-profile/prototype_replay.py deltas SUMMARIES --control R,R --side NAME=R,R... --out FILE
+        [--side-only JOB:TASK]...
     python3 spike/ci-profile/prototype_replay.py replay HISTORY PRS DELTAS
 
 `deltas` reads the run summaries `ciprofile.py profile <run> --json` wrote into SUMMARIES
@@ -17,8 +18,13 @@ writes three different things, kept apart because they answer different question
   task's wall share (an instant split among the tasks running then), and `work_saved_s`, the
   change in summed test-seconds per crate (concurrent test work, from the nextest records the
   summary carries as `binaries_s`).
-The sides must have run the same Nx tasks as the control in every job, or the comparison is
-refused, naming the tasks one side ran and the other did not.
+The sides must have scheduled the same Nx tasks as the control in every job, or the comparison is
+refused, naming the tasks one side scheduled and the other did not; a task the prototype itself
+adds (its own crate's coverage unit, which Linux's unnarrowed coverage always schedules) is let
+through only when declared with `--side-only JOB:TASK`, and is recorded. A task both sides
+scheduled but only one executed (the other replayed it from the Nx cache, because the prototype's
+own manifest edit moved its key) is compared over the runs that executed it and recorded under
+`executed_by_one_side`.
 
 `replay` predicts, for every PR of HISTORY (`ciprofile.py history` output, each task with its
 interval), how much sooner each job would have ended had the prototype been in place: the tasks
@@ -104,6 +110,7 @@ class JobSummary:
     intervals: dict[str, Interval]
     shares: dict[str, float]
     work: dict[str, float]
+    scheduled: frozenset[str]
 
 
 def summary(directory: Path, run: int) -> dict[str, JobSummary]:
@@ -115,8 +122,10 @@ def summary(directory: Path, run: int) -> dict[str, JobSummary]:
         job = obj(raw_job, f"{path} {name}")
         intervals: dict[str, Interval] = {}
         shares: dict[str, float] = {}
+        scheduled: set[str] = set()
         for raw_task in items(job.get("tasks"), f"{path} {name} tasks"):
             task = obj(raw_task, f"{path} {name} task")
+            scheduled.add(str(task.get("task")))
             if task.get("result") != "executed":
                 continue
             where = f"{path} {name} {task.get('task')}"
@@ -127,13 +136,15 @@ def summary(directory: Path, run: int) -> dict[str, JobSummary]:
         for binary, spent in obj(job.get("binaries_s") or {}, f"{path} {name} binaries").items():
             if m := WORK_BINARY.match(binary):
                 work[m.group("crate")] += seconds(spent, f"{path} {name} {binary}")
-        out[name] = JobSummary(seconds(job.get("wall_s"), f"{path} {name} wall"), intervals, shares, dict(work))
+        wall = seconds(job.get("wall_s"), f"{path} {name} wall")
+        out[name] = JobSummary(wall, intervals, shares, dict(work), frozenset(scheduled))
     return out
 
 
 def mean_of(values: list[dict[str, float]]) -> dict[str, float]:
+    """Each key's mean over the records that hold it."""
     keys = {k for v in values for k in v}
-    return {k: statistics.mean(v.get(k, 0.0) for v in values) for k in keys}
+    return {k: statistics.mean(v[k] for v in values if k in v) for k in keys}
 
 
 def job_figures(present: list[JobSummary]) -> dict[str, float]:
@@ -144,7 +155,22 @@ def job_figures(present: list[JobSummary]) -> dict[str, float]:
     }
 
 
-def deltas(directory: Path, control: list[int], sides: dict[str, list[int]]) -> dict:
+def elapsed(p: JobSummary) -> dict[str, float]:
+    return {t: e - s for t, (s, e) in p.intervals.items()}
+
+
+def added_cost(measured: list[JobSummary], added: list[str]) -> dict[str, float]:
+    """A task only the prototype runs costs its whole mean elapsed interval: a negative saving."""
+    means = mean_of([elapsed(p) for p in measured])
+    return {t: -round(means[t], 1) for t in added}
+
+
+def deltas(
+    directory: Path,
+    control: list[int],
+    sides: dict[str, list[int]],
+    side_only: frozenset[tuple[str, str]] = frozenset(),
+) -> dict:
     base = [summary(directory, r) for r in control]
     out: dict = {"control": control, "sides": {}}
     for side, runs in sides.items():
@@ -155,24 +181,30 @@ def deltas(directory: Path, control: list[int], sides: dict[str, list[int]]) -> 
             m = [s[job.value] for s in measured if job.value in s]
             if not c or not m:
                 continue
-            c_tasks, m_tasks = {t for p in c for t in p.intervals}, {t for p in m for t in p.intervals}
-            if c_tasks != m_tasks:
+            c_sched = frozenset().union(*(p.scheduled for p in c))
+            m_sched = frozenset().union(*(p.scheduled for p in m))
+            declared = {t for j, t in side_only if j == job.value}
+            if c_sched - m_sched or (m_sched - c_sched) - declared:
                 raise Invalid(
-                    f"{side} {job.value}: the selections differ (control only {sorted(c_tasks - m_tasks)},"
-                    f" {side} only {sorted(m_tasks - c_tasks)}); hold them equal before comparing"
+                    f"{side} {job.value}: the selections differ (control only {sorted(c_sched - m_sched)},"
+                    f" {side} only {sorted((m_sched - c_sched) - declared)}); hold them equal before comparing"
                 )
+            c_exec, m_exec = {t for p in c for t in p.intervals}, {t for p in m for t in p.intervals}
 
-            def diff(get, c=c, m=m) -> dict[str, float]:
+            def diff(get, keys=None, c=c, m=m) -> dict[str, float]:
                 before, after = mean_of([get(p) for p in c]), mean_of([get(p) for p in m])
-                return {k: round(before.get(k, 0.0) - after.get(k, 0.0), 1) for k in sorted(set(before) | set(after))}
+                names = sorted(set(before) & set(after)) if keys is None else sorted(keys)
+                return {k: round(before.get(k, 0.0) - after.get(k, 0.0), 1) for k in names}
 
             per_job[job.value] = {
                 "runs": [len(c), len(m)],
                 "control": job_figures(c),
                 "side": job_figures(m),
-                "elapsed_saved_s": diff(lambda p: {t: e - s for t, (s, e) in p.intervals.items()}),
+                "side_only": sorted(m_sched - c_sched),
+                "executed_by_one_side": {"control": sorted(c_exec - m_exec), side: sorted((m_exec - c_exec) & c_sched)},
+                "elapsed_saved_s": diff(elapsed) | added_cost(m, sorted((m_sched - c_sched) & m_exec)),
                 "share_saved_s": diff(lambda p: p.shares),
-                "work_saved_s": diff(lambda p: p.work),
+                "work_saved_s": diff(lambda p: p.work, {k for p in c + m for k in p.work}),
             }
         out["sides"][side] = {"runs": runs, "jobs": per_job}
     return out
@@ -257,6 +289,7 @@ def main(argv: list[str]) -> int:
     d.add_argument("--control", type=run_ids, required=True)
     d.add_argument("--side", action="append", required=True)
     d.add_argument("--out", type=Path, required=True)
+    d.add_argument("--side-only", action="append", default=[], help="JOB:TASK the prototype itself adds")
     r = sub.add_parser("replay")
     for name in ("history", "prs", "deltas"):
         r.add_argument(name, type=Path)
@@ -269,7 +302,14 @@ def main(argv: list[str]) -> int:
                 if name not in SIDES:
                     ap.error(f"--side takes {'|'.join(SIDES)}=R,R, not {item!r}")
                 sides[name] = run_ids(ids)
-            args.out.write_text(json.dumps(deltas(args.summaries, args.control, sides), indent=1) + "\n")
+            declared = set()
+            for item in args.side_only:
+                job, _, task = item.partition(":")
+                if job not in {j.value for j in JobName} or ":" not in task:
+                    ap.error(f"--side-only takes JOB:PROJECT:TARGET, not {item!r}")
+                declared.add((job, task))
+            measured = deltas(args.summaries, args.control, sides, frozenset(declared))
+            args.out.write_text(json.dumps(measured, indent=1) + "\n")
             return 0
         lines = replay(
             json.loads(args.history.read_text()),

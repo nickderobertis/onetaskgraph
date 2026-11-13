@@ -25,8 +25,10 @@ def command(*args: str) -> subprocess.CompletedProcess:
     )
 
 
-def write_summary(directory: Path, run: int, tasks: dict[str, tuple[float, float, float]], work: float) -> None:
-    """tasks: name -> (start, end, share)."""
+def write_summary(
+    directory: Path, run: int, tasks: dict[str, tuple[float, float, float]], work: float, replayed: tuple[str, ...] = ()
+) -> None:
+    """tasks: name -> (start, end, share), each executed; `replayed` tasks are scheduled and replayed."""
     job = {
         "job_id": run,
         "wall_s": 1800 + run,
@@ -34,7 +36,7 @@ def write_summary(directory: Path, run: int, tasks: dict[str, tuple[float, float
         "tasks": [
             {"task": t, "result": "executed", "start": s, "end": e, "share_s": sh} for t, (s, e, sh) in tasks.items()
         ]
-        + [{"task": "x:replayed", "result": "remote_hit", "start": 0, "end": 0, "share_s": 0}],
+        + [{"task": t, "result": "remote_hit", "start": 0, "end": 0, "share_s": 0} for t in ("x:replayed", *replayed)],
         "binaries_s": {"instrumented:onetaskgraph-e2e::e2e": work, "e2e-0123456789abcdef": 5.0},
     }
     (directory / f"profile-{run}.json").write_text(json.dumps({"run": run, "jobs": {"test-macos": job}}))
@@ -94,6 +96,34 @@ class CommandTests(unittest.TestCase):
         proc = self.deltas("split", tasks, tasks, extra={"onetaskgraph-plugin-api:test": (0, 50, 25)})
         self.assertEqual(proc.returncode, 2)
         self.assertIn("split only ['onetaskgraph-plugin-api:test']", proc.stderr)
+
+    def test_a_declared_task_the_prototype_adds_is_a_cost_and_a_replay_on_one_side_is_recorded_not_compared(self):
+        common: dict[str, tuple[float, float, float]] = {
+            "build": (0, 100, 100),
+            "onetaskgraph-core:test": (100, 400, 200),
+        }
+        write_summary(self.root, 1, common, 0, replayed=("lib:test",))
+        write_summary(self.root, 2, common, 0, replayed=("lib:test",))
+        split: dict[str, tuple[float, float, float]] = {
+            **common,
+            "onetaskgraph-core:test": (100, 390, 190),
+            "lib:test": (0, 80, 40),
+        }
+        write_summary(self.root, 3, {**split, "onetaskgraph-template:coverage": (0, 30, 15)}, 0)
+        write_summary(self.root, 4, {**split, "onetaskgraph-template:coverage": (0, 50, 25)}, 0)
+        args = ("deltas", str(self.root), "--control", "1,2", "--side", "split=3,4", "--out", str(self.root / "d.json"))
+        refused = command(*args)
+        self.assertEqual(refused.returncode, 2)
+        self.assertIn("split only ['onetaskgraph-template:coverage']", refused.stderr)
+        proc = command(*args, "--side-only", "test-macos:onetaskgraph-template:coverage")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        job = json.loads((self.root / "d.json").read_text())["sides"]["split"]["jobs"]["test-macos"]
+        self.assertEqual(job["side_only"], ["onetaskgraph-template:coverage"])
+        self.assertEqual(job["executed_by_one_side"], {"control": [], "split": ["lib:test"]})
+        self.assertEqual(
+            job["elapsed_saved_s"],
+            {"build": 0.0, "onetaskgraph-core:test": 10.0, "onetaskgraph-template:coverage": -40.0},
+        )
 
     def test_the_replay_predicts_each_prs_shortening_from_its_own_critical_path(self):
         control = {"build": (0, 100, 100), "onetaskgraph-e2e:test": (100, 700, 300)}
