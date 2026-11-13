@@ -1,8 +1,0 @@
-pyramid: runs [43422794958, 43422857812] against control [43422783410, 43422844825]
-  test-linux   job wall  25.5 ->  25.9 min; replayed saving +0.12 min/PR over 30, +0.13 min/PR over the 18 typical
-  test-macos   job wall  30.5 ->  29.4 min; replayed saving +0.16 min/PR over 30, +0.22 min/PR over the 18 typical
-  test-windows job wall  30.2 ->  33.4 min; replayed saving -0.05 min/PR over 30, -0.07 min/PR over the 18 typical
-split: runs [43422809261, 43422873045] against control [43422783410, 43422844825]
-  test-linux   job wall  25.5 ->  30.6 min; replayed saving -0.20 min/PR over 30, -0.30 min/PR over the 18 typical
-  test-macos   job wall  30.5 ->  30.0 min; replayed saving +0.57 min/PR over 30, +0.88 min/PR over the 18 typical
-  test-windows job wall  30.2 ->  31.1 min; replayed saving +0.55 min/PR over 30, +0.86 min/PR over the 18 typical

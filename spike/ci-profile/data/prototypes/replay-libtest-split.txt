@@ -1,4 +1,0 @@
-split: runs [43422809261, 43422873045] against control [43422783410, 43422844825]
-  test-linux   job wall  25.5 ->  30.6 min; replayed saving -0.06 min/PR over 30, -0.09 min/PR over the 18 typical
-  test-macos   job wall  30.5 ->  30.0 min; replayed saving +0.02 min/PR over 30, +0.04 min/PR over the 18 typical
-  test-windows job wall  30.2 ->  31.1 min; replayed saving +0.12 min/PR over 30, +0.19 min/PR over the 18 typical
