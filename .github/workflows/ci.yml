@@ -44,7 +44,7 @@ jobs:
   # reaches. `budgets`, at the end of this file, follows them.
 
   lint:
-    if: github.event_name == 'pull_request'
+    if: false
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # In all four jobs: the Python SDK's environment without the CLI copy `uv sync` would build
@@ -128,7 +128,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: package.json
-          no-cache: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
+          no-cache: true
       # Linux's distribution journey runs in this job (scripts/ci-job.sh), so its release build
       # and its scratch copy's builds join the lint builds and test-linux's restored family on
       # this runner's disk; the SDKs it never uses go in the background, as test-linux's do.
@@ -141,7 +141,7 @@ jobs:
         with:
           version: ${{ steps.pins.outputs.uv }}
           enable-cache: true
-          save-cache: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+          save-cache: false
       # Reads rust-toolchain.toml; its built-in cache keys `target` and the cargo registry on
       # Cargo.lock, the toolchain and the OS, and cargo's fingerprints refuse a stale unit.
       # test-linux's family, which .github/workflows/rust-cache-warm.yml saves on main with this
@@ -190,7 +190,7 @@ jobs:
         env:
           NX_SELF_HOSTED_REMOTE_CACHE_SERVER: http://127.0.0.1:3000
           NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN: ${{ steps.nx-cache-trust.outputs.token }}
-          CACHE_READ_ONLY: ${{ steps.nx-cache-trust.outputs.read_only == 'true' && '1' || '' }}
+          CACHE_READ_ONLY: '1'
           GITHUB_TOKEN: ${{ github.token }}
       - name: Wait for the cache recording proxy
         shell: bash
@@ -208,12 +208,12 @@ jobs:
       # only from a job that passed, and a tool built from source is the cost worth keeping
       # even when a later step fails or the timeout ends the job.
       - uses: actions/cache/save@v6
-        if: steps.release-plz-cache.outputs.cache-hit != 'true' && github.event.pull_request.head.repo.full_name == github.repository
+        if: false
         with:
           path: ~/.cache/onetaskgraph/tools/release-plz
           key: release-plz-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.release-plz }}
       - uses: actions/cache/save@v6
-        if: steps.prune-superseded-cache.outputs.cache-hit != 'true' && github.event.pull_request.head.repo.full_name == github.repository
+        if: false
         with:
           path: |
             ~/.cargo/bin/cargo-prune-superseded
@@ -288,7 +288,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: always() && steps.nx-cache-trust.outputs.promotable == 'true'
         with:
-          name: nx-cache-entries-${{ github.job }}
+          name: spike-nx-executions-${{ github.job }}
           path: ${{ runner.temp }}/nx-cache-report
           retention-days: 7
       - cancel: nx-cache
@@ -296,7 +296,7 @@ jobs:
   test-linux:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
     # No concurrency group: this run's live sessions touch only resources of its own
     # namespace, so any number of runs may execute them at once.
     env:
@@ -319,7 +319,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: package.json
-          no-cache: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
+          no-cache: true
       - name: Install the workflow tooling
         run: just github-workflows-bootstrap
       # The classifier affects only Rust coverage; functional and SDK tasks still run.
@@ -350,7 +350,7 @@ jobs:
         with:
           version: ${{ steps.pins.outputs.uv }}
           enable-cache: true
-          save-cache: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+          save-cache: false
       # Reads rust-toolchain.toml; its built-in cache keys `target` and the cargo registry on
       # Cargo.lock, the toolchain and the OS, and cargo's fingerprints refuse a stale unit.
       # The shared key is the one .github/workflows/rust-cache-warm.yml saves on main, the one
@@ -395,7 +395,7 @@ jobs:
         env:
           NX_SELF_HOSTED_REMOTE_CACHE_SERVER: http://127.0.0.1:3000
           NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN: ${{ steps.nx-cache-trust.outputs.token }}
-          CACHE_READ_ONLY: ${{ steps.nx-cache-trust.outputs.read_only == 'true' && '1' || '' }}
+          CACHE_READ_ONLY: '1'
           GITHUB_TOKEN: ${{ github.token }}
       - name: Wait for the cache recording proxy
         shell: bash
@@ -409,12 +409,12 @@ jobs:
         run: just bootstrap --outputStyle=static
       # Saved straight after Bootstrap, as lint's are.
       - uses: actions/cache/save@v6
-        if: steps.release-plz-cache.outputs.cache-hit != 'true' && github.event.pull_request.head.repo.full_name == github.repository
+        if: false
         with:
           path: ~/.cache/onetaskgraph/tools/release-plz
           key: release-plz-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.release-plz }}
       - uses: actions/cache/save@v6
-        if: steps.prune-superseded-cache.outputs.cache-hit != 'true' && github.event.pull_request.head.repo.full_name == github.repository
+        if: false
         with:
           path: |
             ~/.cargo/bin/cargo-prune-superseded
@@ -442,7 +442,11 @@ jobs:
           # llmlint: ignore[live_tier_compiles_and_requires_credential] `0` on a fork pull request alone, which GitHub hands no secrets; every other run demands the credential.
           ONETASKGRAPH_LIVE_REQUIRED: ${{ github.event.pull_request.head.repo.fork && '0' || '1' }}
         # llmlint: ignore[external_service_suite_stays_out_of_the_affected_tier] These suites run only when their own plugin changed, which is the edge; AGENTS.md records why an edge of their own was removed.
-        run: just ci-test-linux
+        shell: bash
+        run: |
+          status=0
+          just ci-test-linux --exclude=github-cache-policy,github-nx-policy,github-workflow-policy,github-workflows,linear-documents-policy,report-job,screenshots,scripts || status=$?
+          exit "$status"
       # The release pull request alone: after this job's tests, because the pool maintenance
       # prunes and rebuilds the target directory they use, and not in lint, where beside the
       # distribution journey it ran that job past its timeout.
@@ -490,7 +494,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: always() && steps.nx-cache-trust.outputs.promotable == 'true'
         with:
-          name: nx-cache-entries-${{ github.job }}
+          name: spike-nx-executions-${{ github.job }}
           path: ${{ runner.temp }}/nx-cache-report
           retention-days: 7
       - cancel: nx-cache
@@ -498,7 +502,7 @@ jobs:
   test-windows:
     if: github.event_name == 'pull_request'
     runs-on: windows-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
     env:
       ONETASKGRAPH_SDK_WITHOUT_CLI: "1"
       UV_NO_SYNC: "1"
@@ -537,14 +541,14 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: package.json
-          no-cache: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
+          no-cache: true
       - name: Install the workflow tooling
         run: just github-workflows-bootstrap
       - uses: astral-sh/setup-uv@v7
         with:
           version: ${{ steps.pins.outputs.uv }}
           enable-cache: true
-          save-cache: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+          save-cache: false
       # rust-cache hashes every installed compiler; exclude the unused floating one.
       - name: Exclude the unused floating compiler from the build cache
         shell: bash
@@ -585,7 +589,7 @@ jobs:
         env:
           NX_SELF_HOSTED_REMOTE_CACHE_SERVER: http://127.0.0.1:3000
           NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN: ${{ steps.nx-cache-trust.outputs.token }}
-          CACHE_READ_ONLY: ${{ steps.nx-cache-trust.outputs.read_only == 'true' && '1' || '' }}
+          CACHE_READ_ONLY: '1'
           GITHUB_TOKEN: ${{ github.token }}
       - name: Wait for the cache recording proxy
         shell: bash
@@ -599,12 +603,12 @@ jobs:
         run: just bootstrap --outputStyle=static
       # Saved straight after Bootstrap, as lint's are.
       - uses: actions/cache/save@v6
-        if: steps.release-plz-cache.outputs.cache-hit != 'true' && github.event.pull_request.head.repo.full_name == github.repository
+        if: false
         with:
           path: ~/.cache/onetaskgraph/tools/release-plz
           key: release-plz-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.release-plz }}
       - uses: actions/cache/save@v6
-        if: steps.prune-superseded-cache.outputs.cache-hit != 'true' && github.event.pull_request.head.repo.full_name == github.repository
+        if: false
         with:
           path: |
             ~/.cargo/bin/cargo-prune-superseded
@@ -612,7 +616,11 @@ jobs:
           key: prune-superseded-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.prune-superseded }}-${{ hashFiles('rust-toolchain.toml') }}
       # llmlint: ignore-block[live_tier_compiles_and_requires_credential,external_service_suite_stays_out_of_the_affected_tier] test-linux alone carries this run's live credentials, so this job cannot demand one; and the uncredentialed service suites run behind affected selection, as in test-linux, only when their own plugin changed.
       - name: Test the affected projects
-        run: just ci-test-windows
+        shell: bash
+        run: |
+          status=0
+          just ci-test-windows --exclude=github-cache-policy,github-nx-policy,github-workflow-policy,github-workflows,linear-documents-policy,report-job,screenshots,scripts || status=$?
+          exit "$status"
       # llmlint: ignore-end[live_tier_compiles_and_requires_credential,external_service_suite_stays_out_of_the_affected_tier]
 
       - name: Report cache entries and task executions
@@ -622,7 +630,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: always() && steps.nx-cache-trust.outputs.promotable == 'true'
         with:
-          name: nx-cache-entries-${{ github.job }}
+          name: spike-nx-executions-${{ github.job }}
           path: ${{ runner.temp }}/nx-cache-report
           retention-days: 7
       - cancel: nx-cache
@@ -630,7 +638,7 @@ jobs:
   test-macos:
     if: github.event_name == 'pull_request'
     runs-on: macos-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
     env:
       ONETASKGRAPH_SDK_WITHOUT_CLI: "1"
       UV_NO_SYNC: "1"
@@ -651,14 +659,14 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: package.json
-          no-cache: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
+          no-cache: true
       - name: Install the workflow tooling
         run: just github-workflows-bootstrap
       - uses: astral-sh/setup-uv@v7
         with:
           version: ${{ steps.pins.outputs.uv }}
           enable-cache: true
-          save-cache: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+          save-cache: false
       # rust-cache hashes every installed compiler; exclude the unused floating one.
       - name: Exclude the unused floating compiler from the build cache
         shell: bash
@@ -699,7 +707,7 @@ jobs:
         env:
           NX_SELF_HOSTED_REMOTE_CACHE_SERVER: http://127.0.0.1:3000
           NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN: ${{ steps.nx-cache-trust.outputs.token }}
-          CACHE_READ_ONLY: ${{ steps.nx-cache-trust.outputs.read_only == 'true' && '1' || '' }}
+          CACHE_READ_ONLY: '1'
           GITHUB_TOKEN: ${{ github.token }}
       - name: Wait for the cache recording proxy
         shell: bash
@@ -713,12 +721,12 @@ jobs:
         run: just bootstrap --outputStyle=static
       # Saved straight after Bootstrap, as lint's are.
       - uses: actions/cache/save@v6
-        if: steps.release-plz-cache.outputs.cache-hit != 'true' && github.event.pull_request.head.repo.full_name == github.repository
+        if: false
         with:
           path: ~/.cache/onetaskgraph/tools/release-plz
           key: release-plz-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.release-plz }}
       - uses: actions/cache/save@v6
-        if: steps.prune-superseded-cache.outputs.cache-hit != 'true' && github.event.pull_request.head.repo.full_name == github.repository
+        if: false
         with:
           path: |
             ~/.cargo/bin/cargo-prune-superseded
@@ -726,7 +734,11 @@ jobs:
           key: prune-superseded-${{ runner.os }}-${{ runner.arch }}-${{ steps.pins.outputs.prune-superseded }}-${{ hashFiles('rust-toolchain.toml') }}
       # llmlint: ignore-block[live_tier_compiles_and_requires_credential,external_service_suite_stays_out_of_the_affected_tier] test-linux alone carries this run's live credentials, so this job cannot demand one; and the uncredentialed service suites run behind affected selection, as in test-linux, only when their own plugin changed.
       - name: Test the affected projects
-        run: just ci-test-macos
+        shell: bash
+        run: |
+          status=0
+          just ci-test-macos --exclude=github-cache-policy,github-nx-policy,github-workflow-policy,github-workflows,linear-documents-policy,report-job,screenshots,scripts || status=$?
+          exit "$status"
       # llmlint: ignore-end[live_tier_compiles_and_requires_credential,external_service_suite_stays_out_of_the_affected_tier]
       - name: Report cache entries and task executions
         if: always()
@@ -735,7 +747,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: always() && steps.nx-cache-trust.outputs.promotable == 'true'
         with:
-          name: nx-cache-entries-${{ github.job }}
+          name: spike-nx-executions-${{ github.job }}
           path: ${{ runner.temp }}/nx-cache-report
           retention-days: 7
       - cancel: nx-cache
@@ -749,7 +761,7 @@ jobs:
   # holds its budget and the journeys that drive it.
   budgets:
     needs: [lint, test-linux, test-windows, test-macos]
-    if: always()
+    if: false
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:

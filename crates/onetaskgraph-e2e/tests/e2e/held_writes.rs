@@ -302,6 +302,7 @@ fn every_verb_is_held(stores: &Stores, destination: &str, what: &str) {
 }
 
 #[test]
+#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/held_writes.rs"]
 fn every_task_write_verb_held_to_a_version_lands_at_it_and_is_refused_once_it_moved() {
     for cached in [false, true] {
         for destination in DESTINATIONS {
@@ -333,6 +334,7 @@ fn every_task_write_verb_held_to_a_version_lands_at_it_and_is_refused_once_it_mo
 }
 
 #[test]
+#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/held_writes.rs"]
 fn a_held_write_on_a_task_nothing_holds_is_refused_as_any_write_of_it_is() {
     let stores = Stores::new(false);
     stores.note("A", "Task A");
@@ -352,6 +354,7 @@ fn a_held_write_on_a_task_nothing_holds_is_refused_as_any_write_of_it_is() {
 }
 
 #[test]
+#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/held_writes.rs"]
 fn a_held_copy_names_one_task() {
     let stores = Stores::new(false);
     stores.note("A", "Task A");
@@ -394,6 +397,7 @@ fn memory(sandbox: &Sandbox, title: &str) {
 }
 
 #[test]
+#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/held_writes.rs"]
 fn an_in_memory_task_held_to_a_version_lands_at_it_and_is_refused_at_another() {
     let sandbox = Sandbox::new();
     let folder = sandbox.subdirectory("folder");
@@ -528,6 +532,7 @@ fn priority_of(path: &Path) -> String {
 }
 
 #[test]
+#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/held_writes.rs"]
 fn two_writes_held_to_one_version_of_a_folder_task_never_both_land() {
     let sandbox = Sandbox::new();
     let folder = sandbox.subdirectory("folder");
@@ -591,6 +596,7 @@ fn untouched(task: &Value, written: &str) -> Value {
 }
 
 #[test]
+#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/held_writes.rs"]
 fn a_guarded_priority_set_writes_only_over_a_priority_it_names_and_answers_held_otherwise() {
     for destination in DESTINATIONS {
         let stores = Stores::new(false);
@@ -725,6 +731,7 @@ fn a_guarded_priority_set_writes_only_over_a_priority_it_names_and_answers_held_
 }
 
 #[test]
+#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/held_writes.rs"]
 fn a_repositories_update_replaces_the_list_alone_and_clears_it() {
     for destination in DESTINATIONS {
         let stores = Stores::new(false);
@@ -831,6 +838,7 @@ fn a_repositories_update_replaces_the_list_alone_and_clears_it() {
 }
 
 #[test]
+#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/held_writes.rs"]
 fn an_in_memory_task_takes_a_guarded_priority_and_a_repositories_update() {
     let sandbox = Sandbox::new();
     std::fs::create_dir_all(sandbox.subdirectory("folder").join("tasks")).expect("a folder");
@@ -928,6 +936,7 @@ fn an_in_memory_task_takes_a_guarded_priority_and_a_repositories_update() {
 }
 
 #[test]
+#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/held_writes.rs"]
 fn a_guard_reads_as_held_or_written_to_a_person_and_metadata_off_a_task_takes_no_version() {
     let stores = Stores::new(false);
     stores.note("A", "Task A");
@@ -1042,6 +1051,7 @@ fn hosted(sandbox: &Sandbox, title: &str) {
 }
 
 #[test]
+#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/held_writes.rs"]
 fn a_write_held_across_the_stdio_plugin_protocol_lands_at_its_version_and_is_refused_at_another() {
     let sandbox = Sandbox::new();
     let run = |arguments: &[&str], code: i32| -> Value {
@@ -1100,6 +1110,7 @@ fn a_write_held_across_the_stdio_plugin_protocol_lands_at_its_version_and_is_ref
 }
 
 #[test]
+#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/held_writes.rs"]
 fn a_write_expecting_a_version_and_held_to_it_takes_both_on_a_cached_board() {
     let stores = Stores::new(true);
     stores.note("A", "Task A");
@@ -1153,6 +1164,7 @@ fn a_write_expecting_a_version_and_held_to_it_takes_both_on_a_cached_board() {
 }
 
 #[test]
+#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/held_writes.rs"]
 fn a_held_copy_carrying_comments_checks_its_first_write_and_lands_the_rest() {
     for destination in DESTINATIONS {
         let stores = Stores::new(false);
