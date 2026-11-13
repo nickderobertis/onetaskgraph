@@ -396,6 +396,13 @@ class GitHubResponseTests(unittest.TestCase):
         limit = models.RateLimit.parse(json.loads((FIXTURES / "rate-limit.json").read_text()))
         self.assertGreaterEqual(limit.rest, 0)
 
+    def test_a_skipped_job_github_stamps_as_ending_before_it_starts_is_read_as_never_run(self):
+        jobs = [models.Job.parse(j) for j in json.loads((FIXTURES / "run-43392807274-jobs.json").read_text())["jobs"]]
+        skipped = {j.name: j for j in jobs if j.conclusion is models.Conclusion.SKIPPED}
+        self.assertEqual(set(skipped), {"lint", "budgets"})
+        self.assertTrue(all(not j.finished for j in skipped.values()))
+        self.assertTrue(all(j.finished for j in jobs if j.name.startswith("test-")))
+
     def test_every_conclusion_github_answered_is_one_the_model_knows(self):
         seen = set()
         for job in json.loads((FIXTURES / "run-43152201170-jobs.json").read_text())["jobs"]:

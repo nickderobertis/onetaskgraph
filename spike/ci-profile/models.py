@@ -232,7 +232,10 @@ class Job:
         where = f"job {record.get('id')}"
         start = timestamp(record["started_at"], where) if record.get("started_at") else None
         end = timestamp(record["completed_at"], where) if record.get("completed_at") else None
-        if start is not None and end is not None and end < start:
+        if conclusion(record.get("conclusion"), where) is Conclusion.SKIPPED:
+            # GitHub stamps a skipped job as completing a second before it starts: it never ran.
+            start = end = None
+        elif start is not None and end is not None and end < start:
             raise Invalid(f"{where}: completes before it starts")
         steps = tuple(
             s
