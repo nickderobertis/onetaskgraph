@@ -297,7 +297,10 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     # Version 64: a Linear configuration's `metadata_fields`, and the entries `sources fields`
     # reports for them.
     linear = bundle["roots"]["LinearConfig"]
-    assert "metadata_fields" in linear["properties"]
+    assert isinstance(linear, dict)
+    linear_properties = linear["properties"]
+    assert isinstance(linear_properties, dict)
+    assert "metadata_fields" in linear_properties
     # Version 63: what `task assignee set` answers.
     assert "TaskAssigneeSet" in bundle["roots"]
     # Version 62: the documents the relation calls read and answer.
