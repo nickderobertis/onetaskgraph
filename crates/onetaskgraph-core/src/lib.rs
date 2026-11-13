@@ -127,3 +127,5 @@ pub use template::{
     RenderedTemplate, Sha256Digest, Template, TemplateError, TemplateInput, TemplateLoader,
     TemplateProvenance, TemplateVariable, TemplateVariables, VariableType,
 };
+
+// spike-onetaskgraph-profile: a no-behaviour edit, so this demonstration selects what an engine change selects.
