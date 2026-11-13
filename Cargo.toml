@@ -19,6 +19,7 @@ authors = ["Nick DeRobertis"]
 # publish a crate whose siblings resolve elsewhere (scripts/crate-sibling-resolution.sh).
 onetaskgraph-plugin-api = { path = "crates/onetaskgraph-plugin-api", version = "=0.14.14" }
 onetaskgraph-core = { path = "crates/onetaskgraph-core", version = "=0.14.14" }
+onetaskgraph-template = { path = "crates/onetaskgraph-template", version = "=0.14.14" }
 onetaskgraph-in-memory = { path = "crates/onetaskgraph-in-memory", version = "=0.14.14" }
 onetaskgraph-local-md = { path = "crates/onetaskgraph-local-md", version = "=0.14.14" }
 onetaskgraph-linear = { path = "crates/onetaskgraph-linear", version = "=0.14.14" }
