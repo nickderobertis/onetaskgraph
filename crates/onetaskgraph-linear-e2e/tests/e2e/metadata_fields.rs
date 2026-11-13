@@ -765,3 +765,77 @@ fn a_section_a_person_edited_is_never_read_and_is_written_afresh_by_the_next_wri
     assert!(!stored.contains("edited by hand"), "{stored}");
     assert_eq!(setup.show("task", &id)["content"], "Prose.");
 }
+
+#[test]
+fn a_write_of_an_existing_item_holding_a_value_no_section_can_show_is_refused_changing_nothing() {
+    let setup = Setup::new(true);
+    setup.author(&record());
+    let (ids, _) = setup.copy();
+    let mut refused = record();
+    refused["owning_runs"] = json!(["run-a", 2]);
+    let value = refused.to_string();
+    let update = format!("{KEY}={refused}");
+    let task = format!("linear:{}", ids[1]);
+    let mut writes: Vec<Vec<String>> = KINDS
+        .iter()
+        .zip(&ids)
+        .map(|((kind, _), id)| {
+            [
+                *kind,
+                "metadata",
+                "set",
+                &format!("linear:{id}"),
+                KEY,
+                &value,
+            ]
+            .map(str::to_owned)
+            .to_vec()
+        })
+        .collect();
+    writes.push(
+        ["task", "update", &task, "--metadata", &update]
+            .map(str::to_owned)
+            .to_vec(),
+    );
+    let held: Vec<String> = KINDS
+        .iter()
+        .zip(&ids)
+        .map(|((_, table), id)| setup.workspace.long_form(table, id).unwrap())
+        .collect();
+    for arguments in writes {
+        let from = setup.workspace.served().len();
+        let output = setup
+            .sandbox
+            .command()
+            .args(&arguments)
+            .assert()
+            .failure()
+            .get_output()
+            .clone();
+        let said = stderr(&output);
+        for named in [
+            "source linear",
+            "\"Owning runs\"",
+            "an array whose element 1 is a number",
+        ] {
+            assert!(said.contains(named), "{arguments:?}: {named}: {said}");
+        }
+        assert!(
+            !setup.workspace.served()[from..]
+                .iter()
+                .any(|(query, _)| query.trim_start().starts_with("mutation")),
+            "{arguments:?}: refused before any mutation"
+        );
+    }
+    // Every item holds what it held: its content, its section and its metadata.
+    for (((kind, table), id), held) in KINDS.iter().zip(&ids).zip(&held) {
+        assert_eq!(
+            &setup.workspace.long_form(table, id).unwrap(),
+            held,
+            "{kind}"
+        );
+        let shown = setup.show(kind, id);
+        assert_eq!(shown["content"], CONTENT, "{kind}");
+        assert_eq!(shown["metadata"][KEY], record(), "{kind}");
+    }
+}
