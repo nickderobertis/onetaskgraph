@@ -1,0 +1,14 @@
+{
+ "control": [43422783410, 43422844825],
+ "measure": "libtest seconds: the summed `finished in` of every `test result` line of the crate in each job's log (macOS, Windows), and the summed nextest seconds of its `instrumented:` binaries (Linux, the harness's binaries_s); control core 9/6 s macOS, 31/28 s Windows, 34.6/33.9 s Linux; split core 4/5, 13/17, 35.3/46.4 s; template 0/0, 1/1, 1.2/1.2 s",
+ "sides": {
+  "split": {
+   "runs": [43422809261, 43422873045],
+   "jobs": {
+    "test-linux": {"control_wall_s": 1528.0, "side_wall_s": 1836.0, "runs": [2, 2], "saved_s": {"onetaskgraph-core:coverage": -6.6, "onetaskgraph-template:coverage": -1.2}},
+    "test-macos": {"control_wall_s": 1829.5, "side_wall_s": 1798.5, "runs": [2, 2], "saved_s": {"onetaskgraph-core:test": 3.0, "onetaskgraph-template:test": 0.0}},
+    "test-windows": {"control_wall_s": 1814.0, "side_wall_s": 1865.5, "runs": [2, 2], "saved_s": {"onetaskgraph-core:test": 14.5, "onetaskgraph-template:test": -1.0}}
+   }
+  }
+ }
+}
