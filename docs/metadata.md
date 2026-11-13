@@ -352,40 +352,86 @@ do not: status goes to the board's `Status` single-select and the issue's own op
 closed state, `onetaskgraph.origin` goes to a source-owned `onetaskgraph.origin` text
 field, and dependencies go to `blockedBy` and to sub-issue links.
 
-### `github-projects` can also project a value onto a board text field
+### `github-projects` and `linear` can also show a value where a person reads the item
 
-A board filters on its fields and not on an issue's body, so a source can be configured to
-write chosen metadata values to board text fields as well — the way a board triaging
-follow-ups from several machines is sliced by the host each came from:
+A board filters on its fields and not on an issue's body, and Linear renders neither the slot
+nor any field of a caller's own, so a source can be configured to show chosen metadata values
+where a person reading the item sees them — the way a board triaging follow-ups from several
+machines is sliced by the host each came from:
 
 ```yaml
-metadata_fields:              # optional; absent or [] projects nothing
-  - field: Host               # the board text field's name
+metadata_fields:              # optional; absent or [] shows nothing
+  - field: Host               # the name it is shown under
     key: orchestrator.follow-up   # a top-level metadata key
     path: [host]              # optional: object keys walked inside that key's value
 ```
 
-**The field is a projection and the slot stays the value's one home.** Every read reports
-metadata from the body's slot exactly as it would without the entry, and a value a person types
-into the field on the board is never read back as metadata.
+A `github-projects` source writes each value to the board text field `field` names; a `linear`
+source shows them all in one collapsed `Fields` section at the end of the item's description.
+`local-md`, `in-memory` and every other source keep ignoring or refusing the key as they always
+have.
+
+**What is shown is a projection and the slot stays the value's one home.** Every read reports
+metadata from the slot exactly as it would without the entry, and a value a person types into a
+board field or into the section is never read back as metadata.
+
+**Which values are accepted** is one rule on both sources. The value at `key` and `path` is:
+
+- **a string** — the empty string included;
+- **an array whose every element is a string**;
+- **an object whose every value is a string**;
+- **nothing** — the key, or any step of the path, absent — **or `null`**: there is no value;
+- **anything else** — a boolean, a number, an array holding any non-string, an object holding
+  any non-string value, any nested array or object — is refused before any mutation, naming
+  the source, the key, the path, the field and the type found; for a mixed array or object the
+  refusal also names the first offending index or key and that element's type (`an array whose
+  element 1 is a number`, `an object whose value at key "b" is an array`).
+
+The configuration read refuses, naming the source and the entry: a blank `field` or `key`; a
+`key` under the reserved `onetaskgraph.` prefix; for `github-projects` alone, a `field` equal,
+ignoring case, to `Status`, `Priority`, `onetaskgraph.origin` or a field GitHub owns on every board (Title, Assignees,
+Labels, Linked pull requests, Milestone, Repository, Reviewers, Parent issue, Sub-issues
+progress, Type); and two entries naming one field. Those board field names mean nothing on
+Linear, which takes them.
+
+#### On a GitHub board: a text field
 
 On every item write that reaches the board — a create, an update and a copy, of a task, a
 project and a document alike, `metadata set` and `task update` of the projected key included —
-the value at `key` and `path` in the item's metadata decides the field:
+the field holds:
 
-- **a string** — the empty string included, which is written as itself — is written to the
-  field, and nothing is sent when the field already holds it;
-- **nothing** — the key, or any step of the path, absent — **or `null`** clears the field when
-  it holds a value, and sends nothing when it does not;
-- **any other JSON type** — a number, a boolean, an object or an array — is refused before any
-  mutation, naming the source, the key, the path and the type found.
+- **a string** as itself, the empty string included;
+- **an array** as its elements in array order, joined by one line feed (LF), with no trailing
+  line feed;
+- **an object** as one line `KEY: VALUE` per entry, in ascending byte order of the keys whatever
+  order the JSON was written in, joined by one line feed, with no trailing line feed;
+- **the empty array and the empty object** as the empty string;
+- **nothing or `null`** by clearing the field when it holds a value.
 
-The value travels in the one ordered field write a write already sends beside `Status`,
-`Priority` and the origin, so projecting adds no request to a copy. It adds one mutation
-operation to a first copy and one to a write whose value moved, and GitHub's secondary
-content-creation limit may count each aliased operation: the budget
+Nothing is sent when the field already holds exactly that text. The value travels in the one
+ordered field write a write already sends beside `Status`, `Priority` and the origin, so
+projecting adds no request to a copy, and a list or a map is the same one field operation a
+string is. It adds one mutation operation to a first copy and one to a write whose value moved,
+and GitHub's secondary content-creation limit may count each aliased operation: the budget
 `github-metadata-field-content-creation-share` in
 `crates/onetaskgraph-github-projects-e2e/budgets.yaml` holds that share.
+
+**A text field holds at most 1,024, counted here in UTF-8 bytes.** Spike `spike-sample-ticket`
+measured it on a live board through this store: 1,024 accepted, 1,025 refused whole with
+`Column value must be a valid value for text column`, and nothing on the item changed. It wrote
+ASCII values only, where characters, code points and bytes are the same count, and GitHub's
+documentation and its GraphQL schema state neither the limit nor its unit. So this source counts
+UTF-8 bytes — never fewer than characters or UTF-16 units — which can only shorten a non-ASCII
+value earlier than GitHub would, never send one it refuses.
+
+**A longer value is shortened, never refused.** The field holds the longest prefix of the
+rendered value's whole lines that fits within the limit together with one line feed and the
+elision line, then the elision line itself: `… N more lines in this item's metadata`, or
+`… 1 more line in this item's metadata` when N is 1, where N counts the rendered lines left out
+and `…` is U+2026. When not even the first line fits, the field holds the elision line alone, N
+counting every line. A value within the limit is written whole, and a line is never split. The
+item's metadata keeps the whole value, and the repeat-write rule compares against the shortened
+text, so an unchanged over-long value sends no field mutation.
 
 **Reads and writes never create the field.** A board without it, or with a field of that name
 that is not a text field, refuses the write before any mutation, naming the source, the field
@@ -393,13 +439,54 @@ and `onetaskgraph sources fields <source> --apply`. That command reports each co
 as there or missing, creates a missing one as a text field, and never alters a field that is
 there: a same-named field of another type is reported as a conflict and left as it is.
 
-The configuration read refuses, naming the source and the entry: a blank `field` or `key`; a
-`key` under the reserved `onetaskgraph.` prefix; a `field` equal, ignoring case, to `Status`,
-`Priority`, `onetaskgraph.origin` or a field GitHub owns on every board (Title, Assignees,
-Labels, Linked pull requests, Milestone, Repository, Reviewers, Parent issue, Sub-issues
-progress, Type); and two entries naming one field. `linear` takes no such key — its
-configuration refuses it as unknown — and keeps every metadata key in its slot; `local-md` and
-`in-memory` have no fields to project onto.
+#### On Linear: one collapsed `Fields` section
+
+Linear has no custom fields. On every write of a task's, a project's or a document's long form,
+a `linear` source writes one store-owned expandable block between the caller's content and the
+metadata slot. In the authored form (README "Expandable blocks"), for an item whose
+`orchestrator.follow-up` record held a host, two runs and a basis, it reads:
+
+```text
+<details>
+<summary>Fields</summary>
+
+- **Host**: `workstation-1`
+- **Owning runs**:
+  - `run-a`
+  - `run-b`
+- **Basis**:
+  - `github.com/acme/widget: 0123456789abcdef0123456789abcdef01234567`
+
+</details>
+```
+
+- The summary is the fixed word `Fields`.
+- There is one top-level bullet per configured entry, in configuration order: the field name in
+  bold, a colon, then the value.
+- A string is one code span on the field's line; a string holding a line break gives one nested
+  bullet per line.
+- An array gives one nested bullet per element, in order; an object one nested bullet
+  `KEY: VALUE` per entry, in byte order of the keys, the whole line one code span.
+- Every value sits in a code span, the one spelling Linear keeps byte for byte; a value holding
+  a backtick takes a longer backtick fence, as CommonMark specifies, and a line break inside an
+  element is the space CommonMark reads it as.
+- An entry with no value, an empty string, an empty array or an empty object gets no bullet, and
+  an item with no bullet gets no section at all.
+- The source writes it in Linear's own `+++ Fields` … `+++` form, the way it writes any authored
+  block, set off by a marker of its own on the line before it — an HTML comment,
+  ``<!-- `onetaskgraph.fields` -->``, which Linear does not render.
+
+**The section is display only.** The slot stays the metadata's one home. Every read gives back
+the caller's content with the section — from its marker to the slot — removed, so a read of
+content is the caller's content and nothing else; a caller's own expandable block of any
+summary, `Fields` included, carries no marker and reads back exactly as before. Every write
+regenerates the section from the slot, so a person's edit to it is overwritten, and an unchanged
+repeat write sends no description update, however Linear normalised the section's text. A write
+sends no request beyond what the same write sends without `metadata_fields`: the section rides
+the description write each write already sends, and `metadata set` rewrites it with the slot
+when a shown value moved. Comments carry no metadata and get no section.
+`onetaskgraph sources fields <linear source>` reports each configured entry as carried in the
+section, none ever missing, and `--apply` changes nothing for them.
 
 <!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] This metadata guide must explain the two fields status occupies; the github-projects loopback tests and shared live journey reconcile the mapping, mutation order, and read-back at the real interface. -->
 For terminal status, those two GitHub fields move together: `done` selects the mapped

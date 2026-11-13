@@ -64,8 +64,9 @@ onetaskgraph sources fields <SOURCE> [--apply] [--json]
 # missing one first, of the type its category derives, and renames, retypes or deletes nothing.
 # A GitHub Projects source's metadata_fields are reported too, each text field there or
 # missing; --apply creates a missing one as a text field and reports, without changing, a
-# same-named field of another type. See "Status mapping" below, and docs/metadata.md for
-# metadata_fields.
+# same-named field of another type; a Linear source's are reported as carried in each item's
+# collapsed Fields section, with nothing to create. See "Status mapping" below, and
+# docs/metadata.md for metadata_fields.
 onetaskgraph sources status-options <SOURCE> [--apply] [--json]
 # The Status-only form of `sources fields`, which supersedes it; kept as it was.
 onetaskgraph sources route <SOURCE> [--repository R]... [--classification public|private] [--json]
