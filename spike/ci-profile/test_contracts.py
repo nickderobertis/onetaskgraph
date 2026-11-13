@@ -840,7 +840,8 @@ class ShimInstallTests(unittest.TestCase):
         binary.write_text(
             "#!/usr/bin/env python3\nimport json\n"
             "print(json.dumps({'type': 'suite', 'event': 'started', 'test_count': 0}))\n"
-            "print(json.dumps({'type': 'suite', 'event': 'ok', 'passed': 0, 'failed': 0, 'ignored': 0, 'filtered_out': 0, 'exec_time': 0.0}))\n"
+            "print(json.dumps({'type': 'suite', 'event': 'ok', 'passed': 0, 'failed': 0,"
+            " 'ignored': 0, 'filtered_out': 0, 'exec_time': 0.0}))\n"
         )
         binary.chmod(0o755)
         record = root / "spike" / "tests.jsonl"

@@ -597,7 +597,8 @@ class RunnerCommandTests(unittest.TestCase):
             "seen = subprocess.run(['cargo', 'test', '--no-run'], capture_output=True, text=True).stdout.strip()\n"
             "print(json.dumps({'type': 'suite', 'event': 'started', 'test_count': 1}))\n"
             "print(json.dumps({'type': 'test', 'event': 'ok', 'name': 'nested', 'exec_time': 0.5}))\n"
-            "print(json.dumps({'type': 'suite', 'event': 'ok', 'passed': 1, 'failed': 0, 'ignored': 0, 'filtered_out': 0, 'exec_time': 0.5}))\n"
+            "print(json.dumps({'type': 'suite', 'event': 'ok', 'passed': 1, 'failed': 0,"
+            " 'ignored': 0, 'filtered_out': 0, 'exec_time': 0.5}))\n"
             "print(seen, file=sys.stderr)",
             0,
         )
@@ -613,7 +614,8 @@ class RunnerCommandTests(unittest.TestCase):
             "print('not json from the binary')\n"
             "print(json.dumps({'type': 'test', 'event': 'failed', 'name': 't::slow', 'exec_time': 1.5,"
             " 'stdout': 'boom'}))\n"
-            "print(json.dumps({'type': 'suite', 'event': 'failed', 'passed': 0, 'failed': 1, 'ignored': 0, 'filtered_out': 0, 'exec_time': 1.5}))",
+            "print(json.dumps({'type': 'suite', 'event': 'failed', 'passed': 0, 'failed': 1,"
+            " 'ignored': 0, 'filtered_out': 0, 'exec_time': 1.5}))",
             101,
         )
         self.assertEqual(proc.returncode, 101)
