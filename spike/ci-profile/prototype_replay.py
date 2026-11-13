@@ -2,18 +2,13 @@
 """Price the measured prototypes over the 30-PR population.
 
     python3 spike/ci-profile/prototype_replay.py deltas SUMMARIES --control R,R --side NAME=R,R... --out FILE
-        [--measure share|test-run]
     python3 spike/ci-profile/prototype_replay.py replay HISTORY PRS DELTAS
 
 `deltas` reads the run summaries `ciprofile.py profile <run> --json` wrote into SUMMARIES
 (`profile-<run>.json`) for the control runs and each prototype side's runs, and writes per side
 and per job: the mean job wall clock of each, and for every Nx task the control's mean wall share
 less the side's (seconds the side saved; negative where it cost). A task one side ran and the
-other did not counts as zero there. `--measure test-run` compares each task's seconds after its
-own compile instead of its wall share: compile work moves between concurrent tasks (whichever
-cargo invocation builds a shared unit first pays for it), and a prototype that changes the
-selection changes every share, so a task's own test-run seconds are what a smaller test suite
-changes.
+other did not counts as zero there.
 
 `replay` applies each side's measured task deltas to every PR of HISTORY (`ciprofile.py history`
 output) by the PR's own diff (PRS) and the tasks its run executed:
@@ -71,16 +66,7 @@ class JobSummary:
     shares: dict[str, float]
 
 
-def task_seconds(task: dict, measure: str, where: str) -> float:
-    if measure == "share":
-        return seconds(task.get("share_s"), f"{where} share")
-    start, end = seconds(task.get("start"), f"{where} start"), seconds(task.get("end"), f"{where} end")
-    compiled = task.get("compile_end")
-    begin = start if compiled is None else seconds(compiled, f"{where} compile end")
-    return max(0.0, end - begin)
-
-
-def summary(directory: Path, run: int, measure: str = "share") -> dict[str, JobSummary]:
+def summary(directory: Path, run: int) -> dict[str, JobSummary]:
     path = directory / f"profile-{run}.json"
     record = obj(json.loads(path.read_text()), str(path))
     out = {}
@@ -90,8 +76,7 @@ def summary(directory: Path, run: int, measure: str = "share") -> dict[str, JobS
         shares: dict[str, float] = defaultdict(float)
         for raw_task in items(job.get("tasks"), f"{path} {name} tasks"):
             task = obj(raw_task, f"{path} {name} task")
-            if task.get("result") == "executed":
-                shares[str(task.get("task"))] += task_seconds(task, measure, f"{path} {name}")
+            shares[str(task.get("task"))] += seconds(task.get("share_s"), f"{path} {name} share")
         out[name] = JobSummary(seconds(job.get("wall_s"), f"{path} {name} wall"), dict(shares))
     return out
 
@@ -108,11 +93,11 @@ def mean_job(summaries: list[dict[str, JobSummary]], job: str) -> tuple[float, d
     )
 
 
-def deltas(directory: Path, control: list[int], sides: dict[str, list[int]], measure: str = "share") -> dict:
-    base = [summary(directory, r, measure) for r in control]
-    out: dict = {"control": control, "measure": measure, "sides": {}}
+def deltas(directory: Path, control: list[int], sides: dict[str, list[int]]) -> dict:
+    base = [summary(directory, r) for r in control]
+    out: dict = {"control": control, "sides": {}}
     for side, runs in sides.items():
-        measured = [summary(directory, r, measure) for r in runs]
+        measured = [summary(directory, r) for r in runs]
         per_job = {}
         for job in JobName:
             c_wall, c_shares, c_n = mean_job(base, job.value)
@@ -150,10 +135,7 @@ def replay(history_raw: object, prs_raw: object, measured: dict) -> list[str]:
         if side not in SIDES:
             raise Invalid(f"deltas name an unknown side {side!r}")
         jobs = obj(record.get("jobs"), f"{side} jobs")
-        lines.append(
-            f"{side}: runs {record.get('runs')} against control {measured.get('control')},"
-            f" by {measured.get('measure', 'share')}"
-        )
+        lines.append(f"{side}: runs {record.get('runs')} against control {measured.get('control')}")
         for job in JobName:
             if job.value not in jobs:
                 continue
@@ -189,7 +171,6 @@ def main(argv: list[str]) -> int:
     d.add_argument("--control", type=run_ids, required=True)
     d.add_argument("--side", action="append", required=True)
     d.add_argument("--out", type=Path, required=True)
-    d.add_argument("--measure", choices=("share", "test-run"), default="share")
     r = sub.add_parser("replay")
     for name in ("history", "prs", "deltas"):
         r.add_argument(name, type=Path)
@@ -202,8 +183,7 @@ def main(argv: list[str]) -> int:
                 if name not in SIDES:
                     ap.error(f"--side takes {'|'.join(SIDES)}=R,R, not {item!r}")
                 sides[name] = run_ids(ids)
-            measured = deltas(args.summaries, args.control, sides, args.measure)
-            args.out.write_text(json.dumps(measured, indent=1) + "\n")
+            args.out.write_text(json.dumps(deltas(args.summaries, args.control, sides), indent=1) + "\n")
             return 0
         print(
             "\n".join(

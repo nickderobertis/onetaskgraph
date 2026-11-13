@@ -20,18 +20,8 @@ def command(*args: str) -> subprocess.CompletedProcess:
     )
 
 
-def write_summary(directory: Path, run: int, wall: float, shares: dict[str, float], compile_s: float = 0) -> None:
-    tasks = [
-        {
-            "task": t,
-            "result": "executed",
-            "start": 0,
-            "end": s + compile_s,
-            "compile_end": compile_s,
-            "share_s": s + compile_s,
-        }
-        for t, s in shares.items()
-    ]
+def write_summary(directory: Path, run: int, wall: float, shares: dict[str, float]) -> None:
+    tasks = [{"task": t, "result": "executed", "start": 0, "end": 1, "share_s": s} for t, s in shares.items()]
     job = {"job_id": run, "wall_s": wall, "buckets_s": {}, "tasks": tasks}
     (directory / f"profile-{run}.json").write_text(
         json.dumps({"run": run, "head_sha": "a" * 40, "jobs": {"test-macos": job}})
@@ -99,21 +89,6 @@ class PrototypeReplayTests(unittest.TestCase):
         proc = self.replay(out)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn(f"replayed saving {expected / 30 / 60:+.2f} min/PR over 30", proc.stdout)
-
-    def test_test_run_seconds_leave_out_the_compile_a_task_happened_to_pay_for(self):
-        write_summary(self.root, 1, 1800, {"onetaskgraph-core:test": 70}, compile_s=430)
-        write_summary(self.root, 2, 1800, {"onetaskgraph-core:test": 70}, compile_s=390)
-        write_summary(self.root, 3, 1800, {"onetaskgraph-core:test": 65}, compile_s=100)
-        write_summary(self.root, 4, 1800, {"onetaskgraph-core:test": 65}, compile_s=100)
-        out = self.root / "deltas.json"
-        args = ("deltas", str(self.root), "--control", "1,2", "--side", "split=3,4", "--out", str(out))
-        self.assertEqual(command(*args, "--measure", "test-run").returncode, 0)
-        record = json.loads(out.read_text())
-        self.assertEqual(record["measure"], "test-run")
-        self.assertEqual(record["sides"]["split"]["jobs"]["test-macos"]["saved_s"], {"onetaskgraph-core:test": 5.0})
-        self.assertEqual(command(*args).returncode, 0)
-        by_share = json.loads(out.read_text())["sides"]["split"]["jobs"]["test-macos"]["saved_s"]
-        self.assertEqual(by_share["onetaskgraph-core:test"], 315.0)  # the compile the control's task paid for
 
     def test_an_unknown_side_and_a_missing_summary_are_refused(self):
         proc = command("deltas", str(self.root), "--control", "1", "--side", "faster=2", "--out", str(self.root / "o"))
