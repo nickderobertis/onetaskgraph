@@ -86,6 +86,7 @@ SDK_DISTRIBUTION = "onetaskgraph-sdk"
 # it requires, which scripts/crate-sibling-resolution.sh proves against the registry first.
 CRATE_PUBLICATION_ORDER = (
     "onetaskgraph-plugin-api",
+    "onetaskgraph-template",
     "onetaskgraph-in-memory",
     "onetaskgraph-local-md",
     "onetaskgraph-linear",
