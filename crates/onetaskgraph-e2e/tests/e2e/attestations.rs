@@ -2512,6 +2512,16 @@ fn the_item_a_private_copy_was_made_from_is_found_only_when_its_link_says_so_una
         &copy_a,
         "the recorded root records a malformed root",
     );
+    // A's copy deleted, as a person deletes a file: the root it would have recorded is gone,
+    // and `authoring:a`'s link to it still names the item it was copied from.
+    std::fs::remove_file(&held).expect("A's copy deleted");
+    plan.holds(
+        "task",
+        &onward_b,
+        "valid",
+        Value::Null,
+        "the copy between it and its root deleted",
+    );
     std::fs::write(&held, text).expect("restored");
 
     // A project's edge. The copy writes `downstream` without its edge to a project outside it,
