@@ -2,7 +2,8 @@
 """Apply the spike's measurement-only changes to a tree's `.github/workflows/ci.yml`.
 
     python3 spike/ci-profile/measurement_only.py <ci.yml> [--exclude=P,Q]
-        [--step-env=[JOB:]NAME=VALUE]... [--no-recorders] [--cold-rust] [--compile-only]
+        [--step-env=[JOB:]NAME=VALUE]... [--job-exclude=JOB:P,Q]... [--no-recorders] [--cold-rust]
+        [--compile-only]
 
 The same text edits apply to today's workflow and to the workflow of #3956 and its parent, so
 both sides of a comparison carry byte-identical measurement changes:
@@ -18,6 +19,8 @@ both sides of a comparison carry byte-identical measurement changes:
   `--step-env` a prototype sets;
 - `--exclude` passes projects to `ci-job.sh --exclude=` (the tasks only the workflow edit
   itself selected), so a demonstration runs the selection its source edit makes;
+- `--job-exclude` adds projects to one job's `--exclude=` alone, so a prototype whose own diff
+  widens the selection can be held to exactly the tasks its control runs in each job;
 - `--cold-rust` turns the Rust build cache off in each test job's toolchain step
   (`cache: false`: nothing is restored, and nothing could be saved), so the job builds cold;
 - `--compile-only` replaces each test job's gate with one cold-comparable build,
@@ -63,6 +66,7 @@ class StepEnv:
 class Options:
     exclude: str = ""
     step_env: tuple[StepEnv, ...] = field(default_factory=tuple)
+    job_exclude: tuple[tuple[str, str], ...] = field(default_factory=tuple)
     recorders: bool = True
     cold_rust: bool = False
     compile_only: bool = False
@@ -102,7 +106,8 @@ def test_step(job: str, options: Options) -> str:
     venv_py = (
         "$RUNNER_TEMP/spikevenv/Scripts/python.exe" if job == "test-windows" else "$RUNNER_TEMP/spikevenv/bin/python"
     )
-    command = f"just ci-{job}" + (f" --exclude={options.exclude}" if options.exclude else "")
+    excluded = ",".join([options.exclude] * bool(options.exclude) + [p for j, p in options.job_exclude if j == job])
+    command = f"just ci-{job}" + (f" --exclude={excluded}" if excluded else "")
     lines = [f"export {e.name}={e.value}" for e in options.step_env if e.job in (None, job)]
     if options.compile_only:
         lines += [
@@ -187,6 +192,7 @@ def parse(argv: list[str]) -> tuple[str, Options]:
     parser.add_argument("workflow")
     parser.add_argument("--exclude", default="")
     parser.add_argument("--step-env", action="append", default=[])
+    parser.add_argument("--job-exclude", action="append", default=[])
     parser.add_argument("--no-recorders", action="store_true")
     parser.add_argument("--cold-rust", action="store_true")
     parser.add_argument("--compile-only", action="store_true")
@@ -200,8 +206,16 @@ def parse(argv: list[str]) -> tuple[str, Options]:
         if not match:
             parser.error(f"--step-env takes [JOB:]NAME=VALUE with an upper-case name and a plain value, not {item!r}")
         pairs.append(StepEnv(match.group(1), match.group(2), match.group(3)))
+    job_exclude = []
+    for item in args.job_exclude:
+        job, _, projects = item.partition(":")
+        if job not in TRIPLES or not PROJECT_LIST.fullmatch(projects):
+            parser.error(f"--job-exclude takes JOB:P,Q with JOB one of {', '.join(TRIPLES)}, not {item!r}")
+        job_exclude.append((job, projects))
     recorders = not (args.no_recorders or args.compile_only)
-    return args.workflow, Options(args.exclude, tuple(pairs), recorders, args.cold_rust, args.compile_only)
+    return args.workflow, Options(
+        args.exclude, tuple(pairs), tuple(job_exclude), recorders, args.cold_rust, args.compile_only
+    )
 
 
 def main(argv: list[str]) -> int:

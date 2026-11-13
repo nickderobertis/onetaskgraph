@@ -714,6 +714,15 @@ class MeasurementOnlyCommandTests(unittest.TestCase):
             self.assertNotIn("just ci-", gate)
             self.assertIn(f"name: spike-profile-{job}", body.split("\n  budgets:\n")[0])
 
+    def test_a_job_exclusion_reaches_that_job_alone(self):
+        proc, text = self.run_tool("--exclude=x", "--job-exclude=test-macos:a,b", "--job-exclude=test-macos:c")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("just ci-test-macos --exclude=x,a,b,c || status=$?", text)
+        self.assertIn("just ci-test-linux --exclude=x || status=$?", text)
+        self.assertIn("just ci-test-windows --exclude=x || status=$?", text)
+        self.assertEqual(self.run_tool("--job-exclude=test-macos:a;b")[0].returncode, 2)
+        self.assertEqual(self.run_tool("--job-exclude=lint:a")[0].returncode, 2)
+
     def test_shell_text_and_an_unknown_workflow_are_refused(self):
         self.assertEqual(self.run_tool("--exclude=a;$(x)")[0].returncode, 2)
         self.assertEqual(self.run_tool("--step-env=lower=1")[0].returncode, 2)
