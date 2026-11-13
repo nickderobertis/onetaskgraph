@@ -265,8 +265,12 @@ def account_steps(p: JobProfile, log: list[LogLine]) -> None:
         if kind is StepKind.TEST:
             # The step API keeps whole seconds; the log's own group for the step is exact.
             near = [x.span for x in sections if abs(x.span.start - step.start) <= STEP_SLACK]
+            # Two groups can open inside that slack (the base derivation just before the gate); the
+            # step's own group is the one that overlaps the step longest.
             p.test_step = (
-                min(near, key=lambda span: abs(span.start - step.start)) if near else Interval(step.start, step.end)
+                max(near, key=lambda span: min(span.end, step.end) - max(span.start, step.start))
+                if near
+                else Interval(step.start, step.end)
             )
         elif kind is not StepKind.BACKGROUND:
             p.buckets[Bucket(kind.value)] += step.end - step.start

@@ -23,7 +23,8 @@ A compile-only demonstration (`measurement_only.py --compile-only`) is read with
 
 Two more subcommands build the report:
     durations <since> <until>         median durations of successful test jobs of PR runs created in a window
-    history <prs.json> --out FILE     each PR's first (or --which last) CI run, task by task, per job
+    history <prs.json> --out FILE     each PR's first (or --which last) CI run, task by task, per job,
+                                      each task with its interval; --pin H re-reads the runs H cites
 
 Exit status: 0 the measurement printed; 2 a usage error; 3 a read refused below the rate floor
 (wait for the reset and run it again); 4 a requested job did not finish in that run, or a
@@ -317,7 +318,7 @@ async def job_record(gh: ghcache.GitHub, run_id: RunId, job: Job) -> JobRecord:
         p.wall,
         Source.EXECUTIONS if executions is not None else Source.LOG,
         {k.value: v for k, v in p.buckets.items()},
-        {t.id: TaskRecord(t.result, t.end - t.start, p.task_share.get(t.id, 0.0)) for t in p.tasks},
+        {t.id: TaskRecord(t.result, t.end - t.start, p.task_share.get(t.id, 0.0), t.start, t.end) for t in p.tasks},
     )
 
 
@@ -327,22 +328,51 @@ def runs_of(pr: PullRequest, runs: list[Run]) -> list[Run]:
     return sorted(mine.values(), key=lambda r: r.created_at)
 
 
-async def history(gh: ghcache.GitHub, prs_file: Path, since: str, out_file: Path, which: str) -> int:
+@dataclass(frozen=True)
+class HistoryRequest:
+    prs_file: Path
+    since: str
+    out_file: Path
+    which: str
+    pin: Path | None = None
+
+
+async def history(gh: ghcache.GitHub, request: HistoryRequest) -> int:
+    prs_file, since, out_file, which, pin = (
+        request.prs_file,
+        request.since,
+        request.out_file,
+        request.which,
+        request.pin,
+    )
     prs = [PullRequest.parse(p) for p in items(json.loads(prs_file.read_text()), str(prs_file))]
     if len({p.pr for p in prs}) != len(prs):
         raise Invalid(f"{prs_file}: a pull request is listed twice")
-    runs = await gh.runs_list(f"event=pull_request&created=>={since}", pages=4)
+    # --pin re-reads exactly the runs an earlier history cites, so a record gains fields without a
+    # different run being chosen; a PR the pinned history does not name is refused.
+    pinned = (
+        {int(k): FirstRunRecord.parse(v, f"{pin} #{k}") for k, v in obj(json.loads(pin.read_text()), str(pin)).items()}
+        if pin
+        else {}
+    )
+    runs = [] if pin else await gh.runs_list(f"event=pull_request&created=>={since}", pages=4)
     out: dict[int, FirstRunRecord] = {}
     unmatched = []
     out_file.write_text("{}")  # a list with no PR still leaves its (empty) history, never a stale one
     for pr in prs:
-        mine = runs_of(pr, runs)
-        if not mine:
-            unmatched.append(pr.pr)
-            continue
-        run = mine[0] if which == "first" else mine[-1]
+        if pin:
+            if pr.pr not in pinned:
+                unmatched.append(pr.pr)
+                continue
+            run, count = await gh.run(RunId(pinned[pr.pr].run)), pinned[pr.pr].runs_of_pr
+        else:
+            mine = runs_of(pr, runs)
+            if not mine:
+                unmatched.append(pr.pr)
+                continue
+            run, count = (mine[0] if which == "first" else mine[-1]), len(mine)
         jobs = {j.name: j for j in await gh.jobs(run.id)}
-        record = FirstRunRecord(run.id, run.head_sha, run.created_at, run.conclusion, len(mine))
+        record = FirstRunRecord(run.id, run.head_sha, run.created_at, run.conclusion, count)
         for name in JobName:
             job = jobs.get(name.value)
             if job is not None and job.finished:
@@ -357,7 +387,8 @@ async def history(gh: ghcache.GitHub, prs_file: Path, since: str, out_file: Path
         out_file.write_text(json.dumps({str(k): v.to_json() for k, v in out.items()}, indent=1))
     print(f"(GitHub reads this invocation: {gh.reads}; written {out_file})")
     if unmatched:
-        print(f"ciprofile: no run since {since} for #{', #'.join(map(str, unmatched))}; widen --since", file=sys.stderr)
+        where = f"in {pin}" if pin else f"since {since}"
+        print(f"ciprofile: no run {where} for #{', #'.join(map(str, unmatched))}", file=sys.stderr)
         return MISSING_EXIT
     return 0
 
@@ -481,6 +512,7 @@ def parser() -> argparse.ArgumentParser:
     h.add_argument("--since", type=instant, default="2026-11-01")
     h.add_argument("--out", type=Path, required=True)
     h.add_argument("--which", choices=("first", "last"), default="first")
+    h.add_argument("--pin", type=Path, help="re-read exactly the runs this earlier history cites")
     return ap
 
 
@@ -498,7 +530,7 @@ async def run_command(args: argparse.Namespace) -> int:
                 return USAGE_EXIT
             return await durations(gh, since, until)
         case "history":
-            return await history(gh, args.prs_file, args.since, args.out, args.which)
+            return await history(gh, HistoryRequest(args.prs_file, args.since, args.out, args.which, args.pin))
     return USAGE_EXIT
 
 

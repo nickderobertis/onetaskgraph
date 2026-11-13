@@ -382,6 +382,88 @@ class ProfileCommandTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("#9 run 77 (success): test-macos: 2 run/1 replayed 10.0m", proc.stdout)
         self.assertEqual(json.loads(out.read_text())["9"]["jobs"]["test-macos"]["source"], "executions")
+        tasks = json.loads(out.read_text())["9"]["jobs"]["test-macos"]["tasks"]
+        self.assertTrue(all(t["end"] >= t["start"] for t in tasks.values()), tasks)
+
+    def test_a_pinned_history_rereads_the_runs_it_cites_and_lists_none(self):
+        root = scratch(self)
+        cache = fixture_cache(root)
+        prs = root / "prs.json"
+        prs.write_text(json.dumps([{"pr": 9, "head": "b" * 40, "branch": "topic"}]))
+        pin = root / "pin.json"
+        pin.write_text(
+            json.dumps(
+                {
+                    "9": {
+                        "run": RUN,
+                        "head_sha": "a" * 40,
+                        "created_at": "2026-11-12T04:00:00Z",
+                        "conclusion": "success",
+                        "runs_of_pr": 3,
+                        "jobs": {},
+                    }
+                }
+            )
+        )
+        out = root / "history.json"
+        env = {"CIPROFILE_CACHE": str(cache), "CIPROFILE_OFFLINE": "1"}
+        proc = command("ciprofile.py", "history", str(prs), "--out", str(out), "--pin", str(pin), env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr)  # offline, with no run listing cached: none was read
+        record = json.loads(out.read_text())["9"]
+        self.assertEqual((record["run"], record["runs_of_pr"]), (RUN, 3))
+        self.assertEqual(
+            record["jobs"]["test-macos"]["tasks"]["b-crate:test"]["end"]
+            - record["jobs"]["test-macos"]["tasks"]["b-crate:test"]["start"],
+            240.0,
+        )
+        pin.write_text("{}")
+        proc = command("ciprofile.py", "history", str(prs), "--out", str(out), "--pin", str(pin), env=env)
+        self.assertEqual(proc.returncode, 4)
+        self.assertIn("no run in", proc.stderr)
+
+
+class TestStepTests(unittest.TestCase):
+    """The gate's own log group, when another group opens within a second of it (run 41847627149's lines)."""
+
+    def test_the_gate_is_the_group_that_overlaps_its_step_not_the_one_that_opens_nearest(self):
+        job = Job.parse(
+            {
+                "id": 1,
+                "name": "test-macos",
+                "conclusion": "failure",
+                "started_at": "2026-11-04T14:28:40Z",
+                "completed_at": "2026-11-04T14:50:00Z",
+                "steps": [
+                    {
+                        "name": "Derive the comparison base",
+                        "started_at": "2026-11-04T14:28:50Z",
+                        "completed_at": "2026-11-04T14:28:50Z",
+                        "conclusion": "success",
+                    },
+                    {
+                        "name": "Test the affected projects",
+                        "started_at": "2026-11-04T14:28:50Z",
+                        "completed_at": "2026-11-04T14:49:00Z",
+                        "conclusion": "failure",
+                    },
+                ],
+            }
+        )
+        log = "\n".join(
+            [
+                '2026-11-04T14:28:50.1713230Z ##[group]Run bash scripts/ci-pr-base.sh "$BASE_REF" "$BASE_SHA"',
+                "2026-11-04T14:28:50.7289790Z ##[group]Run just ci-test-macos",
+                "2026-11-04T14:28:55.0000000Z [test,budgets] > nx run onetaskgraph-core:test",
+                "2026-11-04T14:40:00.0000000Z [test,budgets] onetaskgraph-core: test result: ok. 1 passed",
+                "2026-11-04T14:49:00.0000000Z ##[group]Run actions/cache/save@v6",
+                "2026-11-04T14:50:00.0000000Z done",
+            ]
+        )
+        p = prof.profile_job(job, log, None)
+        step = p.test_step
+        assert step is not None
+        self.assertGreater(step.end - step.start, 1200)
+        self.assertEqual([t.id for t in p.tasks], ["onetaskgraph-core:test"])
 
 
 class ReplayCommandTests(unittest.TestCase):

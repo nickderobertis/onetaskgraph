@@ -537,22 +537,43 @@ def sampler_record(raw: Any) -> Tick | Exit | None:
 
 @dataclass(frozen=True)
 class TaskRecord:
-    """One Nx task of one job of a PR's run, as `ciprofile.py history` writes it and `replay.py` reads it."""
+    """One Nx task of one job of a PR's run, as `ciprofile.py history` writes it and `replay.py` reads it.
+
+    `start` and `end` (epoch seconds) are the task's interval, which a critical-path replay needs;
+    a record written before they were kept has neither, and neither is written when absent."""
 
     result: TaskResult
     seconds: Seconds
     share_s: Seconds
+    start: float | None = None
+    end: float | None = None
 
     def to_json(self) -> dict[str, Any]:
-        return {"result": self.result.value, "seconds": round(self.seconds, 1), "share_s": round(self.share_s, 1)}
+        out: dict[str, Any] = {
+            "result": self.result.value,
+            "seconds": round(self.seconds, 1),
+            "share_s": round(self.share_s, 1),
+        }
+        if self.start is not None and self.end is not None:
+            out["start"], out["end"] = round(self.start, 3), round(self.end, 3)
+        return out
 
     @classmethod
     def parse(cls, raw: Any, where: str) -> TaskRecord:
         record = obj(raw, where)
+        start, end = record.get("start"), record.get("end")
+        if (start is None) != (end is None):
+            raise Invalid(f"{where}: a task interval needs both its start and its end")
+        if start is not None:
+            start, end = seconds(start, f"{where} start"), seconds(end, f"{where} end")
+            if end < start:
+                raise Invalid(f"{where}: a task ends before it starts")
         return cls(
             TaskResult.of(take(record, "result", str, where)),
             seconds(take(record, "seconds", (int, float), where), where),
             seconds(take(record, "share_s", (int, float), where), where),
+            start,
+            end,
         )
 
 
