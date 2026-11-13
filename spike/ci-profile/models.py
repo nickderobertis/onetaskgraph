@@ -391,6 +391,14 @@ class LibtestEvent:
         stdout = record.get("stdout", "")
         if not isinstance(stdout, str):
             raise Invalid(f"{where}: stdout is not text")
+        finished = outcome in (LibtestOutcome.OK, LibtestOutcome.FAILED)
+        if finished and time_value is None:
+            raise Invalid(f"{where}: a finished {kind.value} carries no exec_time (--report-time)")
+        totals = ("passed", "failed", "ignored", "filtered_out")
+        if kind is LibtestKind.SUITE and finished and (missing := [k for k in totals if k not in record]):
+            raise Invalid(f"{where}: a finished suite carries no {', '.join(missing)}")
+        if kind is LibtestKind.SUITE and outcome is LibtestOutcome.STARTED and "test_count" not in record:
+            raise Invalid(f"{where}: a started suite carries no test_count")
         return cls(
             kind=kind,
             outcome=outcome,

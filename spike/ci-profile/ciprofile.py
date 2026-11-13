@@ -63,6 +63,7 @@ from models import (  # noqa: E402
     take,
     timestamp,
 )
+from models import positive as positive_id  # noqa: E402
 
 USAGE_EXIT, FLOOR_EXIT, MISSING_EXIT = 2, 3, 4
 QUARTILE_MINIMUM = 2  # statistics.quantiles needs two observations
@@ -295,7 +296,7 @@ class PullRequest:
     def parse(cls, raw: object) -> PullRequest:
         record = obj(raw, "prs.json entry")
         return cls(
-            take(record, "pr", int, "prs.json"),
+            positive_id(take(record, "pr", int, "prs.json"), "prs.json"),
             take(record, "head", str, "prs.json"),
             take(record, "branch", str, "prs.json"),
         )
@@ -322,6 +323,8 @@ def runs_of(pr: PullRequest, runs: list[Run]) -> list[Run]:
 
 async def history(gh: ghcache.GitHub, prs_file: Path, since: str, out_file: Path, which: str) -> int:
     prs = [PullRequest.parse(p) for p in items(json.loads(prs_file.read_text()), str(prs_file))]
+    if len({p.pr for p in prs}) != len(prs):
+        raise Invalid(f"{prs_file}: a pull request is listed twice")
     runs = await gh.runs_list(f"event=pull_request&created=>={since}", pages=4)
     out: dict[int, FirstRunRecord] = {}
     unmatched = []

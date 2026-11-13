@@ -69,6 +69,12 @@ class ProducerContractTests(unittest.TestCase):
             )
         )
 
+    def test_a_finished_event_without_its_timing_or_counts_is_refused(self):
+        with self.assertRaisesRegex(models.Invalid, "carries no exec_time"):
+            models.LibtestEvent.parse({"type": "test", "event": "ok", "name": "t"}, "b")
+        with self.assertRaisesRegex(models.Invalid, "carries no ignored, filtered_out"):
+            models.LibtestEvent.parse({"type": "suite", "event": "ok", "passed": 1, "failed": 0, "exec_time": 1.0}, "b")
+
     def test_a_libtest_event_libtest_never_emits_is_refused(self):
         with self.assertRaisesRegex(models.Invalid, "emits no suite ignored event"):
             models.LibtestEvent.parse({"type": "suite", "event": "ignored"}, "b")
@@ -466,7 +472,16 @@ class MoreCommandPathTests(unittest.TestCase):
                         "name": "broke",
                         "exec_time": 9.0,
                     },
-                    {"type": "suite", "event": "failed", "binary": "e2e-0123456789abcdef", "exec_time": 9.0},
+                    {
+                        "type": "suite",
+                        "event": "failed",
+                        "binary": "e2e-0123456789abcdef",
+                        "passed": 0,
+                        "failed": 0,
+                        "ignored": 0,
+                        "filtered_out": 0,
+                        "exec_time": 9.0,
+                    },
                 ]
             )
         )
@@ -583,6 +598,18 @@ class BoundaryFailureTests(unittest.TestCase):
             proc = command("ciprofile.py", "durations", since, until, env={"CIPROFILE_OFFLINE": "1"})
             self.assertEqual(proc.returncode, 2)
             self.assertIn("the window's end must follow its start", proc.stderr)
+
+    def test_a_pr_listed_twice_or_numbered_zero_exits_4(self):
+        root = scratch(self)
+        env = {"CIPROFILE_CACHE": str(fixture_cache(root)), "CIPROFILE_OFFLINE": "1"}
+        for prs, why in (
+            ([{"pr": 9, "head": "a", "branch": "x"}] * 2, "listed twice"),
+            ([{"pr": 0, "head": "a", "branch": "x"}], "positive"),
+        ):
+            (root / "prs.json").write_text(json.dumps(prs))
+            proc = command("ciprofile.py", "history", str(root / "prs.json"), "--out", str(root / "h.json"), env=env)
+            self.assertEqual(proc.returncode, 4)
+            self.assertIn(why, proc.stderr)
 
     def test_a_malformed_pr_list_and_an_unwritable_output_exit_4_naming_why(self):
         root = scratch(self)
@@ -813,7 +840,7 @@ class ShimInstallTests(unittest.TestCase):
         binary.write_text(
             "#!/usr/bin/env python3\nimport json\n"
             "print(json.dumps({'type': 'suite', 'event': 'started', 'test_count': 0}))\n"
-            "print(json.dumps({'type': 'suite', 'event': 'ok', 'passed': 0, 'failed': 0, 'exec_time': 0.0}))\n"
+            "print(json.dumps({'type': 'suite', 'event': 'ok', 'passed': 0, 'failed': 0, 'ignored': 0, 'filtered_out': 0, 'exec_time': 0.0}))\n"
         )
         binary.chmod(0o755)
         record = root / "spike" / "tests.jsonl"
