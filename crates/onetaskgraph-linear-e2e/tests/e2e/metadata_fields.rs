@@ -102,6 +102,8 @@ impl Setup {
             "todo": {"task": "Ready", "project": "Scheduled"},
             "done": {"task": "Finished", "project": "Shipped"},
         });
+        // `bare` reads the same workspace with no `metadata_fields` at all.
+        let bare = config.clone();
         if let Some(entries) = entries {
             config["metadata_fields"] = entries;
         }
@@ -112,6 +114,7 @@ impl Setup {
         }
         sandbox.project_document(&document(&json!({
             "linear": {"plugin": "linear", "config": config},
+            "bare": {"plugin": "linear", "config": bare},
             "plan": {"plugin": "local-md", "config": {"root": plan}},
         })));
         Self {
@@ -198,7 +201,12 @@ impl Setup {
 
     /// One item as `<kind> show --json` reads it.
     fn show(&self, kind: &str, id: &str) -> Value {
-        let id = format!("linear:{id}");
+        self.show_from("linear", kind, id)
+    }
+
+    /// One item as `<kind> show --json` reads it through the source `source`.
+    fn show_from(&self, source: &str, kind: &str, id: &str) -> Value {
+        let id = format!("{source}:{id}");
         let mut arguments = vec![kind, "show", id.as_str(), "--json"];
         if kind == "task" {
             arguments.push("--no-comments");
@@ -300,6 +308,8 @@ fn every_kind_is_stored_with_its_fields_section_and_read_back_without_it() {
         let shown = setup.show(kind, id);
         assert_eq!(shown["content"], CONTENT, "{kind}: {shown}");
         assert_eq!(shown["metadata"][KEY], record(), "{kind}: {shown}");
+        // A source configured with no `metadata_fields` reads the same item the same way.
+        assert_eq!(setup.show_from("bare", kind, id), shown, "{kind}");
     }
 
     // An unchanged repeat sends no update of any long form, though Linear rewrote the section.
@@ -307,11 +317,11 @@ fn every_kind_is_stored_with_its_fields_section_and_read_back_without_it() {
     assert_eq!(updates(&again), 0, "{again:#?}");
 }
 
-/// Every write a journey makes after the copy that creates the plan, of one setup: each step's
-/// requests, and the three items' ids.
 /// The requests one step of a journey sent, under its name.
 type Step = (&'static str, Vec<(String, Value)>);
 
+/// Every write a journey makes, from the copy that creates the plan on, of one setup: each
+/// step's requests, and the three items' ids.
 fn every_write(setup: &Setup) -> (Vec<Step>, [String; 3]) {
     setup.author(&record());
     let (ids, created) = setup.copy();
@@ -497,7 +507,12 @@ fn every_shape_no_section_can_show_is_refused_before_any_mutation_naming_what_it
 
 #[test]
 fn sources_fields_reports_each_entry_as_carried_in_the_section_and_creates_nothing() {
-    let setup = Setup::new(true);
+    let mut entries = projections();
+    entries
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"field": "Team", "key": "team.name"}));
+    let setup = Setup::configured(Some(entries));
     let (output, served) = setup.run(&["--json", "sources", "fields", "linear", "--apply"]);
     let report: Value = serde_json::from_str(&stdout(&output)).expect("a fields report");
     assert_eq!(
@@ -507,6 +522,7 @@ fn sources_fields_reports_each_entry_as_carried_in_the_section_and_creates_nothi
             {"field": "Owning runs", "key": KEY, "path": ["owning_runs"], "carried": "section"},
             {"field": "Basis", "key": KEY, "path": ["basis"], "carried": "section"},
             {"field": "Notes", "key": KEY, "path": ["notes"], "carried": "section"},
+            {"field": "Team", "key": "team.name", "carried": "section"},
         ])
     );
     assert!(
@@ -516,12 +532,84 @@ fn sources_fields_reports_each_entry_as_carried_in_the_section_and_creates_nothi
         "nothing to create"
     );
     let (output, _) = setup.run(&["sources", "fields", "linear"]);
-    assert!(
-        stdout(&output).contains(
-            "linear: Host for orchestrator.follow-up at host is carried in each item's Fields \
-             section; nothing to create\n"
+    for line in [
+        "linear: Host for orchestrator.follow-up at host is carried in each item's Fields \
+         section; nothing to create\n",
+        "linear: Team for team.name is carried in each item's Fields section; nothing to create\n",
+    ] {
+        assert!(stdout(&output).contains(line), "{line}{}", stdout(&output));
+    }
+}
+
+/// The task `T-1` alone, carrying `content` and `record`, copied to Linear: its Linear id and
+/// the long form its create sent.
+fn copied_task(setup: &Setup, content: &str, record: &Value) -> (String, String) {
+    std::fs::write(
+        setup.plan.join("tasks/T-1.md"),
+        format!(
+            "---\ntitle: Build it\nstatus: todo\nmetadata: {}\n---\n{content}\n",
+            json!({KEY: record})
         ),
-        "{}",
-        stdout(&output)
+    )
+    .expect("the task");
+    let (output, served) = setup.run(&["task", "copy", "plan:T-1", "--to", "linear", "--json"]);
+    let report: Value = serde_json::from_str(&stdout(&output)).expect("a copy report");
+    let id = report["items"][0]["destination"]
+        .as_str()
+        .and_then(|id| id.strip_prefix("linear:"))
+        .unwrap_or_else(|| panic!("a Linear destination: {report}"))
+        .to_owned();
+    let sent = long_forms_sent(&served)
+        .into_iter()
+        .next()
+        .expect("the create's long form");
+    (id, sent)
+}
+
+#[test]
+fn every_value_is_one_code_span_whatever_backticks_spaces_or_line_breaks_it_holds() {
+    let setup = Setup::new(true);
+    let record = json!({
+        "host": "`edge`",
+        "owning_runs": ["", "two\nlines", "ends with `"],
+        "basis": {"k": "v`"},
+        "notes": " spaced ",
+    });
+    let (id, sent) = copied_task(&setup, "Prose.", &record);
+    assert_eq!(
+        between(&sent, "Prose."),
+        format!(
+            "\n\n{MARKER}\n\n+++ Fields\n\n\
+             - **Host**: `` `edge` ``\n\
+             - **Owning runs**:\n  - ` `\n  - `two lines`\n  - `` ends with ` ``\n\
+             - **Basis**:\n  - `` k: v` ``\n\
+             - **Notes**: `  spaced  `\n\
+             \n+++\n\n"
+        ),
+        "{sent}"
+    );
+    let shown = setup.show("task", &id);
+    assert_eq!(shown["content"], "Prose.");
+    assert_eq!(shown["metadata"][KEY], record);
+}
+
+#[test]
+fn a_caller_quoting_the_marker_keeps_every_byte_of_it_with_a_section_or_without() {
+    // The marker quoted inline, and alone on a line before prose rather than a block: neither is
+    // a section of the source's, so both read back as written.
+    let content = format!("Quoting {MARKER} inline.\n\n{MARKER}\n\nJust prose after it.");
+    let setup = Setup::new(true);
+    let (id, sent) = copied_task(&setup, &content, &record());
+    assert!(sent.contains("\n\n+++ Fields\n\n- **Host**"), "{sent}");
+    assert_eq!(setup.show("task", &id)["content"], content.as_str());
+    let empty = json!({"host": ""}).to_string();
+    let target = format!("linear:{id}");
+    setup.run(&["task", "metadata", "set", &target, KEY, &empty, "--json"]);
+    let stored = setup.workspace.long_form("tasks", &id).unwrap();
+    assert!(!stored.contains("+++ Fields"), "no section: {stored}");
+    assert_eq!(setup.show("task", &id)["content"], content.as_str());
+    assert_eq!(
+        setup.show_from("bare", "task", &id)["content"],
+        content.as_str()
     );
 }

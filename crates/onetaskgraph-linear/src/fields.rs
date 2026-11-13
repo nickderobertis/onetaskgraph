@@ -61,10 +61,20 @@ pub struct MetadataFieldConfig {
 /// One validated [`MetadataFieldConfig`] entry.
 #[derive(Debug, Clone)]
 pub(crate) struct MetadataField {
-    field: String,
-    key: String,
+    field: ShownField,
+    key: ShownKey,
     path: Vec<String>,
 }
+
+/// The name a value is shown under: never blank, and never one another entry of the same
+/// source names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ShownField(String);
+
+/// The top-level metadata key a shown value is read from: never blank, and never under the
+/// namespace this product reserves.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ShownKey(String);
 
 impl MetadataField {
     /// Validate every entry of one instance's `metadata_fields`, refusing the first that cannot
@@ -79,7 +89,7 @@ impl MetadataField {
             if let Some(why) = ProjectedValue::entry_refusal(
                 &entry.field,
                 &entry.key,
-                resolved.iter().map(|other| other.field.as_str()),
+                resolved.iter().map(|other| other.field.0.as_str()),
                 "field",
             ) {
                 return Err(SourceError::Config {
@@ -91,8 +101,8 @@ impl MetadataField {
                 });
             }
             resolved.push(Self {
-                field: entry.field,
-                key: entry.key,
+                field: ShownField(entry.field),
+                key: ShownKey(entry.key),
                 path: entry.path,
             });
         }
@@ -101,12 +111,12 @@ impl MetadataField {
 
     /// The field's name, as `sources fields` reports it.
     pub(crate) fn field(&self) -> &str {
-        &self.field
+        &self.field.0
     }
 
     /// The key, as `sources fields` reports it.
     pub(crate) fn key(&self) -> &str {
-        &self.key
+        &self.key.0
     }
 
     /// The path, as `sources fields` reports it.
@@ -121,7 +131,7 @@ impl MetadataField {
         metadata: &BTreeMap<String, Value>,
         instance: &SourceName,
     ) -> Result<Option<String>, SourceError> {
-        let value = match ProjectedValue::read(metadata, &self.key, &self.path) {
+        let value = match ProjectedValue::read(metadata, &self.key.0, &self.path) {
             Ok(Some(value)) if !value.is_empty() => value,
             Ok(_) => return Ok(None),
             Err(found) => {
@@ -132,15 +142,15 @@ impl MetadataField {
                          string, an array of strings, an object of string values, null or \
                          nothing can be shown; next: store one of those there, or remove the \
                          value",
-                        self.key,
+                        self.key.0,
                         serde_json::to_string(&self.path)
                             .unwrap_or_else(|_| format!("{:?}", self.path)),
-                        self.field
+                        self.field.0
                     ),
                 });
             }
         };
-        let head = format!("- **{}**:", self.field);
+        let head = format!("- **{}**:", self.field.0);
         let nested = |lines: Vec<String>| {
             lines
                 .iter()
