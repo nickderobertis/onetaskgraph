@@ -61,6 +61,7 @@ RECONCILED_VERSION_FILES: Tuple[VersionFile, ...] = (
             "onetaskgraph-local-md",
             "onetaskgraph-plugin-api",
             "onetaskgraph-status-options",
+            "onetaskgraph-template",
         )
     ),
     RegexVersionFile(
