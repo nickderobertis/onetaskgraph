@@ -68,9 +68,9 @@ def test_records(lines):
         except ValueError:
             continue
         if e.get("type") == "test" and e.get("event") in ("ok", "failed") and "exec_time" in e:
-            per_test.append((f"{e['binary'].rsplit('-', 1)[0]}::{e['name']}", float(e["exec_time"])))
+            per_test.append((f"{e['binary']}::{e['name']}", float(e["exec_time"])))
         if e.get("type") == "suite" and e.get("event") in ("ok", "failed"):
-            per_binary[e["binary"].rsplit("-", 1)[0]] += float(e.get("exec_time", 0))
+            per_binary[e["binary"]] += float(e.get("exec_time", 0))
     return per_binary, per_test
 
 
@@ -91,10 +91,10 @@ def profile_run(run_id: int, jobs_wanted, as_json: bool, top: int) -> int:
         samples, tests = spike_records(run_id, name)
         sampled = prof.load_sampler(samples, p.test_step) if samples and p.test_step else None
         per_binary, per_test = test_records(tests)
-        if not per_test and p.nextest:
-            per_test = list(p.nextest)
-            for test, secs in p.nextest:
-                per_binary[test.split("$")[0]] += secs
+        # Linux's instrumented runs print nextest's own per-test times in the log (replays too).
+        for test, secs in p.nextest:
+            per_test.append((f"instrumented:{test}", secs))
+            per_binary[f"instrumented:{test.split('$')[0]}"] += secs
         executed = [t for t in p.tasks if t.result == "executed"]
         replayed = [t for t in p.tasks if t.result != "executed"]
         print(f"\n== {name} (job {job['id']}, {job['conclusion']}) wall {p.wall / 60:.2f} min; "
