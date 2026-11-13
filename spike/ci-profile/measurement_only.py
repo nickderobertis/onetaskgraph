@@ -44,9 +44,18 @@ class SiteMissing(Exception):
 
 
 @dataclass(frozen=True)
+class StepEnv:
+    """One variable a measurement exports inside the test step, for one job or for every job."""
+
+    job: str | None
+    name: str
+    value: str
+
+
+@dataclass(frozen=True)
 class Options:
     exclude: str = ""
-    step_env: tuple[tuple[str | None, str, str], ...] = field(default_factory=tuple)  # (job or every job, name, value)
+    step_env: tuple[StepEnv, ...] = field(default_factory=tuple)
     recorders: bool = True
 
 
@@ -85,7 +94,7 @@ def test_step(job: str, options: Options) -> str:
         "$RUNNER_TEMP/spikevenv/Scripts/python.exe" if job == "test-windows" else "$RUNNER_TEMP/spikevenv/bin/python"
     )
     command = f"just ci-{job}" + (f" --exclude={options.exclude}" if options.exclude else "")
-    lines = [f"export {name}={value}" for only, name, value in options.step_env if only in (None, job)]
+    lines = [f"export {e.name}={e.value}" for e in options.step_env if e.job in (None, job)]
     if options.recorders:
         lines += [
             'mkdir -p "$RUNNER_TEMP/spike"',
@@ -156,7 +165,7 @@ def parse(argv: list[str]) -> tuple[str, Options]:
         match = STEP_ENV.fullmatch(item)
         if not match:
             parser.error(f"--step-env takes [JOB:]NAME=VALUE with an upper-case name and a plain value, not {item!r}")
-        pairs.append((match.group(1), match.group(2), match.group(3)))
+        pairs.append(StepEnv(match.group(1), match.group(2), match.group(3)))
     return args.workflow, Options(args.exclude, tuple(pairs), not args.no_recorders)
 
 

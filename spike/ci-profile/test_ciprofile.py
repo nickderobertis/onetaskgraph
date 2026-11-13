@@ -525,16 +525,17 @@ class SamplerCommandTests(unittest.TestCase):
         recorder = subprocess.Popen([sys.executable, str(HERE / "sampler.py"), str(out), "--tick", "0.2"])
         try:
             time.sleep(0.5)
-            subprocess.run([sys.executable, "-c", "import time; time.sleep(1.5)"], check=True)
+            child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(1.5)"])
+            child.wait()
             time.sleep(0.6)
         finally:
             Path(f"{out}.stop").write_text("")
             self.assertEqual(recorder.wait(timeout=60), 0)
         records = [sampler_record(json.loads(line)) for line in out.read_text().splitlines()]
         self.assertGreater(len([r for r in records if isinstance(r, Tick)]), 3)
-        self.assertTrue(
-            [r for r in records if isinstance(r, Exit) and r.category is Category.PYTHON and r.end - r.start >= 1.0],
-            "the 1.5 s python child should have been recorded ending",
+        ended = [r for r in records if isinstance(r, Exit) and r.pid == child.pid]
+        self.assertEqual(
+            [r.category for r in ended], [Category.PYTHON], "the child should have been recorded ending once"
         )
 
     def test_a_tick_that_is_not_a_finite_positive_number_is_a_usage_error(self):

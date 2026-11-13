@@ -97,7 +97,9 @@ class GitHub:
             batch = items(body.get(key), f"{path} {key}")
             found += batch
             total = body.get("total_count")
-            if len(batch) < PAGE or (isinstance(total, int) and len(found) >= total):
+            if total is not None and (isinstance(total, bool) or not isinstance(total, int) or total < 0):
+                raise Invalid(f"{path}: total_count {total!r} is not a count")
+            if len(batch) < PAGE or (total is not None and len(found) >= total):
                 return found
             page += 1
 

@@ -23,23 +23,31 @@ TaskId = NewType("TaskId", str)  # "<project>:<target>"
 Seconds = float
 
 ISO_TIME = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.(\d+))?(Z|[+-]\d\d:\d\d)?")
-CONCLUSIONS = frozenset(
-    {
-        "success",
-        "failure",
-        "cancelled",
-        "skipped",
-        "timed_out",
-        "neutral",
-        "action_required",
-        "stale",
-        "startup_failure",
-    }
-)
 
 
 class Invalid(ValueError):
     """A decoded record did not have the shape the harness reads."""
+
+
+class Conclusion(StrEnum):
+    """A job's, a step's or a run's conclusion, as GitHub's REST API documents them."""
+
+    SUCCESS = "success"
+    FAILURE = "failure"
+    CANCELLED = "cancelled"
+    SKIPPED = "skipped"
+    TIMED_OUT = "timed_out"
+    NEUTRAL = "neutral"
+    ACTION_REQUIRED = "action_required"
+    STALE = "stale"
+    STARTUP_FAILURE = "startup_failure"
+
+
+class Source(StrEnum):
+    """Where a job's Nx task timeline was read from."""
+
+    EXECUTIONS = "executions"
+    LOG = "log"
 
 
 class JobName(StrEnum):
@@ -138,16 +146,26 @@ def timestamp(value: Any, where: str) -> float:
     return datetime.fromisoformat(text + zone).astimezone(UTC).timestamp()
 
 
+def source_of(value: str, where: str) -> Source:
+    try:
+        return Source(value)
+    except ValueError as error:
+        raise Invalid(f"{where}: unknown timeline source {value!r}") from error
+
+
 def items(value: Any, where: str) -> list[Any]:
     if not isinstance(value, list):
         raise Invalid(f"{where}: expected a list, got {type(value).__name__}")
     return value
 
 
-def conclusion(value: Any, where: str) -> str | None:
-    if value is not None and value not in CONCLUSIONS:
-        raise Invalid(f"{where}: unknown conclusion {value!r}")
-    return value
+def conclusion(value: Any, where: str) -> Conclusion | None:
+    if value is None:
+        return None
+    try:
+        return Conclusion(value)
+    except ValueError as error:
+        raise Invalid(f"{where}: unknown conclusion {value!r}") from error
 
 
 @dataclass(frozen=True)
@@ -176,7 +194,7 @@ class Step:
 class Job:
     id: JobId
     name: str
-    conclusion: str | None
+    conclusion: Conclusion | None
     start: float | None
     end: float | None
     steps: tuple[Step, ...]
@@ -219,7 +237,7 @@ class Run:
     head_branch: str
     event: str
     created_at: str
-    conclusion: str | None
+    conclusion: Conclusion | None
     pull_requests: tuple[int, ...]
 
     @classmethod
@@ -334,8 +352,8 @@ class LibtestEvent:
         except ValueError as error:
             raise Invalid(f"{where}: {record.get('type')!r}/{record.get('event')!r} is no libtest event") from error
         name = record.get("name")
-        if kind is LibtestKind.TEST and not isinstance(name, str):
-            raise Invalid(f"{where}: a test event names no test")
+        if (kind is LibtestKind.TEST and not isinstance(name, str)) or not isinstance(name, (str, type(None))):
+            raise Invalid(f"{where}: a test event names no test, or a name is not text")
         time_value = record.get("exec_time")
         stdout = record.get("stdout", "")
         if not isinstance(stdout, str):
@@ -403,21 +421,25 @@ class Tick:
 
 @dataclass(frozen=True)
 class Exit:
-    """A process the sampler saw end: its category, its lifetime and its CPU."""
+    """A process the sampler saw end: its category, its lifetime and its CPU, and its pid where known."""
 
     category: Category
     start: float
     end: float
     cpu: Seconds
+    pid: int | None = None
 
     def to_json(self) -> dict[str, Any]:
-        return {
+        out: dict[str, Any] = {
             "kind": "exit",
             "category": self.category.value,
             "start": self.start,
             "end": self.end,
             "cpu": round(self.cpu, 4),
         }
+        if self.pid is not None:
+            out["pid"] = self.pid
+        return out
 
 
 def sampler_record(raw: Any) -> Tick | Exit | None:
@@ -433,7 +455,14 @@ def sampler_record(raw: Any) -> Tick | Exit | None:
             begin, finish = seconds(start, "exit"), seconds(end, "exit")
             if finish < begin:
                 raise Invalid("exit: ends before it starts")
-            return Exit(category(name, "exit"), begin, finish, seconds(cpu, "exit"))
+            pid = raw.get("pid")
+            return Exit(
+                category(name, "exit"),
+                begin,
+                finish,
+                seconds(cpu, "exit"),
+                None if pid is None else count(pid, "exit pid"),
+            )
         case {"kind": "start" | "stop"}:
             return None
         case _:
@@ -464,9 +493,9 @@ class TaskRecord:
 @dataclass(frozen=True)
 class JobRecord:
     job_id: int
-    conclusion: str | None
+    conclusion: Conclusion | None
     wall_s: Seconds
-    source: str
+    source: Source
     buckets_s: dict[str, Seconds]
     tasks: dict[TaskId, TaskRecord]
 
@@ -487,7 +516,7 @@ class JobRecord:
             take(record, "job_id", int, where),
             conclusion(record.get("conclusion"), where),
             seconds(take(record, "wall_s", (int, float), where), where),
-            take(record, "source", str, where),
+            source_of(take(record, "source", str, where), where),
             {k: seconds(v, where) for k, v in obj(record.get("buckets_s", {}), where).items()},
             {
                 TaskId(t): TaskRecord.parse(v, f"{where} {t}")
@@ -501,7 +530,7 @@ class FirstRunRecord:
     run: int
     head_sha: str
     created_at: str
-    conclusion: str | None
+    conclusion: Conclusion | None
     runs_of_pr: int
     jobs: dict[JobName, JobRecord] = field(default_factory=dict)
 
@@ -539,7 +568,7 @@ def history(raw: Any) -> dict[int, FirstRunRecord]:
     """A whole `ciprofile.py history` document, keyed by PR number."""
     out = {}
     for pr, entry in obj(raw, "history").items():
-        if not str(pr).isdigit():
+        if not isinstance(pr, str) or not re.fullmatch(r"[0-9]+", pr):
             raise Invalid(f"history: {pr!r} is not a pull request number")
         out[int(pr)] = FirstRunRecord.parse(entry, f"history #{pr}")
     return out

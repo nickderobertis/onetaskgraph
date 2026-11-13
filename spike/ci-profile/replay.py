@@ -89,11 +89,14 @@ class Option(Enum):
 
 def distribution_reads(root: Path) -> frozenset[str]:
     """Every repository file the distribution journeys' commands name, followed through the scripts they name."""
-    targets = obj(json.loads((root / "scripts/project.json").read_text()), "scripts/project.json").get("targets", {})
+    where = "scripts/project.json"
+    targets = obj(obj(json.loads((root / where).read_text()), where).get("targets"), f"{where} targets")
     pending: list[str] = []
     for name in ("distribution-check", "distribution-test"):
-        options = obj(obj(targets, "targets").get(name), name).get("options", {})
-        commands = options.get("commands") or [options.get("command", "")]
+        options = obj(obj(targets.get(name), f"{where} {name}").get("options"), f"{where} {name} options")
+        commands = items(options["commands"], f"{name} commands") if "commands" in options else [options.get("command")]
+        if not all(isinstance(c, str) and c for c in commands):
+            raise Invalid(f"{where} {name}: every command must be text")
         pending += [n for c in commands for n in NAMED_FILE.findall(c)]
     found: set[str] = set()
     while pending:

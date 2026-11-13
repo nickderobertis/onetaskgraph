@@ -163,6 +163,7 @@ def exits(seen: dict[int, Seen], alive: dict[int, Alive]) -> list[Exit]:
                     gone.created,
                     max(gone.last_seen, gone.created),
                     max(0.0, gone.last_cpu - gone.first_cpu),
+                    pid,
                 )
             )
     return out

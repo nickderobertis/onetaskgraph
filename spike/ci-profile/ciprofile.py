@@ -55,6 +55,7 @@ from models import (  # noqa: E402
     Run,
     RunId,
     Seconds,
+    Source,
     TaskRecord,
     TestTime,
     items,
@@ -278,7 +279,7 @@ async def job_record(gh: ghcache.GitHub, run_id: RunId, job: Job) -> JobRecord:
         job.id,
         job.conclusion,
         p.wall,
-        "executions" if executions is not None else "log",
+        Source.EXECUTIONS if executions is not None else Source.LOG,
         {k.value: v for k, v in p.buckets.items()},
         {t.id: TaskRecord(t.result, t.end - t.start, p.task_share.get(t.id, 0.0)) for t in p.tasks},
     )

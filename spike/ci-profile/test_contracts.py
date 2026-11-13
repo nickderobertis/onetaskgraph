@@ -370,3 +370,169 @@ class AttributionPathTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+FIXTURES = HERE / "data/github"
+
+
+class GitHubResponseTests(unittest.TestCase):
+    """models.py's GitHub records against GitHub's own answers to this harness's reads (data/github/README.md)."""
+
+    def test_recorded_jobs_runs_artifacts_and_allowances_parse(self):
+        jobs = [models.Job.parse(j) for j in json.loads((FIXTURES / "run-43152201170-jobs.json").read_text())["jobs"]]
+        self.assertEqual({j.name for j in jobs} >= {"test-linux", "test-macos", "test-windows"}, True)
+        self.assertTrue(all(j.finished for j in jobs if j.name.startswith("test-")))
+        runs = [
+            models.Run.parse(r) for r in json.loads((FIXTURES / "runs-listing-page.json").read_text())["workflow_runs"]
+        ]
+        self.assertEqual(len(runs), 3)
+        artifacts = json.loads((FIXTURES / "run-43369924587-artifacts.json").read_text())["artifacts"]
+        self.assertIn("spike-profile-test-macos", {models.Artifact.parse(a).name for a in artifacts})
+        limit = models.RateLimit.parse(json.loads((FIXTURES / "rate-limit.json").read_text()))
+        self.assertGreaterEqual(limit.rest, 0)
+
+    def test_every_conclusion_github_answered_is_one_the_model_knows(self):
+        seen = set()
+        for job in json.loads((FIXTURES / "run-43152201170-jobs.json").read_text())["jobs"]:
+            seen |= {job["conclusion"], *(s["conclusion"] for s in job["steps"])}
+        for run in json.loads((FIXTURES / "runs-listing-page.json").read_text())["workflow_runs"]:
+            seen.add(run["conclusion"])
+        self.assertLessEqual(seen - {None}, {c.value for c in models.Conclusion})
+
+
+class MoreCommandPathTests(unittest.TestCase):
+    def test_failed_tests_and_nextest_lines_reach_the_report_and_top_truncates(self):
+        root = scratch(self)
+        cache = fixture_cache(root)
+        run = cache / f"runs/{RUN}"
+        (run / "logs/5.txt").write_text(
+            LOG
+            + "\n"
+            + "\n".join(
+                f"2026-11-12T04:05:0{i}.0000000Z [coverage] "
+                + json.dumps(
+                    {"type": "test", "event": "ok", "name": f"x::e2e$t{i}", "exec_time": i + 0.5}, separators=(",", ":")
+                )
+                for i in range(3)
+            )
+        )
+        (run / "artifacts/spike-profile-test-macos/tests.jsonl").write_text(
+            "\n".join(
+                json.dumps(e)
+                for e in [
+                    {
+                        "type": "test",
+                        "event": "failed",
+                        "binary": "e2e-0123456789abcdef",
+                        "name": "broke",
+                        "exec_time": 9.0,
+                    },
+                    {"type": "suite", "event": "failed", "binary": "e2e-0123456789abcdef", "exec_time": 9.0},
+                ]
+            )
+        )
+        env = {"CIPROFILE_CACHE": str(cache), "CIPROFILE_OFFLINE": "1"}
+        proc = command("ciprofile.py", "profile", str(RUN), "--jobs", "test-macos", "--top", "1", env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("9.0s  e2e-0123456789abcdef::broke", proc.stdout)
+        self.assertIn("2.5s  instrumented:x::e2e::t2", proc.stdout)
+        binaries = proc.stdout.split("test binaries (2, seconds):\n")[1].split("  slowest")[0].strip().splitlines()
+        self.assertEqual(len(binaries), 1)  # --top 1
+        tasks = proc.stdout.split("Nx tasks by share of wall clock (own seconds, result):\n")[1].split("  latest")[0]
+        self.assertEqual(len(tasks.strip().splitlines()), 1)
+
+    def test_without_its_artifacts_a_job_is_profiled_from_its_log_alone(self):
+        root = scratch(self)
+        cache = fixture_cache(root)
+        shutil.rmtree(cache / f"runs/{RUN}/artifacts")
+        (cache / f"runs/{RUN}/artifacts.json").write_text(json.dumps({"total_count": 0, "artifacts": []}))
+        proc = command(
+            "ciprofile.py",
+            "profile",
+            str(RUN),
+            "--jobs",
+            "test-macos",
+            env={"CIPROFILE_CACHE": str(cache), "CIPROFILE_OFFLINE": "1"},
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("Nx tasks: 1 run, 1 replayed [log headers]", proc.stdout)
+        self.assertNotIn("sampler:", proc.stdout)
+
+    def test_a_run_already_listed_is_not_read_again_and_a_failed_read_exits_4(self):
+        root = scratch(self)
+        env = fake_gh(root, remaining=4000, responses={})
+        cache = Path(env["CIPROFILE_CACHE"])
+        (cache / "lists").mkdir(parents=True)
+        (cache / "lists/page.1.json").write_text(json.dumps({"workflow_runs": [RUN_RECORD]}))
+        with unittest.mock.patch.dict("os.environ", env):
+            run = asyncio.run(ghcache.GitHub(cache=cache, offline=False).run(models.RunId(RUN)))
+        self.assertEqual(run.head_branch, "topic")
+        self.assertFalse((root / "calls.log").exists())
+        proc = command("ciprofile.py", "profile", "999", env=env)
+        self.assertEqual(proc.returncode, 4)
+        self.assertIn(
+            "ReadFailed: gh api --allow-escape-sequences repos/nickderobertis/onetaskgraph/actions/runs/999: HTTP 404",
+            proc.stderr,
+        )
+
+    def test_the_replay_matches_each_pr_against_the_keys_in_force_when_it_ran(self):
+        root = scratch(self)
+        for side, files in (("after", ["crates/c/src/new.rs"]), ("before", ["crates/c/src/old.rs"])):
+            (root / side).mkdir()
+            (root / f"{side}/c__test.json").write_text(json.dumps({"files": files}))
+        record = {
+            "run": 1,
+            "head_sha": "e" * 40,
+            "created_at": "2026-11-01T00:00:00Z",
+            "conclusion": "success",
+            "runs_of_pr": 1,
+            "jobs": {
+                "test-linux": {
+                    "job_id": 1,
+                    "conclusion": "success",
+                    "wall_s": 60,
+                    "source": "log",
+                    "tasks": {"c:test": {"result": "executed", "seconds": 60, "share_s": 60}},
+                }
+            },
+        }
+        (root / "h.json").write_text(json.dumps({"3900": record, "3990": {**record, "run": 2}}))
+        (root / "p.json").write_text(
+            json.dumps([{"pr": 3900, "files": ["crates/c/src/old.rs"]}, {"pr": 3990, "files": ["crates/c/src/new.rs"]}])
+        )
+        proc = command(
+            "replay.py",
+            str(root / "h.json"),
+            str(root / "p.json"),
+            str(root / "after"),
+            str(root / "before"),
+            "--json",
+            str(root / "r.json"),
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        rows = json.loads((root / "r.json").read_text())["rows"]
+        self.assertEqual(rows["3900"]["test-linux"]["c:test"]["matched"], ["crates/c/src/old.rs"])
+        self.assertEqual(rows["3990"]["test-linux"]["c:test"]["matched"], ["crates/c/src/new.rs"])
+
+
+class RunnerPassthroughTests(unittest.TestCase):
+    def binary(self, root: Path) -> Path:
+        path = root / "probe-0123456789abcdef"
+        path.write_text("#!/usr/bin/env python3\nimport sys\nprint('args=' + ' '.join(sys.argv[1:]))\nsys.exit(7)\n")
+        path.chmod(0o755)
+        return path
+
+    def test_a_list_probe_a_nextest_child_and_an_unset_record_run_untouched(self):
+        root = scratch(self)
+        record = root / "tests.jsonl"
+        for args, env in (
+            (["--list"], {"SPIKE_TEST_RECORD": str(record)}),
+            (["-q"], {"SPIKE_TEST_RECORD": str(record), "NEXTEST_RUN_ID": "1"}),
+            (["-q"], {}),
+        ):
+            proc = command("testrunner.py", str(self.binary(root)), *args, env=env)
+            self.assertEqual(proc.returncode, 7)
+            self.assertEqual(proc.stdout.strip(), "args=" + " ".join(args))
+        spawns = [json.loads(x) for x in (root / "tests.jsonl.spawns").read_text().splitlines()]
+        self.assertEqual([(s["mode"], s["code"]) for s in spawns], [("passthrough", 7), ("passthrough", 7)])
+        self.assertFalse(record.exists())

@@ -120,31 +120,27 @@ class Task:
         return self.target in ("coverage", "coverage-build")
 
     def bucket_at(self, instant: float) -> Bucket:
+        """The category this task's share of one instant belongs to; earlier cases win."""
         build = next((b for b in self.builds if b.start <= instant < b.end), None)
-        if self.result.replayed:
-            return Bucket.NX_RESTORE
-        if any(w.start <= instant < w.end for w in self.lock_waits):
-            return Bucket.LOCK_WAIT
-        if build is not None:
-            return (
-                Bucket.COMPILE_RELEASE
-                if build.profile == "release"
-                else Bucket.COMPILE_INSTRUMENTED
-                if self.instrumented
-                else Bucket.COMPILE_PLAIN
-            )
-        if self.compile_end is not None and instant < self.compile_end:
-            return Bucket.COMPILE_INSTRUMENTED if self.instrumented else Bucket.COMPILE_PLAIN
-        if self.project in ("workspace", "scripts") or self.target not in (
-            "test",
-            "coverage",
-            "test-uncovered",
-            "budgets",
-        ):
-            return Bucket.SCRIPTS
-        if self.target == "budgets":
-            return Bucket.BUDGETS
-        return Bucket.TEST_INSTRUMENTED if self.instrumented else Bucket.TEST_PLAIN
+        waiting = any(w.start <= instant < w.end for w in self.lock_waits)
+        compiling = self.compile_end is not None and instant < self.compile_end
+        match (self.result.replayed, waiting, build, compiling, self.project, self.target):
+            case (True, *_):
+                return Bucket.NX_RESTORE
+            case (_, True, *_):
+                return Bucket.LOCK_WAIT
+            case (_, _, Build(profile="release"), *_):
+                return Bucket.COMPILE_RELEASE
+            case (_, _, Build(), *_) | (_, _, None, True, *_):
+                return Bucket.COMPILE_INSTRUMENTED if self.instrumented else Bucket.COMPILE_PLAIN
+            case (*_, "workspace" | "scripts", _):
+                return Bucket.SCRIPTS
+            case (*_, "budgets"):
+                return Bucket.BUDGETS
+            case (*_, "test" | "coverage" | "test-uncovered"):
+                return Bucket.TEST_INSTRUMENTED if self.instrumented else Bucket.TEST_PLAIN
+            case _:
+                return Bucket.SCRIPTS
 
 
 @dataclass(frozen=True)
