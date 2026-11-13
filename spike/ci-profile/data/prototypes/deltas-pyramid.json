@@ -18,12 +18,26 @@
      "control": {
       "wall_s": 1528.0,
       "gate_span_s": 1419.2,
-      "chain_span_s": 1405.7
+      "runs_wall_s": [
+       1557.0,
+       1499.0
+      ],
+      "runs_gate_span_s": [
+       1437.9,
+       1400.5
+      ]
      },
      "side": {
       "wall_s": 1555.5,
       "gate_span_s": 1444.1,
-      "chain_span_s": 1430.5
+      "runs_wall_s": [
+       1502.0,
+       1609.0
+      ],
+      "runs_gate_span_s": [
+       1399.0,
+       1489.2
+      ]
      },
      "side_only": [],
      "executed_by_one_side": {
@@ -115,7 +129,11 @@
       "onetaskgraph-plugin-api": 0.0,
       "onetaskgraph-status-options": 0.0,
       "onetaskgraph-status-options-e2e": 0.1
-     }
+     },
+     "model_on_control_s": [
+      -20.5,
+      -21.3
+     ]
     },
     "test-macos": {
      "runs": [
@@ -125,12 +143,26 @@
      "control": {
       "wall_s": 1829.5,
       "gate_span_s": 1666.2,
-      "chain_span_s": 1660.4
+      "runs_wall_s": [
+       1918.0,
+       1741.0
+      ],
+      "runs_gate_span_s": [
+       1743.1,
+       1589.2
+      ]
      },
      "side": {
       "wall_s": 1761.5,
       "gate_span_s": 1621.8,
-      "chain_span_s": 1614.8
+      "runs_wall_s": [
+       1769.0,
+       1754.0
+      ],
+      "runs_gate_span_s": [
+       1639.8,
+       1603.8
+      ]
      },
      "side_only": [],
      "executed_by_one_side": {
@@ -181,7 +213,11 @@
       "sdk-typescript:test": 2.0,
       "workspace:test": 13.3
      },
-     "work_saved_s": {}
+     "work_saved_s": {},
+     "model_on_control_s": [
+      19.0,
+      19.0
+     ]
     },
     "test-windows": {
      "runs": [
@@ -190,13 +226,27 @@
      ],
      "control": {
       "wall_s": 1814.0,
-      "gate_span_s": 1612.4,
-      "chain_span_s": 1603.9
+      "gate_span_s": 1612.3,
+      "runs_wall_s": [
+       1591.0,
+       2037.0
+      ],
+      "runs_gate_span_s": [
+       1407.7,
+       1817.0
+      ]
      },
      "side": {
       "wall_s": 2002.5,
       "gate_span_s": 1771.8,
-      "chain_span_s": 1760.1
+      "runs_wall_s": [
+       2019.0,
+       1986.0
+      ],
+      "runs_gate_span_s": [
+       1792.9,
+       1750.8
+      ]
      },
      "side_only": [],
      "executed_by_one_side": {
@@ -247,7 +297,11 @@
       "sdk-typescript:test": -25.9,
       "workspace:test": 3.4
      },
-     "work_saved_s": {}
+     "work_saved_s": {},
+     "model_on_control_s": [
+      -66.4,
+      -14.2
+     ]
     }
    }
   }
