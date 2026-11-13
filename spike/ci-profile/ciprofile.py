@@ -147,18 +147,66 @@ def profile_run(run_id: int, jobs_wanted, as_json: bool, top: int) -> int:
 
 def durations(since: str, until: str) -> int:
     runs = [r for r in ghcache.runs_list(f"event=pull_request&created={since}..{until}")
-            if r["conclusion"] == "success" and not r["head_branch"].startswith("release-plz")]
+            if r["conclusion"] in ("success", "failure") and not r["head_branch"].startswith("release-plz")]
     per = defaultdict(list)
     for r in runs:
         for j in ghcache.jobs(r["id"]):
             if j["name"] in TEST_JOBS and j["conclusion"] == "success":
                 per[j["name"]].append((prof.ts(j["completed_at"]) - prof.ts(j["started_at"])) / 60)
-    print(f"successful non-release PR runs created {since}..{until}: {len(runs)}")
+    print(f"completed non-release PR runs created {since}..{until}: {len(runs)}; successful jobs:")
     for name in TEST_JOBS:
         v = per[name]
         if v:
             print(f"  {name:13s} n={len(v):3d} median {statistics.median(v):5.1f} min  "
                   f"p25 {statistics.quantiles(v, n=4)[0]:5.1f}  p75 {statistics.quantiles(v, n=4)[2]:5.1f}  max {max(v):5.1f}")
+    return 0
+
+
+def job_tasks(run_id: int, job: dict) -> dict:
+    """One job's Nx tasks with their result and own seconds, and its wall clock."""
+    log = ghcache.job_log(run_id, job["id"])
+    executions = executions_for(run_id, job["name"])
+    p = prof.profile_job(job, log, executions)
+    return {"job_id": job["id"], "conclusion": job["conclusion"], "wall_s": round(p.wall, 1),
+            "source": "executions" if executions else "log",
+            "buckets_s": {k: round(v, 1) for k, v in p.buckets.items()},
+            "tasks": {t.name: {"result": t.result, "seconds": round(t.end - t.start, 1),
+                               "share_s": round(p.task_share.get(t.name, 0), 1)} for t in p.tasks}}
+
+
+def history(prs_file: str, since: str, out_file: str, which: str) -> int:
+    """For each PR in prs_file, its first (or last) CI run's test jobs, task by task."""
+    prs = json.loads(Path(prs_file).read_text())
+    runs = ghcache.runs_list(f"event=pull_request&created=>={since}", pages=4)
+    by_pr: dict[int, list[dict]] = defaultdict(list)
+    for r in runs:
+        for pr in r.get("pull_requests") or []:
+            by_pr[pr["number"]].append(r)
+        if not r.get("pull_requests"):
+            for p in prs:
+                if r["head_sha"] == p["head"] or r["head_branch"] == p["branch"]:
+                    by_pr[p["pr"]].append(r)
+    out = {}
+    for p in prs:
+        candidates = sorted({r["id"]: r for r in by_pr.get(p["pr"], [])}.values(), key=lambda r: r["created_at"])
+        if not candidates:
+            print(f"#{p['pr']}: no run found since {since}")
+            continue
+        run = candidates[0] if which == "first" else candidates[-1]
+        jobs = {j["name"]: j for j in ghcache.jobs(run["id"])}
+        entry = {"run": run["id"], "head_sha": run["head_sha"], "created_at": run["created_at"],
+                 "conclusion": run["conclusion"], "runs_of_pr": len(candidates), "jobs": {}}
+        for name in TEST_JOBS:
+            job = jobs.get(name)
+            if job and job.get("completed_at") and job.get("conclusion") not in ("skipped", None):
+                entry["jobs"][name] = job_tasks(run["id"], job)
+        out[p["pr"]] = entry
+        summary = "  ".join(f"{n}: {len([t for t in j['tasks'].values() if t['result'] == 'executed'])} run/"
+                            f"{len([t for t in j['tasks'].values() if t['result'] != 'executed'])} replayed "
+                            f"{j['wall_s'] / 60:.1f}m" for n, j in entry["jobs"].items())
+        print(f"#{p['pr']} run {run['id']} ({run['conclusion']}): {summary}")
+        Path(out_file).write_text(json.dumps(out, indent=1))
+    print(f"(GitHub reads this invocation: {ghcache.requests_made()}; written {out_file})")
     return 0
 
 
@@ -173,8 +221,15 @@ def main(argv=None) -> int:
     d = sub.add_parser("durations")
     d.add_argument("since")
     d.add_argument("until")
+    h = sub.add_parser("history")
+    h.add_argument("prs_file")
+    h.add_argument("--since", default="2026-11-01")
+    h.add_argument("--out", required=True)
+    h.add_argument("--which", choices=("first", "last"), default="first")
     args = ap.parse_args(argv)
     try:
+        if args.cmd == "history":
+            return history(args.prs_file, args.since, args.out, args.which)
         if args.cmd == "profile":
             return profile_run(args.run, args.jobs.split(","), args.json, args.top)
         if args.cmd == "durations":

@@ -16,7 +16,8 @@ import zipfile
 from pathlib import Path
 
 REPO = "nickderobertis/onetaskgraph"
-FLOOR = 2500
+FLOOR = 2500  # REST core: this dispatch's own stop line (stricter than the ruling's 2,000)
+GRAPHQL_FLOOR = 2000  # manager ruling c0.5: never below 40% of the shared GraphQL allowance
 
 
 class RateFloor(RuntimeError):
@@ -38,19 +39,27 @@ def requests_made() -> int:
 
 
 def remaining() -> int:
+    return remaining_both()[0]
+
+
+def remaining_both() -> tuple[int, int]:
+    """(REST core, GraphQL) remaining, read from the REST rate_limit endpoint, which spends neither."""
     out = subprocess.run(
-        ["gh", "api", "rate_limit", "--jq", ".resources.core.remaining"],
+        ["gh", "api", "rate_limit", "--jq", "[.resources.core.remaining, .resources.graphql.remaining] | @tsv"],
         check=True, capture_output=True, text=True,
-    ).stdout
-    return int(out.strip())
+    ).stdout.split()
+    return int(out[0]), int(out[1])
 
 
 def _check_floor() -> None:
     # Ask once every 25 reads; rate_limit itself is free.
     if _requests % 25 == 0:
-        left = remaining()
-        if left < FLOOR:
-            raise RateFloor(f"only {left} core requests remain (floor {FLOOR}); stop and wait for the reset")
+        core, graphql = remaining_both()
+        if core < FLOOR:
+            raise RateFloor(f"only {core} core requests remain (floor {FLOOR}); stop and wait for the reset")
+        if graphql < GRAPHQL_FLOOR:
+            raise RateFloor(f"only {graphql} GraphQL points remain (floor {GRAPHQL_FLOOR}, ruling c0.5); "
+                            "the host's other reads share it, so stop and wait for its reset")
 
 
 def _get(path: str) -> bytes:
