@@ -1,161 +1,168 @@
-"""Read-only, cached GitHub reads for the CI profile spike.
+"""An async, typed, read-only and cached GitHub client for the CI profile spike.
 
-Every read goes through the host's `gh` login, is written once under the cache directory and
-never asked again, and refuses to start while `gh api rate_limit` reports fewer than
-FLOOR core requests remaining (the dispatch's stop line).
+Every read goes through the host's `gh` login (`gh api`), is written once under the cache
+directory and never asked again, and is refused — `RateFloor` — while `gh api rate_limit`
+reports fewer than REST_FLOOR core or GRAPHQL_FLOOR GraphQL requests remaining; the check
+spends neither allowance and runs before every batch of CHECK_EVERY reads. With
+CIPROFILE_OFFLINE set a read that is not cached raises `Offline` instead of being made.
+Listings are paged to their end, so a run's jobs and artifacts are all of them.
 """
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import os
-import subprocess
-import sys
 import zipfile
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
+
+from models import Artifact, Invalid, Job, RateLimit, Run, RunId, items, obj
 
 REPO = "nickderobertis/onetaskgraph"
-FLOOR = 2500  # REST core: this dispatch's own stop line (stricter than the ruling's 2,000)
-GRAPHQL_FLOOR = 2000  # manager ruling c0.5: never below 40% of the shared GraphQL allowance
+REST_FLOOR = 2500  # this dispatch's own stop line, stricter than the shared 2,000
+GRAPHQL_FLOOR = 2000  # manager ruling c0.5: never below 40% of the shared allowance
+CHECK_EVERY = 25
+PAGE = 100
+KEPT_SUFFIXES = (".json", ".jsonl", ".xml", ".txt", ".csv", ".spawns")
 
 
 class RateFloor(RuntimeError):
-    pass
+    """An allowance this host's login shares is below its floor; wait for its reset."""
 
 
 class Offline(LookupError):
     """CIPROFILE_OFFLINE is set and the read is not in the cache."""
 
 
-def cache_dir() -> Path:
+class ReadFailed(RuntimeError):
+    """`gh api` refused or failed a read."""
+
+
+def default_cache() -> Path:
     root = os.environ.get("CIPROFILE_CACHE")
-    path = Path(root) if root else Path(__file__).resolve().parents[2] / "target" / "ci-profile"
-    path.mkdir(parents=True, exist_ok=True)
-    return path
+    return Path(root) if root else Path(__file__).resolve().parents[2] / "target" / "ci-profile"
 
 
-_requests = 0
+@dataclass
+class GitHub:
+    cache: Path = field(default_factory=default_cache)
+    offline: bool = field(default_factory=lambda: bool(os.environ.get("CIPROFILE_OFFLINE")))
+    reads: int = 0
 
+    async def _gh(self, *args: str) -> bytes:
+        proc = await asyncio.create_subprocess_exec("gh", *args, stdout=asyncio.subprocess.PIPE,
+                                                    stderr=asyncio.subprocess.PIPE)
+        out, err = await proc.communicate()
+        if proc.returncode != 0:
+            raise ReadFailed(f"gh {' '.join(args)}: {err.decode(errors='replace').strip()}")
+        return out
 
-def requests_made() -> int:
-    return _requests
+    async def rate_limit(self) -> RateLimit:
+        return RateLimit.parse(json.loads(await self._gh("api", "rate_limit")))
 
+    async def _read(self, path: str) -> bytes:
+        if self.offline:
+            raise Offline(path)
+        if self.reads % CHECK_EVERY == 0:
+            limit = await self.rate_limit()
+            if limit.rest < REST_FLOOR:
+                raise RateFloor(f"only {limit.rest} REST core requests remain (floor {REST_FLOOR}); wait for the reset")
+            if limit.graphql < GRAPHQL_FLOOR:
+                raise RateFloor(f"only {limit.graphql} GraphQL points remain (floor {GRAPHQL_FLOOR}); wait for the reset")
+        self.reads += 1
+        return await self._gh("api", "--allow-escape-sequences", f"repos/{REPO}/{path}")
 
-def remaining() -> int:
-    return remaining_both()[0]
-
-
-def remaining_both() -> tuple[int, int]:
-    """(REST core, GraphQL) remaining, read from the REST rate_limit endpoint, which spends neither."""
-    out = subprocess.run(
-        ["gh", "api", "rate_limit", "--jq", "[.resources.core.remaining, .resources.graphql.remaining] | @tsv"],
-        check=True, capture_output=True, text=True,
-    ).stdout.split()
-    return int(out[0]), int(out[1])
-
-
-def _check_floor() -> None:
-    # Ask once every 25 reads; rate_limit itself is free.
-    if _requests % 25 == 0:
-        core, graphql = remaining_both()
-        if core < FLOOR:
-            raise RateFloor(f"only {core} core requests remain (floor {FLOOR}); stop and wait for the reset")
-        if graphql < GRAPHQL_FLOOR:
-            raise RateFloor(f"only {graphql} GraphQL points remain (floor {GRAPHQL_FLOOR}, ruling c0.5); "
-                            "the host's other reads share it, so stop and wait for its reset")
-
-
-def _get(path: str) -> bytes:
-    global _requests
-    if os.environ.get("CIPROFILE_OFFLINE"):
-        raise Offline(path)
-    _check_floor()
-    _requests += 1
-    proc = subprocess.run(
-        ["gh", "api", "--allow-escape-sequences", f"repos/{REPO}/{path}"],
-        capture_output=True,
-    )
-    if proc.returncode != 0:
-        raise RuntimeError(f"gh api {path}: {proc.stderr.decode(errors='replace').strip()}")
-    return proc.stdout
-
-
-def _cached(name: str, path: str) -> bytes:
-    target = cache_dir() / name
-    if target.exists():
-        return target.read_bytes()
-    data = _get(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(data)
-    return data
-
-
-def run(run_id: int) -> dict:
-    target = cache_dir() / f"runs/{run_id}/run.json"
-    if not target.exists():
-        # A run already listed is read from the listing rather than asked for again.
-        for listing in sorted((cache_dir() / "lists").glob("*.json")):
-            for entry in json.loads(listing.read_text())["workflow_runs"]:
-                if entry["id"] == run_id:
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    target.write_text(json.dumps(entry))
-                    return entry
-    return json.loads(_cached(f"runs/{run_id}/run.json", f"actions/runs/{run_id}"))
-
-
-def jobs(run_id: int) -> list[dict]:
-    return json.loads(_cached(f"runs/{run_id}/jobs.json", f"actions/runs/{run_id}/jobs?per_page=50"))["jobs"]
-
-
-def job_log(run_id: int, job_id: int) -> str:
-    return _cached(f"runs/{run_id}/logs/{job_id}.txt", f"actions/jobs/{job_id}/logs").decode("utf-8", "replace")
-
-
-def artifacts(run_id: int) -> list[dict]:
-    return json.loads(_cached(f"runs/{run_id}/artifacts.json", f"actions/runs/{run_id}/artifacts?per_page=100"))["artifacts"]
-
-
-def artifact_member(run_id: int, name: str, member: str) -> bytes | None:
-    """One file out of a named artifact, cached unzipped; None when the run has no such artifact."""
-    target = cache_dir() / f"runs/{run_id}/artifacts/{name}/{member}"
-    if target.exists():
-        return target.read_bytes()
-    marker = target.with_name(target.name + ".absent")
-    if marker.exists():
-        return None
-    found = [a for a in artifacts(run_id) if a["name"] == name and not a["expired"]]
-    if not found:
-        marker.parent.mkdir(parents=True, exist_ok=True)
-        marker.write_text("")
-        return None
-    data = _get(f"actions/artifacts/{found[0]['id']}/zip")
-    with zipfile.ZipFile(io.BytesIO(data)) as archive:
-        names = archive.namelist()
+    async def _cached(self, name: str, path: str) -> bytes:
+        target = self.cache / name
+        if target.exists():
+            return target.read_bytes()
+        data = await self._read(path)
         target.parent.mkdir(parents=True, exist_ok=True)
-        for entry in names:
-            out = (target.parent / entry).resolve()
-            if not out.is_relative_to(target.parent.resolve()):
-                raise RuntimeError(f"artifact {name} holds an entry outside its directory: {entry}")
-            if entry.endswith((".json", ".jsonl", ".xml", ".txt", ".csv")):
+        target.write_bytes(data)
+        return data
+
+    async def _pages(self, name: str, path: str, key: str) -> list[Any]:
+        found: list[Any] = []
+        page = 1
+        while True:
+            body = obj(json.loads(await self._cached(f"{name}.{page}.json", f"{path}per_page={PAGE}&page={page}")), path)
+            batch = items(body.get(key), f"{path} {key}")
+            found += batch
+            total = body.get("total_count")
+            if len(batch) < PAGE or (isinstance(total, int) and len(found) >= total):
+                return found
+            page += 1
+
+    async def run(self, run_id: RunId) -> Run:
+        target = self.cache / f"runs/{run_id}/run.json"
+        if not target.exists():
+            for listing in sorted((self.cache / "lists").glob("*.json")):
+                for entry in items(obj(json.loads(listing.read_text()), str(listing)).get("workflow_runs"), str(listing)):
+                    if isinstance(entry, dict) and entry.get("id") == run_id:
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        target.write_text(json.dumps(entry))
+        return Run.parse(json.loads(await self._cached(f"runs/{run_id}/run.json", f"actions/runs/{run_id}")))
+
+    async def jobs(self, run_id: RunId) -> list[Job]:
+        legacy = self.cache / f"runs/{run_id}/jobs.json"  # an earlier release of this cache kept one page
+        if legacy.exists():
+            raw = items(obj(json.loads(legacy.read_text()), "jobs").get("jobs"), "jobs")
+        else:
+            raw = await self._pages(f"runs/{run_id}/jobs", f"actions/runs/{run_id}/jobs?", "jobs")
+        return [Job.parse(j) for j in raw]
+
+    async def job_log(self, run_id: RunId, job: Job) -> str:
+        data = await self._cached(f"runs/{run_id}/logs/{job.id}.txt", f"actions/jobs/{job.id}/logs")
+        return data.decode("utf-8", "replace")
+
+    async def artifacts(self, run_id: RunId) -> list[Artifact]:
+        legacy = self.cache / f"runs/{run_id}/artifacts.json"
+        if legacy.exists():
+            raw = items(obj(json.loads(legacy.read_text()), "artifacts").get("artifacts"), "artifacts")
+        else:
+            raw = await self._pages(f"runs/{run_id}/artifacts", f"actions/runs/{run_id}/artifacts?", "artifacts")
+        return [Artifact.parse(a) for a in raw]
+
+    async def artifact_member(self, run_id: RunId, name: str, member: str) -> bytes | None:
+        """One file of a named artifact, cached unzipped; None when the run holds no such artifact or file."""
+        directory = self.cache / f"runs/{run_id}/artifacts/{name}"
+        target, absent = directory / member, directory / f"{member}.absent"
+        if target.exists():
+            return target.read_bytes()
+        if absent.exists() or (directory.exists() and any(directory.iterdir())):
+            return None
+        found = [a for a in await self.artifacts(run_id) if a.name == name and not a.expired]
+        directory.mkdir(parents=True, exist_ok=True)
+        if found:
+            extract(await self._read(f"actions/artifacts/{found[0].id}/zip"), directory)
+        if not target.exists():
+            absent.write_text("")
+            return None
+        return target.read_bytes()
+
+    async def runs_list(self, query: str, pages: int) -> list[Run]:
+        name = "lists/" + query.replace("/", "_").replace("&", "_").replace("=", "_")
+        out: list[Run] = []
+        for page in range(1, pages + 1):
+            body = obj(json.loads(await self._cached(f"{name}.{page}.json",
+                                                     f"actions/workflows/ci.yml/runs?{query}&per_page={PAGE}&page={page}")), query)
+            batch = items(body.get("workflow_runs"), "workflow_runs")
+            out += [Run.parse(r) for r in batch]
+            if len(batch) < PAGE:
+                break
+        return out
+
+
+def extract(data: bytes, directory: Path) -> None:
+    root = directory.resolve()
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        for entry in archive.namelist():
+            out = (directory / entry).resolve()
+            if not out.is_relative_to(root):
+                raise Invalid(f"artifact entry {entry!r} lies outside its directory")
+            if entry.endswith(KEPT_SUFFIXES):
                 out.parent.mkdir(parents=True, exist_ok=True)
                 out.write_bytes(archive.read(entry))
-    if not target.exists():
-        marker.write_text("")
-        return None
-    return target.read_bytes()
-
-
-def runs_list(query: str, pages: int = 3) -> list[dict]:
-    out: list[dict] = []
-    for page in range(1, pages + 1):
-        body = json.loads(_cached(f"lists/{query.replace('/', '_').replace('&', '_').replace('=', '_')}.{page}.json",
-                                  f"actions/workflows/ci.yml/runs?{query}&per_page=100&page={page}"))
-        out += body["workflow_runs"]
-        if len(body["workflow_runs"]) < 100:
-            break
-    return out
-
-
-if __name__ == "__main__":
-    print(remaining(), file=sys.stderr)

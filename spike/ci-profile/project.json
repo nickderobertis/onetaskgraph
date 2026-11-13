@@ -1,0 +1,17 @@
+{
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "name": "spike-ci-profile",
+  "projectType": "library",
+  "tags": ["lang:python", "layer:workspace"],
+  "//": "The CI test-speed spike's measurement harness: a hosted run's job wall clock divided by category, the recorders a demonstration run carries, and the replay of recent pull requests against finer Nx keys. Its tests drive each command through its real entry point, with a stand-in `gh` at the process boundary.",
+  "targets": {
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "uv run --no-project --quiet --with psutil==7.1.3 python -m unittest discover -s spike/ci-profile -p 'test_*.py'"
+      },
+      "cache": false,
+      "//": "Uncached: its runner journey compiles a cargo shim with the host's rustc and starts a real cargo, which no input of this project describes."
+    }
+  }
+}
