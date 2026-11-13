@@ -3894,6 +3894,10 @@ pub enum ReferenceFault {
     StatusNamingNoOption,
 }
 
+/// The longest text the loopback board's text fields take, in characters: what spike
+/// `spike-sample-ticket` measured a real board taking, 1,025 refused.
+pub const GITHUB_TEXT_FIELD_LIMIT: usize = 1024;
+
 /// The token a source configured by [`GitHubBoardFields::second_board`] sends, which tells its
 /// requests from the first board's in this server's one log.
 pub const GITHUB_SECOND_BOARD_TOKEN: &str = "test-token-b";
@@ -5729,6 +5733,18 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
             .iter_mut()
             .find(|item| item["item"] == item_id)
             .expect("a field update names a board item");
+        // GitHub refuses a text value over 1,024 characters whole, as spike
+        // `spike-sample-ticket` measured on a live board, and writes nothing.
+        if projected
+            && text
+                .as_str()
+                .is_some_and(|text| text.chars().count() > GITHUB_TEXT_FIELD_LIMIT)
+        {
+            board
+                .owed_errors
+                .push("Column value must be a valid value for text column".to_owned());
+            return json!({ "updateProjectV2ItemFieldValue": null });
+        }
         if projected {
             if !held["texts"].is_object() {
                 held["texts"] = json!({});

@@ -21373,8 +21373,14 @@ async fn a_value_no_text_field_can_hold_is_refused_before_any_mutation() {
     for (value, found) in [
         (json!(7), "a number"),
         (json!(true), "a boolean"),
-        (json!({"name": "alpha"}), "an object"),
-        (json!(["alpha"]), "an array"),
+        (
+            json!({"name": "alpha", "count": 2}),
+            "an object whose value at key \"count\" is a number",
+        ),
+        (
+            json!(["alpha", ["beta"]]),
+            "an array whose element 1 is an array",
+        ),
     ] {
         for kind in [Kind::Task, Kind::Project, Kind::Document] {
             let fixture = board(vec![]).with_field(host_field());
@@ -21420,7 +21426,10 @@ async fn a_value_no_text_field_can_hold_is_refused_before_any_mutation() {
             .await
             .expect_err("an array"),
     );
-    assert!(message.contains("an array"), "{message}");
+    assert!(
+        message.contains("an array whose element 0 is a number"),
+        "{message}"
+    );
     assert_eq!(fixture.seen(), Vec::<Value>::new());
 }
 
