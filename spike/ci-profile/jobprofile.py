@@ -49,6 +49,9 @@ NEXTEST_DONE = re.compile(
 CARGO_BUILD = re.compile(r"^(?P<word>Compiling|Finished) (?:`(?P<profile>\w+)` profile)?")
 STORED = re.compile(r"Nx cache: stored (?P<n>\d+) entries, (?P<bytes>\d+) bytes; replayed (?P<r>\d+) entries")
 CACHE_SIZE = re.compile(r"Cache Size: ~?([0-9.]+ ?[MG]B)")
+RESTORE_BOUNDS = 2  # a restore is measured between its first and last restore line
+STEP_SLACK = 2.0  # seconds: the step API keeps whole seconds, the log's groups are exact
+SHORTEST_LINK = 0.5  # seconds: shorter tasks are replays, which hold no slot worth chaining
 # Below this share of one CPU, work processes in a tick are waiting rather than working.
 IDLE_CPU_SHARE = 0.1
 
@@ -119,7 +122,7 @@ class Task:
     def instrumented(self) -> bool:
         return self.target in ("coverage", "coverage-build")
 
-    def bucket_at(self, instant: float) -> Bucket:
+    def bucket_at(self, instant: float) -> Bucket:  # noqa: PLR0911 — one return per case of a single match
         """The category this task's share of one instant belongs to; earlier cases win."""
         build = next((b for b in self.builds if b.start <= instant < b.end), None)
         waiting = any(w.start <= instant < w.end for w in self.lock_waits)
@@ -183,7 +186,7 @@ def parse_log(text: str) -> list[LogLine]:
     return out
 
 
-def step_kind(name: str) -> StepKind:
+def step_kind(name: str) -> StepKind:  # noqa: PLR0911 — one return per case of a single match
     n = name.lower()
     match n:
         case _ if "start-cache-server" in n:
@@ -234,7 +237,7 @@ def restore_inside(log: list[LogLine], span: Interval) -> Seconds:
         if span.start <= line.t <= span.end
         and re.search(r"restor|cache key|Cache (hit|not found)|Received \d+ of", line.text, re.I)
     ]
-    return (max(hits) - min(hits)) if len(hits) >= 2 else 0.0
+    return (max(hits) - min(hits)) if len(hits) >= RESTORE_BOUNDS else 0.0
 
 
 def account_steps(p: JobProfile, log: list[LogLine]) -> None:
@@ -257,7 +260,7 @@ def account_steps(p: JobProfile, log: list[LogLine]) -> None:
         kind = step_kind(step.name)
         if kind is StepKind.TEST:
             # The step API keeps whole seconds; the log's own group for the step is exact.
-            near = [x.span for x in sections if abs(x.span.start - step.start) <= 2]
+            near = [x.span for x in sections if abs(x.span.start - step.start) <= STEP_SLACK]
             p.test_step = (
                 min(near, key=lambda span: abs(span.start - step.start)) if near else Interval(step.start, step.end)
             )
@@ -382,7 +385,7 @@ def latest_finishing_chain(tasks: list[Task], window: Interval) -> list[Task]:
     Nx's report carries no dependency edges, so this is a timeline chain, not a dependency
     critical path: each link is what was still running when the next one began."""
     pointer, chain = window.end, []
-    pool = [t for t in tasks if t.end - t.start > 0.5]
+    pool = [t for t in tasks if t.end - t.start > SHORTEST_LINK]
     while before := [t for t in pool if t.end <= pointer + 1 and t.start < pointer - 0.5]:
         link = max(before, key=lambda x: (x.end, -x.start))
         chain.append(link)

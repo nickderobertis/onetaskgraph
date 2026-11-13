@@ -4,4 +4,3 @@ line-length = 120
 
 [lint]
 select = ["E", "F", "W", "I", "UP", "B", "PL"]
-ignore = ["PLR2004", "PLR0913", "PLR0912", "PLR0915", "PLR0911"]

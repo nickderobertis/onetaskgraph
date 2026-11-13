@@ -611,18 +611,31 @@ class FakeTimes:
     system: float = 0.0
 
 
+@dataclasses.dataclass
 class FakeProcess:
     """One entry of a stand-in process table: what psutil reports of a process."""
 
-    def __init__(self, pid: int, ppid: int, name: str, created: float, cpu: float, *, cmdline: tuple[str, ...] = ()):
-        self.info: dict[str, Any] = {"pid": pid, "ppid": ppid, "name": name, "create_time": created}
-        self.cpu = cpu
-        self.command = list(cmdline)
+    pid: int
+    ppid: int
+    name: str
+    created: float
+    cpu: float
+    command: tuple[str, ...] = ()
+    unreadable_command: bool = False
+    unreadable_cpu: bool = False
+
+    @property
+    def info(self) -> dict[str, Any]:
+        return {"pid": self.pid, "ppid": self.ppid, "name": self.name, "create_time": self.created}
 
     def cmdline(self) -> list[str]:
-        return self.command
+        if self.unreadable_command:
+            raise OSError("access denied")
+        return list(self.command)
 
     def cpu_times(self) -> FakeTimes:
+        if self.unreadable_cpu:
+            raise OSError("access denied")
         return FakeTimes(self.cpu)
 
 
@@ -647,10 +660,10 @@ class SamplerAccountingTests(unittest.TestCase):
             FakeProcess(10, 1, "bash", 0.0, 0.0),
             FakeProcess(11, 10, "cargo", 0.0, 0.0),
             FakeProcess(12, 11, "rustc", 0.0, 0.0),
-            FakeProcess(20, 1, "node", 0.0, 0.0, cmdline=("node", "/a/op-nx/start-cache-server/main.js")),
+            FakeProcess(20, 1, "node", 0.0, 0.0, command=("node", "/a/op-nx/start-cache-server/main.js")),
             FakeProcess(21, 20, "gtar", 0.0, 0.0),
             FakeProcess(40, 1, "bash", 0.0, 0.0),
-            FakeProcess(41, 40, "node", 0.0, 0.0, cmdline=("node", "/a/op-nx/start-cache-server/main.js")),
+            FakeProcess(41, 40, "node", 0.0, 0.0, command=("node", "/a/op-nx/start-cache-server/main.js")),
         ]
         taken = sampler.sample(table, {}, me=999, previous=100.0, tick=1.0)
         # rustc hides cargo and bash; gtar hides the sidecar that runs it; a bare sidecar hides nothing above it.
@@ -884,10 +897,7 @@ class ListingAndRecorderEdgeTests(unittest.TestCase):
         table.processes = [flaky]
         sampler.sample(table, seen, me=999, previous=100.0, tick=1.0)
 
-        def refuse() -> FakeTimes:
-            raise OSError("access denied")
-
-        flaky.cpu_times = refuse  # ty: ignore[invalid-assignment] — the OS refusing a read, as psutil raises it
+        flaky.unreadable_cpu = True
         second = sampler.sample(table, seen, me=999, previous=101.0, tick=1.0)
         self.assertEqual(second.cpu.get(models.Category.GIT, 0.0), 0.0)
         self.assertEqual(seen[50].last_cpu, 0.4)
@@ -904,3 +914,93 @@ class ListingAndRecorderEdgeTests(unittest.TestCase):
             replay.parse_prs([{"pr": 1, "files": []}, {"pr": 1, "files": []}])
         with self.assertRaisesRegex(models.Invalid, "canonically"):
             models.history({"01": {}})
+
+
+LINES = (HERE / "data/logs/run-43152201170-lines.txt").read_text(encoding="utf-8").splitlines()
+
+
+class RealLogLineTests(unittest.TestCase):
+    """Each log format jobprofile.py reads, held to lines real job logs printed (data/logs/README.md)."""
+
+    def texts(self) -> list[str]:
+        return [line.text for raw in LINES for line in prof.parse_log(raw)]
+
+    def test_every_real_line_has_a_github_timestamp(self):
+        self.assertEqual(len(self.texts()), len(LINES))
+
+    def test_nx_headers_executed_and_replayed_are_read(self):
+        headers = [m for t in self.texts() if (m := prof.HEADER.match(t))]
+        self.assertTrue(any(m.group("remote") for m in headers))
+        self.assertTrue(any(not m.group("remote") for m in headers))
+        self.assertTrue(all(models.TASK_ID.fullmatch(m.group("task")) for m in headers))
+
+    def test_test_starts_nextest_events_and_cargo_build_lines_are_read(self):
+        texts = self.texts()
+        self.assertTrue(any(prof.TEST_START.match(t) for t in texts))
+        nextest = [m for t in texts if (m := prof.NEXTEST_DONE.match(t)) and m.group("secs")]
+        self.assertTrue(nextest and all("::" in m.group("name") and "$" in m.group("name") for m in nextest))
+        builds = [
+            cm for t in texts if (m := prof.PREFIXED.match(t)) and (cm := prof.CARGO_BUILD.match(m.group("text")))
+        ]
+        self.assertEqual({cm.group("word") for cm in builds}, {"Compiling", "Finished"})
+        self.assertTrue(any(cm.group("profile") for cm in builds if cm.group("word") == "Finished"))
+        self.assertTrue(
+            any((m := prof.PREFIXED.match(t)) and m.group("text").startswith("Blocking waiting") for t in texts)
+        )
+
+    def test_the_cache_size_and_stored_entries_are_read(self):
+        texts = self.texts()
+        self.assertTrue(any(prof.CACHE_SIZE.search(t) for t in texts))
+        stored = [m for t in texts if (m := prof.STORED.search(t))]
+        self.assertEqual(len(stored), 2)
+
+
+class RemainingPathTests(unittest.TestCase):
+    def test_without_a_log_group_near_it_the_test_step_is_the_step_apis_own_interval(self):
+        log = "\n".join([*LOG.splitlines()[:5], *LOG.splitlines()[6:]])  # the step's own group is gone
+        p = prof.profile_job(models.Job.parse(JOB), log, models.NxExecution.report(EXECUTIONS))
+        self.assertEqual(
+            p.test_step,
+            prof.Interval(models.timestamp("2026-11-12T04:01:05Z", "t"), models.timestamp("2026-11-12T04:09:05Z", "t")),
+        )
+
+    def test_a_build_target_is_compile_for_its_whole_interval(self):
+        tasks = [
+            {
+                "task": "onetaskgraph:build",
+                "result": "executed",
+                "started_at": "2026-11-12T04:01:06.000Z",
+                "finished_at": "2026-11-12T04:02:06.000Z",
+            },
+            {
+                "task": "onetaskgraph:coverage-build",
+                "result": "executed",
+                "started_at": "2026-11-12T04:02:06.000Z",
+                "finished_at": "2026-11-12T04:02:36.000Z",
+            },
+        ]
+        lines = LOG.splitlines()
+        steps_only = "\n".join([*lines[:6], *lines[-2:]])  # the step groups and no task header
+        p = prof.profile_job(models.Job.parse(JOB), steps_only, models.NxExecution.report({"tasks": tasks}))
+        self.assertAlmostEqual(p.buckets[prof.Bucket.COMPILE_PLAIN], 60, places=3)
+        self.assertAlmostEqual(p.buckets[prof.Bucket.COMPILE_INSTRUMENTED], 30, places=3)
+
+    def test_a_process_whose_command_line_cannot_be_read_is_classified_by_its_name(self):
+        table = FakeProcessTable()
+        table.processes = [FakeProcess(60, 1, "node", 0.0, 0.0, unreadable_command=True)]
+        taken = sampler.sample(table, {}, me=999, previous=100.0, tick=1.0)
+        self.assertEqual(taken.alive[60].category, models.Category.NODE)
+
+    def test_help_an_explicit_format_and_a_nextest_mode_pass_through(self):
+        root = scratch(self)
+        binary = RunnerPassthroughTests().binary(root)
+        record = root / "tests.jsonl"
+        for args, env in (
+            (["--help"], {}),
+            (["--format=pretty"], {}),
+            (["-q"], {"NEXTEST_EXECUTION_MODE": "process-per-test"}),
+        ):
+            proc = command("testrunner.py", str(binary), *args, env={"SPIKE_TEST_RECORD": str(record), **env})
+            self.assertEqual((proc.returncode, proc.stdout.strip()), (7, "args=" + " ".join(args)))
+        self.assertFalse(record.exists())
+        self.assertEqual(len((root / "tests.jsonl.spawns").read_text().splitlines()), 3)

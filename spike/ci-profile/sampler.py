@@ -74,6 +74,8 @@ NAMED = {
     "just": Category.JUST,
 }
 USAGE_EXIT = 2
+MAX_ANCESTRY = 64  # a parent chain longer than this is a cycle in a racing process table, not a tree
+SAME_PROCESS = 0.01  # seconds: a pid whose start time moved further than this is a new process
 
 
 def node_category(command_line: str) -> Category:
@@ -85,7 +87,7 @@ def node_category(command_line: str) -> Category:
     return Category.NODE
 
 
-def classify(name: str, cmdline: list[str]) -> Category:
+def classify(name: str, cmdline: list[str]) -> Category:  # noqa: PLR0911 — one return per case of a single match
     base = name.lower().removesuffix(".exe")
     match base:
         case _ if base.startswith("rustc"):
@@ -171,7 +173,7 @@ def leaves(alive: dict[int, Alive]) -> dict[Category, int]:
         if process.category is Category.NX_CACHE_SIDECAR:  # a background server, never anyone's work
             continue
         parent, hops = process.parent, 0
-        while parent in alive and hops < 64:
+        while parent in alive and hops < MAX_ANCESTRY:
             has_working_child.add(parent)
             parent, hops = alive[parent].parent, hops + 1
     counts: dict[Category, int] = {}
@@ -209,7 +211,7 @@ def sample(psutil: ProcessTable, seen: dict[int, Seen], me: int, previous: float
         if pid in (me, 0):
             continue
         known = seen.get(pid)
-        if known is None or abs(known.created - created) > 0.01:
+        if known is None or abs(known.created - created) > SAME_PROCESS:
             try:
                 command = proc.cmdline()
             except (psutil.Error, OSError):

@@ -65,6 +65,7 @@ from models import (  # noqa: E402
 )
 
 USAGE_EXIT, FLOOR_EXIT, MISSING_EXIT = 2, 3, 4
+QUARTILE_MINIMUM = 2  # statistics.quantiles needs two observations
 
 
 class JobMissing(LookupError):
@@ -167,8 +168,7 @@ class RunSummary:
         return {"run": self.run, "head_sha": self.head_sha, "jobs": {v.name: v.to_json() for v in self.jobs}}
 
 
-def print_job(view: JobView, top: int) -> None:
-    name, p, executions, division, times = view.name, view.profile, view.from_executions, view.division, view.times
+def print_categories(name: str, p: prof.JobProfile, executions: bool) -> None:
     executed = [t for t in p.tasks if not t.result.replayed]
     print(
         f"\n== {name} (job {p.job.id}, {p.job.conclusion}) wall {p.wall / 60:.2f} min; Nx tasks: {len(executed)} run, "
@@ -179,31 +179,35 @@ def print_job(view: JobView, top: int) -> None:
         print(f"  {k.value:32s} {minutes(v)}  {100 * v / p.wall:5.1f}%")
     print(f"  {'(sum)':32s} {minutes(sum(p.buckets.values()))}")
     if p.rust_cache:
-        print(
-            f"  rust-cache restore: {p.rust_cache.seconds} s, {p.rust_cache.size}, "
-            f"{'hit' if p.rust_cache.hit else 'miss'}"
-        )
+        hit = "hit" if p.rust_cache.hit else "miss"
+        print(f"  rust-cache restore: {p.rust_cache.seconds} s, {p.rust_cache.size}, {hit}")
     if p.stored:
         print(f"  Nx sidecar: stored {p.stored.entries} entries ({p.stored.bytes} bytes), replayed {p.stored.replayed}")
+
+
+def print_tasks(p: prof.JobProfile, top: int) -> None:
     print("  Nx tasks by share of wall clock (own seconds, result):")
     for task_id, share in sorted(p.task_share.items(), key=lambda kv: -kv[1])[:top]:
         t = next(x for x in p.tasks if x.id == task_id)
         compiled = f", compile {t.compile_end - t.start:.0f}s" if t.compile_end else ""
         print(f"    {task_id:55s} {minutes(share)} min  ({t.end - t.start:6.0f}s {t.result.value}{compiled})")
     if p.test_step:
-        print(
-            f"  latest-finishing chain ({len(p.latest_chain)} links, "
-            f"{sum(t.end - t.start for t in p.latest_chain) / 60:.2f} min):"
-        )
+        chain = sum(t.end - t.start for t in p.latest_chain) / 60
+        print(f"  latest-finishing chain ({len(p.latest_chain)} links, {chain:.2f} min):")
         for t in p.latest_chain:
             print(f"    +{(t.start - p.test_step.start) / 60:5.2f} → +{(t.end - p.test_step.start) / 60:5.2f}  {t.id}")
-    if division:
-        print(f"  sampler: test step {sum(division.seconds.values()) / 60:.2f} min by leaf process category:")
-        for k, v in sorted(division.seconds.items(), key=lambda kv: -kv[1]):
-            print(f"    {k:40s} {minutes(v)}  {100 * v / p.wall:5.1f}% of job")
-        print("  sampler: processes that ended in the test step (count, summed lifetime s, CPU s):")
-        for k, totals in sorted(division.exits.items(), key=lambda kv: -kv[1].lifetime):
-            print(f"    {k.value:20s} {totals.count:6d} {totals.lifetime:9.1f} {totals.cpu:8.1f}")
+
+
+def print_division(division: prof.ProcessDivision, wall: Seconds) -> None:
+    print(f"  sampler: test step {sum(division.seconds.values()) / 60:.2f} min by leaf process category:")
+    for k, v in sorted(division.seconds.items(), key=lambda kv: -kv[1]):
+        print(f"    {k:40s} {minutes(v)}  {100 * v / wall:5.1f}% of job")
+    print("  sampler: processes that ended in the test step (count, summed lifetime s, CPU s):")
+    for k, totals in sorted(division.exits.items(), key=lambda kv: -kv[1].lifetime):
+        print(f"    {k.value:20s} {totals.count:6d} {totals.lifetime:9.1f} {totals.cpu:8.1f}")
+
+
+def print_tests(times: TestTimes, top: int) -> None:
     if times.per_binary:
         print(f"  test binaries ({len(times.per_binary)}, seconds):")
         for binary, secs in sorted(times.per_binary.items(), key=lambda kv: -kv[1])[:top]:
@@ -212,6 +216,14 @@ def print_job(view: JobView, top: int) -> None:
         print(f"  slowest tests (of {times.count}):")
         for t in times.slowest:
             print(f"    {t.seconds:7.1f}s  {t.qualified[:110]}")
+
+
+def print_job(view: JobView, top: int) -> None:
+    print_categories(view.name, view.profile, view.from_executions)
+    print_tasks(view.profile, top)
+    if view.division:
+        print_division(view.division, view.profile.wall)
+    print_tests(view.times, top)
 
 
 async def profile_run(gh: ghcache.GitHub, run_id: RunId, wanted: list[str], as_json: bool, top: int) -> int:
@@ -262,7 +274,7 @@ async def durations(gh: ghcache.GitHub, since: str, until: str) -> int:
     print(f"completed non-release PR runs created {since}..{until}: {len(runs)}; successful jobs:")
     for name in JobName:
         values = per[name.value]
-        if len(values) >= 2:
+        if len(values) >= QUARTILE_MINIMUM:
             q = statistics.quantiles(values, n=4)
             print(
                 f"  {name.value:13s} n={len(values):3d} median {statistics.median(values):5.1f} min  "
