@@ -1,0 +1,23 @@
+30 pull requests, each PR's first CI run
+job           tasks run  replayed  mean wall
+  test-linux        1211       166    30.7 min
+  test-macos         605        39    25.8 min
+  test-windows       617        26    24.1 min
+
+executed tasks' wall share by the most specific kind of changed input they matched (minutes over all PRs):
+  test-linux: dep-src 208; (not keyed on the diff) 183; scripts 106; own-tests 90; own-src 58; .github 57; dep-manifest 46; dep-tests 31; own-manifest 30; (not resolved) 11; workspace-manifest 11; dep-other 7; non-semantic-global 6; own-other 5; sdks 1; other 0
+  test-macos: scripts 160; (not keyed on the diff) 135; dep-src 114; own-tests 78; own-src 43; dep-manifest 38; (not resolved) 33; .github 23; dep-tests 20; own-manifest 18; workspace-manifest 11; own-other 7; sdks 2; dep-other 0
+  test-windows: own-tests 115; dep-src 114; (not keyed on the diff) 106; scripts 100; own-src 48; (not resolved) 34; own-manifest 23; dep-tests 22; dep-manifest 18; .github 14; own-other 9; workspace-manifest 9; sdks 1; dep-other 0
+
+option: predicted job shortening, the replayed tasks' intervals moved through each run's critical path,
+  total minutes over the PR jobs with intervals (and per PR)
+  non-semantic-globals-out-of-rust-keys: test-linux 0.1 (0.00/PR)  test-macos 0.0 (0.00/PR)  test-windows 0.0 (0.00/PR)
+  dependents-skip-dependency-tests: test-linux 0.4 (0.01/PR)  test-macos 1.0 (0.03/PR)  test-windows 1.3 (0.04/PR)
+  distribution-only-when-publishable-changes: test-linux 1.5 (0.05/PR)  test-macos 11.2 (0.37/PR)  test-windows 8.3 (0.28/PR)
+  (PR jobs with intervals: test-linux 30, test-macos 30, test-windows 30)
+
+option: minutes of wall share the option would have replayed (attribution, not job shortening),
+  total over the PRs (and per PR)
+  non-semantic-globals-out-of-rust-keys: test-linux 5.8 (0.19/PR)  test-macos 0.0 (0.00/PR)  test-windows 0.0 (0.00/PR)
+  dependents-skip-dependency-tests: test-linux 13.7 (0.46/PR)  test-macos 8.1 (0.27/PR)  test-windows 16.1 (0.54/PR)
+  distribution-only-when-publishable-changes: test-linux 1.5 (0.05/PR)  test-macos 17.2 (0.57/PR)  test-windows 13.3 (0.44/PR)

@@ -40,6 +40,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # E402: models sits beside this file and is found through the sys.path entry above.
+from critical_path import predicted_shortening  # noqa: E402
 from models import FirstRunRecord, Invalid, JobName, TaskId, history, items, obj, positive, take, task_id  # noqa: E402
 
 MERGED_3956 = 3956
@@ -235,6 +236,12 @@ class ReplayResult:
     prs: int = 0
     totals: dict[JobName, JobTotals] = field(default_factory=lambda: {j: JobTotals() for j in JobName})
     saved: dict[Option, dict[JobName, float]] = field(default_factory=lambda: {o: defaultdict(float) for o in Option})
+    # Predicted job shortening: the replayed tasks' whole intervals moved through the run's own
+    # critical path (critical_path.py); only PR jobs whose every executed task has an interval.
+    shortened: dict[Option, dict[JobName, float]] = field(
+        default_factory=lambda: {o: defaultdict(float) for o in Option}
+    )
+    predicted_jobs: dict[JobName, int] = field(default_factory=lambda: defaultdict(int))
     by_kind: dict[JobName, dict[str, float]] = field(default_factory=lambda: {j: defaultdict(float) for j in JobName})
     reasons: dict[int, dict[JobName, dict[TaskId, TaskReason]]] = field(default_factory=dict)
 
@@ -243,6 +250,8 @@ class ReplayResult:
             "prs": self.prs,
             "totals": {j.value: vars(t) for j, t in self.totals.items()},
             "saved_s": {o.value: {j.value: v for j, v in per.items()} for o, per in self.saved.items()},
+            "shortened_s": {o.value: {j.value: v for j, v in per.items()} for o, per in self.shortened.items()},
+            "predicted_jobs": {j.value: n for j, n in self.predicted_jobs.items()},
             "match_kinds_s": {j.value: dict(v) for j, v in self.by_kind.items()},
             "rows": {
                 str(pr): {
@@ -274,6 +283,7 @@ def replay(
             totals.replayed += len(record.tasks) - len(executed)
             totals.wall += record.wall_s
             reasons = result.reasons[pr][job] = {}
+            replayed_by: dict[Option, dict[str, float]] = {o: {} for o in Option}
             for task, ran in executed.items():
                 if task not in keys:
                     result.by_kind[job]["(not resolved)"] += ran.share_s
@@ -289,6 +299,12 @@ def replay(
                 for option in Option:
                     if diff.replays(option, task, matched):
                         result.saved[option][job] += ran.share_s
+                        replayed_by[option][str(task)] = ran.seconds
+            if executed and all(r.start is not None and r.end is not None for r in executed.values()):
+                intervals = {str(t): (float(r.start or 0.0), float(r.end or 0.0)) for t, r in executed.items()}
+                result.predicted_jobs[job] += 1
+                for option in Option:
+                    result.shortened[option][job] += predicted_shortening(intervals, replayed_by[option])
     return result
 
 
@@ -305,7 +321,18 @@ def report(result: ReplayResult) -> None:
         print(
             f"  {job.value}: " + "; ".join(f"{k} {v / 60:.0f}" for k, v in sorted(parts.items(), key=lambda kv: -kv[1]))
         )
-    print("\noption: minutes of wall share the option would have replayed, total over the PRs (and per PR)")
+    print("\noption: predicted job shortening, the replayed tasks' intervals moved through each run's critical path,")
+    print("  total minutes over the PR jobs with intervals (and per PR)")
+    for option, per_job in result.shortened.items():
+        print(
+            f"  {option.value}: "
+            + "  ".join(
+                f"{job.value} {per_job.get(job, 0) / 60:.1f} ({per_job.get(job, 0) / 60 / n:.2f}/PR)" for job in JobName
+            )
+        )
+    print(f"  (PR jobs with intervals: {', '.join(f'{j.value} {result.predicted_jobs.get(j, 0)}' for j in JobName)})")
+    print("\noption: minutes of wall share the option would have replayed (attribution, not job shortening),")
+    print("  total over the PRs (and per PR)")
     for option, per_job in result.saved.items():
         print(
             f"  {option.value}: "

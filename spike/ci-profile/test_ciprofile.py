@@ -517,6 +517,21 @@ class ReplayCommandTests(unittest.TestCase):
         self.assertEqual(saved["dependents-skip-dependency-tests"]["test-macos"], 120)
         self.assertEqual(saved["distribution-only-when-publishable-changes"]["test-macos"], 240)
 
+    def test_a_replayed_task_off_the_critical_path_shortens_the_job_by_nothing_however_large_its_share(self):
+        history = json.loads((self.root / "history.json").read_text())
+        tasks = history["4000"]["jobs"]["test-macos"]["tasks"]
+        tasks["onetaskgraph-e2e:test"].update({"start": 0.0, "end": 300.0})  # beside the chain
+        tasks["scripts:distribution-test"].update({"start": 0.0, "end": 400.0})  # the whole chain
+        (self.root / "history.json").write_text(json.dumps(history))
+        proc = self.run_replay("--json", str(self.root / "out.json"))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        out = json.loads((self.root / "out.json").read_text())
+        self.assertEqual(out["saved_s"]["dependents-skip-dependency-tests"]["test-macos"], 120)  # its wall share
+        self.assertEqual(out["shortened_s"]["dependents-skip-dependency-tests"]["test-macos"], 0.0)
+        self.assertEqual(out["shortened_s"]["distribution-only-when-publishable-changes"]["test-macos"], 100.0)
+        self.assertEqual(out["predicted_jobs"], {"test-macos": 1})
+        self.assertIn("(attribution, not job shortening)", proc.stdout)
+
     def test_an_input_of_the_wrong_shape_exits_2_naming_it(self):
         (self.root / "prs.json").write_text(json.dumps([{"pr": 4000, "files": "crates/x"}]))
         proc = self.run_replay()

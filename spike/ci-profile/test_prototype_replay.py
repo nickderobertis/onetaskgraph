@@ -16,7 +16,7 @@ HERE = Path(__file__).resolve().parent
 DATA = HERE / "data"
 sys.path.insert(0, str(HERE))
 
-import prototype_replay  # noqa: E402
+import critical_path  # noqa: E402
 
 
 def command(*args: str) -> subprocess.CompletedProcess:
@@ -45,22 +45,20 @@ def write_summary(
 class CriticalPathTests(unittest.TestCase):
     def test_a_changed_task_on_the_chain_moves_the_job_end_until_another_task_ends_last(self):
         timeline = {"build": (0.0, 100.0), "e2e": (100.0, 700.0), "other": (50.0, 600.0)}
-        self.assertEqual(prototype_replay.latest_chain(timeline), ["build", "e2e"])
-        self.assertEqual(prototype_replay.predicted_shortening(timeline, {"e2e": 60.0}), 60.0)
-        self.assertEqual(prototype_replay.predicted_shortening(timeline, {"e2e": 300.0}), 100.0)  # `other` ends at 600
-        self.assertEqual(prototype_replay.predicted_shortening(timeline, {"e2e": -30.0}), -30.0)
+        self.assertEqual(critical_path.latest_chain(timeline), ["build", "e2e"])
+        self.assertEqual(critical_path.predicted_shortening(timeline, {"e2e": 60.0}), 60.0)
+        self.assertEqual(critical_path.predicted_shortening(timeline, {"e2e": 300.0}), 100.0)  # `other` ends at 600
+        self.assertEqual(critical_path.predicted_shortening(timeline, {"e2e": -30.0}), -30.0)
 
     def test_a_changed_task_off_the_chain_shortens_nothing_unless_it_grows_past_the_end(self):
         timeline = {"build": (0.0, 100.0), "e2e": (100.0, 700.0), "other": (50.0, 600.0)}
-        self.assertEqual(prototype_replay.predicted_shortening(timeline, {"other": 200.0}), 0.0)
-        self.assertEqual(prototype_replay.predicted_shortening(timeline, {"other": -150.0}), -50.0)
+        self.assertEqual(critical_path.predicted_shortening(timeline, {"other": 200.0}), 0.0)
+        self.assertEqual(critical_path.predicted_shortening(timeline, {"other": -150.0}), -50.0)
 
     def test_a_task_the_run_did_not_have_runs_beside_the_gate_from_its_start(self):
         timeline = {"build": (0.0, 100.0), "core": (100.0, 300.0)}
-        self.assertEqual(prototype_replay.predicted_shortening(timeline, {"core": 10.0, "template:test": -50.0}), 10.0)
-        self.assertEqual(
-            prototype_replay.predicted_shortening(timeline, {"core": 10.0, "template:test": -400.0}), -100.0
-        )
+        self.assertEqual(critical_path.predicted_shortening(timeline, {"core": 10.0, "template:test": -50.0}), 10.0)
+        self.assertEqual(critical_path.predicted_shortening(timeline, {"core": 10.0, "template:test": -400.0}), -100.0)
 
 
 class CommandTests(unittest.TestCase):

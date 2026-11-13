@@ -59,6 +59,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # E402: the harness's own modules are found through the sys.path entry above.
+from critical_path import Interval, latest_chain, predicted_shortening, span  # noqa: E402
 from models import FirstRunRecord, Invalid, JobName, history, items, obj, positive, seconds  # noqa: E402
 from replay import parse_prs  # noqa: E402
 
@@ -74,9 +75,6 @@ MOVED = re.compile(
 CORE = re.compile(r"crates/onetaskgraph-core/")
 TYPICAL = re.compile(r"crates/[^/]+/(src/|tests/|build\.rs$|Cargo\.toml$)")
 WORK_BINARY = re.compile(r"^instrumented:(?P<crate>[\w-]+)::")
-SHORTEST_LINK = 0.5  # seconds: as jobprofile's chain, a replay holds no slot worth chaining
-
-Interval = tuple[float, float]
 
 
 def run_ids(text: str) -> list[int]:
@@ -84,24 +82,6 @@ def run_ids(text: str) -> list[int]:
     if not ids or len(set(ids)) != len(ids):
         raise argparse.ArgumentTypeError("a comma-separated list of distinct run ids")
     return ids
-
-
-def latest_chain(intervals: dict[str, Interval]) -> list[str]:
-    """Walking back from the last end, the task finishing latest before each pointer (jobprofile's rule)."""
-    pool = {t: iv for t, iv in intervals.items() if iv[1] - iv[0] > SHORTEST_LINK}
-    if not pool:
-        return []
-    pointer, chain = max(e for _, e in pool.values()), []
-    while before := [t for t, (s, e) in pool.items() if e <= pointer + 1 and s < pointer - 0.5]:
-        link = max(before, key=lambda t: (pool[t][1], -pool[t][0]))
-        chain.append(link)
-        pointer = pool.pop(link)[0]
-    return list(reversed(chain))
-
-
-def span(intervals: dict[str, Interval], chain: list[str] | None = None) -> float:
-    picked = [intervals[t] for t in chain] if chain is not None else list(intervals.values())
-    return max(e for _, e in picked) - min(s for s, _ in picked) if picked else 0.0
 
 
 @dataclass(frozen=True)
@@ -223,20 +203,6 @@ def changed_tasks(side: str, files: frozenset[str], executed: set[str], elapsed:
             changed.update({t: v for t, v in elapsed.items() if t.startswith(TEMPLATE_PREFIX)})
         return changed
     raise Invalid(f"no replay rule for side {side!r}")
-
-
-def predicted_shortening(intervals: dict[str, Interval], changed: dict[str, float]) -> float:
-    """How much sooner the job's last task ends when each changed task finishes `changed[t]` sooner."""
-    if not intervals:
-        return 0.0
-    end = max(e for _, e in intervals.values())
-    first = min(s for s, _ in intervals.values())
-    chain = set(latest_chain(intervals))
-    chain_end = end - sum(v for t, v in changed.items() if t in chain)
-    others = [e - changed.get(t, 0.0) for t, (_, e) in intervals.items() if t not in chain]
-    # A task the PR's run did not have (the split's new crate) runs beside the gate from its start.
-    added = [first - v for t, v in changed.items() if t not in intervals]
-    return end - max([chain_end, *others, *added])
 
 
 def replay(history_raw: object, prs_raw: object, measured: dict) -> list[str]:
