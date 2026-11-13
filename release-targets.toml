@@ -44,8 +44,8 @@ schema_version = 2
 probe = "scripts/release-probe.sh"
 
 # The engine, the plugin crates and the binary, as a Rust dependent takes them.
-# All eight publish together at the one `[workspace.package]` version, which is
-# why the seven siblings are covered rather than declared.
+# All nine publish together at the one `[workspace.package]` version, which is
+# why the eight siblings are covered rather than declared.
 [[target]]
 id = "crate:onetaskgraph"
 name = "crate"
@@ -54,6 +54,7 @@ published_by = ".github/workflows/release.yml — the publish job, which publish
 manifest = "crates/onetaskgraph/Cargo.toml"
 covers = [
     "crate:onetaskgraph-plugin-api",
+    "crate:onetaskgraph-template",
     "crate:onetaskgraph-in-memory",
     "crate:onetaskgraph-local-md",
     "crate:onetaskgraph-linear",

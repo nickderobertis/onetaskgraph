@@ -18,6 +18,10 @@ name = "onetaskgraph-plugin-api"
 git_tag_name = "onetaskgraph-plugin-api-v{{ version }}"
 git_release_enable = false
 [[package]]
+name = "onetaskgraph-template"
+git_tag_name = "onetaskgraph-template-v{{ version }}"
+git_release_enable = false
+[[package]]
 name = "onetaskgraph-in-memory"
 git_tag_name = "onetaskgraph-in-memory-v{{ version }}"
 git_release_enable = false
