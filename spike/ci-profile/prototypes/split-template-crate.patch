@@ -600,6 +600,55 @@ index 632e3116..d594e91e 100755
          "Not a store: it holds no items and no query is answered from it. It is the order the "
          "release before the YAML crate moved asked each template under "
          "`tests/fixtures/template-front-matter` its variables in, and "
+diff --git a/scripts/coverage-read-sets.json b/scripts/coverage-read-sets.json
+index cbd3fae0..a71aa6c7 100644
+--- a/scripts/coverage-read-sets.json
++++ b/scripts/coverage-read-sets.json
+@@ -18,10 +18,12 @@
+       "config/registry-interfaces.toml"
+     ],
+     "onetaskgraph-core": ["README.md", "docs/metadata.md"],
++    "onetaskgraph-template": ["README.md"],
+     "onetaskgraph-e2e": [
+       "crates/onetaskgraph/src/**/*",
+       "crates/onetaskgraph/build.rs",
+       "crates/onetaskgraph-core/src/**/*",
++      "crates/onetaskgraph-template/src/**/*",
+       "crates/onetaskgraph-core/build.rs",
+       "crates/onetaskgraph-github-projects/src/**/*",
+       "crates/onetaskgraph-github-projects/build.rs",
+@@ -64,6 +66,7 @@
+       "crates/onetaskgraph/src/**/*",
+       "crates/onetaskgraph/build.rs",
+       "crates/onetaskgraph-core/src/**/*",
++      "crates/onetaskgraph-template/src/**/*",
+       "crates/onetaskgraph-core/build.rs",
+       "crates/onetaskgraph-github-projects/**/*",
+       "!crates/onetaskgraph-github-projects/Cargo.toml",
+@@ -110,6 +113,7 @@
+       "crates/onetaskgraph/src/**/*",
+       "crates/onetaskgraph/build.rs",
+       "crates/onetaskgraph-core/src/**/*",
++      "crates/onetaskgraph-template/src/**/*",
+       "crates/onetaskgraph-core/build.rs",
+       "crates/onetaskgraph-github-projects/src/**/*",
+       "crates/onetaskgraph-github-projects/build.rs",
+@@ -150,6 +154,7 @@
+       "crates/onetaskgraph/src/**/*",
+       "crates/onetaskgraph/build.rs",
+       "crates/onetaskgraph-core/src/**/*",
++      "crates/onetaskgraph-template/src/**/*",
+       "crates/onetaskgraph-core/build.rs",
+       "crates/onetaskgraph-github-projects/src/**/*",
+       "crates/onetaskgraph-github-projects/build.rs",
+@@ -176,6 +181,7 @@
+     "coverage-spawned-binary": [
+       "crates/onetaskgraph/src/**/*",
+       "crates/onetaskgraph-core/src/**/*",
++      "crates/onetaskgraph-template/src/**/*",
+       "crates/onetaskgraph-plugin-api/src/**/*",
+       "crates/onetaskgraph-github-projects/src/**/*",
+       "crates/onetaskgraph-linear/src/**/*",
 diff --git a/scripts/product_versions.py b/scripts/product_versions.py
 index db5724ae..dc6827aa 100644
 --- a/scripts/product_versions.py

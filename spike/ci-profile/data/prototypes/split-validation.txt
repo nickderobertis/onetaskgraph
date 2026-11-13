@@ -19,3 +19,22 @@ What the repair adds to the first patch: onetaskgraph-template in release-plz.to
 release-targets.toml's covered crates, scripts/product_versions.py's versioned manifests,
 scripts/release_cd.py's publication order (after the plugin API, before the engine), and
 workspace/project.json's implicitDependencies and coverage dependencies.
+
+Second repair, after hosted runs #4030/#4031 showed github-nx-policy:coverage-read-set failing on
+Linux (scripts/coverage-read-sets.json had no entry for the new unit, so workspace:test, which waits
+on it, did not run): the patch now lists onetaskgraph-template (reading README.md) and adds the new
+crate's sources wherever the binary's engine sources are listed. Validated locally on 7029a947 with
+the patch applied, before the Linux-only split runs were opened:
+nx run github-nx-policy:coverage-read-set --skip-nx-cache: pass 11, fail 0
+nx run workspace:test --skip-nx-cache: NX   Successfully ran target test for project workspace and 3 tasks it depends on
+bash scripts/ci-job.sh test-linux (the Linux gate itself, marker base, NX_SKIP_NX_CACHE=true, no
+  credentials): every phase succeeded but sdk-typescript:coverage and sdk-python:coverage, which
+  fail identically on the unpatched session head 7029a947 on this host (the same messages, e.g.
+  "protocol version 2 has no method get_project") and passed on both hosted split runs of
+  #4030/#4031, so they are this host's, not the patch's.
+github-nx-policy's other suites, run on this host with and without the patch, fail 53 tests either
+way (real-Nx fixtures this host does not reproduce); one more fails only with the patch,
+"Nx's own hash file details retain every original cached target's file input", because it holds
+onetaskgraph-core's inputs to hashes recorded at a historical commit and the split moves files out
+of that crate. No engine-change PR's gate selects it (the controls did not run it); a split that
+landed would have to re-record that fixture.
