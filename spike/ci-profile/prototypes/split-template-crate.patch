@@ -1,0 +1,564 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index 988a3c97..87db9987 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -1327,6 +1327,7 @@ dependencies = [
+  "onetaskgraph-linear",
+  "onetaskgraph-local-md",
+  "onetaskgraph-plugin-api",
++ "onetaskgraph-template",
+  "privateterms",
+  "pulldown-cmark",
+  "schemars",
+@@ -1571,6 +1572,22 @@ dependencies = [
+  "serde_json",
+ ]
+ 
++[[package]]
++name = "onetaskgraph-template"
++version = "0.14.14"
++dependencies = [
++ "jsonschema",
++ "minijinja",
++ "onetaskgraph-plugin-api",
++ "schemars",
++ "serde",
++ "serde-saphyr",
++ "serde_json",
++ "sha2",
++ "tempfile",
++ "thiserror 2.0.20",
++]
++
+ [[package]]
+ name = "openssl"
+ version = "0.10.81"
+diff --git a/Cargo.toml b/Cargo.toml
+index 4bb584d4..f7c38c9d 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -19,6 +19,7 @@ authors = ["Nick DeRobertis"]
+ # publish a crate whose siblings resolve elsewhere (scripts/crate-sibling-resolution.sh).
+ onetaskgraph-plugin-api = { path = "crates/onetaskgraph-plugin-api", version = "=0.14.14" }
+ onetaskgraph-core = { path = "crates/onetaskgraph-core", version = "=0.14.14" }
++onetaskgraph-template = { path = "crates/onetaskgraph-template", version = "=0.14.14" }
+ onetaskgraph-in-memory = { path = "crates/onetaskgraph-in-memory", version = "=0.14.14" }
+ onetaskgraph-local-md = { path = "crates/onetaskgraph-local-md", version = "=0.14.14" }
+ onetaskgraph-linear = { path = "crates/onetaskgraph-linear", version = "=0.14.14" }
+diff --git a/crates/onetaskgraph-core/Cargo.toml b/crates/onetaskgraph-core/Cargo.toml
+index 42fd431c..02fcdfdf 100644
+--- a/crates/onetaskgraph-core/Cargo.toml
++++ b/crates/onetaskgraph-core/Cargo.toml
+@@ -32,6 +32,7 @@ onetaskgraph-in-memory.workspace = true
+ onetaskgraph-linear = { workspace = true, optional = true }
+ onetaskgraph-local-md.workspace = true
+ onetaskgraph-plugin-api.workspace = true
++onetaskgraph-template.workspace = true
+ jsonschema.workspace = true
+ minijinja.workspace = true
+ # A public projection's content is read for the local links it could not carry.
+diff --git a/crates/onetaskgraph-core/project.json b/crates/onetaskgraph-core/project.json
+index 29beaf59..1d79179e 100644
+--- a/crates/onetaskgraph-core/project.json
++++ b/crates/onetaskgraph-core/project.json
+@@ -9,7 +9,8 @@
+     "onetaskgraph-in-memory",
+     "onetaskgraph-linear",
+     "onetaskgraph-local-md",
+-    "onetaskgraph-plugin-api"
++    "onetaskgraph-plugin-api",
++    "onetaskgraph-template"
+   ],
+   "namedInputs": {
+     "cargoInputs": [
+diff --git a/crates/onetaskgraph-core/src/lib.rs b/crates/onetaskgraph-core/src/lib.rs
+index 4ffe2150..1f11f346 100644
+--- a/crates/onetaskgraph-core/src/lib.rs
++++ b/crates/onetaskgraph-core/src/lib.rs
+@@ -47,7 +47,7 @@ pub mod section_links;
+ pub mod subprocess;
+ pub mod task_projection;
+ // llmlint: ignore[code_lands_in_the_domain_that_owns_it] The task that introduced templates fixes their API at this crate's root; the head of `template/mod.rs` states why.
+-pub mod template;
++pub use onetaskgraph_template as template;
+ pub mod version;
+ mod yaml;
+ 
+diff --git a/crates/onetaskgraph-core/src/yaml.rs b/crates/onetaskgraph-core/src/yaml.rs
+index f94c6206..d17715af 100644
+--- a/crates/onetaskgraph-core/src/yaml.rs
++++ b/crates/onetaskgraph-core/src/yaml.rs
+@@ -21,42 +21,3 @@ fn options() -> serde_saphyr::Options {
+ pub(crate) fn from_str<T: DeserializeOwned>(text: &str) -> Result<T, serde_saphyr::Error> {
+     serde_saphyr::from_str_with_options(text, options())
+ }
+-
+-/// `text` read as one YAML value, refusing any text after it: what a reader would otherwise
+-/// drop without a word, `title` after `[bracketed]`, is named in the refusal.
+-pub(crate) fn one_value<T: DeserializeOwned>(text: &str) -> Result<Option<T>, String> {
+-    let mut documents: Vec<T> =
+-        serde_saphyr::from_multiple_with_options(text, options()).map_err(|error| {
+-            // Text a lone value reads without is text after that value.
+-            let after = from_str::<serde::de::IgnoredAny>(text)
+-                .ok()
+-                .and(error.location())
+-                .and_then(|at| offset(text, at.line(), at.column()))
+-                .map(|offset| text[offset..].trim_end())
+-                .filter(|after| !after.is_empty());
+-            match after {
+-                Some(after) => format!("`{after}` follows the value ({error})"),
+-                None => error.to_string(),
+-            }
+-        })?;
+-    match documents.len() {
+-        0 | 1 => Ok(documents.pop()),
+-        count => Err(format!(
+-            "it holds {count} YAML documents where one value was expected"
+-        )),
+-    }
+-}
+-
+-/// The byte offset of the 1-based `line` and `column` in `text`, when it is inside it.
+-fn offset(text: &str, line: u64, column: u64) -> Option<usize> {
+-    let line = usize::try_from(line.checked_sub(1)?).ok()?;
+-    let column = usize::try_from(column.checked_sub(1)?).ok()?;
+-    let start: usize = text.split_inclusive('\n').take(line).map(str::len).sum();
+-    let rest = text.get(start..)?;
+-    let within = rest
+-        .char_indices()
+-        .nth(column)
+-        .map_or(rest.len(), |(at, _)| at);
+-    text.is_char_boundary(start + within)
+-        .then_some(start + within)
+-}
+diff --git a/crates/onetaskgraph-github-projects-e2e/project.json b/crates/onetaskgraph-github-projects-e2e/project.json
+index ec40cae4..32a4cf94 100644
+--- a/crates/onetaskgraph-github-projects-e2e/project.json
++++ b/crates/onetaskgraph-github-projects-e2e/project.json
+@@ -24,6 +24,7 @@
+       "!{workspaceRoot}/crates/onetaskgraph/CHANGELOG.md",
+       "!{workspaceRoot}/crates/onetaskgraph/Cargo.toml",
+       "{workspaceRoot}/crates/onetaskgraph-core/**/*",
++      "{workspaceRoot}/crates/onetaskgraph-template/**/*",
+       "!{workspaceRoot}/crates/onetaskgraph-core/CHANGELOG.md",
+       "!{workspaceRoot}/crates/onetaskgraph-core/Cargo.toml",
+       "{workspaceRoot}/crates/onetaskgraph-e2e-support/**/*",
+diff --git a/crates/onetaskgraph-linear-e2e/project.json b/crates/onetaskgraph-linear-e2e/project.json
+index da392460..edb3433d 100644
+--- a/crates/onetaskgraph-linear-e2e/project.json
++++ b/crates/onetaskgraph-linear-e2e/project.json
+@@ -19,6 +19,7 @@
+       "!{workspaceRoot}/crates/onetaskgraph/CHANGELOG.md",
+       "!{workspaceRoot}/crates/onetaskgraph/Cargo.toml",
+       "{workspaceRoot}/crates/onetaskgraph-core/**/*",
++      "{workspaceRoot}/crates/onetaskgraph-template/**/*",
+       "!{workspaceRoot}/crates/onetaskgraph-core/CHANGELOG.md",
+       "!{workspaceRoot}/crates/onetaskgraph-core/Cargo.toml",
+       "{workspaceRoot}/crates/onetaskgraph-e2e-support/**/*",
+diff --git a/crates/onetaskgraph-status-options-e2e/project.json b/crates/onetaskgraph-status-options-e2e/project.json
+index 58a72751..068dc414 100644
+--- a/crates/onetaskgraph-status-options-e2e/project.json
++++ b/crates/onetaskgraph-status-options-e2e/project.json
+@@ -19,6 +19,7 @@
+       "!{workspaceRoot}/crates/onetaskgraph/CHANGELOG.md",
+       "!{workspaceRoot}/crates/onetaskgraph/Cargo.toml",
+       "{workspaceRoot}/crates/onetaskgraph-core/**/*",
++      "{workspaceRoot}/crates/onetaskgraph-template/**/*",
+       "!{workspaceRoot}/crates/onetaskgraph-core/CHANGELOG.md",
+       "!{workspaceRoot}/crates/onetaskgraph-core/Cargo.toml",
+       "{workspaceRoot}/crates/onetaskgraph-e2e-support/**/*",
+diff --git a/crates/onetaskgraph-template/Cargo.toml b/crates/onetaskgraph-template/Cargo.toml
+new file mode 100644
+index 00000000..4d57ba3a
+--- /dev/null
++++ b/crates/onetaskgraph-template/Cargo.toml
+@@ -0,0 +1,23 @@
++[package]
++name = "onetaskgraph-template"
++description = "onetaskgraph's templates: front matter, answers, rendering and provenance."
++version = "0.14.14"
++edition.workspace = true
++rust-version.workspace = true
++license.workspace = true
++repository.workspace = true
++authors.workspace = true
++
++[dependencies]
++jsonschema.workspace = true
++minijinja.workspace = true
++onetaskgraph-plugin-api.workspace = true
++schemars.workspace = true
++serde.workspace = true
++serde_json.workspace = true
++serde-saphyr.workspace = true
++sha2.workspace = true
++thiserror.workspace = true
++
++[dev-dependencies]
++tempfile.workspace = true
+diff --git a/crates/onetaskgraph-template/project.json b/crates/onetaskgraph-template/project.json
+new file mode 100644
+index 00000000..4e0174ef
+--- /dev/null
++++ b/crates/onetaskgraph-template/project.json
+@@ -0,0 +1,86 @@
++{
++  "$schema": "../../node_modules/nx/schemas/project-schema.json",
++  "name": "onetaskgraph-template",
++  "projectType": "library",
++  "tags": [
++    "lang:rust",
++    "layer:engine",
++    "test-in-coverage:crate"
++  ],
++  "//": "implicitDependencies mirror this crate's Cargo dependencies. Nx cannot read a Cargo manifest, so without them affected selection silently under-runs; scripts/check-nx-graph.sh fails, naming the pair, when the two disagree. llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] JSON has no comment to scope this to `coverage`: the line floor is one report over every crate's instrumented run, so workspace:coverage runs this crate's whether or not the change reached it. `test` still selects by the graph.",
++  "implicitDependencies": [
++    "onetaskgraph-plugin-api"
++  ],
++  "namedInputs": {
++    "cargoInputs": [
++      {
++        "runtime": "node scripts/nx-cargo-closure.mjs --crate onetaskgraph-template"
++      }
++    ]
++  },
++  "targets": {
++    "bootstrap": {
++      "executor": "nx:run-commands",
++      "options": {
++        "command": "cargo fetch --locked"
++      },
++      "//": "Uncached: it reaches the network and writes to the shared cargo registry outside the workspace, so no input in the tree describes its result."
++    },
++    "check": {
++      "executor": "nx:noop"
++    },
++    "format": {
++      "executor": "nx:run-commands",
++      "options": {
++        "command": "cargo fmt -p onetaskgraph-template"
++      },
++      "cache": false,
++      "//": "Uncached: it rewrites the tree in place, so replaying a cached result would be a no-op that silently leaves the tree unformatted."
++    },
++    "format-check": {
++      "executor": "nx:run-commands",
++      "options": {
++        "command": "cargo fmt -p onetaskgraph-template -- --check"
++      }
++    },
++    "lint": {
++      "executor": "nx:run-commands",
++      "options": {
++        "command": "cargo clippy --quiet -p onetaskgraph-template --all-targets --all-features --locked -- -D warnings"
++      }
++    },
++    "typecheck": {
++      "executor": "nx:run-commands",
++      "options": {
++        "command": "cargo check --quiet -p onetaskgraph-template --all-targets --all-features --locked"
++      }
++    },
++    "test": {
++      "executor": "nx:run-commands",
++      "options": {
++        "command": "cargo test --quiet -p onetaskgraph-template --all-features --locked"
++      }
++    },
++    "coverage": {
++      "executor": "nx:run-commands",
++      "options": {
++        "command": "bash scripts/rust-coverage.sh onetaskgraph-template"
++      },
++      "outputs": [
++        "{workspaceRoot}/target/coverage-units/onetaskgraph-template.lcov"
++      ],
++      "cache": true,
++      "//": "A coverage unit: its LCOV report is cached, and workspace:coverage merges every unit's and holds the floor. scripts/check-coverage-enforced.sh reconciles the unit with that merge, and .github/nx-policy/tests/coverage-units.test.mjs holds these inputs to every file the run reads.",
++      "inputs": [
++        "versionFreeNpm",
++        "default",
++        "^coverageDependency",
++        "coverageUnit",
++        "{workspaceRoot}/.tool-versions",
++        {
++          "runtime": "node scripts/coverage-read-digest.mjs --unit onetaskgraph-template"
++        }
++      ]
++    }
++  }
++}
+diff --git a/crates/onetaskgraph-core/src/template/answers.rs b/crates/onetaskgraph-template/src/answers.rs
+similarity index 100%
+rename from crates/onetaskgraph-core/src/template/answers.rs
+rename to crates/onetaskgraph-template/src/answers.rs
+diff --git a/crates/onetaskgraph-core/src/template/front_matter.rs b/crates/onetaskgraph-template/src/front_matter.rs
+similarity index 100%
+rename from crates/onetaskgraph-core/src/template/front_matter.rs
+rename to crates/onetaskgraph-template/src/front_matter.rs
+diff --git a/crates/onetaskgraph-core/src/template/input.rs b/crates/onetaskgraph-template/src/input.rs
+similarity index 100%
+rename from crates/onetaskgraph-core/src/template/input.rs
+rename to crates/onetaskgraph-template/src/input.rs
+diff --git a/crates/onetaskgraph-core/src/template/mod.rs b/crates/onetaskgraph-template/src/lib.rs
+similarity index 99%
+rename from crates/onetaskgraph-core/src/template/mod.rs
+rename to crates/onetaskgraph-template/src/lib.rs
+index 2ce94bb9..4984195b 100644
+--- a/crates/onetaskgraph-core/src/template/mod.rs
++++ b/crates/onetaskgraph-template/src/lib.rs
+@@ -67,6 +67,7 @@ mod members;
+ mod provenance;
+ mod scan;
+ mod schema;
++mod yaml;
+ 
+ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+ use std::fmt;
+diff --git a/crates/onetaskgraph-core/src/template/members.rs b/crates/onetaskgraph-template/src/members.rs
+similarity index 100%
+rename from crates/onetaskgraph-core/src/template/members.rs
+rename to crates/onetaskgraph-template/src/members.rs
+diff --git a/crates/onetaskgraph-core/src/template/provenance.rs b/crates/onetaskgraph-template/src/provenance.rs
+similarity index 100%
+rename from crates/onetaskgraph-core/src/template/provenance.rs
+rename to crates/onetaskgraph-template/src/provenance.rs
+diff --git a/crates/onetaskgraph-core/src/template/scan.rs b/crates/onetaskgraph-template/src/scan.rs
+similarity index 100%
+rename from crates/onetaskgraph-core/src/template/scan.rs
+rename to crates/onetaskgraph-template/src/scan.rs
+diff --git a/crates/onetaskgraph-core/src/template/schema.rs b/crates/onetaskgraph-template/src/schema.rs
+similarity index 100%
+rename from crates/onetaskgraph-core/src/template/schema.rs
+rename to crates/onetaskgraph-template/src/schema.rs
+diff --git a/crates/onetaskgraph-template/src/yaml.rs b/crates/onetaskgraph-template/src/yaml.rs
+new file mode 100644
+index 00000000..f94c6206
+--- /dev/null
++++ b/crates/onetaskgraph-template/src/yaml.rs
+@@ -0,0 +1,62 @@
++//! Every YAML read the engine makes, through `serde-saphyr`: a configuration, an answers
++//! file, a template's front matter and a typed `--var` value.
++//!
++//! serde-saphyr's own behaviour with three options: `yes`, `no`, `on` and `off` stay strings,
++//! as the local Markdown source writes them plain and every document this engine reads was
++//! written to be read that way; `<<` is an ordinary key; and a refusal is one line, which
++//! every message here names its file or its variable beside. The local Markdown source reads
++//! with the same three, in its own crate, because a plugin never depends on the engine;
++//! `tests/yaml.rs` reads one document through both and fails the moment they part.
++
++use serde::de::DeserializeOwned;
++
++fn options() -> serde_saphyr::Options {
++    serde_saphyr::options! {
++        strict_booleans: true,
++        merge_keys: serde_saphyr::MergeKeyPolicy::AsOrdinary,
++        with_snippet: false,
++    }
++}
++
++pub(crate) fn from_str<T: DeserializeOwned>(text: &str) -> Result<T, serde_saphyr::Error> {
++    serde_saphyr::from_str_with_options(text, options())
++}
++
++/// `text` read as one YAML value, refusing any text after it: what a reader would otherwise
++/// drop without a word, `title` after `[bracketed]`, is named in the refusal.
++pub(crate) fn one_value<T: DeserializeOwned>(text: &str) -> Result<Option<T>, String> {
++    let mut documents: Vec<T> =
++        serde_saphyr::from_multiple_with_options(text, options()).map_err(|error| {
++            // Text a lone value reads without is text after that value.
++            let after = from_str::<serde::de::IgnoredAny>(text)
++                .ok()
++                .and(error.location())
++                .and_then(|at| offset(text, at.line(), at.column()))
++                .map(|offset| text[offset..].trim_end())
++                .filter(|after| !after.is_empty());
++            match after {
++                Some(after) => format!("`{after}` follows the value ({error})"),
++                None => error.to_string(),
++            }
++        })?;
++    match documents.len() {
++        0 | 1 => Ok(documents.pop()),
++        count => Err(format!(
++            "it holds {count} YAML documents where one value was expected"
++        )),
++    }
++}
++
++/// The byte offset of the 1-based `line` and `column` in `text`, when it is inside it.
++fn offset(text: &str, line: u64, column: u64) -> Option<usize> {
++    let line = usize::try_from(line.checked_sub(1)?).ok()?;
++    let column = usize::try_from(column.checked_sub(1)?).ok()?;
++    let start: usize = text.split_inclusive('\n').take(line).map(str::len).sum();
++    let rest = text.get(start..)?;
++    let within = rest
++        .char_indices()
++        .nth(column)
++        .map_or(rest.len(), |(at, _)| at);
++    text.is_char_boundary(start + within)
++        .then_some(start + within)
++}
+diff --git a/crates/onetaskgraph-core/tests/fixtures/template-front-matter.expected.json b/crates/onetaskgraph-template/tests/fixtures/template-front-matter.expected.json
+similarity index 100%
+rename from crates/onetaskgraph-core/tests/fixtures/template-front-matter.expected.json
+rename to crates/onetaskgraph-template/tests/fixtures/template-front-matter.expected.json
+diff --git a/crates/onetaskgraph-core/tests/fixtures/template-front-matter/01-design-doc.md.j2 b/crates/onetaskgraph-template/tests/fixtures/template-front-matter/01-design-doc.md.j2
+similarity index 100%
+rename from crates/onetaskgraph-core/tests/fixtures/template-front-matter/01-design-doc.md.j2
+rename to crates/onetaskgraph-template/tests/fixtures/template-front-matter/01-design-doc.md.j2
+diff --git a/crates/onetaskgraph-core/tests/fixtures/template-front-matter/02-follow-up-task.md.j2 b/crates/onetaskgraph-template/tests/fixtures/template-front-matter/02-follow-up-task.md.j2
+similarity index 100%
+rename from crates/onetaskgraph-core/tests/fixtures/template-front-matter/02-follow-up-task.md.j2
+rename to crates/onetaskgraph-template/tests/fixtures/template-front-matter/02-follow-up-task.md.j2
+diff --git a/crates/onetaskgraph-core/tests/fixtures/template-front-matter/03-plan-task.md.j2 b/crates/onetaskgraph-template/tests/fixtures/template-front-matter/03-plan-task.md.j2
+similarity index 100%
+rename from crates/onetaskgraph-core/tests/fixtures/template-front-matter/03-plan-task.md.j2
+rename to crates/onetaskgraph-template/tests/fixtures/template-front-matter/03-plan-task.md.j2
+diff --git a/crates/onetaskgraph-core/tests/fixtures/template-front-matter/04-design-doc.md.j2 b/crates/onetaskgraph-template/tests/fixtures/template-front-matter/04-design-doc.md.j2
+similarity index 100%
+rename from crates/onetaskgraph-core/tests/fixtures/template-front-matter/04-design-doc.md.j2
+rename to crates/onetaskgraph-template/tests/fixtures/template-front-matter/04-design-doc.md.j2
+diff --git a/crates/onetaskgraph-core/tests/fixtures/template-front-matter/05-follow-up-task.md.j2 b/crates/onetaskgraph-template/tests/fixtures/template-front-matter/05-follow-up-task.md.j2
+similarity index 100%
+rename from crates/onetaskgraph-core/tests/fixtures/template-front-matter/05-follow-up-task.md.j2
+rename to crates/onetaskgraph-template/tests/fixtures/template-front-matter/05-follow-up-task.md.j2
+diff --git a/crates/onetaskgraph-core/tests/fixtures/template-front-matter/06-plan-description.md.j2 b/crates/onetaskgraph-template/tests/fixtures/template-front-matter/06-plan-description.md.j2
+similarity index 100%
+rename from crates/onetaskgraph-core/tests/fixtures/template-front-matter/06-plan-description.md.j2
+rename to crates/onetaskgraph-template/tests/fixtures/template-front-matter/06-plan-description.md.j2
+diff --git a/crates/onetaskgraph-core/tests/fixtures/template-front-matter/07-plan-task-budgets.md.j2 b/crates/onetaskgraph-template/tests/fixtures/template-front-matter/07-plan-task-budgets.md.j2
+similarity index 100%
+rename from crates/onetaskgraph-core/tests/fixtures/template-front-matter/07-plan-task-budgets.md.j2
+rename to crates/onetaskgraph-template/tests/fixtures/template-front-matter/07-plan-task-budgets.md.j2
+diff --git a/crates/onetaskgraph-core/tests/fixtures/template-front-matter/08-plan-task.md.j2 b/crates/onetaskgraph-template/tests/fixtures/template-front-matter/08-plan-task.md.j2
+similarity index 100%
+rename from crates/onetaskgraph-core/tests/fixtures/template-front-matter/08-plan-task.md.j2
+rename to crates/onetaskgraph-template/tests/fixtures/template-front-matter/08-plan-task.md.j2
+diff --git a/crates/onetaskgraph-core/tests/fixtures/template-front-matter/09-spike-report.md.j2 b/crates/onetaskgraph-template/tests/fixtures/template-front-matter/09-spike-report.md.j2
+similarity index 100%
+rename from crates/onetaskgraph-core/tests/fixtures/template-front-matter/09-spike-report.md.j2
+rename to crates/onetaskgraph-template/tests/fixtures/template-front-matter/09-spike-report.md.j2
+diff --git a/crates/onetaskgraph-core/tests/fixtures/template-front-matter/10-plan-description.md.j2 b/crates/onetaskgraph-template/tests/fixtures/template-front-matter/10-plan-description.md.j2
+similarity index 100%
+rename from crates/onetaskgraph-core/tests/fixtures/template-front-matter/10-plan-description.md.j2
+rename to crates/onetaskgraph-template/tests/fixtures/template-front-matter/10-plan-description.md.j2
+diff --git a/crates/onetaskgraph-core/tests/fixtures/template-front-matter/11-plan-task-budgets.md.j2 b/crates/onetaskgraph-template/tests/fixtures/template-front-matter/11-plan-task-budgets.md.j2
+similarity index 100%
+rename from crates/onetaskgraph-core/tests/fixtures/template-front-matter/11-plan-task-budgets.md.j2
+rename to crates/onetaskgraph-template/tests/fixtures/template-front-matter/11-plan-task-budgets.md.j2
+diff --git a/crates/onetaskgraph-core/tests/fixtures/template-front-matter/12-d.md.j2 b/crates/onetaskgraph-template/tests/fixtures/template-front-matter/12-d.md.j2
+similarity index 100%
+rename from crates/onetaskgraph-core/tests/fixtures/template-front-matter/12-d.md.j2
+rename to crates/onetaskgraph-template/tests/fixtures/template-front-matter/12-d.md.j2
+diff --git a/crates/onetaskgraph-core/tests/fixtures/template-front-matter/13-f.md.j2 b/crates/onetaskgraph-template/tests/fixtures/template-front-matter/13-f.md.j2
+similarity index 100%
+rename from crates/onetaskgraph-core/tests/fixtures/template-front-matter/13-f.md.j2
+rename to crates/onetaskgraph-template/tests/fixtures/template-front-matter/13-f.md.j2
+diff --git a/crates/onetaskgraph-core/tests/fixtures/template-front-matter/14-r.md.j2 b/crates/onetaskgraph-template/tests/fixtures/template-front-matter/14-r.md.j2
+similarity index 100%
+rename from crates/onetaskgraph-core/tests/fixtures/template-front-matter/14-r.md.j2
+rename to crates/onetaskgraph-template/tests/fixtures/template-front-matter/14-r.md.j2
+diff --git a/crates/onetaskgraph-core/tests/fixtures/template-front-matter/15-t.md.j2 b/crates/onetaskgraph-template/tests/fixtures/template-front-matter/15-t.md.j2
+similarity index 100%
+rename from crates/onetaskgraph-core/tests/fixtures/template-front-matter/15-t.md.j2
+rename to crates/onetaskgraph-template/tests/fixtures/template-front-matter/15-t.md.j2
+diff --git a/crates/onetaskgraph-core/tests/fixtures/template-front-matter/16-design-doc.md.j2 b/crates/onetaskgraph-template/tests/fixtures/template-front-matter/16-design-doc.md.j2
+similarity index 100%
+rename from crates/onetaskgraph-core/tests/fixtures/template-front-matter/16-design-doc.md.j2
+rename to crates/onetaskgraph-template/tests/fixtures/template-front-matter/16-design-doc.md.j2
+diff --git a/crates/onetaskgraph-core/tests/fixtures/template-front-matter/17-design-doc.md.j2 b/crates/onetaskgraph-template/tests/fixtures/template-front-matter/17-design-doc.md.j2
+similarity index 100%
+rename from crates/onetaskgraph-core/tests/fixtures/template-front-matter/17-design-doc.md.j2
+rename to crates/onetaskgraph-template/tests/fixtures/template-front-matter/17-design-doc.md.j2
+diff --git a/crates/onetaskgraph-core/tests/fixtures/template-front-matter/18-follow-up-task.md.j2 b/crates/onetaskgraph-template/tests/fixtures/template-front-matter/18-follow-up-task.md.j2
+similarity index 100%
+rename from crates/onetaskgraph-core/tests/fixtures/template-front-matter/18-follow-up-task.md.j2
+rename to crates/onetaskgraph-template/tests/fixtures/template-front-matter/18-follow-up-task.md.j2
+diff --git a/crates/onetaskgraph-core/tests/fixtures/template-front-matter/19-plan-task-budgets.md.j2 b/crates/onetaskgraph-template/tests/fixtures/template-front-matter/19-plan-task-budgets.md.j2
+similarity index 100%
+rename from crates/onetaskgraph-core/tests/fixtures/template-front-matter/19-plan-task-budgets.md.j2
+rename to crates/onetaskgraph-template/tests/fixtures/template-front-matter/19-plan-task-budgets.md.j2
+diff --git a/crates/onetaskgraph-core/tests/fixtures/template-front-matter/20-plan-task.md.j2 b/crates/onetaskgraph-template/tests/fixtures/template-front-matter/20-plan-task.md.j2
+similarity index 100%
+rename from crates/onetaskgraph-core/tests/fixtures/template-front-matter/20-plan-task.md.j2
+rename to crates/onetaskgraph-template/tests/fixtures/template-front-matter/20-plan-task.md.j2
+diff --git a/crates/onetaskgraph-core/tests/fixtures/template-front-matter/21-spike-report.md.j2 b/crates/onetaskgraph-template/tests/fixtures/template-front-matter/21-spike-report.md.j2
+similarity index 100%
+rename from crates/onetaskgraph-core/tests/fixtures/template-front-matter/21-spike-report.md.j2
+rename to crates/onetaskgraph-template/tests/fixtures/template-front-matter/21-spike-report.md.j2
+diff --git a/crates/onetaskgraph-core/tests/fixtures/template-front-matter/22-old-plan-task.md.j2 b/crates/onetaskgraph-template/tests/fixtures/template-front-matter/22-old-plan-task.md.j2
+similarity index 100%
+rename from crates/onetaskgraph-core/tests/fixtures/template-front-matter/22-old-plan-task.md.j2
+rename to crates/onetaskgraph-template/tests/fixtures/template-front-matter/22-old-plan-task.md.j2
+diff --git a/crates/onetaskgraph-core/tests/fixtures/template-front-matter/23-m.md.j2 b/crates/onetaskgraph-template/tests/fixtures/template-front-matter/23-m.md.j2
+similarity index 100%
+rename from crates/onetaskgraph-core/tests/fixtures/template-front-matter/23-m.md.j2
+rename to crates/onetaskgraph-template/tests/fixtures/template-front-matter/23-m.md.j2
+diff --git a/crates/onetaskgraph-core/tests/fixtures/template-front-matter/24-main.md.j2 b/crates/onetaskgraph-template/tests/fixtures/template-front-matter/24-main.md.j2
+similarity index 100%
+rename from crates/onetaskgraph-core/tests/fixtures/template-front-matter/24-main.md.j2
+rename to crates/onetaskgraph-template/tests/fixtures/template-front-matter/24-main.md.j2
+diff --git a/crates/onetaskgraph-core/tests/fixtures/template-front-matter/25-main2.md.j2 b/crates/onetaskgraph-template/tests/fixtures/template-front-matter/25-main2.md.j2
+similarity index 100%
+rename from crates/onetaskgraph-core/tests/fixtures/template-front-matter/25-main2.md.j2
+rename to crates/onetaskgraph-template/tests/fixtures/template-front-matter/25-main2.md.j2
+diff --git a/crates/onetaskgraph-core/tests/fixtures/template-front-matter/26-part2.md.j2 b/crates/onetaskgraph-template/tests/fixtures/template-front-matter/26-part2.md.j2
+similarity index 100%
+rename from crates/onetaskgraph-core/tests/fixtures/template-front-matter/26-part2.md.j2
+rename to crates/onetaskgraph-template/tests/fixtures/template-front-matter/26-part2.md.j2
+diff --git a/crates/onetaskgraph-core/tests/fixtures/template-front-matter/27-plan-task.md.j2 b/crates/onetaskgraph-template/tests/fixtures/template-front-matter/27-plan-task.md.j2
+similarity index 100%
+rename from crates/onetaskgraph-core/tests/fixtures/template-front-matter/27-plan-task.md.j2
+rename to crates/onetaskgraph-template/tests/fixtures/template-front-matter/27-plan-task.md.j2
+diff --git a/crates/onetaskgraph-core/tests/fixtures/template-front-matter/28-human-task.md.j2 b/crates/onetaskgraph-template/tests/fixtures/template-front-matter/28-human-task.md.j2
+similarity index 100%
+rename from crates/onetaskgraph-core/tests/fixtures/template-front-matter/28-human-task.md.j2
+rename to crates/onetaskgraph-template/tests/fixtures/template-front-matter/28-human-task.md.j2
+diff --git a/crates/onetaskgraph-core/tests/templates.rs b/crates/onetaskgraph-template/tests/templates.rs
+similarity index 99%
+rename from crates/onetaskgraph-core/tests/templates.rs
+rename to crates/onetaskgraph-template/tests/templates.rs
+index ca66cd3d..bf67daed 100644
+--- a/crates/onetaskgraph-core/tests/templates.rs
++++ b/crates/onetaskgraph-template/tests/templates.rs
+@@ -7,7 +7,7 @@
+ 
+ use std::path::Path;
+ 
+-use onetaskgraph_core::{
++use onetaskgraph_template::{
+     Answers, ChainField, DECLARATION_KEYS, FRONT_MATTER_KEYS, ItemType, TemplateError,
+     TemplateLoader, VariableType,
+ };
+@@ -511,7 +511,7 @@ fn the_digest_is_stable_and_moves_when_any_chain_file_changes() {
+     assert_ne!(load(), first);
+ }
+ 
+-fn one_of_each() -> onetaskgraph_core::Template {
++fn one_of_each() -> onetaskgraph_template::Template {
+     TemplateLoader::new()
+         .with_template(
+             "t.md",
+@@ -1772,7 +1772,7 @@ fn every_variant_of_a_declaration_vocabulary_is_in_its_all() {
+ ///
+ /// `tests/fixtures/template-front-matter` holds redacted copies of the front matter of the 28
+ /// template files found on the author's host, and the `.expected.json` beside it the order
+-/// [`onetaskgraph_core::Template::unanswered`] — what an interactive `template render` asks
++/// [`onetaskgraph_template::Template::unanswered`] — what an interactive `template render` asks
+ /// from — gave each under the release before the YAML crate moved. A reader that sorted the
+ /// keys, as a `serde_json` map does, would ask most of them alphabetically.
+ #[test]
+diff --git a/scripts/check-store-fixtures.sh b/scripts/check-store-fixtures.sh
+index 632e3116..d594e91e 100755
+--- a/scripts/check-store-fixtures.sh
++++ b/scripts/check-store-fixtures.sh
+@@ -292,7 +292,7 @@ NOT_A_STORE = {
+         "whole, given a status and spliced back — and `tests/plan_store` compares this release's "
+         "observation of the same records with it by an exact equality per record."
+     ),
+-    "crates/onetaskgraph-core/tests/fixtures/template-front-matter.expected.json": (
++    "crates/onetaskgraph-template/tests/fixtures/template-front-matter.expected.json": (
+         "Not a store: it holds no items and no query is answered from it. It is the order the "
+         "release before the YAML crate moved asked each template under "
+         "`tests/fixtures/template-front-matter` its variables in, and "
