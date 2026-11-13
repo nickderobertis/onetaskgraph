@@ -9,7 +9,8 @@
     "onetaskgraph-in-memory",
     "onetaskgraph-linear",
     "onetaskgraph-local-md",
-    "onetaskgraph-plugin-api"
+    "onetaskgraph-plugin-api",
+    "onetaskgraph-template"
   ],
   "namedInputs": {
     "cargoInputs": [

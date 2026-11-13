@@ -19,6 +19,7 @@
       "!{workspaceRoot}/crates/onetaskgraph/CHANGELOG.md",
       "!{workspaceRoot}/crates/onetaskgraph/Cargo.toml",
       "{workspaceRoot}/crates/onetaskgraph-core/**/*",
+      "{workspaceRoot}/crates/onetaskgraph-template/**/*",
       "!{workspaceRoot}/crates/onetaskgraph-core/CHANGELOG.md",
       "!{workspaceRoot}/crates/onetaskgraph-core/Cargo.toml",
       "{workspaceRoot}/crates/onetaskgraph-e2e-support/**/*",

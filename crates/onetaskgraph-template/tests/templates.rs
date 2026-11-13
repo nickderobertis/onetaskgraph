@@ -7,7 +7,7 @@
 
 use std::path::Path;
 
-use onetaskgraph_core::{
+use onetaskgraph_template::{
     Answers, ChainField, DECLARATION_KEYS, FRONT_MATTER_KEYS, ItemType, TemplateError,
     TemplateLoader, VariableType,
 };
@@ -511,7 +511,7 @@ fn the_digest_is_stable_and_moves_when_any_chain_file_changes() {
     assert_ne!(load(), first);
 }
 
-fn one_of_each() -> onetaskgraph_core::Template {
+fn one_of_each() -> onetaskgraph_template::Template {
     TemplateLoader::new()
         .with_template(
             "t.md",
@@ -1772,7 +1772,7 @@ fn every_variant_of_a_declaration_vocabulary_is_in_its_all() {
 ///
 /// `tests/fixtures/template-front-matter` holds redacted copies of the front matter of the 28
 /// template files found on the author's host, and the `.expected.json` beside it the order
-/// [`onetaskgraph_core::Template::unanswered`] — what an interactive `template render` asks
+/// [`onetaskgraph_template::Template::unanswered`] — what an interactive `template render` asks
 /// from — gave each under the release before the YAML crate moved. A reader that sorted the
 /// keys, as a `serde_json` map does, would ask most of them alphabetically.
 #[test]
