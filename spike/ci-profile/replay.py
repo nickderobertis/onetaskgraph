@@ -40,7 +40,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # E402: models sits beside this file and is found through the sys.path entry above.
-from models import FirstRunRecord, Invalid, JobName, TaskId, history, items, obj, take, task_id  # noqa: E402
+from models import FirstRunRecord, Invalid, JobName, TaskId, history, items, obj, positive, take, task_id  # noqa: E402
 
 MERGED_3956 = 3956
 USAGE_EXIT = 2
@@ -183,7 +183,7 @@ class Diff:
 def repository_path(value: object, where: str) -> str:
     if not isinstance(value, str) or not value or value.startswith("/") or "\\" in value:
         raise Invalid(f"{where}: {value!r} is not a repository-relative path")
-    if posixpath.normpath(value) != value or value.split("/")[0] == "..":
+    if posixpath.normpath(value) != value or value.split("/")[0] in ("..", "."):
         raise Invalid(f"{where}: {value!r} is not a normalized repository path")
     return value
 
@@ -192,7 +192,7 @@ def parse_prs(raw: object) -> dict[int, frozenset[str]]:
     out = {}
     for entry in items(raw, "prs"):
         record = obj(entry, "prs entry")
-        pr = take(record, "pr", int, "prs entry")
+        pr = positive(take(record, "pr", int, "prs entry"), "prs entry")
         if pr in out:
             raise Invalid(f"#{pr} is listed twice")
         out[pr] = frozenset(repository_path(f, f"#{pr} files") for f in items(record.get("files"), f"#{pr} files"))

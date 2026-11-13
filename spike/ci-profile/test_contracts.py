@@ -921,6 +921,10 @@ class ListingAndRecorderEdgeTests(unittest.TestCase):
             replay.parse_prs([{"pr": 1, "files": []}, {"pr": 1, "files": []}])
         with self.assertRaisesRegex(models.Invalid, "canonically"):
             models.history({"01": {}})
+        with self.assertRaisesRegex(models.Invalid, "positive"):
+            replay.parse_prs([{"pr": 0, "files": []}])
+        with self.assertRaisesRegex(models.Invalid, "normalized"):
+            replay.parse_prs([{"pr": 1, "files": ["."]}])
 
 
 LINES = (HERE / "data/logs/run-43152201170-lines.txt").read_text(encoding="utf-8").splitlines()
