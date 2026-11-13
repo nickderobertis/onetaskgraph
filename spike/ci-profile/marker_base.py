@@ -61,8 +61,8 @@ def main() -> int:
     except (subprocess.CalledProcessError, RuntimeError) as error:
         print(f"marker_base: {error}", file=sys.stderr)
         return 1
-    sys.stdout.reconfigure(newline="\n")
-    print(f"export NX_BASE={base} NX_HEAD={head}")
+    # Bytes, so Windows' text-mode stdout adds no carriage return to what the shell evaluates.
+    sys.stdout.buffer.write(f"export NX_BASE={base} NX_HEAD={head}\n".encode())
     return 0
 
 
