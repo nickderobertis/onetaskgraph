@@ -1,5 +1,5 @@
 The repaired split patch (spike/ci-profile/prototypes/split-template-crate.patch), validated locally
-on session head 7029a947's tree with the patch applied, before the hosted runs #4028/#4029 were opened.
+on session head 7029a947's tree with the patch applied, before the hosted split runs of #4030 and #4031 were opened.
 Nothing here was timed; each line is a command's own outcome.
 
 static guards, each exit 0: check-coverage-enforced, check-release-targets, check-nx-graph,
