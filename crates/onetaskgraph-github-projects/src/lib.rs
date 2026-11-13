@@ -3881,6 +3881,7 @@ impl MetadataField {
 /// unit, so this source counts UTF-8 bytes — at least as many as characters or UTF-16 units —
 /// which can only shorten a non-ASCII value earlier than GitHub would, never send one it
 /// refuses.
+// llmlint: ignore[contracts_have_one_source_or_a_drift_gate] GitHub publishes no machine-readable statement of this limit — neither its documentation nor its GraphQL schema (`ProjectV2FieldValue.text: String`) names one — so the only source is the measurement above, and a live probe would spend the credentialed lane's budget, which is a decision outside this change. Drift cannot pass silently either way: a raised limit only shortens a value earlier than needed, and a lowered one makes GitHub refuse the write, which fails the command naming the field.
 const TEXT_FIELD_LIMIT: usize = 1024;
 
 /// The text a board text field holds for `value`, as `docs/metadata.md` states it: a string as

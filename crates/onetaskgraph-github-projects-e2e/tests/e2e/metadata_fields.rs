@@ -1026,7 +1026,10 @@ fn a_value_longer_than_the_text_field_is_written_as_its_leading_lines_and_a_coun
     // The realistic size: the longest rendered list the live followups board held was 1,671
     // characters, about twelve draft ids of 140 characters.
     let realistic = draft_lines(12, 140);
-    assert!(realistic.join("\n").len() > 1_600, "realistic, and over");
+    assert!(
+        realistic.join("\n").len() > GITHUB_TEXT_FIELD_LIMIT,
+        "realistic, and over"
+    );
     // Six lines, a line feed and the line counting the six left out fit; a seventh would not.
     let elided = |left: usize| format!("\u{2026} {left} more lines in this item's metadata");
     let kept = format!("{}\n{}", realistic[..6].join("\n"), elided(6));
