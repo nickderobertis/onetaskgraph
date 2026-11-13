@@ -30,10 +30,13 @@ use std::collections::BTreeMap;
 use onetaskgraph_plugin_api::{ProjectedValue, SourceError, SourceName};
 use serde_json::Value;
 
-/// The marker the section is set off by.
+/// Written alone on the line before the section, and the one thing a read recognises it by: an
+/// HTML comment, which Linear does not render, holding its name in a code span, which Linear
+/// stores byte for byte where it would autolink the bare `onetaskgraph.fields`.
 pub(crate) const MARKER: &str = "<!-- `onetaskgraph.fields` -->";
 
-/// The section's summary.
+/// The fixed summary every item's section is collapsed under, whatever its entries; a read
+/// never relies on it, since a caller's own block may carry the same one.
 const SUMMARY: &str = "Fields";
 
 /// One `metadata_fields` entry of a `linear` source's configuration: the same shape a
