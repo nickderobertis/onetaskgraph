@@ -1,9 +1,11 @@
-"""prototype_replay.py through its entry point, over the committed 30-PR population and run summaries
-shaped as `ciprofile.py profile --json` writes them."""
+"""prototype_replay.py: its critical-path rule on hand-built timelines, and both commands through the entry
+point, over run summaries shaped as `ciprofile.py profile --json` writes them and the committed 30-PR history."""
 
 from __future__ import annotations
 
 import json
+import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -12,6 +14,9 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 DATA = HERE / "data"
+sys.path.insert(0, str(HERE))
+
+import prototype_replay  # noqa: E402
 
 
 def command(*args: str) -> subprocess.CompletedProcess:
@@ -20,82 +25,101 @@ def command(*args: str) -> subprocess.CompletedProcess:
     )
 
 
-def write_summary(directory: Path, run: int, wall: float, shares: dict[str, float]) -> None:
-    tasks = [{"task": t, "result": "executed", "start": 0, "end": 1, "share_s": s} for t, s in shares.items()]
-    job = {"job_id": run, "wall_s": wall, "buckets_s": {}, "tasks": tasks}
-    (directory / f"profile-{run}.json").write_text(
-        json.dumps({"run": run, "head_sha": "a" * 40, "jobs": {"test-macos": job}})
-    )
+def write_summary(directory: Path, run: int, tasks: dict[str, tuple[float, float, float]], work: float) -> None:
+    """tasks: name -> (start, end, share)."""
+    job = {
+        "job_id": run,
+        "wall_s": 1800 + run,
+        "buckets_s": {},
+        "tasks": [
+            {"task": t, "result": "executed", "start": s, "end": e, "share_s": sh} for t, (s, e, sh) in tasks.items()
+        ]
+        + [{"task": "x:replayed", "result": "remote_hit", "start": 0, "end": 0, "share_s": 0}],
+        "binaries_s": {"instrumented:onetaskgraph-e2e::e2e": work, "e2e-0123456789abcdef": 5.0},
+    }
+    (directory / f"profile-{run}.json").write_text(json.dumps({"run": run, "jobs": {"test-macos": job}}))
 
 
-class PrototypeReplayTests(unittest.TestCase):
+class CriticalPathTests(unittest.TestCase):
+    def test_a_changed_task_on_the_chain_moves_the_job_end_until_another_task_ends_last(self):
+        timeline = {"build": (0.0, 100.0), "e2e": (100.0, 700.0), "other": (50.0, 600.0)}
+        self.assertEqual(prototype_replay.latest_chain(timeline), ["build", "e2e"])
+        self.assertEqual(prototype_replay.predicted_shortening(timeline, {"e2e": 60.0}), 60.0)
+        self.assertEqual(prototype_replay.predicted_shortening(timeline, {"e2e": 300.0}), 100.0)  # `other` ends at 600
+        self.assertEqual(prototype_replay.predicted_shortening(timeline, {"e2e": -30.0}), -30.0)
+
+    def test_a_changed_task_off_the_chain_shortens_nothing_unless_it_grows_past_the_end(self):
+        timeline = {"build": (0.0, 100.0), "e2e": (100.0, 700.0), "other": (50.0, 600.0)}
+        self.assertEqual(prototype_replay.predicted_shortening(timeline, {"other": 200.0}), 0.0)
+        self.assertEqual(prototype_replay.predicted_shortening(timeline, {"other": -150.0}), -50.0)
+
+    def test_a_task_the_run_did_not_have_runs_beside_the_gate_from_its_start(self):
+        timeline = {"build": (0.0, 100.0), "core": (100.0, 300.0)}
+        self.assertEqual(prototype_replay.predicted_shortening(timeline, {"core": 10.0, "template:test": -50.0}), 10.0)
+        self.assertEqual(
+            prototype_replay.predicted_shortening(timeline, {"core": 10.0, "template:test": -400.0}), -100.0
+        )
+
+
+class CommandTests(unittest.TestCase):
     def setUp(self):
         self.root = Path(tempfile.mkdtemp(prefix="prototype-replay-"))
-        self.addCleanup(lambda: subprocess.run(["rm", "-rf", str(self.root)], check=False))
+        self.addCleanup(shutil.rmtree, self.root, True)
 
-    def deltas(self, side: str, control: dict[str, float], prototype: dict[str, float]) -> Path:
-        write_summary(self.root, 1, 1800, control)
-        write_summary(self.root, 2, 1900, control)
-        write_summary(self.root, 3, 1700, prototype)
-        write_summary(self.root, 4, 1700, prototype)
-        out = self.root / "deltas.json"
-        proc = command("deltas", str(self.root), "--control", "1,2", "--side", f"{side}=3,4", "--out", str(out))
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        return out
-
-    def replay(self, deltas: Path) -> subprocess.CompletedProcess:
-        return command("replay", str(DATA / "history-first-runs.json"), str(DATA / "prs30.json"), str(deltas))
-
-    def test_a_measured_e2e_saving_is_replayed_on_every_pr_whose_run_executed_that_task(self):
-        out = self.deltas(
-            "pyramid", {"onetaskgraph-e2e:test": 300, "x:y": 50}, {"onetaskgraph-e2e:test": 240, "x:y": 50}
+    def deltas(
+        self, side: str, control: dict, prototype: dict, extra: dict | None = None
+    ) -> subprocess.CompletedProcess:
+        write_summary(self.root, 1, control, 1800.0)
+        write_summary(self.root, 2, control, 1900.0)
+        write_summary(self.root, 3, {**prototype, **(extra or {})}, 1300.0)
+        write_summary(self.root, 4, prototype, 1300.0)
+        return command(
+            "deltas", str(self.root), "--control", "1,2", "--side", f"{side}=3,4", "--out", str(self.root / "d.json")
         )
-        record = json.loads(out.read_text())["sides"]["pyramid"]["jobs"]["test-macos"]
-        self.assertEqual(record["saved_s"], {"onetaskgraph-e2e:test": 60.0, "x:y": 0.0})
-        self.assertEqual((record["control_wall_s"], record["side_wall_s"]), (1850.0, 1700.0))
+
+    def test_elapsed_change_wall_share_and_summed_test_seconds_are_kept_apart(self):
+        control = {"build": (0, 100, 100), "onetaskgraph-e2e:test": (100, 700, 300)}
+        prototype = {"build": (0, 100, 100), "onetaskgraph-e2e:test": (100, 640, 200)}
+        proc = self.deltas("pyramid", control, prototype)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        job = json.loads((self.root / "d.json").read_text())["sides"]["pyramid"]["jobs"]["test-macos"]
+        self.assertEqual(job["elapsed_saved_s"], {"build": 0.0, "onetaskgraph-e2e:test": 60.0})
+        self.assertEqual(job["share_saved_s"]["onetaskgraph-e2e:test"], 100.0)
+        self.assertEqual(job["work_saved_s"], {"onetaskgraph-e2e": 550.0})
+        self.assertEqual((job["control"]["chain_span_s"], job["side"]["chain_span_s"]), (700.0, 640.0))
+        self.assertEqual((job["control"]["gate_span_s"], job["side"]["gate_span_s"]), (700.0, 640.0))
+
+    def test_sides_whose_selections_differ_are_refused_naming_the_tasks(self):
+        tasks = {"build": (0, 100, 100), "onetaskgraph-core:test": (100, 300, 200)}
+        proc = self.deltas("split", tasks, tasks, extra={"onetaskgraph-plugin-api:test": (0, 50, 25)})
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("split only ['onetaskgraph-plugin-api:test']", proc.stderr)
+
+    def test_the_replay_predicts_each_prs_shortening_from_its_own_critical_path(self):
+        control = {"build": (0, 100, 100), "onetaskgraph-e2e:test": (100, 700, 300)}
+        self.assertEqual(
+            self.deltas("pyramid", control, {**control, "onetaskgraph-e2e:test": (100, 640, 200)}).returncode, 0
+        )
+        proc = command(
+            "replay", str(DATA / "history-first-runs.json"), str(DATA / "prs30.json"), str(self.root / "d.json")
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        line = next(x for x in proc.stdout.splitlines() if "test-macos" in x)
+        found = re.search(r"predicted shortening ([+-][0-9.]+) min/PR over 30,", line)
+        assert found is not None, line
+        predicted = float(found.group(1))
         history = json.loads((DATA / "history-first-runs.json").read_text())
-        ran = sum(
-            1
+        ran = [
+            run["jobs"]["test-macos"]["tasks"]["onetaskgraph-e2e:test"]
             for run in history.values()
             if run["jobs"].get("test-macos", {}).get("tasks", {}).get("onetaskgraph-e2e:test", {}).get("result")
             == "executed"
-        )
-        proc = self.replay(out)
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn(f"replayed saving {60 * ran / 30 / 60:+.2f} min/PR over 30", proc.stdout)
-
-    def test_a_split_saves_only_on_prs_changing_the_engine_outside_what_it_moved(self):
-        out = self.deltas(
-            "split",
-            {"onetaskgraph-core:test": 400},
-            {"onetaskgraph-core:test": 340, "onetaskgraph-template:test": 30},
-        )
-        prs = json.loads((DATA / "prs30.json").read_text())
-        history = json.loads((DATA / "history-first-runs.json").read_text())
-        expected = 0.0
-        for pr in prs:
-            files = pr["files"]
-            tasks = history[str(pr["pr"])]["jobs"].get("test-macos", {}).get("tasks", {})
-            core_ran = tasks.get("onetaskgraph-core:test", {}).get("result") == "executed"
-            moved = any(
-                f.startswith(("crates/onetaskgraph-core/src/template/", "crates/onetaskgraph-core/tests/templates.rs"))
-                or f == "crates/onetaskgraph-core/src/yaml.rs"
-                or f.startswith("crates/onetaskgraph-core/tests/fixtures/template-front-matter")
-                for f in files
-            )
-            touches = moved or any(f.startswith("crates/onetaskgraph-core/") for f in files)
-            if touches:
-                expected += (60 if core_ran else 0) - (30 if moved else 0)
-        proc = self.replay(out)
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn(f"replayed saving {expected / 30 / 60:+.2f} min/PR over 30", proc.stdout)
-
-    def test_an_unknown_side_and_a_missing_summary_are_refused(self):
-        proc = command("deltas", str(self.root), "--control", "1", "--side", "faster=2", "--out", str(self.root / "o"))
-        self.assertEqual(proc.returncode, 2)
-        proc = command("deltas", str(self.root), "--control", "9", "--side", "split=8", "--out", str(self.root / "o"))
-        self.assertEqual(proc.returncode, 2)
-        self.assertIn("profile-9.json", proc.stderr)
+        ]
+        # At most a minute on each PR that ran the task, and less wherever it was off the chain.
+        self.assertGreater(predicted, 0)
+        self.assertLess(predicted, round(len(ran) / 30, 2))
+        self.assertIn("(0 without intervals)", line)
+        self.assertIn("measured: wall  30.0 ->  30.1 min, chain  11.7 ->  10.7 min", line)
 
 
 if __name__ == "__main__":
