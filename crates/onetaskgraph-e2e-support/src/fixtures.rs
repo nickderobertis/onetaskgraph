@@ -3894,9 +3894,10 @@ pub enum ReferenceFault {
     StatusNamingNoOption,
 }
 
-/// The longest text the loopback board's text fields take, in characters: what spike
-/// `spike-sample-ticket` measured a real board taking, 1,025 refused.
-pub const GITHUB_TEXT_FIELD_LIMIT: usize = 1024;
+/// The longest text the loopback board's text fields take, counted in characters as GitHub
+/// may count it: the GitHub Projects source's own limit, which spike `spike-sample-ticket`
+/// measured a real board holding, so the board here is as strict as the source assumes.
+pub use onetaskgraph_github_projects::TEXT_FIELD_LIMIT as GITHUB_TEXT_FIELD_LIMIT;
 
 /// The token a source configured by [`GitHubBoardFields::second_board`] sends, which tells its
 /// requests from the first board's in this server's one log.

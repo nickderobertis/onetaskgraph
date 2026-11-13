@@ -3882,7 +3882,7 @@ impl MetadataField {
 /// which can only shorten a non-ASCII value earlier than GitHub would, never send one it
 /// refuses.
 // llmlint: ignore[contracts_have_one_source_or_a_drift_gate] GitHub publishes no machine-readable statement of this limit — neither its documentation nor its GraphQL schema (`ProjectV2FieldValue.text: String`) names one — so the only source is the measurement above, and a live probe would spend the credentialed lane's budget, which is a decision outside this change. Drift cannot pass silently either way: a raised limit only shortens a value earlier than needed, and a lowered one makes GitHub refuse the write, which fails the command naming the field.
-const TEXT_FIELD_LIMIT: usize = 1024;
+pub const TEXT_FIELD_LIMIT: usize = 1024;
 
 /// The text a board text field holds for `value`, as `docs/metadata.md` states it: a string as
 /// itself, an array's elements and an object's `KEY: VALUE` entries — in byte order of the
@@ -17768,6 +17768,25 @@ mod unprojectable_fields_tests {
             )
             .map(str::to_owned)
             .collect()
+    }
+
+    /// `docs/metadata.md` states the text field's limit a caller is held to; it is this source's
+    /// own constant, so the two cannot part.
+    #[test]
+    fn the_documented_text_field_limit_is_the_one_the_source_shortens_at() {
+        let document = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/metadata.md"),
+        )
+        .expect("docs/metadata.md is readable");
+        let lead = "**A text field holds at most ";
+        let start = document.find(lead).expect("the limit sentence") + lead.len();
+        let stated = &document[start..start + document[start..].find(',').unwrap() + 4];
+        assert_eq!(
+            stated.replace(',', "").parse::<usize>().ok(),
+            Some(TEXT_FIELD_LIMIT),
+            "docs/metadata.md states {stated:?}"
+        );
+        assert!(document[start..].starts_with(&format!("{stated}, counted here in UTF-8 bytes.")));
     }
 
     #[test]
