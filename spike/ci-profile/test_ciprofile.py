@@ -135,16 +135,103 @@ class SamplerTests(unittest.TestCase):
             self.assertEqual(sampler.classify(name, cmd), want, name)
 
 
+class RunnerShimTests(unittest.TestCase):
+    """The runner through its real command: libtest JSON on, and a cargo the test starts sees no RUSTC_BOOTSTRAP."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp)
+        self.fake_cargo = self.tmp / "real-cargo"
+        self.fake_cargo.write_text("#!/usr/bin/env python3\nimport os, sys\n"
+                                   "print('bootstrap=' + str(os.environ.get('RUSTC_BOOTSTRAP')) + ' args=' + ' '.join(sys.argv[1:]))\n")
+        self.fake_cargo.chmod(0o755)
+
+    def run_binary(self, body: str, code: int):
+        binary = self.tmp / "suite-0123456789abcdef"
+        binary.write_text("#!/usr/bin/env python3\nimport json, os, subprocess, sys\n" + body + f"\nsys.exit({code})\n")
+        binary.chmod(0o755)
+        record = self.tmp / "spike" / "tests.jsonl"
+        record.parent.mkdir()
+        env = dict(os.environ, SPIKE_TEST_RECORD=str(record), CARGO=str(self.fake_cargo))
+        proc = subprocess.run([sys.executable, str(HERE / "testrunner.py"), str(binary), "-q"],
+                              capture_output=True, text=True, env=env)
+        return proc, [json.loads(x) for x in record.read_text().splitlines()]
+
+    @unittest.skipUnless(shutil.which("rustc") and os.name != "nt", "compiles the shim with rustc")
+    def test_a_cargo_the_test_starts_runs_without_rustc_bootstrap(self):
+        proc, events = self.run_binary(
+            "assert os.environ['RUSTC_BOOTSTRAP'] == '1' and '--format=json' in sys.argv and '-q' not in sys.argv\n"
+            "seen = subprocess.run(['cargo', 'test', '--no-run'], capture_output=True, text=True).stdout.strip()\n"
+            "print(json.dumps({'type': 'suite', 'event': 'started', 'test_count': 1}))\n"
+            "print(json.dumps({'type': 'test', 'event': 'ok', 'name': 'nested', 'exec_time': 0.5, 'stdout': seen}))\n"
+            "print(json.dumps({'type': 'suite', 'event': 'ok', 'passed': 1, 'failed': 0, 'exec_time': 0.5}))\n"
+            "print(seen, file=sys.stderr)", 0)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("bootstrap=None args=test --no-run", proc.stderr)
+        self.assertEqual([e["exec_time"] for e in events if e.get("type") == "test"], [0.5])
+        self.assertIn("test result: ok. 1 passed", proc.stdout)
+
+    @unittest.skipUnless(shutil.which("rustc") and os.name != "nt", "compiles the shim with rustc")
+    def test_a_failing_suite_keeps_its_status_and_prints_what_failed(self):
+        proc, events = self.run_binary(
+            "print(json.dumps({'type': 'suite', 'event': 'started', 'test_count': 1}))\n"
+            "print('not json from the binary')\n"
+            "print(json.dumps({'type': 'test', 'event': 'failed', 'name': 't::slow', 'exec_time': 1.5, 'stdout': 'boom'}))\n"
+            "print(json.dumps({'type': 'suite', 'event': 'failed', 'passed': 0, 'failed': 1, 'exec_time': 1.5}))", 101)
+        self.assertEqual(proc.returncode, 101)
+        self.assertIn("boom", proc.stdout)
+        self.assertIn("not json from the binary", proc.stdout)
+        self.assertIn("test result: failed", proc.stdout)
+
+    def test_no_binary_is_a_usage_error_on_standard_error(self):
+        proc = subprocess.run([sys.executable, str(HERE / "testrunner.py")], capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("testrunner.py <test binary>", proc.stderr)
+
+
 class MeasurementOnlyTests(unittest.TestCase):
-    def test_todays_workflow_writes_no_cache_and_records_every_test_job(self):
-        text = measurement_only.apply((HERE.parents[1] / ".github/workflows/ci.yml").read_text(encoding="utf-8"), "x,y")
+    def run_tool(self, *args):
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp)
+        workflow = tmp / "ci.yml"
+        shutil.copy(HERE.parents[1] / ".github/workflows/ci.yml", workflow)
+        proc = subprocess.run([sys.executable, str(HERE / "measurement_only.py"), str(workflow), *args],
+                              capture_output=True, text=True)
+        return proc, workflow.read_text(encoding="utf-8")
+
+    def test_todays_workflow_writes_no_cache_and_scopes_every_measurement_variable_to_the_test_step(self):
+        proc, text = self.run_tool("--exclude=x,y", "--step-env=CARGO_PROFILE_RELEASE_INCREMENTAL=true")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertNotIn("save-cache: ${{", text)
         self.assertNotRegex(text, r"cache-save-if: (?!false)")
         self.assertNotRegex(text, r"CACHE_READ_ONLY: (?!'1')")
         self.assertNotIn("nx-cache-entries-", text)
+        self.assertNotIn("GITHUB_ENV", text.split("spike: install the process sampler")[1].split("Test the affected")[0])
         for job in ("test-linux", "test-macos", "test-windows"):
             self.assertIn(f"name: spike-profile-{job}", text)
             self.assertIn(f"just ci-{job} --exclude=x,y || status=$?", text)
+        # Every CARGO_* a measurement sets is exported inside the test step, after every cache restore.
+        for line in [x for x in text.splitlines() if "CARGO_PROFILE_RELEASE_INCREMENTAL" in x or "_RUNNER=" in x]:
+            self.assertTrue(line.startswith("          export "), line)
+
+    def test_without_recorders_only_the_cache_edits_and_the_step_env_remain(self):
+        proc, text = self.run_tool("--no-recorders")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertNotIn("sampler.py", text)
+        self.assertNotIn("testrunner.py", text)
+        self.assertIn("save-cache: false", text)
+
+    def test_shell_text_and_an_unknown_workflow_are_refused(self):
+        proc, _ = self.run_tool("--exclude=a;$(x)")
+        self.assertEqual(proc.returncode, 2)
+        proc, _ = self.run_tool("--step-env=lower=1")
+        self.assertEqual(proc.returncode, 2)
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp)
+        (tmp / "ci.yml").write_text("name: other\n")
+        proc = subprocess.run([sys.executable, str(HERE / "measurement_only.py"), str(tmp / "ci.yml")], capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("not one the spike's edits know", proc.stderr)
 
 
 if __name__ == "__main__":
