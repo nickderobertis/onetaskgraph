@@ -28,6 +28,7 @@ REST_FLOOR = 2500
 GRAPHQL_FLOOR = 2000
 CHECK_EVERY = 25
 PAGE = 100
+COMPLETE = ".complete"
 KEPT_SUFFIXES = (".json", ".jsonl", ".xml", ".txt", ".csv", ".spawns")
 
 
@@ -117,42 +118,42 @@ class GitHub:
                         target.write_text(json.dumps(entry))
         return Run.parse(json.loads(await self._cached(f"runs/{run_id}/run.json", f"actions/runs/{run_id}")))
 
-    async def jobs(self, run_id: RunId) -> list[Job]:
-        legacy = self.cache / f"runs/{run_id}/jobs.json"  # an earlier release of this cache kept one page
+    async def _listing(self, run_id: RunId, kind: str) -> list[Any]:
+        """A run's jobs or artifacts: a whole one-page listing an earlier release of this cache kept, or every page."""
+        legacy = self.cache / f"runs/{run_id}/{kind}.json"
         if legacy.exists():
-            raw = items(obj(json.loads(legacy.read_text()), "jobs").get("jobs"), "jobs")
-        else:
-            raw = await self._pages(f"runs/{run_id}/jobs", f"actions/runs/{run_id}/jobs?", "jobs")
-        return [Job.parse(j) for j in raw]
+            body = obj(json.loads(legacy.read_text()), str(legacy))
+            found = items(body.get(kind), f"{legacy} {kind}")
+            total = body.get("total_count", len(found))
+            if isinstance(total, int) and not isinstance(total, bool) and total <= len(found):
+                return found
+        return await self._pages(f"runs/{run_id}/{kind}", f"actions/runs/{run_id}/{kind}?", kind)
+
+    async def jobs(self, run_id: RunId) -> list[Job]:
+        return [Job.parse(j) for j in await self._listing(run_id, "jobs")]
 
     async def job_log(self, run_id: RunId, job: Job) -> str:
         data = await self._cached(f"runs/{run_id}/logs/{job.id}.txt", f"actions/jobs/{job.id}/logs")
         return data.decode("utf-8", "replace")
 
     async def artifacts(self, run_id: RunId) -> list[Artifact]:
-        legacy = self.cache / f"runs/{run_id}/artifacts.json"
-        if legacy.exists():
-            raw = items(obj(json.loads(legacy.read_text()), "artifacts").get("artifacts"), "artifacts")
-        else:
-            raw = await self._pages(f"runs/{run_id}/artifacts", f"actions/runs/{run_id}/artifacts?", "artifacts")
-        return [Artifact.parse(a) for a in raw]
+        return [Artifact.parse(a) for a in await self._listing(run_id, "artifacts")]
 
     async def artifact_member(self, run_id: RunId, name: str, member: str) -> bytes | None:
-        """One file of a named artifact, cached unzipped; None when the run holds no such artifact or file."""
+        """One file of a named artifact, cached unzipped; None when the run holds no such artifact or file.
+
+        An artifact is downloaded and extracted whole, then marked complete; a directory without the
+        mark is an interrupted extraction and is downloaded again."""
         directory = self.cache / f"runs/{run_id}/artifacts/{name}"
-        target, absent = directory / member, directory / f"{member}.absent"
-        if target.exists():
-            return target.read_bytes()
-        if absent.exists() or (directory.exists() and any(directory.iterdir())):
-            return None
-        found = [a for a in await self.artifacts(run_id) if a.name == name and not a.expired]
-        directory.mkdir(parents=True, exist_ok=True)
-        if found:
-            extract(await self._read(f"actions/artifacts/{found[0].id}/zip"), directory)
-        if not target.exists():
-            absent.write_text("")
-            return None
-        return target.read_bytes()
+        complete = directory / COMPLETE
+        if not complete.exists():
+            found = [a for a in await self.artifacts(run_id) if a.name == name and not a.expired]
+            directory.mkdir(parents=True, exist_ok=True)
+            if found:
+                extract(await self._read(f"actions/artifacts/{found[0].id}/zip"), directory)
+            complete.write_text("present\n" if found else "absent\n")
+        target = directory / member
+        return target.read_bytes() if target.is_file() else None
 
     async def runs_list(self, query: str, pages: int) -> list[Run]:
         name = "lists/" + query.replace("/", "_").replace("&", "_").replace("=", "_")

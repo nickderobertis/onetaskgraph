@@ -162,8 +162,10 @@ def fixture_cache(root: Path) -> Path:
     executions = run / "artifacts/nx-cache-entries-test-macos"
     executions.mkdir(parents=True)
     (executions / "executions.json").write_text(json.dumps(EXECUTIONS))
+    (executions / ".complete").write_text("present\n")  # as the client marks an extracted artifact
     records = run / "artifacts/spike-profile-test-macos"
     records.mkdir(parents=True)
+    (records / ".complete").write_text("present\n")
     (records / "tests.jsonl").write_text(
         "\n".join(
             json.dumps(e)
@@ -466,10 +468,10 @@ class ReplayCommandTests(unittest.TestCase):
         (root / "scripts/helper.py").write_text("open('release-targets.toml')\n")
         (root / "scripts/test.sh").write_text("echo missing/never.sh\n")
         (root / "release-targets.toml").write_text("")
-        reads = replay.distribution_reads(root)
+        reads = replay.distribution_named_files(root)
         self.assertEqual(reads, {"scripts/check.sh", "scripts/helper.py", "scripts/test.sh", "release-targets.toml"})
         # Against this repository: every file the real distribution scripts name is publishable.
-        real = replay.Publishable(replay.distribution_reads(replay.REPO_ROOT))
+        real = replay.Publishable(replay.distribution_named_files(replay.REPO_ROOT))
         for script in ("scripts/test-distribution.sh", "scripts/check-distribution-contract.sh"):
             text = (replay.REPO_ROOT / script).read_text()
             for named in replay.NAMED_FILE.findall(text):

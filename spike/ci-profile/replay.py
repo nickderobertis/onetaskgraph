@@ -18,7 +18,9 @@ time it held a slot, split with whatever ran beside it) — an estimate of the j
 
 What the distribution journeys read is derived from the repository at --root, not listed here:
 crate sources and manifests, and every file the commands of `scripts:distribution-check` and
-`scripts:distribution-test` name, followed through each script those name in turn.
+`scripts:distribution-test` name literally, followed through each script those name in turn — a
+lower bound, since a path a script builds at run time is not seen; the option's saving is an
+upper bound for the same reason.
 
 Exit status: 0 the replay printed; 2 a usage error or an input of a shape it does not read.
 """
@@ -87,8 +89,11 @@ class Option(Enum):
     DISTRIBUTION_WHEN_PUBLISHABLE = "distribution-only-when-publishable-changes"
 
 
-def distribution_reads(root: Path) -> frozenset[str]:
-    """Every repository file the distribution journeys' commands name, followed through the scripts they name."""
+def distribution_named_files(root: Path) -> frozenset[str]:
+    """The repository files the distribution journeys' commands name literally, followed through each script so named.
+
+    A path a script builds at run time (`npm/platforms/${platform}/package.json`) or names as a directory
+    (`sdks/python`) is not seen, so this is a lower bound on what the journeys read."""
     where = "scripts/project.json"
     targets = obj(obj(json.loads((root / where).read_text()), where).get("targets"), f"{where} targets")
     pending: list[str] = []
@@ -111,7 +116,7 @@ def distribution_reads(root: Path) -> frozenset[str]:
 
 @dataclass(frozen=True)
 class Publishable:
-    """The files a distribution journey reads: crate sources and manifests, and what its scripts name."""
+    """What a distribution journey is known to read: crate sources and manifests, and the files its scripts name."""
 
     named: frozenset[str]
 
@@ -321,7 +326,7 @@ def main(argv: list[str]) -> int:
             parse_prs(json.loads(args.prs.read_text())),
             load_inputs(args.inputs_after),
             load_inputs(args.inputs_before),
-            Publishable(distribution_reads(args.root)),
+            Publishable(distribution_named_files(args.root)),
         )
     except (OSError, ValueError) as error:
         print(f"replay: {type(error).__name__}: {error}", file=sys.stderr)

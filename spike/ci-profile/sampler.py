@@ -20,8 +20,10 @@ import os
 import re
 import sys
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, Protocol
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -108,6 +110,34 @@ def classify(name: str, cmdline: list[str]) -> Category:
             return Category.OTHER
 
 
+class CpuTimes(Protocol):
+    @property
+    def user(self) -> float: ...
+
+    @property
+    def system(self) -> float: ...
+
+
+class ProcessEntry(Protocol):
+    """One process as psutil's `process_iter` yields it."""
+
+    @property
+    def info(self) -> dict[str, Any]: ...
+
+    def cmdline(self) -> list[str]: ...
+
+    def cpu_times(self) -> CpuTimes: ...
+
+
+class ProcessTable(Protocol):
+    """The operating system's process table as the sampler reads it: the `psutil` module, or a stand-in."""
+
+    @property
+    def Error(self) -> type[Exception]: ...  # noqa: N802 — psutil's own name for its error type
+
+    def process_iter(self, attrs: list[str]) -> Iterable[ProcessEntry]: ...
+
+
 @dataclass
 class Seen:
     """A process the sampler has classified, with what it last read of it."""
@@ -169,7 +199,7 @@ def exits(seen: dict[int, Seen], alive: dict[int, Alive]) -> list[Exit]:
     return out
 
 
-def sample(psutil, seen: dict[int, Seen], me: int, previous: float, tick: float) -> Sample:
+def sample(psutil: ProcessTable, seen: dict[int, Seen], me: int, previous: float, tick: float) -> Sample:
     now = time.time()
     alive: dict[int, Alive] = {}
     cpu: dict[Category, float] = {}
@@ -195,7 +225,7 @@ def sample(psutil, seen: dict[int, Seen], me: int, previous: float, tick: float)
     return Sample(now, alive, cpu)
 
 
-def cpu_of(psutil, proc, fallback: float) -> float:
+def cpu_of(psutil: ProcessTable, proc: ProcessEntry, fallback: float) -> float:
     try:
         times = proc.cpu_times()
         return times.user + times.system

@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import io
 import json
 import re
@@ -16,6 +17,7 @@ import unittest
 import unittest.mock
 import zipfile
 from pathlib import Path
+from typing import Any
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -600,30 +602,37 @@ class ReplayOptionJourneyTests(unittest.TestCase):
         )
 
 
+@dataclasses.dataclass(frozen=True)
+class FakeTimes:
+    user: float
+    system: float = 0.0
+
+
 class FakeProcess:
     """One entry of a stand-in process table: what psutil reports of a process."""
 
     def __init__(self, pid: int, ppid: int, name: str, created: float, cpu: float, *, cmdline: tuple[str, ...] = ()):
-        self.info = {"pid": pid, "ppid": ppid, "name": name, "create_time": created}
+        self.info: dict[str, Any] = {"pid": pid, "ppid": ppid, "name": name, "create_time": created}
         self.cpu = cpu
         self.command = list(cmdline)
 
     def cmdline(self) -> list[str]:
         return self.command
 
-    def cpu_times(self):
-        return type("Times", (), {"user": self.cpu, "system": 0.0})()
+    def cpu_times(self) -> FakeTimes:
+        return FakeTimes(self.cpu)
 
 
 class FakeProcessTable:
     """The OS boundary the sampler reads, as psutil presents it."""
 
-    Error = OSError
+    Error: type[Exception] = OSError
 
     def __init__(self) -> None:
         self.processes: list[FakeProcess] = []
 
-    def process_iter(self, _fields):
+    def process_iter(self, attrs: list[str]) -> list[FakeProcess]:
+        del attrs  # psutil reads only the named fields; the stand-in holds every one
         return list(self.processes)
 
 
@@ -674,3 +683,101 @@ class SamplerAccountingTests(unittest.TestCase):
         self.assertEqual(
             {(e.pid, e.category) for e in gone}, {(30, models.Category.PYTHON), (31, models.Category.COMPILE)}
         )
+
+
+class MoreProducerContractTests(unittest.TestCase):
+    def test_each_jobs_runner_target_is_the_triple_of_the_image_it_runs_on(self):
+        import measurement_only  # noqa: PLC0415 — beside this file
+
+        workflow = (REPO / ".github/workflows/ci.yml").read_text()
+        images = dict(re.findall(r"\n  (test-[a-z]+):\n(?:    [^\n]*\n)*?    runs-on: ([\w.-]+)", workflow))
+        expected = {
+            "ubuntu-latest": "X86_64_UNKNOWN_LINUX_GNU",
+            "macos-latest": "AARCH64_APPLE_DARWIN",
+            "windows-latest": "X86_64_PC_WINDOWS_MSVC",
+        }
+        self.assertEqual(set(images), set(measurement_only.TRIPLES))
+        for job, image in images.items():
+            self.assertEqual(measurement_only.TRIPLES[job], expected[image], f"{job} runs on {image}")
+
+    def test_the_stored_entries_line_is_the_one_the_cache_report_prints(self):
+        source = (REPO / "scripts/nx-remote-cache.mjs").read_text()
+        template = re.search(
+            r"`(Nx cache: stored \$\{.*?\} entries, \$\{.*?\} bytes; replayed \$\{.*?\} entries)`", source
+        )
+        assert template is not None, "nx-remote-cache.mjs no longer prints its stored-entries line"
+        rendered = re.sub(r"\$\{(?:[^{}]|\{[^{}]*\})*\}", "7", template.group(1))
+        match = prof.STORED.search(rendered)
+        assert match is not None, f"{rendered!r} is not read by jobprofile.STORED"
+        self.assertEqual((match.group("n"), match.group("bytes"), match.group("r")), ("7", "7", "7"))
+
+
+class CacheRecoveryTests(unittest.TestCase):
+    def test_a_missing_member_is_answered_from_the_cache_and_an_interrupted_extraction_is_redone(self):
+        root = scratch(self)
+        env = ClientTests().artifact_gh(root, {"tests.jsonl": b"{}\n"})
+        with unittest.mock.patch.dict("os.environ", env):
+            gh = ghcache.GitHub(cache=root / "cache", offline=False)
+            for _ in range(2):
+                self.assertIsNone(
+                    asyncio.run(gh.artifact_member(models.RunId(RUN), "spike-profile-test-macos", "x.json"))
+                )
+            downloads = sum("artifacts/3/zip" in c for c in (root / "calls.log").read_text().splitlines())
+            self.assertEqual(downloads, 1)
+            directory = root / f"cache/runs/{RUN}/artifacts/spike-profile-test-macos"
+            (directory / ghcache.COMPLETE).unlink()
+            (directory / "tests.jsonl").unlink()
+            self.assertEqual(
+                asyncio.run(gh.artifact_member(models.RunId(RUN), "spike-profile-test-macos", "tests.jsonl")), b"{}\n"
+            )
+        self.assertEqual(sum("artifacts/3/zip" in c for c in (root / "calls.log").read_text().splitlines()), 2)
+
+    def test_a_truncated_legacy_listing_is_paged_again(self):
+        root = scratch(self)
+        env = fake_gh(
+            root,
+            remaining=4000,
+            responses={
+                f"actions/runs/{RUN}/jobs?per_page=100&page=1": {"total_count": 2, "jobs": [JOB, {**JOB, "id": 6}]}
+            },
+        )
+        legacy = root / f"cache/runs/{RUN}/jobs.json"
+        legacy.parent.mkdir(parents=True)
+        legacy.write_text(json.dumps({"total_count": 2, "jobs": [JOB]}))
+        with unittest.mock.patch.dict("os.environ", env):
+            jobs = asyncio.run(ghcache.GitHub(cache=root / "cache", offline=False).jobs(models.RunId(RUN)))
+        self.assertEqual([j.id for j in jobs], [5, 6])
+
+
+class LogFallbackTests(unittest.TestCase):
+    def test_a_local_replay_in_the_log_stays_a_local_hit(self):
+        log = "\n".join(
+            [*LOG.splitlines()[:6], "2026-11-12T04:01:06.0000000Z [test,budgets] > nx run e-crate:test  [local cache]"]
+        )
+        p = prof.profile_job(models.Job.parse(JOB), log, None)
+        self.assertEqual({t.id: t.result for t in p.tasks}, {"e-crate:test": models.TaskResult.LOCAL_HIT})
+
+
+class ShimInstallTests(unittest.TestCase):
+    @unittest.skipUnless(shutil.which("rustc"), "compiles the shim with rustc")
+    def test_runners_installing_the_shim_at_once_all_run_their_binary(self):
+        root = scratch(self)
+        binary = root / "probe-0123456789abcdef"
+        binary.write_text(
+            "#!/usr/bin/env python3\nimport json\n"
+            "print(json.dumps({'type': 'suite', 'event': 'started', 'test_count': 0}))\n"
+            "print(json.dumps({'type': 'suite', 'event': 'ok', 'passed': 0, 'failed': 0, 'exec_time': 0.0}))\n"
+        )
+        binary.chmod(0o755)
+        record = root / "spike" / "tests.jsonl"
+        record.parent.mkdir()
+        env = {**__import__("os").environ, "SPIKE_TEST_RECORD": str(record), "CARGO": sys.executable}
+        runners = [
+            subprocess.Popen(
+                [sys.executable, str(HERE / "testrunner.py"), str(binary)], env=env, stdout=subprocess.DEVNULL
+            )
+            for _ in range(4)
+        ]
+        self.assertEqual([r.wait(timeout=300) for r in runners], [0, 0, 0, 0])
+        self.assertTrue((record.parent / "cargo-shim/cargo").exists())
+        self.assertEqual(len([p for p in (record.parent / "cargo-shim").iterdir() if p.is_dir()]), 0)
