@@ -2058,7 +2058,7 @@ fn task_states(plan: &Plan, project: &str) -> Vec<(String, Value, Value)> {
     states
 }
 
-/// `states`, sorted as [`task_states`] answers them.
+/// `states`, in the order [`task_states`] answers them in.
 fn sorted(mut states: Vec<(String, Value, Value)>) -> Vec<(String, Value, Value)> {
     states.sort_by(|left, right| left.0.cmp(&right.0));
     states
@@ -2352,18 +2352,23 @@ fn a_record_the_previous_release_wrote_reads_valid_and_travels_through_a_copy() 
 fn the_item_a_private_copy_was_made_from_is_found_only_when_its_link_says_so_unambiguously() {
     // Every answer the private side's correspondence gives, through the binary over folders of
     // Markdown: `authoring` and `vault` declared private, beside a private Linear workspace that
-    // answers every request rate limited; `published` and `onward` declared public. Authoring's
-    // `a` records `vault:root-a` as its root, and `b` depends on it; project `downstream`
-    // depends on project `upstream`.
+    // answers every request rate limited and one whose credential is absent; `published` and
+    // `onward` declared public. Authoring's `a` records `vault:root-a` as its root, and `b`
+    // depends on it; project `downstream` depends on project `upstream`, listed after sixty
+    // other projects so the one linking to its copy is past the first page.
     let plan = Plan::new(false);
     let vault = plan.sandbox.subdirectory("vault");
     let published = plan.sandbox.subdirectory("published");
     let onward = plan.sandbox.subdirectory("onward");
     let (limited, _) = linear_rate_limited(&plan.sandbox);
+    // A private workspace whose credential is not there at all.
+    let (mut keyless, _) = linear_rate_limited(&plan.sandbox);
+    keyless["api_key_env"] = json!("ONETASKGRAPH_TEST_NO_SUCH_KEY");
     let mut configured: Value = serde_json::from_str(&document(&json!({
         "authoring": {"plugin": "local-md", "visibility": "private",
                       "config": {"root": plan.notes}},
         "secret": {"plugin": "linear", "visibility": "private", "config": limited},
+        "keyless": {"plugin": "linear", "visibility": "private", "config": keyless},
         "vault": {"plugin": "local-md", "visibility": "private", "config": {"root": vault}},
         "published": {"plugin": "local-md", "visibility": "public",
                       "config": {"root": published}},
@@ -2538,5 +2543,97 @@ fn the_item_a_private_copy_was_made_from_is_found_only_when_its_link_says_so_una
         "valid",
         Value::Null,
         "its edge names the copy of the project it depended on",
+    );
+
+    // A far end in a public source that nothing private links to is named by its own id, so a
+    // record taken over it holds; a private source failing for any other reason than being
+    // unreachable fails the check rather than reading as no link.
+    write(
+        &published,
+        "tasks/p.md",
+        "---\ntitle: P\nstatus: todo\nproject: launch\n\
+         metadata:\n  \"onetaskgraph.origin\": \"vault:root-p\"\n---\nDo P.\n",
+    );
+    write(
+        &published,
+        "tasks/q.md",
+        "---\ntitle: Q\nstatus: todo\nproject: launch\ndepends_on: [p, n]\n---\nDo Q.\n",
+    );
+    write(
+        &published,
+        "tasks/n.md",
+        "---\ntitle: N\nstatus: todo\nproject: launch\n---\nDo N.\n",
+    );
+    plan.attest("task", "published:q");
+    plan.holds(
+        "task",
+        "published:q",
+        "valid",
+        Value::Null,
+        "a far end no private item links to",
+    );
+    write(&vault, "tasks/broken.md", "---\ntitle: [unclosed\n---\n");
+    let broken = plan.run(&[
+        "task",
+        "attestation",
+        "check",
+        "published:q",
+        "--kind",
+        KIND,
+    ]);
+    assert_ne!(
+        broken.status.code(),
+        Some(0),
+        "a private source failing: {}",
+        stdout(&broken)
+    );
+    assert!(
+        stderr(&broken).contains("vault"),
+        "the failure names the private source: {}",
+        stderr(&broken)
+    );
+    std::fs::remove_file(vault.join("tasks/broken.md")).expect("the broken file goes");
+
+    // Copied on, Q's copy's far end records `published:p`, which is read for the root it
+    // records in turn — `vault:root-p` — and a read of it that fails fails the check.
+    let tasks = plan.json(&[
+        "task",
+        "copy",
+        "published:p",
+        "published:n",
+        "published:q",
+        "--to",
+        "onward",
+    ]);
+    let onward_q = landed(&tasks, "published:q");
+    plan.holds(
+        "task",
+        &onward_q,
+        "valid",
+        Value::Null,
+        "by the root its far end's origin records",
+    );
+    let p_file = published.join("tasks/p.md");
+    let p_text = std::fs::read_to_string(&p_file).expect("p's file");
+    std::fs::write(&p_file, "---\ntitle: [unclosed\n---\n").expect("a broken file");
+    let unread = plan.run(&["task", "attestation", "check", &onward_q, "--kind", KIND]);
+    assert_ne!(
+        unread.status.code(),
+        Some(0),
+        "the recorded root unreadable: {}",
+        stdout(&unread)
+    );
+    assert!(
+        stderr(&unread).contains("published"),
+        "the failure names the source holding it: {}",
+        stderr(&unread)
+    );
+    std::fs::write(&p_file, p_text).expect("restored");
+    plan.holds(
+        "task",
+        &onward_q,
+        "valid",
+        Value::Null,
+        "its far end's origin restored",
     );
 }

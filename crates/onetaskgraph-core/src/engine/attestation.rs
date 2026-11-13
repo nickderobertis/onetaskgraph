@@ -675,7 +675,6 @@ enum Root {
 }
 
 impl Root {
-    /// The id it names.
     fn id(&self) -> &GlobalId {
         match self {
             Self::Read(id) | Self::Recorded(id) => id,
