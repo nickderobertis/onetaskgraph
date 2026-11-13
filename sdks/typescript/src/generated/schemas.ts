@@ -11682,6 +11682,14 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
         "description": "Whether this source's tasks carry their assignee: `false`, the default, reads every task\nwithout an `assignees` member, refuses every write naming one and sends Linear exactly\nthe documents it sent before assignees existed; `true` reads each issue's\n`assignee{displayName}` — a Linear user's display name, unique within its workspace —\nand writes one person, or none, as the issue's `assigneeId`.",
         "type": "boolean",
         "default": false
+      },
+      "metadata_fields": {
+        "description": "Caller metadata values this source shows in one collapsed `Fields` section at the end\nof each task's, project's and document's visible description, since Linear has no\ncustom fields and never renders the slot the metadata is kept in.\n\nAbsent or empty, no section is written. Each entry names the `field` a value is shown\nunder, a top-level metadata `key` and an optional `path` of object keys walked inside\nthat key's value — the entries a `github-projects` source takes, refused at read for the\nsame reasons but for that source's own board field names. A string, an array of strings\nand an object of string values are shown, an empty one or nothing not at all; any other\nJSON type is refused before any mutation. The section is display only: the slot stays\nthe metadata's one home, every read gives back the caller's content without it, and\nevery write regenerates it. `docs/metadata.md` states its shape.",
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/LinearMetadataField"
+        },
+        "default": []
       }
     },
     "additionalProperties": false,
@@ -11826,6 +11834,33 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
           }
         },
         "additionalProperties": false
+      },
+      "LinearMetadataField": {
+        "description": "One `metadata_fields` entry of a `linear` source's configuration: the same shape a\n`github-projects` source takes.",
+        "type": "object",
+        "properties": {
+          "field": {
+            "description": "The name the value is shown under, in bold, in the item's `Fields` section.",
+            "type": "string"
+          },
+          "key": {
+            "description": "The top-level metadata key the value is read from. A key under the reserved\n`onetaskgraph.` prefix is refused.",
+            "type": "string"
+          },
+          "path": {
+            "description": "Object keys walked inside that key's value, outermost first. Absent or empty, the\nkey's own value is the one shown. Left out of a serialized entry when empty.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": []
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "field",
+          "key"
+        ]
       }
     }
   },
@@ -34284,6 +34319,14 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "type": "null"
           }
         ]
+      },
+      "metadata_fields": {
+        "description": "Each `metadata_fields` entry, in configuration order: each is shown in an item's\n`Fields` section rather than in a field Linear holds, so none is ever missing and\n`--apply` creates nothing for it. Absent when the source configures none.",
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/SectionFieldReport"
+        },
+        "default": []
       }
     },
     "required": [
@@ -34434,6 +34477,47 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
           "kind",
           "name",
           "message"
+        ]
+      },
+      "SectionFieldReport": {
+        "description": "One `metadata_fields` entry of a `linear` source, as `sources fields` reports it.",
+        "type": "object",
+        "properties": {
+          "field": {
+            "description": "The name the value is shown under.",
+            "type": "string"
+          },
+          "key": {
+            "description": "The top-level metadata key the value is read from.",
+            "type": "string"
+          },
+          "path": {
+            "description": "Object keys walked inside that key's value; absent when the key's own value is shown.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "carried": {
+            "description": "Where the value is carried: always `section`, the item's `Fields` section.",
+            "$ref": "#/$defs/SectionCarried"
+          }
+        },
+        "required": [
+          "field",
+          "key",
+          "path",
+          "carried"
+        ]
+      },
+      "SectionCarried": {
+        "description": "Where a `linear` source carries a `metadata_fields` value.",
+        "oneOf": [
+          {
+            "description": "In the collapsed `Fields` section at the end of the item's description.",
+            "type": "string",
+            "const": "section"
+          }
         ]
       }
     }

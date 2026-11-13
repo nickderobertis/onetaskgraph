@@ -126,10 +126,10 @@ pub fn fields(report: &FieldsReport) -> String {
 /// create Linear refused is the command's failure, which it reports on stderr.
 pub fn status_names(report: &onetaskgraph_linear::StatusNamesReport) -> String {
     let word = |value: serde_json::Value| value.as_str().map(str::to_owned).unwrap_or_default();
-    if report.names.is_empty() {
-        return format!("{}: status_mapping names no status\n", report.source);
-    }
     let mut rendered = String::new();
+    if report.names.is_empty() {
+        rendered = format!("{}: status_mapping names no status\n", report.source);
+    }
     for mapped in &report.names {
         let kind = word(serde_json::to_value(mapped.kind()).unwrap_or_default());
         let category = word(serde_json::to_value(mapped.category()).unwrap_or_default());
@@ -160,6 +160,18 @@ pub fn status_names(report: &onetaskgraph_linear::StatusNamesReport) -> String {
             "{}: {kind} {category} -> {}: {found}\n",
             report.source,
             mapped.name()
+        ));
+    }
+    // A metadata value is shown in the item's `Fields` section, so there is nothing to create.
+    for field in &report.metadata_fields {
+        let at = if field.path.is_empty() {
+            String::new()
+        } else {
+            format!(" at {}", field.path.join("."))
+        };
+        rendered.push_str(&format!(
+            "{}: {} for {}{at} is carried in each item's Fields section; nothing to create\n",
+            report.source, field.field, field.key
         ));
     }
     rendered

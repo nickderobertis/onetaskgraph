@@ -34,6 +34,7 @@ mod linear_budget;
 mod linear_rewrites;
 mod linear_status;
 mod live_project_create;
+mod metadata_fields;
 mod origin_batch;
 mod pinning_walk;
 mod plan_copy;

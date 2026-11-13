@@ -475,12 +475,14 @@
 //! refused naming both. A project write other than to that project itself is refused before any
 //! request: a project this source created would be one none of its reads could find.
 //!
-//! ## Ruling: a narrow metadata write moves only the slot, and a task carries delivery
+//! ## Ruling: a narrow metadata write moves the slot and the `Fields` section, and a task carries delivery
 //!
 //! `set_task_metadata`, `set_project_metadata` and `set_document_metadata` read the item and
 //! send one update of its long-form field — `description`, `description` and `content` —
-//! that differs from what Linear holds only inside the trailing metadata slot: every byte
-//! above it is kept as it was. A key already holding the value sends nothing. The answer is
+//! that differs from what Linear holds only inside the trailing metadata slot and, for a source
+//! configured with `metadata_fields`, the `Fields` section before it, which every write
+//! regenerates from the slot (see the `fields` module): every byte of the caller's content
+//! above them is kept as it was. A key already holding the value sends nothing. The answer is
 //! the item read back. `set_task_rendering` and `set_document_rendering` replace the content
 //! and the slot's `onetaskgraph.template` entry together in one such update, every other slot
 //! entry kept; this source keeps no template answers. So a copy's `onetaskgraph.copies` link
@@ -568,6 +570,7 @@ pub mod live_artifact;
 
 mod assignees;
 mod batch;
+mod fields;
 mod origins;
 mod relations;
 mod shared;
@@ -1197,6 +1200,23 @@ pub struct LinearConfig {
     /// `assignee{displayName}` — a Linear user's display name, unique within its workspace —
     /// and writes one person, or none, as the issue's `assigneeId`.
     assignees: bool,
+    /// Caller metadata values this source shows in one collapsed `Fields` section at the end
+    /// of each task's, project's and document's visible description, since Linear has no
+    /// custom fields and never renders the slot the metadata is kept in.
+    ///
+    /// Absent or empty, no section is written. Each entry names the `field` a value is shown
+    /// under, a top-level metadata `key` and an optional `path` of object keys walked inside
+    /// that key's value — the entries a `github-projects` source takes, refused at read for the
+    /// same reasons but for that source's own board field names. A string, an array of strings
+    /// and an object of string values are shown, an empty one or nothing not at all; any other
+    /// JSON type is refused before any mutation. The section is display only: the slot stays
+    /// the metadata's one home, every read gives back the caller's content without it, and
+    /// every write regenerates it. `docs/metadata.md` states its shape.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    // Kept in the schema as `"default": []` although a serialized configuration leaves an empty
+    // list out, so both SDKs model an absent list as an empty one rather than as `null`.
+    #[schemars(!skip_serializing_if)]
+    metadata_fields: Vec<fields::MetadataFieldConfig>,
 }
 
 /// The id of one Linear project, which a scoped source holds alone.
@@ -1293,6 +1313,7 @@ impl Default for LinearConfig {
             project: None,
             link_types: std::collections::BTreeMap::new(),
             assignees: false,
+            metadata_fields: Vec::new(),
         }
     }
 }
@@ -1682,6 +1703,35 @@ pub struct StatusNamesReport {
     /// The create Linear refused, which stopped an `--apply`; absent when nothing was refused.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub refused: Option<RefusedCreate>,
+    /// Each `metadata_fields` entry, in configuration order: each is shown in an item's
+    /// `Fields` section rather than in a field Linear holds, so none is ever missing and
+    /// `--apply` creates nothing for it. Absent when the source configures none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    // Kept in the schema as `"default": []`, for the reason the configuration's list is.
+    #[schemars(!skip_serializing_if)]
+    pub metadata_fields: Vec<SectionFieldReport>,
+}
+
+/// One `metadata_fields` entry of a `linear` source, as `sources fields` reports it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
+pub struct SectionFieldReport {
+    /// The name the value is shown under.
+    pub field: String, // llmlint: ignore[invalid_states_unrepresentable] Copied from a configuration entry `MetadataField::resolve` already validated; the serialized string is the report's simple public contract, as GitHub's `MetadataFieldReport::field` is.
+    /// The top-level metadata key the value is read from.
+    pub key: String, // llmlint: ignore[invalid_states_unrepresentable] Copied from a validated configuration entry, as `field` is.
+    /// Object keys walked inside that key's value; absent when the key's own value is shown.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub path: Vec<String>,
+    /// Where the value is carried: always `section`, the item's `Fields` section.
+    pub carried: SectionCarried,
+}
+
+/// Where a `linear` source carries a `metadata_fields` value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum SectionCarried {
+    /// In the collapsed `Fields` section at the end of the item's description.
+    Section,
 }
 
 impl StatusNamesReport {
@@ -1963,6 +2013,8 @@ struct LinearSource {
     /// The display names this instance asked Linear for and Linear holds no user under, until
     /// [`TaskSource::end_command`]: each is refused again without another request.
     unknown_people: std::sync::Mutex<std::collections::BTreeSet<String>>,
+    /// The metadata values each long form's `Fields` section shows; see [`fields`].
+    metadata_fields: Vec<fields::MetadataField>,
     /// Whether a failed or mismatched assignee write of this call asked for every resolved person
     /// to be let go of when the call ends.
     forget_at_end: std::sync::Mutex<bool>,
@@ -1999,6 +2051,7 @@ impl LinearSource {
             },
             other => other,
         })?;
+        let metadata_fields = fields::MetadataField::resolve(config.metadata_fields, name)?;
         let key = secrets
             .get(&config.api_key_env.0)
             .filter(|v| !v.expose_secret().trim().is_empty())
@@ -2036,6 +2089,7 @@ impl LinearSource {
             assignees: config.assignees,
             unknown_people: std::sync::Mutex::new(std::collections::BTreeSet::new()),
             forget_at_end: std::sync::Mutex::new(false),
+            metadata_fields,
         })
     }
 }
@@ -2595,6 +2649,14 @@ impl LinearSource {
         variables: Value,
         under_400: Under400,
     ) -> Result<Result<Value, Refusal>, SourceError> {
+        // Each long form a write sends carries the `Fields` section its slot's metadata shows,
+        // composed — or refused — before anything else about the write happens.
+        let variables =
+            if query.trim_start().starts_with("mutation") && !self.metadata_fields.is_empty() {
+                self.sectioned(variables)?
+            } else {
+                variables
+            };
         // A write may change which items record an origin, so nothing read ahead outlives it.
         if query.trim_start().starts_with("mutation") {
             self.forget_origins_ahead(false);
@@ -2619,6 +2681,11 @@ impl LinearSource {
         let answered = match (answered, markup) {
             (Ok(Ok(data)), Some(markup)) => Ok(Ok(marked(data, &|body| markup.read(body)))),
             (answered, _) => answered,
+        };
+        // And each long form answered is read without it, so nothing above here sees it.
+        let answered = match answered {
+            Ok(Ok(data)) => Ok(Ok(unsectioned(data))),
+            answered => answered,
         };
         // A write naming an assignee's id that failed may have failed for that id, so the next
         // one resolves the person afresh rather than sending it again.
@@ -6718,6 +6785,16 @@ impl LinearSource {
             team,
             names,
             refused,
+            metadata_fields: self
+                .metadata_fields
+                .iter()
+                .map(|entry| SectionFieldReport {
+                    field: entry.field().to_owned(),
+                    key: entry.key().to_owned(),
+                    path: entry.path().to_vec(),
+                    carried: SectionCarried::Section,
+                })
+                .collect(),
         })
     }
 
@@ -7767,6 +7844,106 @@ fn slot_text(metadata: &std::collections::BTreeMap<String, Value>) -> Result<Str
 /// The members a body travels under in a request's variables and an answer's data: an issue's
 /// `description`, a project's and a document's `content`, and a comment's `body`.
 const BODY_MEMBERS: [&str; 3] = ["description", "content", "body"];
+
+/// The members a long form — the field an item's metadata slot ends — travels under: every
+/// body member but a comment's, which carries no slot.
+const LONG_FORM_MEMBERS: [&str; 2] = ["description", "content"];
+
+impl LinearSource {
+    /// `variables` with every long form they carry that ends in a slot holding the `Fields`
+    /// section its metadata shows — or the refusal for a value none can show.
+    fn sectioned(&self, value: Value) -> Result<Value, SourceError> {
+        Ok(match value {
+            Value::Object(object) => Value::Object(
+                object
+                    .into_iter()
+                    .map(|(key, held)| {
+                        let held = match held {
+                            Value::String(body) if LONG_FORM_MEMBERS.contains(&key.as_str()) => {
+                                Value::String(self.with_section(&body)?)
+                            }
+                            other => self.sectioned(other)?,
+                        };
+                        Ok((key, held))
+                    })
+                    .collect::<Result<_, SourceError>>()?,
+            ),
+            Value::Array(items) => Value::Array(
+                items
+                    .into_iter()
+                    .map(|item| self.sectioned(item))
+                    .collect::<Result<_, _>>()?,
+            ),
+            other => other,
+        })
+    }
+
+    /// `long_form` with the `Fields` section its slot's metadata shows set between the content
+    /// and the slot — after its marker and a blank line, and before a blank line — in place of
+    /// any it held; unchanged when it ends in no slot.
+    fn with_section(&self, long_form: &str) -> Result<String, SourceError> {
+        let Some((start, encoded_start, encoded_end)) = slot_bounds(long_form)? else {
+            return Ok(long_form.to_owned());
+        };
+        let metadata: std::collections::BTreeMap<String, Value> =
+            serde_json::from_str(&long_form[encoded_start..encoded_end]).map_err(|error| {
+                SourceError::Malformed {
+                    message: format!(
+                        "invalid canonical JSON in Linear onetaskgraph metadata slot: {error}"
+                    ),
+                }
+            })?;
+        let mut above = long_form[..start].to_owned();
+        if let Some(at) = fields::marker_at(&above) {
+            above.truncate(at);
+        }
+        let slot = &long_form[start..];
+        let Some(section) = fields::section(&self.metadata_fields, &metadata, &self.name)? else {
+            return Ok(format!("{above}{slot}"));
+        };
+        // The marker stands on a line of its own, so content ending in no line break is set
+        // off from it by the blank line a read of the slot takes off anyway.
+        if !above.is_empty() && !above.ends_with('\n') {
+            above.push_str("\n\n");
+        }
+        Ok(format!("{above}{}\n\n{section}\n\n{slot}", fields::MARKER))
+    }
+}
+
+/// `value` with every long form it carries read without the `Fields` section a source writes
+/// before its slot — whatever the source's configuration, so one written under another reads
+/// the same.
+fn unsectioned(value: Value) -> Value {
+    match value {
+        Value::Object(object) => Value::Object(
+            object
+                .into_iter()
+                .map(|(key, held)| {
+                    let held = match held {
+                        Value::String(body) if LONG_FORM_MEMBERS.contains(&key.as_str()) => {
+                            Value::String(without_section(body))
+                        }
+                        other => unsectioned(other),
+                    };
+                    (key, held)
+                })
+                .collect(),
+        ),
+        Value::Array(items) => Value::Array(items.into_iter().map(unsectioned).collect()),
+        other => other,
+    }
+}
+
+/// `long_form` without the `Fields` section before its slot, from its marker to the slot.
+fn without_section(long_form: String) -> String {
+    let Ok(Some((start, _, _))) = slot_bounds(&long_form) else {
+        return long_form;
+    };
+    match fields::marker_at(&long_form[..start]) {
+        Some(at) => format!("{}{}", &long_form[..at], &long_form[start..]),
+        None => long_form,
+    }
+}
 
 /// `value` with `apply` applied to every string held under one of [`BODY_MEMBERS`], at any depth.
 /// A member holding anything but a string — a filter on a description, say — is walked into and

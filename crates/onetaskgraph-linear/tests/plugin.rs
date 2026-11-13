@@ -2492,24 +2492,61 @@ fn factory_validates_config_and_missing_credentials() {
     );
 }
 
-/// A Linear source keeps every metadata key in its description slot, so the `metadata_fields`
-/// a GitHub Projects source projects onto board fields is not a key its configuration takes.
+/// A Linear source takes `metadata_fields` — shown in each item's `Fields` section — and refuses
+/// an entry that cannot stand for the reasons a GitHub Projects source refuses it, naming the
+/// source and the entry. GitHub's own board field names mean nothing here and are taken.
 #[test]
-fn a_linear_configuration_refuses_metadata_fields_as_an_unknown_field() {
-    let refused = match onetaskgraph_linear::Plugin.build(
-        &SourceName::new("work").unwrap(),
-        &serde_json::json!({"team": "ENG", "metadata_fields": [
-            {"field": "Host", "key": "orchestrator.follow-up", "path": ["host"]}
-        ]}),
-        &Secrets(Some("fixture-key".into())),
-    ) {
-        Err(error) => error.to_string(),
-        Ok(_) => panic!("a Linear source took metadata_fields"),
+fn a_linear_configuration_takes_metadata_fields_and_refuses_an_entry_that_cannot_stand() {
+    let build = |entries: serde_json::Value| {
+        onetaskgraph_linear::Plugin.build(
+            &SourceName::new("work").unwrap(),
+            &serde_json::json!({"team": "ENG", "metadata_fields": entries}),
+            &Secrets(Some("fixture-key".into())),
+        )
     };
-    assert!(
-        refused.contains("unknown field `metadata_fields`"),
-        "{refused}"
-    );
+    let host =
+        serde_json::json!({"field": "Host", "key": "orchestrator.follow-up", "path": ["host"]});
+    for entries in [
+        serde_json::json!([host]),
+        serde_json::json!([]),
+        serde_json::json!([host, {"field": "Status", "key": "team.state"}, {"field": "Title", "key": "team.title"}]),
+    ] {
+        if let Err(error) = build(entries.clone()) {
+            panic!("{entries}: {error}");
+        }
+    }
+    for (entries, said) in [
+        (
+            serde_json::json!([{"field": " ", "key": "orchestrator.follow-up"}]),
+            "blank field",
+        ),
+        (
+            serde_json::json!([{"field": "Host", "key": ""}]),
+            "blank key",
+        ),
+        (
+            serde_json::json!([{"field": "Host", "key": "onetaskgraph.origin"}]),
+            "reserved \"onetaskgraph.\" prefix",
+        ),
+        (
+            serde_json::json!([host, {"field": "host", "key": "team.machine"}]),
+            "same field as metadata_fields[0]",
+        ),
+        (
+            serde_json::json!([{"field": "Host", "key": "a.b", "depth": 1}]),
+            "depth",
+        ),
+    ] {
+        let refused = match build(entries.clone()) {
+            Err(error) => error.to_string(),
+            Ok(_) => panic!("{entries}: a Linear source took an entry that cannot stand"),
+        };
+        assert!(refused.contains(said), "{entries}: {said}: {refused}");
+        if said != "depth" {
+            assert!(refused.contains("source work"), "{entries}: {refused}");
+            assert!(refused.contains("metadata_fields["), "{entries}: {refused}");
+        }
+    }
 }
 
 #[tokio::test]
