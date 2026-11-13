@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Apply the spike's measurement-only changes to a tree's `.github/workflows/ci.yml`.
 
-    python3 spike/ci-profile/measurement_only.py <ci.yml> [--exclude=P,Q] [--step-env=NAME=VALUE]... [--no-recorders]
+    python3 spike/ci-profile/measurement_only.py <ci.yml> [--exclude=P,Q] [--step-env=[JOB:]NAME=VALUE]... [--no-recorders]
 
 The same text edits apply to today's workflow and to the workflow of #3956 and its parent, so
 both sides of a comparison carry byte-identical measurement changes:
@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 TRIPLES = {"test-linux": "X86_64_UNKNOWN_LINUX_GNU", "test-macos": "AARCH64_APPLE_DARWIN",
            "test-windows": "X86_64_PC_WINDOWS_MSVC"}
 PROJECT_LIST = re.compile(r"[A-Za-z0-9_.@/-]+(,[A-Za-z0-9_.@/-]+)*")
-STEP_ENV = re.compile(r"([A-Z][A-Z0-9_]*)=([A-Za-z0-9_.:/+-]*)")
+STEP_ENV = re.compile(r"(?:(test-linux|test-macos|test-windows):)?([A-Z][A-Z0-9_]*)=([A-Za-z0-9_.:/+-]*)")
 USAGE_EXIT = 2
 
 
@@ -42,7 +42,7 @@ class SiteMissing(Exception):
 @dataclass(frozen=True)
 class Options:
     exclude: str = ""
-    step_env: tuple[tuple[str, str], ...] = field(default_factory=tuple)
+    step_env: tuple[tuple[str | None, str, str], ...] = field(default_factory=tuple)  # (job or every job, name, value)
     recorders: bool = True
 
 
@@ -72,7 +72,7 @@ def test_step(job: str, options: Options) -> str:
     py = "python" if job == "test-windows" else "python3"
     venv_py = "$RUNNER_TEMP/spikevenv/Scripts/python.exe" if job == "test-windows" else "$RUNNER_TEMP/spikevenv/bin/python"
     command = f"just ci-{job}" + (f" --exclude={options.exclude}" if options.exclude else "")
-    lines = [f"export {name}={value}" for name, value in options.step_env]
+    lines = [f"export {name}={value}" for only, name, value in options.step_env if only in (None, job)]
     if options.recorders:
         lines += ['mkdir -p "$RUNNER_TEMP/spike"',
                   'export SPIKE_TEST_RECORD="$RUNNER_TEMP/spike/tests.jsonl"',
@@ -126,8 +126,8 @@ def parse(argv: list[str]) -> tuple[str, Options]:
     for item in args.step_env:
         match = STEP_ENV.fullmatch(item)
         if not match:
-            parser.error(f"--step-env takes NAME=VALUE with an upper-case name and a plain value, not {item!r}")
-        pairs.append((match.group(1), match.group(2)))
+            parser.error(f"--step-env takes [JOB:]NAME=VALUE with an upper-case name and a plain value, not {item!r}")
+        pairs.append((match.group(1), match.group(2), match.group(3)))
     return args.workflow, Options(args.exclude, tuple(pairs), not args.no_recorders)
 
 

@@ -391,6 +391,13 @@ class MeasurementOnlyCommandTests(unittest.TestCase):
             self.assertTrue(line.startswith("          export "), line)
         self.assertEqual(text.count("GITHUB_ENV"), (HERE.parents[1] / ".github/workflows/ci.yml").read_text().count("GITHUB_ENV"))
 
+    def test_a_step_variable_can_be_held_to_one_job(self):
+        proc, text = self.run_tool("--step-env=test-macos:CARGO_PROFILE_DEV_OPT_LEVEL=1")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(text.count("export CARGO_PROFILE_DEV_OPT_LEVEL=1"), 1)
+        macos = text.split("\n  test-macos:\n")[1].split("\n  budgets:\n")[0]
+        self.assertIn("export CARGO_PROFILE_DEV_OPT_LEVEL=1", macos)
+
     def test_without_recorders_only_the_cache_edits_remain(self):
         proc, text = self.run_tool("--no-recorders")
         self.assertEqual(proc.returncode, 0, proc.stderr)
