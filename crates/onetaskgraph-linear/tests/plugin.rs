@@ -2525,6 +2525,10 @@ fn a_linear_configuration_takes_metadata_fields_and_refuses_an_entry_that_cannot
             "blank key",
         ),
         (
+            serde_json::json!([{"field": "Ho\nst", "key": "orchestrator.follow-up"}]),
+            "line break",
+        ),
+        (
             serde_json::json!([{"field": "Host", "key": "onetaskgraph.origin"}]),
             "reserved \"onetaskgraph.\" prefix",
         ),

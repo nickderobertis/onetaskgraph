@@ -1041,7 +1041,18 @@ fn a_value_longer_than_the_text_field_is_written_as_its_leading_lines_and_a_coun
     let single = draft_lines(1, GITHUB_TEXT_FIELD_LIMIT + 1);
     // A map whose first line alone is over: the counting line alone, counting every line.
     let over_first = json!({"a": "x".repeat(GITHUB_TEXT_FIELD_LIMIT), "b": "short"});
+    // The same lines as one string holding line breaks: shortened alike.
+    let as_string = json!(realistic.join("\n"));
+    // Two lines of 400 two-byte characters: 801 characters, which GitHub might take, but 1,601
+    // UTF-8 bytes, which this source counts, so the second is left out.
+    let wide = vec!["\u{e9}".repeat(400), "\u{e9}".repeat(400)];
+    let wide_kept = format!(
+        "{}\n\u{2026} 1 more line in this item's metadata",
+        "\u{e9}".repeat(400)
+    );
     for (value, field) in [
+        (as_string, kept.clone()),
+        (json!(wide), wide_kept),
         (json!(realistic), kept),
         (json!(exact), exact.join("\n")),
         (

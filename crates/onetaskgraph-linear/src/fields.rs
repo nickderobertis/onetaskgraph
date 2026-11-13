@@ -91,7 +91,14 @@ impl MetadataField {
                 &entry.key,
                 resolved.iter().map(|other| other.field.0.as_str()),
                 "field",
-            ) {
+            )
+            .or_else(|| {
+                entry.field.contains(char::is_control).then(|| {
+                    "names a field holding a line break or another control character, which \
+                     cannot stand on one line of the Fields section; next: name it on one line"
+                        .to_owned()
+                })
+            }) {
                 return Err(SourceError::Config {
                     message: format!(
                         "metadata_fields[{index}] of source {instance} (field {:?}, key {:?}) \
@@ -150,7 +157,7 @@ impl MetadataField {
                 });
             }
         };
-        let head = format!("- **{}**:", self.field.0);
+        let head = format!("- **{}**:", markdown_escaped(&self.field.0));
         let nested = |lines: Vec<String>| {
             lines
                 .iter()
@@ -178,6 +185,20 @@ impl MetadataField {
             ),
         }))
     }
+}
+
+/// `text` with every character Markdown could read as markup inside a bold label
+/// backslash-escaped, as CommonMark escapes ASCII punctuation, so a field's name is shown as
+/// written and never changes the section's structure.
+fn markdown_escaped(text: &str) -> String {
+    let mut escaped = String::with_capacity(text.len());
+    for character in text.chars() {
+        if "\\`*_[]<>#!|&~".contains(character) {
+            escaped.push('\\');
+        }
+        escaped.push(character);
+    }
+    escaped
 }
 
 /// `text` as one inline code span, as CommonMark spells one: fenced by one backtick more than

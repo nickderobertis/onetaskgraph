@@ -91,6 +91,11 @@ impl Setup {
     }
 
     fn configured(entries: Option<Value>) -> Self {
+        Self::mapped(entries, true)
+    }
+
+    /// [`Setup::configured`], with an empty `status_mapping` unless `mapped` says so.
+    fn mapped(entries: Option<Value>, mapped: bool) -> Self {
         let sandbox = Sandbox::new();
         let held = json!({
             "tasks": [], "documents": [], "labels": [], "projects": [],
@@ -98,10 +103,14 @@ impl Setup {
         });
         let (mut config, workspace) =
             linear_workspace_with(&sandbox, held, TEAM_STATES, PROJECT_STATUSES);
-        config["status_mapping"] = json!({
-            "todo": {"task": "Ready", "project": "Scheduled"},
-            "done": {"task": "Finished", "project": "Shipped"},
-        });
+        if mapped {
+            config["status_mapping"] = json!({
+                "todo": {"task": "Ready", "project": "Scheduled"},
+                "done": {"task": "Finished", "project": "Shipped"},
+            });
+        } else {
+            config["status_mapping"] = json!({});
+        }
         // `bare` reads the same workspace with no `metadata_fields` at all.
         let bare = config.clone();
         if let Some(entries) = entries {
@@ -612,4 +621,54 @@ fn a_caller_quoting_the_marker_keeps_every_byte_of_it_with_a_section_or_without(
         setup.show_from("bare", "task", &id)["content"],
         content.as_str()
     );
+}
+
+#[test]
+fn sources_fields_reports_the_section_entries_of_a_source_mapping_no_status() {
+    let setup = Setup::mapped(Some(json!([{"field": "Team", "key": "team.name"}])), false);
+    let (output, served) = setup.run(&["sources", "fields", "linear", "--apply"]);
+    assert_eq!(
+        stdout(&output),
+        "linear: status_mapping names no status\n\
+         linear: Team for team.name is carried in each item's Fields section; nothing to create\n"
+    );
+    assert!(
+        !served
+            .iter()
+            .any(|(query, _)| query.trim_start().starts_with("mutation")),
+        "nothing to create"
+    );
+}
+
+#[test]
+fn a_field_name_holding_markup_is_shown_as_written_and_keeps_the_section_whole() {
+    let setup = Setup::configured(Some(json!([
+        {"field": "Owner *of* <it>_now_", "key": KEY, "path": ["host"]},
+    ])));
+    let (id, sent) = copied_task(&setup, "Prose.", &json!({"host": "h"}));
+    assert_eq!(
+        between(&sent, "Prose."),
+        format!(
+            "\n\n{MARKER}\n\n+++ Fields\n\n- **Owner \\*of\\* \\<it\\>\\_now\\_**: `h`\n\n+++\n\n"
+        ),
+        "{sent}"
+    );
+    assert_eq!(setup.show("task", &id)["content"], "Prose.");
+    // A name on two lines could not stand on one bullet's line: refused as the configuration
+    // is read, before any request.
+    let refused = Setup::configured(Some(json!([{"field": "Ho\nst", "key": KEY}])));
+    let output = refused
+        .sandbox
+        .command()
+        .args(["task", "list", "--source", "linear"])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+    assert!(
+        stderr(&output).contains("line break"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(refused.workspace.served().is_empty());
 }
