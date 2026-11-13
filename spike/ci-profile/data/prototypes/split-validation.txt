@@ -1,0 +1,21 @@
+The repaired split patch (spike/ci-profile/prototypes/split-template-crate.patch), validated locally
+on session head 7029a947's tree with the patch applied, before the hosted runs #4028/#4029 were opened.
+Nothing here was timed; each line is a command's own outcome.
+
+static guards, each exit 0: check-coverage-enforced, check-release-targets, check-nx-graph,
+  check-distribution-contract, check-contract-inventory, check-plugin-isolation, check-store-fixtures,
+  check-workspace-config
+nx run-many -t distribution-check,distribution-test -p scripts --skip-nx-cache:
+NX   Successfully ran targets distribution-check, distribution-test for project scripts and 1 task it depends on
+nx run workspace:coverage --skip-nx-cache (every unit, uncached; the two loopback e2e units re-run
+  after the worktree's Python SDK environment was synced — the host sets UV_NO_SYNC=1, CI does not):
+NX   Successfully ran target coverage for 2 projects and 2 tasks they depend on
+workspace: lines covered: 78663
+workspace: lines total: 82718
+workspace: lines percent: 95.0978
+NX   Successfully ran target coverage for project workspace
+
+What the repair adds to the first patch: onetaskgraph-template in release-plz.toml's packages,
+release-targets.toml's covered crates, scripts/product_versions.py's versioned manifests,
+scripts/release_cd.py's publication order (after the plugin API, before the engine), and
+workspace/project.json's implicitDependencies and coverage dependencies.
