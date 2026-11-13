@@ -43,22 +43,50 @@ def write_summary(
 
 
 class CriticalPathTests(unittest.TestCase):
-    def test_a_changed_task_on_the_chain_moves_the_job_end_until_another_task_ends_last(self):
-        timeline = {"build": (0.0, 100.0), "e2e": (100.0, 700.0), "other": (50.0, 600.0)}
-        self.assertEqual(critical_path.latest_chain(timeline), ["build", "e2e"])
-        self.assertEqual(critical_path.predicted_shortening(timeline, {"e2e": 60.0}), 60.0)
-        self.assertEqual(critical_path.predicted_shortening(timeline, {"e2e": 300.0}), 100.0)  # `other` ends at 600
-        self.assertEqual(critical_path.predicted_shortening(timeline, {"e2e": -30.0}), -30.0)
+    """critical_path.py re-times a run over Nx's task dependencies; timestamps alone imply no dependency."""
 
-    def test_a_changed_task_off_the_chain_shortens_nothing_unless_it_grows_past_the_end(self):
-        timeline = {"build": (0.0, 100.0), "e2e": (100.0, 700.0), "other": (50.0, 600.0)}
-        self.assertEqual(critical_path.predicted_shortening(timeline, {"other": 200.0}), 0.0)
-        self.assertEqual(critical_path.predicted_shortening(timeline, {"other": -150.0}), -50.0)
+    def test_tasks_that_ran_one_after_another_without_an_edge_are_independent(self):
+        # Y began the moment X ended, but nothing makes Y wait for X: a timeline chain would move Y.
+        timeline = {"x:test": (0.0, 100.0), "y:test": (100.0, 300.0)}
+        self.assertEqual(critical_path.predicted_shortening(timeline, {}, {"x:test": 50.0}), 0.0)
+        # With the edge, Y did wait for X, and moves with it.
+        self.assertEqual(critical_path.predicted_shortening(timeline, {"y:test": {"x:test"}}, {"x:test": 50.0}), 50.0)
+
+    def test_shortening_one_path_leaves_a_competing_dependent_path_where_it_was(self):
+        # A -> C and D -> B; B starts as A ends, but depends on D, which had ended 5 s earlier.
+        timeline = {"a": (0.0, 100.0), "d": (0.0, 95.0), "c": (100.0, 250.0), "b": (100.0, 300.0)}
+        deps = {"c": {"a"}, "b": {"d"}}
+        self.assertEqual(critical_path.predicted_shortening(timeline, deps, {"a": 50.0}), 0.0)  # B still ends last
+        self.assertEqual(critical_path.predicted_shortening(timeline, deps, {"c": 100.0}), 0.0)
+        self.assertEqual(critical_path.predicted_shortening(timeline, deps, {"b": 30.0}), 30.0)
+        self.assertEqual(critical_path.predicted_shortening(timeline, deps, {"b": 80.0}), 50.0)  # until C ends last
+        self.assertEqual(critical_path.predicted_shortening(timeline, deps, {"a": -100.0}), -50.0)  # C now ends at 350
+
+    def test_a_task_that_waited_on_something_else_keeps_its_start_unless_a_dependency_now_ends_later(self):
+        # E depends on A, but started 60 s after A ended: a slot, a phase, the runner — not A.
+        timeline = {"a": (0.0, 100.0), "e": (160.0, 400.0)}
+        self.assertEqual(critical_path.predicted_shortening(timeline, {"e": {"a"}}, {"a": 50.0}), 0.0)
+        self.assertEqual(critical_path.predicted_shortening(timeline, {"e": {"a"}}, {"a": -100.0}), -40.0)
+
+    def test_dependencies_are_followed_through_tasks_the_run_did_not_execute(self):
+        graph = {"e2e:test": ["cli:build"], "cli:build": ["core:build"], "core:build": []}
+        self.assertEqual(
+            critical_path.executed_deps(graph, {"e2e:test", "core:build"}),
+            {
+                "e2e:test": {"core:build"},
+                "core:build": set(),
+            },
+        )
 
     def test_a_task_the_run_did_not_have_runs_beside_the_gate_from_its_start(self):
         timeline = {"build": (0.0, 100.0), "core": (100.0, 300.0)}
-        self.assertEqual(critical_path.predicted_shortening(timeline, {"core": 10.0, "template:test": -50.0}), 10.0)
-        self.assertEqual(critical_path.predicted_shortening(timeline, {"core": 10.0, "template:test": -400.0}), -100.0)
+        deps = {"core": {"build"}}
+        self.assertEqual(
+            critical_path.predicted_shortening(timeline, deps, {"core": 10.0, "template:test": -50.0}), 10.0
+        )
+        self.assertEqual(
+            critical_path.predicted_shortening(timeline, deps, {"core": 10.0, "template:test": -400.0}), -100.0
+        )
 
 
 class CommandTests(unittest.TestCase):
@@ -67,15 +95,23 @@ class CommandTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.root, True)
 
     def deltas(
-        self, side: str, control: dict, prototype: dict, extra: dict | None = None
+        self, side: str, control: dict, prototype: dict, extra: dict | None = None, graphs: Path | None = None
     ) -> subprocess.CompletedProcess:
         write_summary(self.root, 1, control, 1800.0)
         write_summary(self.root, 2, control, 1900.0)
         write_summary(self.root, 3, {**prototype, **(extra or {})}, 1300.0)
         write_summary(self.root, 4, prototype, 1300.0)
-        return command(
-            "deltas", str(self.root), "--control", "1,2", "--side", f"{side}=3,4", "--out", str(self.root / "d.json")
-        )
+        args = [
+            "deltas",
+            str(self.root),
+            "--control",
+            "1,2",
+            "--side",
+            f"{side}=3,4",
+            "--out",
+            str(self.root / "d.json"),
+        ]
+        return command(*args, *(["--graphs", str(graphs)] if graphs else []))
 
     def test_elapsed_change_wall_share_and_summed_test_seconds_are_kept_apart(self):
         control = {"build": (0, 100, 100), "onetaskgraph-e2e:test": (100, 700, 300)}
@@ -86,8 +122,22 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(job["elapsed_saved_s"], {"build": 0.0, "onetaskgraph-e2e:test": 60.0})
         self.assertEqual(job["share_saved_s"]["onetaskgraph-e2e:test"], 100.0)
         self.assertEqual(job["work_saved_s"], {"onetaskgraph-e2e": 550.0})
-        self.assertEqual((job["control"]["chain_span_s"], job["side"]["chain_span_s"]), (700.0, 640.0))
         self.assertEqual((job["control"]["gate_span_s"], job["side"]["gate_span_s"]), (700.0, 640.0))
+        self.assertEqual(
+            (job["control"]["runs_wall_s"], job["side"]["runs_wall_s"]), ([1801.0, 1802.0], [1803.0, 1804.0])
+        )
+        self.assertNotIn("model_on_control_s", job)
+
+    def test_the_model_is_checked_on_the_control_runs_own_timelines_and_graphs(self):
+        control = {"build": (0, 100, 100), "onetaskgraph-e2e:test": (100, 700, 300), "other:test": (0, 650, 300)}
+        prototype = {**control, "onetaskgraph-e2e:test": (100, 640, 200)}
+        graphs = self.root / "graphs"
+        graphs.mkdir()
+        for run in (1, 2):
+            (graphs / f"run-{run}.json").write_text(json.dumps({"dependencies": {"onetaskgraph-e2e:test": ["build"]}}))
+        self.assertEqual(self.deltas("pyramid", control, prototype, graphs=graphs).returncode, 0)
+        job = json.loads((self.root / "d.json").read_text())["sides"]["pyramid"]["jobs"]["test-macos"]
+        self.assertEqual(job["model_on_control_s"], [50.0, 50.0])  # 60 s sooner, until other:test ends last
 
     def test_sides_whose_selections_differ_are_refused_naming_the_tasks(self):
         tasks = {"build": (0, 100, 100), "onetaskgraph-core:test": (100, 300, 200)}
@@ -123,31 +173,30 @@ class CommandTests(unittest.TestCase):
             {"build": 0.0, "onetaskgraph-core:test": 10.0, "onetaskgraph-template:coverage": -40.0},
         )
 
-    def test_the_replay_predicts_each_prs_shortening_from_its_own_critical_path(self):
+    def test_the_replay_estimates_each_prs_shortening_over_its_own_task_graph(self):
         control = {"build": (0, 100, 100), "onetaskgraph-e2e:test": (100, 700, 300)}
         self.assertEqual(
             self.deltas("pyramid", control, {**control, "onetaskgraph-e2e:test": (100, 640, 200)}).returncode, 0
         )
-        proc = command(
-            "replay", str(DATA / "history-first-runs.json"), str(DATA / "prs30.json"), str(self.root / "d.json")
-        )
+        args = ["replay", str(DATA / "history-first-runs.json"), str(DATA / "prs30.json"), str(self.root / "d.json")]
+        self.assertEqual(command(*args).returncode, 2)  # no graphs, no estimate
+        proc = command(*args, "--graphs", str(DATA / "taskgraphs"))
         self.assertEqual(proc.returncode, 0, proc.stderr)
         line = next(x for x in proc.stdout.splitlines() if "test-macos" in x)
-        found = re.search(r"predicted shortening ([+-][0-9.]+) min/PR over 30,", line)
+        found = re.search(r"estimated shortening ([+-][0-9.]+) min/PR over 30,", line)
         assert found is not None, line
-        predicted = float(found.group(1))
+        estimated = float(found.group(1))
         history = json.loads((DATA / "history-first-runs.json").read_text())
-        ran = [
-            run["jobs"]["test-macos"]["tasks"]["onetaskgraph-e2e:test"]
-            for run in history.values()
-            if run["jobs"].get("test-macos", {}).get("tasks", {}).get("onetaskgraph-e2e:test", {}).get("result")
+        ran = sum(
+            run["jobs"].get("test-macos", {}).get("tasks", {}).get("onetaskgraph-e2e:test", {}).get("result")
             == "executed"
-        ]
-        # At most a minute on each PR that ran the task, and less wherever it was off the chain.
-        self.assertGreater(predicted, 0)
-        self.assertLess(predicted, round(len(ran) / 30, 2))
+            for run in history.values()
+        )
+        # At most a minute on each PR that ran the task, and less wherever something else ended last.
+        self.assertGreaterEqual(estimated, 0)
+        self.assertLessEqual(estimated, round(ran / 30, 2))
         self.assertIn("(0 without intervals)", line)
-        self.assertIn("measured: wall  30.0 ->  30.1 min, chain  11.7 ->  10.7 min", line)
+        self.assertIn("measured gate span (min) 11.7, 11.7 -> 10.7, 10.7, wall 30.0, 30.0 -> 30.1, 30.1", line)
 
 
 if __name__ == "__main__":

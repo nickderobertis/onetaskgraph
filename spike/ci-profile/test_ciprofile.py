@@ -573,13 +573,20 @@ class ReplayCommandTests(unittest.TestCase):
         self.assertEqual(saved["dependents-skip-dependency-tests"]["test-macos"], 120)
         self.assertEqual(saved["distribution-only-when-publishable-changes"]["test-macos"], 240)
 
-    def test_a_replayed_task_off_the_critical_path_shortens_the_job_by_nothing_however_large_its_share(self):
+    def test_a_replayed_task_shortens_the_job_only_through_the_tasks_that_waited_for_it(self):
         history = json.loads((self.root / "history.json").read_text())
         tasks = history["4000"]["jobs"]["test-macos"]["tasks"]
-        tasks["onetaskgraph-e2e:test"].update({"start": 0.0, "end": 300.0})  # beside the chain
-        tasks["scripts:distribution-test"].update({"start": 0.0, "end": 400.0})  # the whole chain
+        tasks["onetaskgraph-e2e:test"].update({"start": 0.0, "end": 300.0})
+        tasks["scripts:distribution-test"].update({"start": 0.0, "end": 400.0})  # ends last, and depends on nothing
         (self.root / "history.json").write_text(json.dumps(history))
+        graphs = self.root / "graphs"
+        graphs.mkdir()
+        (graphs / "pr-4000.json").write_text(json.dumps({"dependencies": {}}))
         proc = self.run_replay("--json", str(self.root / "out.json"))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        out = json.loads((self.root / "out.json").read_text())
+        self.assertEqual(out["predicted_jobs"], {})  # no graphs, no estimate
+        proc = self.run_replay("--json", str(self.root / "out.json"), "--graphs", str(graphs))
         self.assertEqual(proc.returncode, 0, proc.stderr)
         out = json.loads((self.root / "out.json").read_text())
         self.assertEqual(out["saved_s"]["dependents-skip-dependency-tests"]["test-macos"], 120)  # its wall share

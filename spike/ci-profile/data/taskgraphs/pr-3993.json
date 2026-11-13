@@ -1,0 +1,17 @@
+{
+ "sha": "74272eeb66b58491997fee4a5493598326645834",
+ "targets": [
+  "build",
+  "distribution-check",
+  "distribution-test"
+ ],
+ "dependencies": {
+  "onetaskgraph-live-janitor:build": [],
+  "onetaskgraph:build": [],
+  "sdk-typescript:build": [],
+  "scripts:distribution-check": [],
+  "scripts:distribution-test": [
+   "onetaskgraph:build"
+  ]
+ }
+}

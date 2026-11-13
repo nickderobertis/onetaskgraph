@@ -2,6 +2,7 @@
 """Replay recent pull requests against finer Nx keys.
 
     python3 spike/ci-profile/replay.py HISTORY PRS INPUTS_AFTER INPUTS_BEFORE [--json OUT] [--root DIR]
+        [--graphs DIR]
 
 HISTORY is `ciprofile.py history` output (each PR's first CI run, task by task, per job, written
 by `models.FirstRunRecord`); PRS lists each PR's number and changed files (its squash commit's
@@ -13,8 +14,13 @@ For every task a PR's run executed it names the changed files that are inputs of
 file at all means the task is not keyed on the diff: an uncached target, a `run` phase, or a key
 that moved through a runtime input `nx show target inputs` does not list. Each `Option` is a
 rule over those matches: a task every one of whose matched files the option takes out of its key
-would have replayed, and the saving is that task's measured share of the job's wall clock (the
-time it held a slot, split with whatever ran beside it) — an estimate of the job's shortening.
+would have replayed. Two figures are printed for each option, and only the second estimates how
+much shorter a job would be:
+- wall-share attribution: the replayed tasks' measured share of the job's wall clock (the time
+  each held a slot, split with whatever ran beside it);
+- with `--graphs` (`taskgraphs.py` output, `pr-<n>.json`), the estimated job shortening: the PR's
+  run re-timed over Nx's task graph at its commit with the replayed tasks taking no time
+  (`critical_path.py`, a model, not a measurement).
 
 What the distribution journeys read is derived from the repository at --root, not listed here:
 crate sources and manifests, and every file the commands of `scripts:distribution-check` and
@@ -40,7 +46,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # E402: models sits beside this file and is found through the sys.path entry above.
-from critical_path import predicted_shortening  # noqa: E402
+from critical_path import executed_deps, predicted_shortening  # noqa: E402
 from models import FirstRunRecord, Invalid, JobName, TaskId, history, items, obj, positive, take, task_id  # noqa: E402
 
 MERGED_3956 = 3956
@@ -236,8 +242,8 @@ class ReplayResult:
     prs: int = 0
     totals: dict[JobName, JobTotals] = field(default_factory=lambda: {j: JobTotals() for j in JobName})
     saved: dict[Option, dict[JobName, float]] = field(default_factory=lambda: {o: defaultdict(float) for o in Option})
-    # Predicted job shortening: the replayed tasks' whole intervals moved through the run's own
-    # critical path (critical_path.py); only PR jobs whose every executed task has an interval.
+    # Estimated job shortening (critical_path.py over the PR's own Nx task graph); only PR jobs
+    # whose every executed task has an interval, and only with --graphs.
     shortened: dict[Option, dict[JobName, float]] = field(
         default_factory=lambda: {o: defaultdict(float) for o in Option}
     )
@@ -263,13 +269,22 @@ class ReplayResult:
         }
 
 
+@dataclass(frozen=True)
+class Keys:
+    """Each task's resolved inputs on the tree after #3956 and on its parent."""
+
+    after: dict[TaskId, frozenset[str]]
+    before: dict[TaskId, frozenset[str]]
+
+
 def replay(
     runs: dict[int, FirstRunRecord],
     prs: dict[int, frozenset[str]],
-    keys_after: dict[TaskId, frozenset[str]],
-    keys_before: dict[TaskId, frozenset[str]],
+    keys_by_era: Keys,
     publishable: Publishable,
+    graphs: dict[int, dict[str, list[str]]] | None = None,
 ) -> ReplayResult:
+    keys_after, keys_before = keys_by_era.after, keys_by_era.before
     result = ReplayResult(prs=len(runs))
     for pr, first in runs.items():
         if pr not in prs:
@@ -300,11 +315,13 @@ def replay(
                     if diff.replays(option, task, matched):
                         result.saved[option][job] += ran.share_s
                         replayed_by[option][str(task)] = ran.seconds
-            if executed and all(r.start is not None and r.end is not None for r in executed.values()):
+            timed = executed and all(r.start is not None and r.end is not None for r in executed.values())
+            if graphs is not None and timed:
                 intervals = {str(t): (float(r.start or 0.0), float(r.end or 0.0)) for t, r in executed.items()}
+                deps = executed_deps(graphs[pr], set(intervals))
                 result.predicted_jobs[job] += 1
                 for option in Option:
-                    result.shortened[option][job] += predicted_shortening(intervals, replayed_by[option])
+                    result.shortened[option][job] += predicted_shortening(intervals, deps, replayed_by[option])
     return result
 
 
@@ -321,8 +338,8 @@ def report(result: ReplayResult) -> None:
         print(
             f"  {job.value}: " + "; ".join(f"{k} {v / 60:.0f}" for k, v in sorted(parts.items(), key=lambda kv: -kv[1]))
         )
-    print("\noption: predicted job shortening, the replayed tasks' intervals moved through each run's critical path,")
-    print("  total minutes over the PR jobs with intervals (and per PR)")
+    print("\noption: estimated job shortening, each PR's run re-timed over its own Nx task graph without the")
+    print("  replayed tasks (a model), total minutes over the PR jobs with intervals (and per PR)")
     for option, per_job in result.shortened.items():
         print(
             f"  {option.value}: "
@@ -350,14 +367,23 @@ def main(argv: list[str]) -> int:
         ap.add_argument(name, type=Path)
     ap.add_argument("--json", type=Path)
     ap.add_argument("--root", type=Path, default=REPO_ROOT)
+    ap.add_argument("--graphs", type=Path, help="taskgraphs.py output holding pr-<n>.json")
     args = ap.parse_args(argv)
     try:
+        runs = history(json.loads(args.history.read_text()))
+        graphs = None
+        if args.graphs:
+            graphs = {}
+            for pr in runs:
+                record = obj(json.loads((args.graphs / f"pr-{pr}.json").read_text()), f"pr-{pr}.json")
+                deps = obj(record.get("dependencies"), f"pr-{pr}.json dependencies")
+                graphs[pr] = {str(k): [str(d) for d in items(v, f"pr-{pr}.json {k}")] for k, v in deps.items()}
         result = replay(
-            history(json.loads(args.history.read_text())),
+            runs,
             parse_prs(json.loads(args.prs.read_text())),
-            load_inputs(args.inputs_after),
-            load_inputs(args.inputs_before),
+            Keys(load_inputs(args.inputs_after), load_inputs(args.inputs_before)),
             Publishable(distribution_named_files(args.root)),
+            graphs,
         )
     except (OSError, ValueError) as error:
         print(f"replay: {type(error).__name__}: {error}", file=sys.stderr)

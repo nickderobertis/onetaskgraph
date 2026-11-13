@@ -2,44 +2,39 @@
 """Price the measured prototypes over the 30-PR population, in elapsed job minutes.
 
     python3 spike/ci-profile/prototype_replay.py deltas SUMMARIES --control R,R --side NAME=R,R... --out FILE
-        [--side-only JOB:TASK]...
-    python3 spike/ci-profile/prototype_replay.py replay HISTORY PRS DELTAS
+        [--side-only JOB:TASK]... [--graphs DIR]
+    python3 spike/ci-profile/prototype_replay.py replay HISTORY PRS DELTAS --graphs DIR
 
 `deltas` reads the run summaries `ciprofile.py profile <run> --json` wrote into SUMMARIES
 (`profile-<run>.json`) for the control runs and each prototype side's runs. Per side and job it
-writes three different things, kept apart because they answer different questions:
-- `elapsed_saved_s`: for each Nx task, the control's mean elapsed interval (its end less its
-  start) less the side's — how much sooner the task itself finishes. This is what the replay
-  moves.
-- measured job figures: the mean job wall clock, the Nx gate's span (first task start to last task
-  end) and the latest-finishing chain's span, control and side — the job shortening the runs
-  themselves showed, noise included.
-- attribution and work, never a prediction of job minutes: `share_saved_s`, the change in each
-  task's wall share (an instant split among the tasks running then), and `work_saved_s`, the
-  change in summed test-seconds per crate (concurrent test work, from the nextest records the
-  summary carries as `binaries_s`).
-The sides must have scheduled the same Nx tasks as the control in every job, or the comparison is
-refused, naming the tasks one side scheduled and the other did not; a task the prototype itself
-adds (its own crate's coverage unit, which Linux's unnarrowed coverage always schedules) is let
+writes, kept apart because they answer different questions:
+- measured job figures, the evidence: each run's job wall clock and Nx gate span (first task start
+  to last task end), control and side, with their means;
+- `elapsed_saved_s`: for each Nx task, the control's mean elapsed interval less the side's — how
+  much sooner the task itself finished. This is what the replay moves;
+- `model_on_control_s` (with `--graphs`, which holds `run-<id>.json` from `taskgraphs.py`): the
+  model's prediction of the gate shortening, applied to the control runs' own timelines — to set
+  beside the measured change, as a check on the model;
+- attribution and work, never a prediction of job minutes: `share_saved_s`, each task's wall
+  share change, and `work_saved_s`, summed test-seconds per crate (Linux's nextest records).
+The sides must have scheduled the same Nx tasks in every job, or the comparison is refused, naming
+the tasks one side scheduled and the other did not; a task the prototype itself adds is let
 through only when declared with `--side-only JOB:TASK`, and is recorded. A task both sides
-scheduled but only one executed (the other replayed it from the Nx cache, because the prototype's
-own manifest edit moved its key) is compared over the runs that executed it and recorded under
+scheduled but only one executed is compared over the runs that executed it and recorded under
 `executed_by_one_side`.
 
-`replay` predicts, for every PR of HISTORY (`ciprofile.py history` output, each task with its
-interval), how much sooner each job would have ended had the prototype been in place: the tasks
-the prototype changes finish earlier (or later) by their measured `elapsed_saved_s`; a changed task
-on the job's latest-finishing chain moves the chain's end, every task after it on the chain moving
-with it, and a changed task off the chain moves only its own end; the job ends at the latest of
-the two. Which tasks a PR's prototype changes:
+`replay` estimates, for every PR of HISTORY (`ciprofile.py history` output, each task with its
+interval), how much sooner each job would have ended had the prototype been in place, with
+`critical_path.py`: the PR's own run re-timed over Nx's task graph at that PR's commit (`--graphs`,
+`pr-<n>.json`), the changed tasks taking their measured `elapsed_saved_s` less. Which tasks a PR's
+prototype changes:
 - `pyramid`: the `onetaskgraph-e2e` tasks its run executed;
 - `split`: a PR changing `onetaskgraph-core` outside the moved template files changes the core
   tasks its run executed; one changing a moved file also runs the template crate's tasks, beside
   the gate from its start; any other PR changes nothing.
-Off-chain followers are not shifted and contention is not modelled; both are stated beside the
-figures. It prints, per side and job, the mean predicted shortening per PR over all PRs and over
-the typical PR (one whose diff changes a crate's `src/`, `tests/`, `build.rs` or `Cargo.toml`), and
-how many PR jobs had the intervals to be predicted.
+It prints, per side and job, the measured job figures and the estimated shortening per PR over all
+PRs and over the typical PR (one whose diff changes a crate's `src/`, `tests/`, `build.rs` or
+`Cargo.toml`). Those are a model's estimates; the measured figures are the evidence.
 
 Exit status: 0 printed or written; 2 a usage error, an input of a shape it does not read, or
 sides whose task selections differ.
@@ -55,11 +50,12 @@ import sys
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # E402: the harness's own modules are found through the sys.path entry above.
-from critical_path import Interval, latest_chain, predicted_shortening, span  # noqa: E402
+from critical_path import Interval, executed_deps, gate_span, predicted_shortening  # noqa: E402
 from models import FirstRunRecord, Invalid, JobName, history, items, obj, positive, seconds  # noqa: E402
 from replay import parse_prs  # noqa: E402
 
@@ -127,11 +123,22 @@ def mean_of(values: list[dict[str, float]]) -> dict[str, float]:
     return {k: statistics.mean(v[k] for v in values if k in v) for k in keys}
 
 
-def job_figures(present: list[JobSummary]) -> dict[str, float]:
+def job_figures(present: list[JobSummary]) -> dict:
+    walls = [round(p.wall_s, 1) for p in present]
+    spans = [round(gate_span(p.intervals), 1) for p in present]
     return {
-        "wall_s": round(statistics.mean(p.wall_s for p in present), 1),
-        "gate_span_s": round(statistics.mean(span(p.intervals) for p in present), 1),
-        "chain_span_s": round(statistics.mean(span(p.intervals, latest_chain(p.intervals)) for p in present), 1),
+        "wall_s": round(statistics.mean(walls), 1),
+        "gate_span_s": round(statistics.mean(spans), 1),
+        "runs_wall_s": walls,
+        "runs_gate_span_s": spans,
+    }
+
+
+def load_graph(directory: Path, key: str) -> dict[str, list[str]]:
+    path = directory / f"{key}.json"
+    record = obj(json.loads(path.read_text()), str(path))
+    return {
+        str(k): [str(d) for d in items(v, f"{path} {k}")] for k, v in obj(record.get("dependencies"), str(path)).items()
     }
 
 
@@ -150,12 +157,13 @@ def deltas(
     control: list[int],
     sides: dict[str, list[int]],
     side_only: frozenset[tuple[str, str]] = frozenset(),
+    graphs: Path | None = None,
 ) -> dict:
     base = [summary(directory, r) for r in control]
     out: dict = {"control": control, "sides": {}}
     for side, runs in sides.items():
         measured = [summary(directory, r) for r in runs]
-        per_job = {}
+        per_job: dict[str, dict[str, Any]] = {}
         for job in JobName:
             c = [s[job.value] for s in base if job.value in s]
             m = [s[job.value] for s in measured if job.value in s]
@@ -182,10 +190,19 @@ def deltas(
                 "side": job_figures(m),
                 "side_only": sorted(m_sched - c_sched),
                 "executed_by_one_side": {"control": sorted(c_exec - m_exec), side: sorted((m_exec - c_exec) & c_sched)},
-                "elapsed_saved_s": diff(elapsed) | added_cost(m, sorted((m_sched - c_sched) & m_exec)),
+                "elapsed_saved_s": (saved := diff(elapsed) | added_cost(m, sorted((m_sched - c_sched) & m_exec))),
                 "share_saved_s": diff(lambda p: p.shares),
                 "work_saved_s": diff(lambda p: p.work, {k for p in c + m for k in p.work}),
             }
+            if graphs is not None:
+                model = []
+                for run, summaries in zip(control, base, strict=True):
+                    if job.value in summaries:
+                        p = summaries[job.value]
+                        deps = executed_deps(load_graph(graphs, f"run-{run}"), set(p.intervals))
+                        changed = {t: v for t, v in saved.items() if t in p.intervals or t in m_sched - c_sched}
+                        model.append(round(predicted_shortening(p.intervals, deps, changed), 1))
+                per_job[job.value]["model_on_control_s"] = model
         out["sides"][side] = {"runs": runs, "jobs": per_job}
     return out
 
@@ -205,7 +222,7 @@ def changed_tasks(side: str, files: frozenset[str], executed: set[str], elapsed:
     raise Invalid(f"no replay rule for side {side!r}")
 
 
-def replay(history_raw: object, prs_raw: object, measured: dict) -> list[str]:
+def replay(history_raw: object, prs_raw: object, measured: dict, graphs: Path) -> list[str]:
     runs: dict[int, FirstRunRecord] = history(history_raw)
     prs = parse_prs(prs_raw)
     lines = []
@@ -230,15 +247,20 @@ def replay(history_raw: object, prs_raw: object, measured: dict) -> list[str]:
                     unpredicted += 1
                     continue
                 intervals = {t: (float(r.start or 0.0), float(r.end or 0.0)) for t, r in executed.items()}
-                value = predicted_shortening(intervals, changed_tasks(side, prs[pr], set(executed), elapsed))
+                deps = executed_deps(load_graph(graphs, f"pr-{pr}"), set(executed))
+                value = predicted_shortening(intervals, deps, changed_tasks(side, prs[pr], set(executed), elapsed))
                 per_pr.append(value)
                 if any(TYPICAL.match(f) for f in prs[pr]):
                     typical.append(value)
             c, s = j["control"], j["side"]
+
+            def minutes(values: list[float]) -> str:
+                return ", ".join(f"{v / 60:.1f}" for v in values)
+
             lines.append(
-                f"  {job.value:12s} measured: wall {c['wall_s'] / 60:5.1f} -> {s['wall_s'] / 60:5.1f} min,"
-                f" chain {c['chain_span_s'] / 60:5.1f} -> {s['chain_span_s'] / 60:5.1f} min;"
-                f" predicted shortening {statistics.mean(per_pr) / 60 if per_pr else 0.0:+.2f} min/PR over"
+                f"  {job.value:12s} measured gate span (min) {minutes(c['runs_gate_span_s'])} ->"
+                f" {minutes(s['runs_gate_span_s'])}, wall {minutes(c['runs_wall_s'])} -> {minutes(s['runs_wall_s'])};"
+                f" estimated shortening {statistics.mean(per_pr) / 60 if per_pr else 0.0:+.2f} min/PR over"
                 f" {len(per_pr)}, {statistics.mean(typical) / 60 if typical else 0.0:+.2f} over the {len(typical)}"
                 f" typical ({unpredicted} without intervals)"
             )
@@ -256,9 +278,11 @@ def main(argv: list[str]) -> int:
     d.add_argument("--side", action="append", required=True)
     d.add_argument("--out", type=Path, required=True)
     d.add_argument("--side-only", action="append", default=[], help="JOB:TASK the prototype itself adds")
+    d.add_argument("--graphs", type=Path, help="taskgraphs.py output holding run-<id>.json for the control runs")
     r = sub.add_parser("replay")
     for name in ("history", "prs", "deltas"):
         r.add_argument(name, type=Path)
+    r.add_argument("--graphs", type=Path, required=True, help="taskgraphs.py output holding pr-<n>.json")
     args = ap.parse_args(argv)
     try:
         if args.cmd == "deltas":
@@ -274,13 +298,14 @@ def main(argv: list[str]) -> int:
                 if job not in {j.value for j in JobName} or ":" not in task:
                     ap.error(f"--side-only takes JOB:PROJECT:TARGET, not {item!r}")
                 declared.add((job, task))
-            measured = deltas(args.summaries, args.control, sides, frozenset(declared))
+            measured = deltas(args.summaries, args.control, sides, frozenset(declared), args.graphs)
             args.out.write_text(json.dumps(measured, indent=1) + "\n")
             return 0
         lines = replay(
             json.loads(args.history.read_text()),
             json.loads(args.prs.read_text()),
             obj(json.loads(args.deltas.read_text()), "deltas"),
+            args.graphs,
         )
         print("\n".join(lines))
         return 0
