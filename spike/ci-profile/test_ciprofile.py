@@ -615,6 +615,9 @@ class RunnerCommandTests(unittest.TestCase):
 
 
 class MeasurementOnlyCommandTests(unittest.TestCase):
+    """The rewritten workflow is GitHub-hosted, so it cannot run here: these hold its text to each edit, and the
+    hosted demonstration runs the report cites (their cache steps and the recorders' artifacts) are its execution."""
+
     def run_tool(self, *args):
         workflow = scratch(self) / "ci.yml"
         shutil.copy(HERE.parents[1] / ".github/workflows/ci.yml", workflow)

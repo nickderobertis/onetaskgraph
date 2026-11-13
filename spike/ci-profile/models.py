@@ -22,6 +22,7 @@ ArtifactId = NewType("ArtifactId", int)
 TaskId = NewType("TaskId", str)  # "<project>:<target>"
 Seconds = float
 
+TASK_ID = re.compile(r"[\w.@/-]+:[\w.-]+")
 ISO_TIME = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.(\d+))?(Z|[+-]\d\d:\d\d)?")
 
 
@@ -144,6 +145,12 @@ def timestamp(value: Any, where: str) -> float:
         text = f"{text}.{fraction[:6].ljust(6, '0')}"
     zone = "+00:00" if offset in (None, "Z") else offset
     return datetime.fromisoformat(text + zone).astimezone(UTC).timestamp()
+
+
+def task_id(value: str, where: str) -> TaskId:
+    if not TASK_ID.fullmatch(value):
+        raise Invalid(f"{where}: {value!r} is not an Nx project:target")
+    return TaskId(value)
 
 
 def source_of(value: str, where: str) -> Source:
@@ -301,9 +308,7 @@ class NxExecution:
     @classmethod
     def parse(cls, raw: Any) -> NxExecution:
         record = obj(raw, "Nx execution")
-        task = take(record, "task", str, "Nx execution")
-        if ":" not in task:
-            raise Invalid(f"Nx execution: {task!r} is not project:target")
+        task = task_id(take(record, "task", str, "Nx execution"), "Nx execution")
         start = timestamp(take(record, "started_at", str, task), task)
         end = timestamp(take(record, "finished_at", str, task), task)
         if end < start:
@@ -380,6 +385,25 @@ class LibtestEvent:
         if self.kind is LibtestKind.SUITE:
             out.update(passed=self.passed, failed=self.failed, ignored=self.ignored, filtered_out=self.filtered_out)
         return out
+
+
+class SpawnMode(StrEnum):
+    JSON = "json"
+    PASSTHROUGH = "passthrough"
+
+
+@dataclass(frozen=True)
+class Spawn:
+    """One libtest binary the recording runner ran: when, how, and its exit status."""
+
+    binary: str
+    start: float
+    end: float
+    mode: SpawnMode
+    code: int
+
+    def to_json(self) -> dict[str, Any]:
+        return {"binary": self.binary, "start": self.start, "end": self.end, "mode": self.mode.value, "code": self.code}
 
 
 @dataclass(frozen=True)
@@ -519,7 +543,7 @@ class JobRecord:
             source_of(take(record, "source", str, where), where),
             {k: seconds(v, where) for k, v in obj(record.get("buckets_s", {}), where).items()},
             {
-                TaskId(t): TaskRecord.parse(v, f"{where} {t}")
+                task_id(t, where): TaskRecord.parse(v, f"{where} {t}")
                 for t, v in obj(take(record, "tasks", dict, where), where).items()
             },
         )

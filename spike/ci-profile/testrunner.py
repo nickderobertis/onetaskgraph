@@ -32,7 +32,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # E402: models sits beside this file and is found through the sys.path entry above.
-from models import Invalid, LibtestEvent, LibtestKind, LibtestOutcome  # noqa: E402
+from models import Invalid, LibtestEvent, LibtestKind, LibtestOutcome, Spawn, SpawnMode  # noqa: E402
 
 USAGE_EXIT = 2
 TERSE = {LibtestOutcome.OK: ".", LibtestOutcome.IGNORED: "i", LibtestOutcome.FAILED: "F"}
@@ -164,7 +164,7 @@ def run_recorded(invocation: Invocation, record: Path) -> int:
     code = proc.wait()
     append(
         record.with_name(record.name + ".spawns"),
-        {"binary": invocation.name, "start": start, "end": time.time(), "mode": "json", "code": code},
+        Spawn(invocation.name, start, time.time(), SpawnMode.JSON, code).to_json(),
     )
     return code
 
@@ -181,7 +181,7 @@ def main(argv: list[str]) -> int:
         if record:
             append(
                 Path(record + ".spawns"),
-                {"binary": invocation.name, "start": start, "end": time.time(), "mode": "passthrough", "code": code},
+                Spawn(invocation.name, start, time.time(), SpawnMode.PASSTHROUGH, code).to_json(),
             )
         return code
     return run_recorded(invocation, Path(record))

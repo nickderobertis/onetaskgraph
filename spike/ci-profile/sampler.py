@@ -92,6 +92,8 @@ def classify(name: str, cmdline: list[str]) -> Category:
             return NAMED[base]
         case _ if base in LINKERS:
             return Category.LINK
+        case _ if TEST_BINARY.match(base):  # before the CLI: `onetaskgraph_core-<hash>` is a test executable
+            return Category.TEST_BINARY
         case _ if base.startswith("onetaskgraph"):
             return Category.CLI_UNDER_TEST
         case _ if base == "git" or base.startswith("git-"):
@@ -100,8 +102,6 @@ def classify(name: str, cmdline: list[str]) -> Category:
             return node_category(" ".join(cmdline).lower())
         case _ if base.startswith("python") or base in PYTHON_TOOLS:
             return Category.PYTHON
-        case _ if TEST_BINARY.match(base):
-            return Category.TEST_BINARY
         case _ if base in SHELLS:
             return Category.SHELL
         case _:

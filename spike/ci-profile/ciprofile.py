@@ -129,6 +129,43 @@ class JobView:
     division: prof.ProcessDivision | None
     times: TestTimes
 
+    def to_json(self) -> dict:
+        p, division, times = self.profile, self.division, self.times
+        return {
+            "job_id": p.job.id,
+            "wall_s": round(p.wall, 1),
+            "buckets_s": {k.value: round(v, 1) for k, v in p.buckets.items()},
+            "tasks": [
+                {
+                    "task": t.id,
+                    "result": t.result.value,
+                    "start": t.start,
+                    "end": t.end,
+                    "share_s": round(p.task_share.get(t.id, 0), 1),
+                }
+                for t in p.tasks
+            ],
+            "binaries_s": times.per_binary,
+            "slowest": [[t.qualified, t.seconds] for t in times.slowest],
+            "sampler": None
+            if division is None
+            else {"seconds": division.seconds, "exits": {k.value: vars(v) for k, v in division.exits.items()}},
+            "rust_cache": None if p.rust_cache is None else vars(p.rust_cache),
+            "stored": None if p.stored is None else vars(p.stored),
+        }
+
+
+@dataclass(frozen=True)
+class RunSummary:
+    """What `profile --json` writes: the run and each job it profiled."""
+
+    run: RunId
+    head_sha: str
+    jobs: tuple[JobView, ...]
+
+    def to_json(self) -> dict:
+        return {"run": self.run, "head_sha": self.head_sha, "jobs": {v.name: v.to_json() for v in self.jobs}}
+
 
 def print_job(view: JobView, top: int) -> None:
     name, p, executions, division, times = view.name, view.profile, view.from_executions, view.division, view.times
@@ -181,7 +218,7 @@ async def profile_run(gh: ghcache.GitHub, run_id: RunId, wanted: list[str], as_j
     run = await gh.run(run_id)
     jobs = {j.name: j for j in await gh.jobs(run_id)}
     print(f"run {run_id}  head {run.head_sha[:12]}  branch {run.head_branch}  created {run.created_at}")
-    summary: dict = {"run": run_id, "head_sha": run.head_sha, "jobs": {}}
+    views: list[JobView] = []
     missing = []
     for name in wanted:
         job = jobs.get(name)
@@ -194,33 +231,13 @@ async def profile_run(gh: ghcache.GitHub, run_id: RunId, wanted: list[str], as_j
         samples = await spike_record(gh, run_id, name, "samples.jsonl")
         division = prof.by_process(prof.sampler_records(samples), p.test_step) if samples and p.test_step else None
         times = test_times(await spike_record(gh, run_id, name, "tests.jsonl"), p.nextest)
-        print_job(JobView(name, p, executions is not None, division, times), top)
-        summary["jobs"][name] = {
-            "job_id": job.id,
-            "wall_s": round(p.wall, 1),
-            "buckets_s": {k.value: round(v, 1) for k, v in p.buckets.items()},
-            "tasks": [
-                {
-                    "task": t.id,
-                    "result": t.result.value,
-                    "start": t.start,
-                    "end": t.end,
-                    "share_s": round(p.task_share.get(t.id, 0), 1),
-                }
-                for t in p.tasks
-            ],
-            "binaries_s": times.per_binary,
-            "slowest": [[t.qualified, t.seconds] for t in times.slowest],
-            "sampler": None
-            if division is None
-            else {"seconds": division.seconds, "exits": {k.value: vars(v) for k, v in division.exits.items()}},
-            "rust_cache": None if p.rust_cache is None else vars(p.rust_cache),
-            "stored": None if p.stored is None else vars(p.stored),
-        }
+        view = JobView(name, p, executions is not None, division, times)
+        print_job(view, top)
+        views.append(view)
     print(f"\n(GitHub reads this invocation: {gh.reads})")
     if as_json:
         target = gh.cache / f"profile-{run_id}.json"
-        target.write_text(json.dumps(summary, indent=1))
+        target.write_text(json.dumps(RunSummary(run_id, run.head_sha, tuple(views)).to_json(), indent=1))
         print(f"(json: {target})")
     if missing:
         print(

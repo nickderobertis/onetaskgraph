@@ -38,7 +38,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 # E402: models sits beside this file and is found through the sys.path entry above.
-from models import FirstRunRecord, Invalid, JobName, TaskId, history, items, obj, take  # noqa: E402
+from models import FirstRunRecord, Invalid, JobName, TaskId, history, items, obj, take, task_id  # noqa: E402
 
 MERGED_3956 = 3956
 USAGE_EXIT = 2
@@ -196,8 +196,11 @@ def load_inputs(directory: Path) -> dict[TaskId, frozenset[str]]:
     out = {}
     for path in sorted(directory.glob("*.json")):
         record = obj(json.loads(path.read_text()), str(path))
-        task = TaskId(path.stem.replace("__", ":"))
-        named = f"{record.get('project', task.split(':')[0])}:{record.get('target', task.split(':')[1])}"
+        if path.stem.count("__") != 1:
+            raise Invalid(f"{path}: an inputs file is named <project>__<target>.json")
+        task = task_id(path.stem.replace("__", ":"), str(path))
+        project, target = task.split(":")
+        named = f"{record.get('project', project)}:{record.get('target', target)}"
         if named != task:
             raise Invalid(f"{path}: holds the inputs of {named}, not {task}")
         out[task] = frozenset(repository_path(f, str(path)) for f in items(record.get("files"), str(path)))

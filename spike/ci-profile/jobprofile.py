@@ -274,7 +274,14 @@ def tasks_from_log(log: list[LogLine], window: Interval | None) -> list[Task]:
     for line in inside:
         m = HEADER.match(line.text)
         if m:
-            result = TaskResult.REMOTE_HIT if m.group("remote") or m.group("replay") else TaskResult.EXECUTED
+            remote = m.group("remote") or ""
+            result = (
+                TaskResult.LOCAL_HIT
+                if "local cache" in remote
+                else TaskResult.REMOTE_HIT
+                if remote or m.group("replay")
+                else TaskResult.EXECUTED
+            )
             out.append(Task(TaskId(m.group("task")), line.t, line.t, result))
     prefixed: dict[str, list[float]] = defaultdict(list)
     for line in inside:

@@ -437,7 +437,7 @@ class MoreCommandPathTests(unittest.TestCase):
         self.assertIn("9.0s  e2e-0123456789abcdef::broke", proc.stdout)
         self.assertIn("2.5s  instrumented:x::e2e::t2", proc.stdout)
         binaries = proc.stdout.split("test binaries (2, seconds):\n")[1].split("  slowest")[0].strip().splitlines()
-        self.assertEqual(len(binaries), 1)  # --top 1
+        self.assertEqual(len(binaries), 1)
         tasks = proc.stdout.split("Nx tasks by share of wall clock (own seconds, result):\n")[1].split("  latest")[0]
         self.assertEqual(len(tasks.strip().splitlines()), 1)
 
@@ -536,3 +536,141 @@ class RunnerPassthroughTests(unittest.TestCase):
         spawns = [json.loads(x) for x in (root / "tests.jsonl.spawns").read_text().splitlines()]
         self.assertEqual([(s["mode"], s["code"]) for s in spawns], [("passthrough", 7), ("passthrough", 7)])
         self.assertFalse(record.exists())
+
+
+class BoundaryFailureTests(unittest.TestCase):
+    def test_a_window_that_does_not_move_forward_is_a_usage_error(self):
+        for since, until in (("2026-11-02T00:00:00Z", "2026-11-01T00:00:00Z"), ("2026-11-01T00:00:00Z",) * 2):
+            proc = command("ciprofile.py", "durations", since, until, env={"CIPROFILE_OFFLINE": "1"})
+            self.assertEqual(proc.returncode, 2)
+            self.assertIn("the window's end must follow its start", proc.stderr)
+
+    def test_a_malformed_pr_list_and_an_unwritable_output_exit_4_naming_why(self):
+        root = scratch(self)
+        cache = fixture_cache(root)
+        listing = cache / "lists/event_pull_request_created_>_2026-11-01.1.json"
+        listing.parent.mkdir(parents=True)
+        listing.write_text(json.dumps({"workflow_runs": [RUN_RECORD]}))
+        env = {"CIPROFILE_CACHE": str(cache), "CIPROFILE_OFFLINE": "1"}
+        (root / "bad.json").write_text("{not json")
+        proc = command("ciprofile.py", "history", str(root / "bad.json"), "--out", str(root / "h.json"), env=env)
+        self.assertEqual(proc.returncode, 4)
+        self.assertIn("JSONDecodeError", proc.stderr)
+        (root / "prs.json").write_text(json.dumps([{"pr": 9, "head": "a" * 40, "branch": "topic"}]))
+        proc = command(
+            "ciprofile.py", "history", str(root / "prs.json"), "--out", str(root / "no/such/dir/h.json"), env=env
+        )
+        self.assertEqual(proc.returncode, 4)
+        self.assertIn("FileNotFoundError", proc.stderr)
+
+
+class ReplayOptionJourneyTests(unittest.TestCase):
+    def test_a_formatter_config_edit_would_have_replayed_the_rust_tests_it_reran(self):
+        root = scratch(self)
+        (root / "after").mkdir()
+        (root / "after/onetaskgraph-core__test.json").write_text(
+            json.dumps({"files": ["biome.json", "crates/x/src/a.rs"]})
+        )
+        record = {
+            "run": 1,
+            "head_sha": "f" * 40,
+            "created_at": "2026-11-12T00:00:00Z",
+            "conclusion": "success",
+            "runs_of_pr": 1,
+            "jobs": {
+                "test-windows": {
+                    "job_id": 1,
+                    "conclusion": "success",
+                    "wall_s": 300,
+                    "source": "executions",
+                    "tasks": {"onetaskgraph-core:test": {"result": "executed", "seconds": 200, "share_s": 90}},
+                }
+            },
+        }
+        (root / "h.json").write_text(json.dumps({"3990": record}))
+        (root / "p.json").write_text(json.dumps([{"pr": 3990, "files": ["biome.json"]}]))
+        proc = command(
+            "replay.py", str(root / "h.json"), str(root / "p.json"), str(root / "after"), str(root / "after")
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn(
+            "non-semantic-globals-out-of-rust-keys: test-linux 0.0 (0.00/PR)  test-macos 0.0 (0.00/PR)  "
+            "test-windows 1.5 (1.50/PR)",
+            proc.stdout,
+        )
+
+
+class FakeProcess:
+    """One entry of a stand-in process table: what psutil reports of a process."""
+
+    def __init__(self, pid: int, ppid: int, name: str, created: float, cpu: float, *, cmdline: tuple[str, ...] = ()):
+        self.info = {"pid": pid, "ppid": ppid, "name": name, "create_time": created}
+        self.cpu = cpu
+        self.command = list(cmdline)
+
+    def cmdline(self) -> list[str]:
+        return self.command
+
+    def cpu_times(self):
+        return type("Times", (), {"user": self.cpu, "system": 0.0})()
+
+
+class FakeProcessTable:
+    """The OS boundary the sampler reads, as psutil presents it."""
+
+    Error = OSError
+
+    def __init__(self) -> None:
+        self.processes: list[FakeProcess] = []
+
+    def process_iter(self, _fields):
+        return list(self.processes)
+
+
+class SamplerAccountingTests(unittest.TestCase):
+    def test_a_working_descendant_hides_its_ancestors_and_the_sidecar_is_nobodys_work(self):
+        import sampler  # noqa: PLC0415 — beside this file
+
+        table = FakeProcessTable()
+        table.processes = [
+            FakeProcess(10, 1, "bash", 0.0, 0.0),
+            FakeProcess(11, 10, "cargo", 0.0, 0.0),
+            FakeProcess(12, 11, "rustc", 0.0, 0.0),
+            FakeProcess(20, 1, "node", 0.0, 0.0, cmdline=("node", "/a/op-nx/start-cache-server/main.js")),
+            FakeProcess(21, 20, "gtar", 0.0, 0.0),
+            FakeProcess(40, 1, "bash", 0.0, 0.0),
+            FakeProcess(41, 40, "node", 0.0, 0.0, cmdline=("node", "/a/op-nx/start-cache-server/main.js")),
+        ]
+        taken = sampler.sample(table, {}, me=999, previous=100.0, tick=1.0)
+        # rustc hides cargo and bash; gtar hides the sidecar that runs it; a bare sidecar hides nothing above it.
+        self.assertEqual(
+            sampler.leaves(taken.alive),
+            {
+                models.Category.COMPILE: 1,
+                models.Category.ARCHIVE: 1,
+                models.Category.SHELL: 1,
+                models.Category.NX_CACHE_SIDECAR: 1,
+            },
+        )
+
+    def test_cpu_is_counted_from_when_the_sampler_first_saw_a_process_and_a_reused_pid_is_a_new_process(self):
+        import sampler  # noqa: PLC0415 — beside this file
+
+        table, seen = FakeProcessTable(), {}
+        old = FakeProcess(30, 1, "python3", created=1.0, cpu=50.0)  # running long before the sampler started
+        fresh = FakeProcess(31, 1, "git", created=100.5, cpu=0.2)  # started inside this tick
+        table.processes = [old, fresh]
+        first = sampler.sample(table, seen, me=999, previous=100.0, tick=1.0)
+        self.assertEqual(first.cpu.get(models.Category.PYTHON, 0.0), 0.0)
+        self.assertAlmostEqual(first.cpu[models.Category.GIT], 0.2)
+        old.cpu = 51.5
+        table.processes = [old, FakeProcess(31, 1, "rustc", created=101.6, cpu=0.3)]  # pid 31 reused by a new process
+        second = sampler.sample(table, seen, me=999, previous=101.0, tick=1.0)
+        self.assertAlmostEqual(second.cpu[models.Category.PYTHON], 1.5)
+        self.assertEqual(second.alive[31].category, models.Category.COMPILE)
+        self.assertAlmostEqual(second.cpu[models.Category.COMPILE], 0.3)
+        table.processes = []
+        gone = sampler.exits(seen, {})
+        self.assertEqual(
+            {(e.pid, e.category) for e in gone}, {(30, models.Category.PYTHON), (31, models.Category.COMPILE)}
+        )

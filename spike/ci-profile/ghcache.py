@@ -22,8 +22,10 @@ from typing import Any
 from models import Artifact, Invalid, Job, RateLimit, Run, RunId, items, obj
 
 REPO = "nickderobertis/onetaskgraph"
-REST_FLOOR = 2500  # this dispatch's own stop line, stricter than the shared 2,000
-GRAPHQL_FLOOR = 2000  # manager ruling c0.5: never below 40% of the shared allowance
+# This host's login shares both allowances with other agents and with the live test lanes, which
+# pause when the account is under 40% of either; reads stop above that line so they never cause a pause.
+REST_FLOOR = 2500
+GRAPHQL_FLOOR = 2000
 CHECK_EVERY = 25
 PAGE = 100
 KEPT_SUFFIXES = (".json", ".jsonl", ".xml", ".txt", ".csv", ".spawns")
