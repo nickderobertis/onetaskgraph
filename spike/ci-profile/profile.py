@@ -54,6 +54,7 @@ class Task:
     result: str  # executed | remote_hit | local_hit | ...
     compile_end: float | None = None
     builds: list = field(default_factory=list)  # (start, end, profile) of each cargo build the task printed
+    lock_waits: list = field(default_factory=list)  # (start, end) cargo spent blocked on a file lock
 
     @property
     def project(self) -> str:
@@ -201,6 +202,11 @@ def profile_job(job: dict, log_text: str, executions: dict | None) -> JobProfile
             task.compile_end = task.end
     # Cargo builds a task printed itself (`Compiling` … `Finished \`<profile>\` profile`).
     per_project = defaultdict(list)
+    project_lines = defaultdict(list)
+    for t, line in log:
+        m = re.match(r"^\[[^\]]+\] ([\w.@/-]+): +(.*)$", line)
+        if m:
+            project_lines[m.group(1)].append((t, m.group(2)))
     for t, line in log:
         m = re.match(r"^\[[^\]]+\] ([\w.@/-]+): +(Compiling|Finished) (?:`(\w+)` profile)?", line)
         if m:
@@ -208,6 +214,12 @@ def profile_job(job: dict, log_text: str, executions: dict | None) -> JobProfile
     for task in tasks:
         if task.result != "executed":
             continue
+        lines = [(t, x) for t, x in project_lines.get(task.project, []) if task.start <= t <= task.end]
+        for i, (t, text) in enumerate(lines):
+            if text.startswith("Blocking waiting for file lock"):
+                later = next((u for u, y in lines[i + 1:] if not y.startswith("Blocking waiting")), None)
+                if later is not None and later > t and not (task.lock_waits and task.lock_waits[-1][1] >= t):
+                    task.lock_waits.append((t, later))
         opened = None
         for t, word, profile_name in per_project.get(task.project, []):
             if not (task.start <= t <= task.end):
@@ -262,7 +274,7 @@ def attribute_test_step(p: JobProfile) -> None:
     a0, b0 = p.test_step
     edges = {a0, b0}
     for t in p.tasks:
-        for x in (t.start, t.end, t.compile_end, *[e for b in t.builds for e in b[:2]]):
+        for x in (t.start, t.end, t.compile_end, *[e for b in t.builds for e in b[:2]], *[e for w in t.lock_waits for e in w]):
             if x is not None and a0 < x < b0:
                 edges.add(x)
     edges = sorted(edges)
@@ -279,6 +291,8 @@ def attribute_test_step(p: JobProfile) -> None:
             build = next((b for b in t.builds if b[0] <= mid < b[1]), None)
             if t.result != "executed":
                 p.buckets["cache-restore(nx)"] += share
+            elif any(w[0] <= mid < w[1] for w in t.lock_waits):
+                p.buckets["wait:cargo-file-lock"] += share
             elif build is not None:
                 kind = "release" if build[2] == "release" else ("instrumented" if t.instrumented else "plain")
                 p.buckets[f"compile-link({kind})"] += share
