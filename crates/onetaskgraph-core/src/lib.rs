@@ -47,7 +47,7 @@ pub mod section_links;
 pub mod subprocess;
 pub mod task_projection;
 // llmlint: ignore[code_lands_in_the_domain_that_owns_it] The task that introduced templates fixes their API at this crate's root; the head of `template/mod.rs` states why.
-pub mod template;
+pub use onetaskgraph_template as template;
 pub mod version;
 mod yaml;
 
@@ -127,3 +127,5 @@ pub use template::{
     RenderedTemplate, Sha256Digest, Template, TemplateError, TemplateInput, TemplateLoader,
     TemplateProvenance, TemplateVariable, TemplateVariables, VariableType,
 };
+
+// spike-onetaskgraph-profile: a no-behaviour edit, so this demonstration selects what an engine change selects.
