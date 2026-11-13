@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.15](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.14.14...onetaskgraph-github-projects-v0.14.15) - 2026-11-13
+
+### Added
+
+- project lists and maps onto board fields, and metadata fields onto a collapsed Linear section ([#4028](https://github.com/nickderobertis/onetaskgraph/pull/4028))
+
 ## [0.14.14](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-github-projects-v0.14.13...onetaskgraph-github-projects-v0.14.14) - 2026-11-12
 
 ### Added
