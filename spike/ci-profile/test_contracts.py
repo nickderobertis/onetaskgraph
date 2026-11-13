@@ -56,6 +56,14 @@ class ProducerContractTests(unittest.TestCase):
         for field in ("task", "result", "started_at", "finished_at"):
             self.assertRegex(pushed.group(1), rf"\b{field}\b")
 
+    def test_a_libtest_event_libtest_never_emits_is_refused(self):
+        with self.assertRaisesRegex(models.Invalid, "emits no suite ignored event"):
+            models.LibtestEvent.parse({"type": "suite", "event": "ignored"}, "b")
+        self.assertEqual(
+            models.LibtestEvent.parse({"type": "test", "event": "ignored", "name": "t"}, "b").outcome,
+            models.LibtestOutcome.IGNORED,
+        )
+
     def test_sampler_records_read_back_as_they_were_written(self):
         tick = models.Tick(5.0, 1.0, {models.Category.COMPILE: 2}, {models.Category.COMPILE: 1.5})
         gone = models.Exit(models.Category.GIT, 1.0, 2.5, 0.25)

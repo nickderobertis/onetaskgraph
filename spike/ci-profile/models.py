@@ -348,6 +348,13 @@ class LibtestOutcome(StrEnum):
     IGNORED = "ignored"
 
 
+# What libtest's JSON format emits: a suite starts and ends ok or failed; a test also may be ignored.
+LIBTEST_EVENTS = frozenset(
+    {(LibtestKind.SUITE, o) for o in (LibtestOutcome.STARTED, LibtestOutcome.OK, LibtestOutcome.FAILED)}
+    | {(LibtestKind.TEST, o) for o in LibtestOutcome}
+)
+
+
 @dataclass(frozen=True)
 class LibtestEvent:
     """One event of libtest's `--format=json` stream, as the recording runner keeps it."""
@@ -372,6 +379,8 @@ class LibtestEvent:
             kind, outcome = LibtestKind(record.get("type")), LibtestOutcome(record.get("event"))
         except ValueError as error:
             raise Invalid(f"{where}: {record.get('type')!r}/{record.get('event')!r} is no libtest event") from error
+        if (kind, outcome) not in LIBTEST_EVENTS:
+            raise Invalid(f"{where}: libtest emits no {kind.value} {outcome.value} event")
         name = record.get("name")
         if (kind is LibtestKind.TEST and not isinstance(name, str)) or not isinstance(name, (str, type(None))):
             raise Invalid(f"{where}: a test event names no test, or a name is not text")
