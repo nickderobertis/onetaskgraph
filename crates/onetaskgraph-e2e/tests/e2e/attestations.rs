@@ -2397,6 +2397,13 @@ fn the_item_a_private_copy_was_made_from_is_found_only_when_its_link_says_so_una
         "projects/launch.md",
         "---\ntitle: Launch\nstatus: todo\n---\n",
     );
+    for n in 0..60 {
+        write(
+            &plan.notes,
+            &format!("projects/filler-{n:02}.md"),
+            &format!("---\ntitle: Filler {n}\nstatus: todo\n---\n"),
+        );
+    }
     write(
         &plan.notes,
         "projects/upstream.md",

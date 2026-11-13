@@ -130,6 +130,20 @@ def test_a_refused_attestation_raises_with_the_failure(binary: Path, tmp_path: P
     assert refused.value.failure.kind == "invalid-attestation"
 
 
+class TaskState(NamedTuple):
+    """One task's attestation state, as a project's per-task check answers it."""
+
+    task: GlobalId
+    state: TaskAttestationState
+
+
+class Landed(NamedTuple):
+    """Where one item a copy read landed."""
+
+    source: GlobalId
+    destination: GlobalId
+
+
 def test_a_dependent_task_copied_out_of_a_private_folder_keeps_its_review(
     binary: Path, tmp_path: Path
 ) -> None:
@@ -179,30 +193,29 @@ def test_a_dependent_task_copied_out_of_a_private_folder_keeps_its_review(
     for task in (a, b, c):
         run(client.task_attest(task, "plan-review", "review-plan", "bar-1"))
 
-    def states(project: GlobalId) -> list[tuple[GlobalId, TaskAttestationState]]:
+    def states(project: GlobalId) -> list[TaskState]:
         """Each task's state under `project`, in qualified-id order."""
         checked = run(client.project_attestation_check(project, "plan-review", tasks=True))
         assert isinstance(checked, ProjectAttestationCheck)
-        held = [(GlobalId(entry.id.root), entry.state) for entry in checked.tasks]
-        return sorted(held, key=lambda pair: pair[0].root)
+        held = [TaskState(GlobalId(entry.id.root), entry.state) for entry in checked.tasks]
+        return sorted(held, key=lambda state: state.task.root)
 
-    def all_valid(ids: list[GlobalId]) -> list[tuple[GlobalId, TaskAttestationState]]:
-        return sorted(
-            ((task, TaskAttestationState("valid")) for task in ids), key=lambda pair: pair[0].root
-        )
+    def all_valid(ids: list[GlobalId]) -> list[TaskState]:
+        valid = TaskAttestationState("valid")
+        return sorted((TaskState(task, valid) for task in ids), key=lambda state: state.task.root)
 
     originals = [GlobalId(task) for task in (a, b, c)]
     assert states(GlobalId("authoring:launch")) == all_valid(originals)
     report = run(client.project_copy("authoring:launch", to="published", documents=True))
     assert isinstance(report, CopyReport)
-    landed: list[tuple[GlobalId, GlobalId]] = []
+    landed: list[Landed] = []
     for outcome in (item.root for item in report.items):
         assert isinstance(outcome, CopyOutcomeCreatedOrWouldCreate)
         assert outcome.destination is not None
-        landed.append((GlobalId(outcome.source.root), GlobalId(outcome.destination.root)))
+        landed.append(Landed(GlobalId(outcome.source.root), GlobalId(outcome.destination.root)))
 
     def copy_of(source: GlobalId) -> GlobalId:
-        return next(copy for original, copy in landed if original == source)
+        return next(each.destination for each in landed if each.source == source)
 
     copies = [copy_of(task) for task in originals]
     assert states(copy_of(GlobalId("authoring:launch"))) == all_valid(copies)

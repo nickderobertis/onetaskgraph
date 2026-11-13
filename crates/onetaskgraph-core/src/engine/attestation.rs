@@ -549,23 +549,26 @@ impl Engine {
                 None => {}
             }
         }
-        let mut found: Vec<(GlobalId, std::collections::BTreeMap<String, Value>)> = Vec::new();
+        let mut found = Linked::Nothing;
         for source in private {
             let linked = match kind {
                 ItemKind::Task => self.tasks_linking(&source, &root).await,
                 ItemKind::Project => self.projects_linking(&source, &root).await,
             };
-            match linked {
-                Ok(linked) => found.extend(linked),
+            found = match linked {
+                Ok(linked) => found.and(linked),
                 Err(EngineError::SourceFailed { name, error })
-                    if name == source.as_str() && could_not_answer(&error) => {}
+                    if name == source.as_str() && could_not_answer(&error) =>
+                {
+                    found
+                }
                 Err(error) => return Err(error),
-            }
-            if found.len() > 1 {
+            };
+            if matches!(found, Linked::Several) {
                 return Ok(None);
             }
         }
-        let Some((private, metadata)) = found.pop() else {
+        let Linked::One(private, metadata) = found else {
             return Ok(None);
         };
         match recorded_root(&metadata, &private.to_string()) {
@@ -578,21 +581,22 @@ impl Engine {
         }
     }
 
-    /// Every task of `source` whose [`MetadataKey::COPIES_KEY`] link names `copy`, with its
-    /// metadata, read through the engine's own task query so a source that cannot apply the
-    /// predicate is narrowed here.
+    /// The tasks of `source` whose [`MetadataKey::COPIES_KEY`] link names `copy`, through the
+    /// engine's own task query, which narrows a source that cannot apply the predicate itself
+    /// and fills a page before it says more follow — so one page answers: a page with more to
+    /// come holds more than one.
     async fn tasks_linking(
         &self,
         source: &SourceName,
         copy: &GlobalId,
-    ) -> Result<Vec<(GlobalId, std::collections::BTreeMap<String, Value>)>, EngineError> {
+    ) -> Result<Linked, EngineError> {
         let wanted = MetadataMatch::new(
             MetadataKey::COPIES_KEY,
             vec![copy.source.to_string()],
             copy.to_string(),
         )
         .expect("the key, a source name and a qualified id are never empty");
-        let mut request = TaskRequest {
+        let request = TaskRequest {
             sources: vec![source.clone()],
             filters: Filters::default(),
             project: ProjectSelector::Any,
@@ -606,36 +610,33 @@ impl Engine {
                 token: None,
             },
         };
-        let mut found = Vec::new();
-        loop {
-            let response = self.tasks(&request).await?;
-            if let Some(failure) = response.errors.into_iter().next() {
-                return Err(EngineError::SourceFailed {
-                    name: failure.source.to_string(),
-                    error: failure.error,
-                });
-            }
-            for task in response.items {
-                if links(&task.item.metadata, copy) {
-                    found.push((task.id, task.item.metadata));
-                }
-            }
-            // Two are already not a confident answer, so nothing past them is read.
-            match response.next {
-                Some(token) if found.len() < 2 => request.paging.token = Some(token),
-                _ => return Ok(found),
-            }
+        let response = self.tasks(&request).await?;
+        if let Some(failure) = response.errors.into_iter().next() {
+            return Err(EngineError::SourceFailed {
+                name: failure.source.to_string(),
+                error: failure.error,
+            });
         }
+        if response.next.is_some() {
+            return Ok(Linked::Several);
+        }
+        Ok(response
+            .items
+            .into_iter()
+            .filter(|task| links(&task.item.metadata, copy))
+            .fold(Linked::Nothing, |found, task| {
+                found.and(Linked::One(task.id, task.item.metadata))
+            }))
     }
 
-    /// Every project of `source` whose [`MetadataKey::COPIES_KEY`] link names `copy`, with its
-    /// metadata: a project query has no metadata predicate, so the source's projects are listed
-    /// one page at a time and narrowed here.
+    /// The projects of `source` whose [`MetadataKey::COPIES_KEY`] link names `copy`: a project
+    /// query has no metadata predicate, so the source's projects are listed one page at a time
+    /// and narrowed here, as far as a second link.
     async fn projects_linking(
         &self,
         source: &SourceName,
         copy: &GlobalId,
-    ) -> Result<Vec<(GlobalId, std::collections::BTreeMap<String, Value>)>, EngineError> {
+    ) -> Result<Linked, EngineError> {
         let mut request = ProjectRequest {
             sources: vec![source.clone()],
             filters: Filters::default(),
@@ -644,7 +645,7 @@ impl Engine {
                 token: None,
             },
         };
-        let mut found = Vec::new();
+        let mut found = Linked::Nothing;
         loop {
             let response = self.projects(&request).await?;
             if let Some(failure) = response.errors.into_iter().next() {
@@ -655,13 +656,35 @@ impl Engine {
             }
             for project in response.items {
                 if links(&project.item.metadata, copy) {
-                    found.push((project.id, project.item.metadata));
+                    found = found.and(Linked::One(project.id, project.item.metadata));
                 }
             }
             match response.next {
-                Some(token) if found.len() < 2 => request.paging.token = Some(token),
+                Some(token) if !matches!(found, Linked::Several) => {
+                    request.paging.token = Some(token);
+                }
                 _ => return Ok(found),
             }
+        }
+    }
+}
+
+/// What the sources declared private hold that links to a copy.
+enum Linked {
+    /// Nothing.
+    Nothing,
+    /// One item, with its metadata, which says what its root is.
+    One(GlobalId, std::collections::BTreeMap<String, Value>),
+    /// More than one, which is no confident answer.
+    Several,
+}
+
+impl Linked {
+    /// What `self` and `other` hold together.
+    fn and(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Nothing, held) | (held, Self::Nothing) => held,
+            _ => Self::Several,
         }
     }
 }

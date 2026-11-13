@@ -5646,8 +5646,9 @@ async fn a_dependents_attestation_holds_on_every_copy_its_far_end_is_withheld_fr
         json!({"from": {"id": from, "kind": "task"}, "to": {"id": to, "kind": "task"},
                "kind": "blocks"})
     };
-    // Sixty other tasks listed before them, so the one linking to A's copy is past the first
-    // page of what the vault is asked.
+    // Sixty other tasks listed before them, in a vault that leaves the metadata predicate to
+    // the engine: the one linking to A's copy is past the vault's first page of fifty, and the
+    // engine's own narrowing is what finds it.
     let mut held: Vec<Value> = (0..60)
         .map(|n| {
             json!({"id": format!("F-{n}"), "title": format!("Filler {n}"),
@@ -5658,6 +5659,7 @@ async fn a_dependents_attestation_holds_on_every_copy_its_far_end_is_withheld_fr
     held.push(json!({"id": "B", "title": "B", "status": status, "labels": []}));
     let engine = engine_over(json!({
         "vault": {"plugin": "in-memory", "visibility": "private", "config": {
+            "capabilities": {"filter_by_metadata": "unsupported"},
             "tasks": held,
             "task_dependencies": [edge("B", "A")],
         }},
