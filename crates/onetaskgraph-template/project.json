@@ -1,0 +1,86 @@
+{
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "name": "onetaskgraph-template",
+  "projectType": "library",
+  "tags": [
+    "lang:rust",
+    "layer:engine",
+    "test-in-coverage:crate"
+  ],
+  "//": "implicitDependencies mirror this crate's Cargo dependencies. Nx cannot read a Cargo manifest, so without them affected selection silently under-runs; scripts/check-nx-graph.sh fails, naming the pair, when the two disagree. llmlint: ignore-file[expensive_tests_stay_behind_their_own_edge] JSON has no comment to scope this to `coverage`: the line floor is one report over every crate's instrumented run, so workspace:coverage runs this crate's whether or not the change reached it. `test` still selects by the graph.",
+  "implicitDependencies": [
+    "onetaskgraph-plugin-api"
+  ],
+  "namedInputs": {
+    "cargoInputs": [
+      {
+        "runtime": "node scripts/nx-cargo-closure.mjs --crate onetaskgraph-template"
+      }
+    ]
+  },
+  "targets": {
+    "bootstrap": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo fetch --locked"
+      },
+      "//": "Uncached: it reaches the network and writes to the shared cargo registry outside the workspace, so no input in the tree describes its result."
+    },
+    "check": {
+      "executor": "nx:noop"
+    },
+    "format": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo fmt -p onetaskgraph-template"
+      },
+      "cache": false,
+      "//": "Uncached: it rewrites the tree in place, so replaying a cached result would be a no-op that silently leaves the tree unformatted."
+    },
+    "format-check": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo fmt -p onetaskgraph-template -- --check"
+      }
+    },
+    "lint": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo clippy --quiet -p onetaskgraph-template --all-targets --all-features --locked -- -D warnings"
+      }
+    },
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo check --quiet -p onetaskgraph-template --all-targets --all-features --locked"
+      }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "cargo test --quiet -p onetaskgraph-template --all-features --locked"
+      }
+    },
+    "coverage": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "bash scripts/rust-coverage.sh onetaskgraph-template"
+      },
+      "outputs": [
+        "{workspaceRoot}/target/coverage-units/onetaskgraph-template.lcov"
+      ],
+      "cache": true,
+      "//": "A coverage unit: its LCOV report is cached, and workspace:coverage merges every unit's and holds the floor. scripts/check-coverage-enforced.sh reconciles the unit with that merge, and .github/nx-policy/tests/coverage-units.test.mjs holds these inputs to every file the run reads.",
+      "inputs": [
+        "versionFreeNpm",
+        "default",
+        "^coverageDependency",
+        "coverageUnit",
+        "{workspaceRoot}/.tool-versions",
+        {
+          "runtime": "node scripts/coverage-read-digest.mjs --unit onetaskgraph-template"
+        }
+      ]
+    }
+  }
+}
