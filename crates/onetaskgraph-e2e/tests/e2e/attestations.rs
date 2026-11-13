@@ -14,6 +14,7 @@ use std::process::Output;
 use serde_json::{Value, json};
 
 use crate::common::{Sandbox, stderr, stdout};
+use crate::document_store::interpreter;
 use crate::fixtures::{LinearWorkspace, document, github_projects_with_board, linear_workspace};
 
 /// A task template: one required answer.
@@ -2005,4 +2006,342 @@ fn a_document_check_on_a_source_with_no_documents_is_refused_naming_it() {
             stderr(&refused)
         );
     }
+}
+
+/// `project attestation check PROJECT --kind plan-review --tasks --bar bar-1`: each task's
+/// state and reason, by id, sorted.
+fn task_states(plan: &Plan, project: &str) -> Vec<(String, Value, Value)> {
+    let arguments = [
+        "project",
+        "attestation",
+        "check",
+        project,
+        "--kind",
+        KIND,
+        "--tasks",
+        "--bar",
+        BAR,
+        "--json",
+    ];
+    let output = plan.run(&arguments);
+    let checked: Value = serde_json::from_str(&stdout(&output)).unwrap_or_else(|error| {
+        panic!(
+            "a project check answers JSON ({error}): {}",
+            stderr(&output)
+        )
+    });
+    // It exits 0 exactly when every task's record is `valid`, and 3 otherwise.
+    let all_valid = checked["tasks"]
+        .as_array()
+        .is_some_and(|tasks| tasks.iter().all(|task| task["state"] == "valid"));
+    assert_eq!(
+        output.status.code(),
+        Some(if all_valid { 0 } else { 3 }),
+        "a project check answering {checked}: {}",
+        stderr(&output)
+    );
+    let mut states: Vec<(String, Value, Value)> = checked["tasks"]
+        .as_array()
+        .unwrap_or_else(|| panic!("one entry per task: {checked}"))
+        .iter()
+        .map(|entry| {
+            (
+                entry["id"].as_str().expect("an id").to_owned(),
+                entry["state"].clone(),
+                entry["reason"].clone(),
+            )
+        })
+        .collect();
+    states.sort_by(|left, right| left.0.cmp(&right.0));
+    states
+}
+
+/// `states`, sorted as [`task_states`] answers them.
+fn sorted(mut states: Vec<(String, Value, Value)>) -> Vec<(String, Value, Value)> {
+    states.sort_by(|left, right| left.0.cmp(&right.0));
+    states
+}
+
+/// A `valid` entry of [`task_states`].
+fn valid(id: &str) -> (String, Value, Value) {
+    (id.to_owned(), json!("valid"), Value::Null)
+}
+
+/// Where the outcome copying `source` landed, in a copy's report.
+fn landed(report: &Value, source: &str) -> String {
+    report["items"]
+        .as_array()
+        .expect("outcomes")
+        .iter()
+        .find(|outcome| outcome["source"] == source)
+        .and_then(|outcome| outcome["destination"].as_str())
+        .unwrap_or_else(|| panic!("{source} landed: {report}"))
+        .to_owned()
+}
+
+/// `project copy FROM --to TO --documents --no-interactive`, answering its report.
+fn copy_plan(plan: &Plan, from: &str, to: &str) -> Value {
+    plan.json(&[
+        "project",
+        "copy",
+        from,
+        "--to",
+        to,
+        "--documents",
+        "--no-interactive",
+    ])
+}
+
+/// The planning lifecycle a host configures this store with: `source` (the folder of
+/// Markdown under [`Plan`]'s `notes`) declared private, where plans are authored and reviewed;
+/// two loopback boards `plans` and `shipped`, a folder `published` and a loopback Linear
+/// `linear`, each declared public — so a copy out of `source` records no origin naming it on
+/// any of them — and a `write_policy` whose check passes every write.
+fn private_authoring(source: &str) -> Plan {
+    let mut plan = Plan::new(false);
+    let (board, _) = github_projects_with_board(&plan.sandbox);
+    let (second, _) = github_projects_with_board(&plan.sandbox);
+    let (linear, held) = linear_workspace(
+        &plan.sandbox,
+        json!({"tasks": [], "projects": [], "documents": [], "labels": [],
+               "task_dependencies": [], "project_dependencies": []}),
+    );
+    plan.linear = Some(held);
+    let published = plan.sandbox.subdirectory("published");
+    let mut configured: Value = serde_json::from_str(&document(&json!({
+        source: {"plugin": "local-md", "visibility": "private", "config": {"root": plan.notes}},
+        "plans": {"plugin": "github-projects", "visibility": "public", "config": board},
+        "shipped": {"plugin": "github-projects", "visibility": "public", "config": second},
+        "published": {"plugin": "local-md", "visibility": "public",
+                      "config": {"root": published}},
+        "linear": {"plugin": "linear", "visibility": "public", "config": linear},
+    })))
+    .expect("a document");
+    configured["write_policy"] = json!({
+        "check_command": [
+            interpreter(), "-c", "import sys; sys.stdin.read(); print('{\"verdict\": \"pass\"}')"
+        ],
+        "visibility_command": [
+            interpreter(), "-c",
+            "import sys; sys.stdin.read(); print('{\"visibility\": \"public\"}')"
+        ],
+    });
+    plan.sandbox
+        .project_document(&serde_json::to_string_pretty(&configured).expect("a document"));
+    plan.sandbox
+        .secrets_file("GITHUB_PROJECTS_FIXTURE_TOKEN=test-token\nLINEAR_API_KEY=fixture-key\n");
+    plan
+}
+
+#[test]
+fn a_reviewed_plan_copied_onto_boards_keeps_every_review_valid_until_its_content_moves() {
+    // Two tasks reviewed where they are authored, B depending on A, and C beside them; the
+    // project copied with its documents onto a board and checked there; copied on from that
+    // board onto a second, which gives A a second new identity; copied onto a folder and into
+    // Linear; then B's body edited and the project copied over the board's items again.
+    let plan = private_authoring("authoring");
+    let project = "authoring:launch";
+    plan.exits(
+        &[
+            "project",
+            "create",
+            "authoring",
+            "--id",
+            "launch",
+            "--title",
+            "Launch",
+        ],
+        0,
+    );
+    let create = |title: &str, text: &str, extra: &[&str]| -> String {
+        let file = plan.file(&format!("{title}.md"), text);
+        let mut arguments = vec![
+            "task",
+            "create",
+            "authoring",
+            "--project",
+            "launch",
+            "--title",
+            title,
+            "--body-file",
+            &file,
+            "--no-interactive",
+        ];
+        arguments.extend_from_slice(extra);
+        stdout(&plan.exits(&arguments, 0)).trim().to_owned()
+    };
+    let a = create("A", "Do A.\n", &[]);
+    let b = create("B", "Do B after A.\n", &["--depends-on", &a]);
+    let c = create("C", "Do C.\n", &[]);
+    plan.attest("task", &a);
+    plan.attest("task", &b);
+    let reviewed = |ids: [&str; 3]| {
+        sorted(vec![
+            valid(ids[0]),
+            valid(ids[1]),
+            (ids[2].to_owned(), json!("absent"), Value::Null),
+        ])
+    };
+    assert_eq!(
+        task_states(&plan, project),
+        reviewed([&a, &b, &c]),
+        "where they were reviewed"
+    );
+
+    let first = copy_plan(&plan, project, "plans");
+    let on_board = landed(&first, project);
+    let (board_a, board_b, board_c) = (landed(&first, &a), landed(&first, &b), landed(&first, &c));
+    assert_eq!(
+        task_states(&plan, &on_board),
+        reviewed([&board_a, &board_b, &board_c]),
+        "on the board, B's copy — whose edge names A's copy — holds its review"
+    );
+
+    // Copied on from the board, A's copy gets a second new identity: B's edge still names A.
+    let chained = copy_plan(&plan, &on_board, "shipped");
+    let shipped = landed(&chained, &on_board);
+    let (shipped_b, shipped_c) = (landed(&chained, &board_b), landed(&chained, &board_c));
+    assert_eq!(
+        task_states(&plan, &shipped),
+        reviewed([&landed(&chained, &board_a), &shipped_b, &shipped_c]),
+        "two copies from where it was reviewed"
+    );
+
+    // A folder and Linear, each declared public, hold the reviews the same way.
+    for destination in ["published", "linear"] {
+        let copied = copy_plan(&plan, project, destination);
+        assert_eq!(
+            task_states(&plan, &landed(&copied, project)),
+            reviewed([
+                &landed(&copied, &a),
+                &landed(&copied, &b),
+                &landed(&copied, &c)
+            ]),
+            "{destination}: B's copy holds its review"
+        );
+    }
+
+    // On a copy, an edge added, removed or pointed at another item still voids the review.
+    let moved = json!("content-moved");
+    plan.after(
+        "task",
+        &shipped_b,
+        &["task", "update", &shipped_b, "--depends-on", &shipped_c],
+        "void",
+        moved.clone(),
+        "the copy's edge pointed at another item",
+    );
+    plan.after(
+        "task",
+        &shipped_b,
+        &["task", "update", &shipped_b, "--no-depends-on"],
+        "void",
+        moved.clone(),
+        "the copy's edge removed",
+    );
+    plan.after(
+        "task",
+        &shipped_b,
+        &["task", "update", &shipped_b, "--depends-on", &shipped_c],
+        "void",
+        moved.clone(),
+        "an edge added to the copy",
+    );
+
+    // B's body edited where it is authored, and the project copied again over the board's
+    // items: B's review is void there, A's still holds.
+    let edited = plan.file("b-edited.md", "Do B after A, twice.\n");
+    plan.exits(&["task", "content", "set", &b, "--file", &edited], 0);
+    let again = copy_plan(&plan, project, "plans");
+    assert_eq!(landed(&again, &a), board_a, "the re-copy updates A's copy");
+    assert_eq!(landed(&again, &b), board_b, "the re-copy updates B's copy");
+    assert_eq!(
+        task_states(&plan, &on_board),
+        sorted(vec![
+            valid(&board_a),
+            (board_b.clone(), json!("void"), moved.clone()),
+            (board_c.clone(), json!("absent"), Value::Null),
+        ]),
+        "B's body moved and A's did not"
+    );
+
+    // Where they are authored, an edge added, removed or pointed elsewhere voids it too.
+    plan.after(
+        "task",
+        &b,
+        &["task", "update", &b, "--depends-on", &c],
+        "void",
+        moved.clone(),
+        "the edge pointed at another item",
+    );
+    plan.after(
+        "task",
+        &b,
+        &["task", "update", &b, "--no-depends-on"],
+        "void",
+        moved.clone(),
+        "the edge removed",
+    );
+    plan.after(
+        "task",
+        &b,
+        &["task", "update", &b, "--depends-on", &a, "--depends-on", &c],
+        "void",
+        moved,
+        "an edge added",
+    );
+}
+
+#[test]
+fn a_record_the_previous_release_wrote_reads_valid_and_travels_through_a_copy() {
+    // `notes:a` and `notes:b`, B depending on A, each attested by the released v0.14.14 binary
+    // (fixtures/attestations/v0.14.14). B's edge names a far end no copy made, so its digest is
+    // the one that release computed — with `notes` undeclared, and declared private.
+    let placed = |plan: &Plan| {
+        for (directory, name, text) in [
+            (
+                "projects",
+                "launch.md",
+                include_str!("fixtures/attestations/v0.14.14/launch.md"),
+            ),
+            (
+                "tasks",
+                "a.md",
+                include_str!("fixtures/attestations/v0.14.14/a.md"),
+            ),
+            (
+                "tasks",
+                "b.md",
+                include_str!("fixtures/attestations/v0.14.14/b.md"),
+            ),
+        ] {
+            let held = plan.notes.join(directory);
+            std::fs::create_dir_all(&held).expect("the folder's directory");
+            std::fs::write(held.join(name), text).expect("a recorded file");
+        }
+    };
+    let plain = Plan::new(false);
+    placed(&plain);
+    assert_eq!(
+        task_states(&plain, "notes:launch"),
+        sorted(vec![valid("notes:a"), valid("notes:b")]),
+        "the previous release's records, read by this one"
+    );
+
+    let plan = private_authoring("notes");
+    placed(&plan);
+    assert_eq!(
+        task_states(&plan, "notes:launch"),
+        sorted(vec![valid("notes:a"), valid("notes:b")]),
+        "the previous release's records, with their source declared private"
+    );
+    let copied = copy_plan(&plan, "notes:launch", "plans");
+    assert_eq!(
+        task_states(&plan, &landed(&copied, "notes:launch")),
+        sorted(vec![
+            valid(&landed(&copied, "notes:a")),
+            valid(&landed(&copied, "notes:b"))
+        ]),
+        "copied onto a board, the previous release's records hold"
+    );
 }

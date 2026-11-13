@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 from collections.abc import Coroutine
 from pathlib import Path
 from typing import NamedTuple
@@ -122,3 +123,72 @@ def test_a_refused_attestation_raises_with_the_failure(binary: Path, tmp_path: P
     assert refused.value.exit_code == 1
     assert refused.value.failure is not None
     assert refused.value.failure.kind == "invalid-attestation"
+
+
+def test_a_dependent_task_copied_out_of_a_private_folder_keeps_its_review(
+    binary: Path, tmp_path: Path
+) -> None:
+    """B, depending on A, copied from a private folder to a public one checks ``valid`` there.
+
+    A copy out of a source declared private records no origin naming it, so the copy of A
+    names no root of its own; the store finds it through the link the private A keeps. The
+    copy's edge pointed elsewhere still voids the review.
+    """
+    for folder in ("authoring", "published"):
+        (tmp_path / folder).mkdir()
+    passing = [sys.executable, "-c", 'import sys; sys.stdin.read(); print(\'{"verdict": "pass"}\')']
+    public = [
+        sys.executable,
+        "-c",
+        'import sys; sys.stdin.read(); print(\'{"visibility": "public"}\')',
+    ]
+    (tmp_path / "onetaskgraph.yaml").write_text(
+        json.dumps(
+            {
+                "sources": {
+                    "authoring": {
+                        "plugin": "local-md",
+                        "visibility": "private",
+                        "config": {"root": "authoring"},
+                    },
+                    "published": {
+                        "plugin": "local-md",
+                        "visibility": "public",
+                        "config": {"root": "published"},
+                    },
+                },
+                "write_policy": {"check_command": passing, "visibility_command": public},
+            }
+        ),
+        encoding="utf-8",
+    )
+    client = Client(binary, cwd=tmp_path)
+    run(client.project_create("authoring", "launch", "Launch", body="The plan.\n"))
+    a = run(client.task_create("authoring", "launch", "A", body="Do A.\n")).items[0].id.root
+    b = (
+        run(client.task_create("authoring", "launch", "B", body="Do B.\n", depends_on=[a]))
+        .items[0]
+        .id.root
+    )
+    c = run(client.task_create("authoring", "launch", "C", body="Do C.\n")).items[0].id.root
+    for task in (a, b, c):
+        run(client.task_attest(task, "plan-review", "review-plan", "bar-1"))
+
+    def states(project: str) -> dict[str, str]:
+        checked = run(client.project_attestation_check(project, "plan-review", tasks=True))
+        assert isinstance(checked, ProjectAttestationCheck)
+        return {entry.id.root: entry.state.value for entry in checked.tasks}
+
+    assert states("authoring:launch") == {a: "valid", b: "valid", c: "valid"}
+    report = run(client.project_copy("authoring:launch", to="published", documents=True))
+    landed = {
+        item["source"]: item["destination"]
+        for item in report.model_dump(mode="json")["items"]
+        if "destination" in item
+    }
+    copies = {task: landed[task] for task in (a, b, c)}
+    assert states(landed["authoring:launch"]) == {copy: "valid" for copy in copies.values()}
+
+    run(client.task_update(copies[b], depends_on=[copies[c]]))
+    moved = run(client.task_attestation_check(copies[b], "plan-review", bar="bar-1"))
+    assert (moved.state, moved.reason) == (AttestationState("void"), VoidReason("content-moved"))

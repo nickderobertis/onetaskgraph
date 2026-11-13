@@ -6,22 +6,28 @@
 //! a public write is screened exactly as that one is. A document's write takes the read rather
 //! than reading again. Checking one is the read alone. A task's or a project's own forward
 //! edges are read beside it, and each far end read once for the root of its chain of copies,
-//! which the digest names it by.
+//! which the digest names it by. Where a source is declared private, a far end in a source
+//! that is not, recording no root a copy out of a private source could have withheld, also
+//! costs a query of each source declared private for the item linking to it
+//! (`withheld_root`).
 
 use onetaskgraph_plugin_api::{
-    DependencyEdge, Document, ItemKind, MetadataKey, MetadataRecord, Repository, SourceName,
+    DependencyEdge, Document, ItemKind, MetadataKey, MetadataMatch, MetadataRecord, Repository,
+    SourceName,
 };
 use serde_json::Value;
 
 use super::copy::{Level, forward_edges};
 use super::delivery::source_failed;
-use super::{Engine, EngineError};
+use super::dependents::could_not_answer;
+use super::{Engine, EngineError, Filters, Paging, ProjectRequest, ProjectSelector, TaskRequest};
 use crate::GlobalId;
 use crate::attestation::{
     Attestation, AttestationCheck, AttestationKind, AttestationLabel, AttestationNote, Attested,
     Authored, AuthoredEdge, FarEnd, ProjectAttestationCheck, TaskAttestationCheck, check,
     content_digest, now, record_of, records,
 };
+use crate::config::SourceVisibility;
 use crate::resolve::ResolvedSource;
 use crate::template::Sha256Digest;
 
@@ -451,23 +457,242 @@ impl Engine {
         let Some(metadata) = metadata else {
             return Ok(FarEnd::Lineage(id));
         };
-        for key in [GlobalId::LINEAGE_KEY, GlobalId::ORIGIN_KEY] {
-            let Some(recorded) = metadata.get(key) else {
-                continue;
-            };
-            return match recorded.as_str().map(str::parse::<GlobalId>) {
-                Some(Ok(root)) => Ok(FarEnd::Lineage(root)),
-                _ => Err(source_failed(
-                    far,
-                    onetaskgraph_plugin_api::SourceError::Malformed {
-                        message: format!(
-                            "{start} records the {key} {recorded}, which is not a qualified id, \
-                             so the dependency on it cannot be named for an attestation"
-                        ),
-                    },
-                )),
-            };
-        }
-        Ok(FarEnd::Lineage(id))
+        let (root, read) = match recorded_root(&metadata, start) {
+            Some(Ok(root)) => (root, false),
+            Some(Err(error)) => return Err(source_failed(far, error)),
+            None => (id, true),
+        };
+        Ok(FarEnd::Lineage(
+            self.withheld_root(root.clone(), kind, read)
+                .await?
+                .unwrap_or(root),
+        ))
     }
+
+    /// The root of the chain of copies a copy out of a source declared private leads back to,
+    /// where `root` is such a copy — `None` where it is not one, or where which item it was
+    /// copied from cannot be told.
+    ///
+    /// A copy out of a source declared private into one that is not records no origin naming
+    /// it (journey 89): its provenance stays on the private side, as the
+    /// [`MetadataKey::COPIES_KEY`] link the private item records to it. So an item that records
+    /// no root of its own and sits in a source not declared private may be such a copy, and its
+    /// root is found where its correspondence is kept: the one item of a source declared private
+    /// whose link to `root`'s source names `root`, by that item's own root. Asked only of a
+    /// configured source declared private other than `root`'s own, and only when `root`'s own
+    /// source is configured and is not declared private — so a store declaring nothing private
+    /// sends exactly the requests it did, and a private far end costs none. A source declared
+    /// private that could not be asked (its credential absent, unreachable, rate limited) is
+    /// passed over, and two items linking to `root` are not a confident answer: either leaves
+    /// `root` naming itself, which can void a record but never makes one read `valid`.
+    ///
+    /// `read` says whether `root` is the far end itself, already read and recording no root.
+    /// Where it is not — `root` is what the far end records — it is read once first, because a
+    /// copy out of an item that was itself copied out of a source declared private records that
+    /// item as its origin and hands on no lineage naming the private source: what `root`
+    /// records is then the root, and nothing past it is read.
+    ///
+    /// # Errors
+    ///
+    /// [`EngineError::SourceFailed`] for `root`'s source or a private source failing otherwise,
+    /// and for `root` or the item found recording a lineage or an origin that is not a
+    /// qualified id.
+    async fn withheld_root(
+        &self,
+        root: GlobalId,
+        kind: ItemKind,
+        read: bool,
+    ) -> Result<Option<GlobalId>, EngineError> {
+        if !self
+            .sources
+            .iter()
+            .any(|source| source.name() == &root.source)
+            || self.declared(&root.source) == SourceVisibility::Private
+        {
+            return Ok(None);
+        }
+        let private: Vec<SourceName> = self
+            .sources
+            .iter()
+            .map(|source| source.name().clone())
+            .filter(|name| name != &root.source && self.declared(name) == SourceVisibility::Private)
+            .collect();
+        if private.is_empty() {
+            return Ok(None);
+        }
+        if !read {
+            // A root a copy recorded, read for the root it records in turn: a copy out of an
+            // item that was itself copied out of a source declared private hands on no
+            // lineage naming that source, so its copy records this item as its root.
+            let far = self.built(&root.source)?;
+            let metadata = match kind {
+                ItemKind::Task => far
+                    .source()
+                    .get_task(&root.native)
+                    .await
+                    .map_err(|error| source_failed(far, error))?
+                    .map(|task| task.metadata),
+                ItemKind::Project => far
+                    .source()
+                    .get_project(&root.native)
+                    .await
+                    .map_err(|error| source_failed(far, error))?
+                    .map(|project| project.metadata),
+            };
+            match metadata
+                .as_ref()
+                .and_then(|held| recorded_root(held, &root.to_string()))
+            {
+                Some(Ok(recorded)) => return Ok(Some(recorded)),
+                Some(Err(error)) => return Err(source_failed(far, error)),
+                None => {}
+            }
+        }
+        let mut found: Vec<(GlobalId, std::collections::BTreeMap<String, Value>)> = Vec::new();
+        for source in private {
+            let linked = match kind {
+                ItemKind::Task => self.tasks_linking(&source, &root).await,
+                ItemKind::Project => self.projects_linking(&source, &root).await,
+            };
+            match linked {
+                Ok(linked) => found.extend(linked),
+                Err(EngineError::SourceFailed { name, error })
+                    if name == source.as_str() && could_not_answer(&error) => {}
+                Err(error) => return Err(error),
+            }
+            if found.len() > 1 {
+                return Ok(None);
+            }
+        }
+        let Some((private, metadata)) = found.pop() else {
+            return Ok(None);
+        };
+        match recorded_root(&metadata, &private.to_string()) {
+            Some(Ok(lineage)) => Ok(Some(lineage)),
+            Some(Err(error)) => Err(EngineError::SourceFailed {
+                name: private.source.to_string(),
+                error,
+            }),
+            None => Ok(Some(private)),
+        }
+    }
+
+    /// Every task of `source` whose [`MetadataKey::COPIES_KEY`] link names `copy`, with its
+    /// metadata, read through the engine's own task query so a source that cannot apply the
+    /// predicate is narrowed here.
+    async fn tasks_linking(
+        &self,
+        source: &SourceName,
+        copy: &GlobalId,
+    ) -> Result<Vec<(GlobalId, std::collections::BTreeMap<String, Value>)>, EngineError> {
+        let wanted = MetadataMatch::new(
+            MetadataKey::COPIES_KEY,
+            vec![copy.source.to_string()],
+            copy.to_string(),
+        )
+        .expect("the key, a source name and a qualified id are never empty");
+        let mut request = TaskRequest {
+            sources: vec![source.clone()],
+            filters: Filters::default(),
+            project: ProjectSelector::Any,
+            priorities: Vec::new(),
+            commented_since: None,
+            metadata: vec![wanted],
+            origin: None,
+            include_members: false,
+            paging: Paging {
+                limit: super::copy::PROJECT_PAGE,
+                token: None,
+            },
+        };
+        let mut found = Vec::new();
+        loop {
+            let response = self.tasks(&request).await?;
+            if let Some(failure) = response.errors.into_iter().next() {
+                return Err(EngineError::SourceFailed {
+                    name: failure.source.to_string(),
+                    error: failure.error,
+                });
+            }
+            for task in response.items {
+                if links(&task.item.metadata, copy) {
+                    found.push((task.id, task.item.metadata));
+                }
+            }
+            match response.next {
+                Some(token) => request.paging.token = Some(token),
+                None => return Ok(found),
+            }
+        }
+    }
+
+    /// Every project of `source` whose [`MetadataKey::COPIES_KEY`] link names `copy`, with its
+    /// metadata: a project query has no metadata predicate, so the source's projects are listed
+    /// one page at a time and narrowed here.
+    async fn projects_linking(
+        &self,
+        source: &SourceName,
+        copy: &GlobalId,
+    ) -> Result<Vec<(GlobalId, std::collections::BTreeMap<String, Value>)>, EngineError> {
+        let mut request = ProjectRequest {
+            sources: vec![source.clone()],
+            filters: Filters::default(),
+            paging: Paging {
+                limit: super::copy::PROJECT_PAGE,
+                token: None,
+            },
+        };
+        let mut found = Vec::new();
+        loop {
+            let response = self.projects(&request).await?;
+            if let Some(failure) = response.errors.into_iter().next() {
+                return Err(EngineError::SourceFailed {
+                    name: failure.source.to_string(),
+                    error: failure.error,
+                });
+            }
+            for project in response.items {
+                if links(&project.item.metadata, copy) {
+                    found.push((project.id, project.item.metadata));
+                }
+            }
+            match response.next {
+                Some(token) => request.paging.token = Some(token),
+                None => return Ok(found),
+            }
+        }
+    }
+}
+
+/// Whether `metadata`'s [`MetadataKey::COPIES_KEY`] link to `copy`'s source names `copy`.
+fn links(metadata: &std::collections::BTreeMap<String, Value>, copy: &GlobalId) -> bool {
+    metadata
+        .get(MetadataKey::COPIES_KEY)
+        .and_then(|links| links.get(copy.source.as_str()))
+        .and_then(Value::as_str)
+        == Some(copy.to_string().as_str())
+}
+
+/// The root an item recording `metadata` names for its chain of copies — its
+/// [`GlobalId::LINEAGE_KEY`], else its [`GlobalId::ORIGIN_KEY`] — `None` when it records
+/// neither, where the item is its own root; and a refusal naming `item` when what it records
+/// is not a qualified id, which has no root every copy would agree on.
+fn recorded_root(
+    metadata: &std::collections::BTreeMap<String, Value>,
+    item: &str,
+) -> Option<Result<GlobalId, onetaskgraph_plugin_api::SourceError>> {
+    [GlobalId::LINEAGE_KEY, GlobalId::ORIGIN_KEY]
+        .into_iter()
+        .find_map(|key| metadata.get(key).map(|recorded| (key, recorded)))
+        .map(
+            |(key, recorded)| match recorded.as_str().map(str::parse::<GlobalId>) {
+                Some(Ok(root)) => Ok(root),
+                _ => Err(onetaskgraph_plugin_api::SourceError::Malformed {
+                    message: format!(
+                        "{item} records the {key} {recorded}, which is not a qualified id, so \
+                         the dependency on it cannot be named for an attestation"
+                    ),
+                }),
+            },
+        )
 }
