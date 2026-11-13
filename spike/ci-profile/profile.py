@@ -53,6 +53,7 @@ class Task:
     end: float
     result: str  # executed | remote_hit | local_hit | ...
     compile_end: float | None = None
+    builds: list = field(default_factory=list)  # (start, end, profile) of each cargo build the task printed
 
     @property
     def project(self) -> str:
@@ -88,6 +89,9 @@ class JobProfile:
 
 def step_kind(name: str) -> str:
     n = name.lower()
+    if "start-cache-server" in n:
+        # `background: true`: it runs beside every later step, so it owns no second of its own.
+        return "background"
     if n.startswith("post "):
         if "setup-uv" in n or "setup-bun" in n or "rust-cache" in n or "cache/save" in n:
             return "cache-save"
@@ -159,7 +163,7 @@ def profile_job(job: dict, log_text: str, executions: dict | None) -> JobProfile
                                 "miss": "No cache found" in text}
     covered = 0.0
     for name, a, b, kind in steps:
-        if kind == "test":
+        if kind in ("test", "background"):
             continue
         p.buckets[kind] += b - a
         covered += b - a
@@ -195,6 +199,24 @@ def profile_job(job: dict, log_text: str, executions: dict | None) -> JobProfile
             task.compile_end = min(cands)
         elif task.target in ("build", "coverage-build"):
             task.compile_end = task.end
+    # Cargo builds a task printed itself (`Compiling` … `Finished \`<profile>\` profile`).
+    per_project = defaultdict(list)
+    for t, line in log:
+        m = re.match(r"^\[[^\]]+\] ([\w.@/-]+): +(Compiling|Finished) (?:`(\w+)` profile)?", line)
+        if m:
+            per_project[m.group(1)].append((t, m.group(2), m.group(3)))
+    for task in tasks:
+        if task.result != "executed":
+            continue
+        opened = None
+        for t, word, profile_name in per_project.get(task.project, []):
+            if not (task.start <= t <= task.end):
+                continue
+            if word == "Compiling" and opened is None:
+                opened = t
+            elif word == "Finished" and opened is not None:
+                task.builds.append((opened, t, profile_name or "dev"))
+                opened = None
     p.tasks = tasks
     for t, line in log:
         m = NEXTEST_DONE.match(line)
@@ -213,7 +235,6 @@ def profile_job(job: dict, log_text: str, executions: dict | None) -> JobProfile
 def tasks_from_log(log, window) -> list[Task]:
     """Fallback without the executions artifact: a task runs from its header to its last prefixed line."""
     out: list[Task] = []
-    last: dict[str, float] = {}
     for t, line in log:
         if window and not (window[0] <= t <= window[1]):
             continue
@@ -221,16 +242,19 @@ def tasks_from_log(log, window) -> list[Task]:
         if m:
             result = "remote_hit" if m.group("remote") or m.group("replay") else "executed"
             out.append(Task(m.group("task"), t, t, result))
-            continue
+    # A task ends at its project's last prefixed line before that project's next header.
+    prefixed: dict[str, list[float]] = {}
+    for t, line in log:
         m = re.match(r"^\[[^\]]+\] ([\w.@/-]+): ", line)
-        if m:
-            last[m.group(1)] = t
+        if m and (not window or window[0] <= t <= window[1]):
+            prefixed.setdefault(m.group(1), []).append(t)
     for task in out:
-        if task.result == "executed":
-            later = [x.start for x in out if x.start > task.start]
-            task.end = max(last.get(task.project, task.start), task.start)
-        else:
+        if task.result != "executed":
             task.end = task.start
+            continue
+        nxt = min((x.start for x in out if x.project == task.project and x.start > task.start), default=float("inf"))
+        lines = [t for t in prefixed.get(task.project, []) if task.start <= t < nxt]
+        task.end = max(lines, default=task.start)
     return out
 
 
@@ -238,7 +262,7 @@ def attribute_test_step(p: JobProfile) -> None:
     a0, b0 = p.test_step
     edges = {a0, b0}
     for t in p.tasks:
-        for x in (t.start, t.end, t.compile_end):
+        for x in (t.start, t.end, t.compile_end, *[e for b in t.builds for e in b[:2]]):
             if x is not None and a0 < x < b0:
                 edges.add(x)
     edges = sorted(edges)
@@ -252,8 +276,12 @@ def attribute_test_step(p: JobProfile) -> None:
         share = dt / len(active)
         for t in active:
             p.task_share[t.name] += share
+            build = next((b for b in t.builds if b[0] <= mid < b[1]), None)
             if t.result != "executed":
                 p.buckets["cache-restore(nx)"] += share
+            elif build is not None:
+                kind = "release" if build[2] == "release" else ("instrumented" if t.instrumented else "plain")
+                p.buckets[f"compile-link({kind})"] += share
             elif t.compile_end is not None and mid < t.compile_end:
                 p.buckets["compile-link(instrumented)" if t.instrumented else "compile-link(plain)"] += share
             elif t.project in ("workspace", "scripts") or t.target not in ("test", "coverage", "test-uncovered", "budgets"):

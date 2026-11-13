@@ -24,6 +24,10 @@ class RateFloor(RuntimeError):
     pass
 
 
+class Offline(LookupError):
+    """CIPROFILE_OFFLINE is set and the read is not in the cache."""
+
+
 def cache_dir() -> Path:
     root = os.environ.get("CIPROFILE_CACHE")
     path = Path(root) if root else Path(__file__).resolve().parents[2] / "target" / "ci-profile"
@@ -64,6 +68,8 @@ def _check_floor() -> None:
 
 def _get(path: str) -> bytes:
     global _requests
+    if os.environ.get("CIPROFILE_OFFLINE"):
+        raise Offline(path)
     _check_floor()
     _requests += 1
     proc = subprocess.run(
@@ -86,6 +92,15 @@ def _cached(name: str, path: str) -> bytes:
 
 
 def run(run_id: int) -> dict:
+    target = cache_dir() / f"runs/{run_id}/run.json"
+    if not target.exists():
+        # A run already listed is read from the listing rather than asked for again.
+        for listing in sorted((cache_dir() / "lists").glob("*.json")):
+            for entry in json.loads(listing.read_text())["workflow_runs"]:
+                if entry["id"] == run_id:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_text(json.dumps(entry))
+                    return entry
     return json.loads(_cached(f"runs/{run_id}/run.json", f"actions/runs/{run_id}"))
 
 

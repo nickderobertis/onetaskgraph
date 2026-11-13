@@ -33,14 +33,20 @@ TEST_JOBS = ("test-linux", "test-macos", "test-windows")
 
 
 def executions_for(run_id: int, job: str):
-    data = ghcache.artifact_member(run_id, f"nx-cache-entries-{job}", "executions.json")
-    if data is None:
-        data = ghcache.artifact_member(run_id, f"spike-nx-executions-{job}", "executions.json")
+    try:
+        data = ghcache.artifact_member(run_id, f"nx-cache-entries-{job}", "executions.json")
+        if data is None:
+            data = ghcache.artifact_member(run_id, f"spike-nx-executions-{job}", "executions.json")
+    except ghcache.Offline:
+        return None
     return json.loads(data) if data else None
 
 
 def spike_records(run_id: int, job: str):
-    names = [a["name"] for a in ghcache.artifacts(run_id)]
+    try:
+        names = [a["name"] for a in ghcache.artifacts(run_id)]
+    except ghcache.Offline:
+        return None, None
     if f"spike-profile-{job}" not in names:
         return None, None
     samples = ghcache.artifact_member(run_id, f"spike-profile-{job}", "samples.jsonl")
