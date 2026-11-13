@@ -149,6 +149,7 @@ class JobView:
                     "result": t.result.value,
                     "start": t.start,
                     "end": t.end,
+                    "compile_end": t.compile_end,
                     "share_s": round(p.task_share.get(t.id, 0), 1),
                 }
                 for t in p.tasks
