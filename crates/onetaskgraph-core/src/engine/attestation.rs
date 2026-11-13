@@ -457,15 +457,14 @@ impl Engine {
         let Some(metadata) = metadata else {
             return Ok(FarEnd::Lineage(id));
         };
-        let (root, read) = match recorded_root(&metadata, start) {
-            Some(Ok(root)) => (root, false),
+        let root = match recorded_root(&metadata, start) {
+            Some(Ok(root)) => Root::Recorded(root),
             Some(Err(error)) => return Err(source_failed(far, error)),
-            None => (id, true),
+            None => Root::Read(id),
         };
+        let fallback = root.id().clone();
         Ok(FarEnd::Lineage(
-            self.withheld_root(root.clone(), kind, read)
-                .await?
-                .unwrap_or(root),
+            self.withheld_root(root, kind).await?.unwrap_or(fallback),
         ))
     }
 
@@ -486,11 +485,10 @@ impl Engine {
     /// passed over, and two items linking to `root` are not a confident answer: either leaves
     /// `root` naming itself, which can void a record but never makes one read `valid`.
     ///
-    /// `read` says whether `root` is the far end itself, already read and recording no root.
-    /// Where it is not — `root` is what the far end records — it is read once first, because a
-    /// copy out of an item that was itself copied out of a source declared private records that
-    /// item as its origin and hands on no lineage naming the private source: what `root`
-    /// records is then the root, and nothing past it is read.
+    /// A [`Root::Recorded`] — what the far end records — is read once first, because a copy out
+    /// of an item that was itself copied out of a source declared private records that item as
+    /// its origin and hands on no lineage naming the private source: what it records is then
+    /// the root, and nothing past it is read. A [`Root::Read`] was read already.
     ///
     /// # Errors
     ///
@@ -499,10 +497,13 @@ impl Engine {
     /// qualified id.
     async fn withheld_root(
         &self,
-        root: GlobalId,
+        root: Root,
         kind: ItemKind,
-        read: bool,
     ) -> Result<Option<GlobalId>, EngineError> {
+        let (root, read) = match root {
+            Root::Read(id) => (id, true),
+            Root::Recorded(id) => (id, false),
+        };
         if !self
             .sources
             .iter()
@@ -619,9 +620,10 @@ impl Engine {
                     found.push((task.id, task.item.metadata));
                 }
             }
+            // Two are already not a confident answer, so nothing past them is read.
             match response.next {
-                Some(token) => request.paging.token = Some(token),
-                None => return Ok(found),
+                Some(token) if found.len() < 2 => request.paging.token = Some(token),
+                _ => return Ok(found),
             }
         }
     }
@@ -657,9 +659,26 @@ impl Engine {
                 }
             }
             match response.next {
-                Some(token) => request.paging.token = Some(token),
-                None => return Ok(found),
+                Some(token) if found.len() < 2 => request.paging.token = Some(token),
+                _ => return Ok(found),
             }
+        }
+    }
+}
+
+/// The root of a far end's chain of copies, as [`Engine::lineage_root`] first finds it.
+enum Root {
+    /// The far end itself, read already and recording no root.
+    Read(GlobalId),
+    /// The root the far end records, not read yet.
+    Recorded(GlobalId),
+}
+
+impl Root {
+    /// The id it names.
+    fn id(&self) -> &GlobalId {
+        match self {
+            Self::Read(id) | Self::Recorded(id) => id,
         }
     }
 }

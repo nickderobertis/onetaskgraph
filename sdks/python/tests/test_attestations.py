@@ -23,10 +23,15 @@ from onetaskgraph_sdk import (
     AttestationState,
     Attested,
     Client,
+    CopyReport,
     GlobalId,
     OnetaskgraphError,
     ProjectAttestationCheck,
     VoidReason,
+)
+from onetaskgraph_sdk._generated.copy_report import CopyOutcomeCreatedOrWouldCreate
+from onetaskgraph_sdk._generated.project_attestation_check import (
+    AttestationState as TaskAttestationState,
 )
 
 
@@ -174,21 +179,34 @@ def test_a_dependent_task_copied_out_of_a_private_folder_keeps_its_review(
     for task in (a, b, c):
         run(client.task_attest(task, "plan-review", "review-plan", "bar-1"))
 
-    def states(project: str) -> dict[str, str]:
+    def states(project: GlobalId) -> list[tuple[GlobalId, TaskAttestationState]]:
+        """Each task's state under `project`, in qualified-id order."""
         checked = run(client.project_attestation_check(project, "plan-review", tasks=True))
         assert isinstance(checked, ProjectAttestationCheck)
-        return {entry.id.root: entry.state.value for entry in checked.tasks}
+        held = [(GlobalId(entry.id.root), entry.state) for entry in checked.tasks]
+        return sorted(held, key=lambda pair: pair[0].root)
 
-    assert states("authoring:launch") == {a: "valid", b: "valid", c: "valid"}
+    def all_valid(ids: list[GlobalId]) -> list[tuple[GlobalId, TaskAttestationState]]:
+        return sorted(
+            ((task, TaskAttestationState("valid")) for task in ids), key=lambda pair: pair[0].root
+        )
+
+    originals = [GlobalId(task) for task in (a, b, c)]
+    assert states(GlobalId("authoring:launch")) == all_valid(originals)
     report = run(client.project_copy("authoring:launch", to="published", documents=True))
-    landed = {
-        item["source"]: item["destination"]
-        for item in report.model_dump(mode="json")["items"]
-        if "destination" in item
-    }
-    copies = {task: landed[task] for task in (a, b, c)}
-    assert states(landed["authoring:launch"]) == {copy: "valid" for copy in copies.values()}
+    assert isinstance(report, CopyReport)
+    landed: list[tuple[GlobalId, GlobalId]] = []
+    for outcome in (item.root for item in report.items):
+        assert isinstance(outcome, CopyOutcomeCreatedOrWouldCreate)
+        assert outcome.destination is not None
+        landed.append((GlobalId(outcome.source.root), GlobalId(outcome.destination.root)))
 
-    run(client.task_update(copies[b], depends_on=[copies[c]]))
-    moved = run(client.task_attestation_check(copies[b], "plan-review", bar="bar-1"))
+    def copy_of(source: GlobalId) -> GlobalId:
+        return next(copy for original, copy in landed if original == source)
+
+    copies = [copy_of(task) for task in originals]
+    assert states(copy_of(GlobalId("authoring:launch"))) == all_valid(copies)
+
+    run(client.task_update(copies[1], depends_on=[copies[2]]))
+    moved = run(client.task_attestation_check(copies[1], "plan-review", bar="bar-1"))
     assert (moved.state, moved.reason) == (AttestationState("void"), VoidReason("content-moved"))

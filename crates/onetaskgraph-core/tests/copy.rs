@@ -5646,12 +5646,19 @@ async fn a_dependents_attestation_holds_on_every_copy_its_far_end_is_withheld_fr
         json!({"from": {"id": from, "kind": "task"}, "to": {"id": to, "kind": "task"},
                "kind": "blocks"})
     };
+    // Sixty other tasks listed before them, so the one linking to A's copy is past the first
+    // page of what the vault is asked.
+    let mut held: Vec<Value> = (0..60)
+        .map(|n| {
+            json!({"id": format!("F-{n}"), "title": format!("Filler {n}"),
+                        "status": status, "labels": []})
+        })
+        .collect();
+    held.push(json!({"id": "A", "title": "A", "status": status, "labels": []}));
+    held.push(json!({"id": "B", "title": "B", "status": status, "labels": []}));
     let engine = engine_over(json!({
         "vault": {"plugin": "in-memory", "visibility": "private", "config": {
-            "tasks": [
-                {"id": "A", "title": "A", "status": status, "labels": []},
-                {"id": "B", "title": "B", "status": status, "labels": []},
-            ],
+            "tasks": held,
             "task_dependencies": [edge("B", "A")],
         }},
         "from": {"plugin": "in-memory", "visibility": "public", "config": {
