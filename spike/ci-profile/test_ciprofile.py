@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -25,6 +26,7 @@ sys.path.insert(0, str(HERE))
 
 # E402: the modules under test sit beside this file and are found through the sys.path entry above.
 import jobprofile as prof  # noqa: E402
+import marker_base  # noqa: E402
 import models  # noqa: E402
 import replay  # noqa: E402
 import sampler  # noqa: E402
@@ -466,6 +468,60 @@ class TestStepTests(unittest.TestCase):
         self.assertEqual([t.id for t in p.tasks], ["onetaskgraph-core:test"])
 
 
+class MarkerBaseTests(unittest.TestCase):
+    """marker_base.py in a real git repository: the comparison it prints sees the marker alone."""
+
+    def repo(self, marked: bool) -> Path:
+        root = scratch(self)
+        lib = root / "crates/onetaskgraph-core/src/lib.rs"
+        lib.parent.mkdir(parents=True)
+        lib.write_text("pub fn engine() {}\n")
+        (root / "Cargo.toml").write_text("[workspace]\n")
+
+        def git(*args):
+            subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True)
+
+        git("init", "-q")
+        git("-c", "user.name=t", "-c", "user.email=t@t", "add", "-A")
+        git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "session head")
+        (root / "Cargo.toml").write_text('[workspace]\nmembers = ["crates/new"]\n')  # a prototype's own edit
+        if marked:
+            with lib.open("a") as handle:
+                handle.write(marker_base.MARKER)
+        git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qam", "demonstration")
+        return root
+
+    def run_in(self, root: Path) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [str(Path(sys.executable).absolute()), str(HERE / "marker_base.py")],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    def test_the_printed_comparison_holds_the_marker_alone_on_the_checkouts_own_tree(self):
+        root = self.repo(marked=True)
+        proc = self.run_in(root)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        found = re.fullmatch(r"export NX_BASE=([0-9a-f]{40}) NX_HEAD=([0-9a-f]{40})\n", proc.stdout)
+        assert found is not None, proc.stdout
+        base, head = found.groups()
+
+        def git(*args):
+            return subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, check=True).stdout
+
+        self.assertEqual(git("diff", "--name-only", base, head).split(), ["crates/onetaskgraph-core/src/lib.rs"])
+        self.assertEqual(git("merge-base", base, head).strip(), base)
+        self.assertEqual(git("rev-parse", f"{head}^{{tree}}"), git("rev-parse", "HEAD^{tree}"))
+        self.assertEqual(git("status", "--porcelain"), "")
+
+    def test_a_demonstration_without_the_marker_is_refused(self):
+        proc = self.run_in(self.repo(marked=False))
+        self.assertEqual(proc.returncode, 1)
+        self.assertIn("does not end with the demonstration marker", proc.stderr)
+
+
 class ReplayCommandTests(unittest.TestCase):
     def setUp(self):
         self.root = scratch(self)
@@ -819,6 +875,19 @@ class MeasurementOnlyCommandTests(unittest.TestCase):
         self.assertIn("just ci-test-windows --exclude=x || status=$?", text)
         self.assertEqual(self.run_tool("--job-exclude=test-macos:a;b")[0].returncode, 2)
         self.assertEqual(self.run_tool("--job-exclude=lint:a")[0].returncode, 2)
+
+    def test_a_marker_base_gate_compares_against_the_demonstration_without_its_marker_and_stops_if_it_cannot(self):
+        proc, text = self.run_tool("--marker-base", "--step-env=NX_SKIP_NX_CACHE=true")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        for job, py in (("test-linux", "python3"), ("test-macos", "python3"), ("test-windows", "python")):
+            gate = (
+                text.split(f"\n  {job}:\n")[1].split("- name: Test the affected projects\n")[1].split("\n      - ")[0]
+            )
+            lines = [line.strip() for line in gate.splitlines()]
+            at = lines.index(f'marker="$({py} spike/ci-profile/marker_base.py)" || exit 1')
+            self.assertEqual(lines[at + 1], 'eval "$marker"')
+            self.assertLess(lines.index("export NX_SKIP_NX_CACHE=true"), at)
+            self.assertTrue(any(line.startswith(f"just ci-{job}") for line in lines[at:]))
 
     def test_shell_text_and_an_unknown_workflow_are_refused(self):
         self.assertEqual(self.run_tool("--exclude=a;$(x)")[0].returncode, 2)

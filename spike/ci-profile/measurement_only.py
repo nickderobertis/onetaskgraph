@@ -2,8 +2,8 @@
 """Apply the spike's measurement-only changes to a tree's `.github/workflows/ci.yml`.
 
     python3 spike/ci-profile/measurement_only.py <ci.yml> [--exclude=P,Q]
-        [--step-env=[JOB:]NAME=VALUE]... [--job-exclude=JOB:P,Q]... [--no-recorders] [--cold-rust]
-        [--compile-only]
+        [--step-env=[JOB:]NAME=VALUE]... [--job-exclude=JOB:P,Q]... [--marker-base] [--no-recorders]
+        [--cold-rust] [--compile-only]
 
 The same text edits apply to today's workflow and to the workflow of #3956 and its parent, so
 both sides of a comparison carry byte-identical measurement changes:
@@ -21,6 +21,9 @@ both sides of a comparison carry byte-identical measurement changes:
   itself selected), so a demonstration runs the selection its source edit makes;
 - `--job-exclude` adds projects to one job's `--exclude=` alone, so a prototype whose own diff
   widens the selection can be held to exactly the tasks its control runs in each job;
+- `--marker-base` has each gate compare against a local commit without the demonstration's marker
+  comment (`marker_base.py`), so a prototype and its control select the same tasks whatever else
+  the prototype's commit changes;
 - `--cold-rust` turns the Rust build cache off in each test job's toolchain step
   (`cache: false`: nothing is restored, and nothing could be saved), so the job builds cold;
 - `--compile-only` replaces each test job's gate with one cold-comparable build,
@@ -68,6 +71,7 @@ class Options:
     step_env: tuple[StepEnv, ...] = field(default_factory=tuple)
     job_exclude: tuple[tuple[str, str], ...] = field(default_factory=tuple)
     recorders: bool = True
+    marker_base: bool = False
     cold_rust: bool = False
     compile_only: bool = False
 
@@ -109,6 +113,8 @@ def test_step(job: str, options: Options) -> str:
     excluded = ",".join([options.exclude] * bool(options.exclude) + [p for j, p in options.job_exclude if j == job])
     command = f"just ci-{job}" + (f" --exclude={excluded}" if excluded else "")
     lines = [f"export {e.name}={e.value}" for e in options.step_env if e.job in (None, job)]
+    if options.marker_base:
+        lines += [f'marker="$({py} spike/ci-profile/marker_base.py)" || exit 1', 'eval "$marker"']
     if options.compile_only:
         lines += [
             'mkdir -p "$RUNNER_TEMP/spike"',
@@ -193,6 +199,7 @@ def parse(argv: list[str]) -> tuple[str, Options]:
     parser.add_argument("--exclude", default="")
     parser.add_argument("--step-env", action="append", default=[])
     parser.add_argument("--job-exclude", action="append", default=[])
+    parser.add_argument("--marker-base", action="store_true")
     parser.add_argument("--no-recorders", action="store_true")
     parser.add_argument("--cold-rust", action="store_true")
     parser.add_argument("--compile-only", action="store_true")
@@ -214,7 +221,7 @@ def parse(argv: list[str]) -> tuple[str, Options]:
         job_exclude.append((job, projects))
     recorders = not (args.no_recorders or args.compile_only)
     return args.workflow, Options(
-        args.exclude, tuple(pairs), tuple(job_exclude), recorders, args.cold_rust, args.compile_only
+        args.exclude, tuple(pairs), tuple(job_exclude), recorders, args.marker_base, args.cold_rust, args.compile_only
     )
 
 
