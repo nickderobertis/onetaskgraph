@@ -16,6 +16,11 @@ and prints, per job:
 Reads are cached under target/ci-profile (or $CIPROFILE_CACHE); CIPROFILE_OFFLINE=1 reads the
 cache alone.
 
+A compile-only demonstration (`measurement_only.py --compile-only`) is read with
+    compile <run id> [--jobs ...]          per job: the build step's seconds, and cargo's own
+                                          timings report (units, their summed seconds, the
+                                          build's span, and each workspace crate's seconds)
+
 Two more subcommands build the report:
     durations <since> <until>         median durations of successful test jobs of PR runs created in a window
     history <prs.json> --out FILE     each PR's first (or --which last) CI run, task by task, per job
@@ -60,6 +65,7 @@ from models import (  # noqa: E402
     TestTime,
     items,
     obj,
+    seconds,
     take,
     timestamp,
 )
@@ -383,6 +389,77 @@ def job_list(text: str) -> list[str]:
     return names
 
 
+TIMINGS_MEMBER = "cargo-timings/cargo-timing.html"
+COMPILE_STEP = "Test the affected projects"
+UNIT_DATA = re.compile(r"const UNIT_DATA = (\[.*?\n\]);", re.S)
+
+
+@dataclass(frozen=True)
+class TimedUnit:
+    """One unit of cargo's `--timings` report: a crate's target, built once."""
+
+    name: str
+    target: str
+    start: Seconds
+    duration: Seconds
+
+    @classmethod
+    def parse(cls, raw: object) -> TimedUnit:
+        record = obj(raw, "timings unit")
+        start = seconds(record.get("start"), "timings unit start")
+        duration = seconds(record.get("duration"), "timings unit duration")
+        return cls(
+            take(record, "name", str, "timings unit"), take(record, "target", str, "timings unit"), start, duration
+        )
+
+
+def timed_units(html: str) -> list[TimedUnit]:
+    """The units of a cargo `--timings` HTML report, read from the `UNIT_DATA` array cargo embeds in it."""
+    found = UNIT_DATA.search(html)
+    if not found:
+        raise Invalid("a cargo timings report without its UNIT_DATA array")
+    return [TimedUnit.parse(u) for u in items(json.loads(found.group(1)), "UNIT_DATA")]
+
+
+def compile_view(job: Job, units: list[TimedUnit] | None) -> list[str]:
+    step = next((s for s in job.steps if s.name == COMPILE_STEP), None)
+    lines = [f"== {job.name} (job {job.id}, {job.conclusion}) wall {job.wall / 60:.2f} min"]
+    lines.append(f"  build step: {(step.end - step.start) / 60:.2f} min" if step else "  build step: not run")
+    if units is None:
+        lines.append("  cargo timings: absent")
+        return lines
+    span = max((u.start + u.duration for u in units), default=0.0)
+    total = sum(u.duration for u in units)
+    lines.append(f"  cargo timings: {len(units)} units, span {span / 60:.2f} min, summed {total / 60:.2f} min")
+    per: dict[str, float] = defaultdict(float)
+    for u in units:
+        if u.name.startswith("onetaskgraph"):
+            per[u.name] += u.duration
+    for name, spent in sorted(per.items(), key=lambda kv: -kv[1]):
+        lines.append(f"    {name:40s} {spent:8.1f} s")
+    return lines
+
+
+async def compile_run(gh: ghcache.GitHub, run_id: RunId, wanted: list[str]) -> int:
+    run = await gh.run(run_id)
+    jobs = {j.name: j for j in await gh.jobs(run_id)}
+    print(f"run {run_id}  head {run.head_sha[:12]}  branch {run.head_branch}  created {run.created_at}")
+    missing = []
+    for name in wanted:
+        job = jobs.get(name)
+        if job is None or not job.finished:
+            missing.append(name)
+            continue
+        html = await gh.artifact_member(run_id, f"spike-profile-{name}", TIMINGS_MEMBER)
+        units = timed_units(html.decode("utf-8", "replace")) if html is not None else None
+        print("\n".join(["", *compile_view(job, units)]))
+    print(f"\n(GitHub reads this invocation: {gh.reads})")
+    if missing:
+        print(f"ciprofile: run {run_id} has no finished {', '.join(missing)}", file=sys.stderr)
+        return MISSING_EXIT
+    return 0
+
+
 def parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         prog="ciprofile.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -393,6 +470,9 @@ def parser() -> argparse.ArgumentParser:
     a.add_argument("--jobs", type=job_list, default=[j.value for j in JobName])
     a.add_argument("--json", action="store_true")
     a.add_argument("--top", type=positive, default=15)
+    c = sub.add_parser("compile")
+    c.add_argument("run", type=positive)
+    c.add_argument("--jobs", type=job_list, default=[j.value for j in JobName])
     d = sub.add_parser("durations")
     d.add_argument("since", type=instant)
     d.add_argument("until", type=instant)
@@ -409,6 +489,8 @@ async def run_command(args: argparse.Namespace) -> int:
     match args.cmd:
         case "profile":
             return await profile_run(gh, RunId(args.run), args.jobs, args.json, args.top)
+        case "compile":
+            return await compile_run(gh, RunId(args.run), args.jobs)
         case "durations":
             since, until = full_time(args.since), full_time(args.until)
             if timestamp(until, "until") <= timestamp(since, "since"):

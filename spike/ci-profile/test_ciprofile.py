@@ -628,6 +628,38 @@ class RunnerCommandTests(unittest.TestCase):
         self.assertIn("testrunner.py <test binary>", proc.stderr)
 
 
+class CompileCommandTests(unittest.TestCase):
+    """`ciprofile.py compile` over a compile-only run: the build step from the jobs listing and cargo's own
+    `--timings` report from the run's artifact, here a report a real cargo wrote (`data/cargo-timings/probe.html`)."""
+
+    def run_compile(self, report: str | None):
+        root = scratch(self)
+        cache = fixture_cache(root)
+        records = cache / f"runs/{RUN}/artifacts/spike-profile-test-macos"
+        if report is not None:
+            (records / "cargo-timings").mkdir()
+            (records / "cargo-timings/cargo-timing.html").write_text(report)
+        env = {"CIPROFILE_CACHE": str(cache), "CIPROFILE_OFFLINE": "1"}
+        return command("ciprofile.py", "compile", str(RUN), "--jobs", "test-macos", env=env)
+
+    def test_a_compile_only_run_prints_its_build_step_and_cargos_own_timings(self):
+        proc = self.run_compile((HERE / "data/cargo-timings/probe.html").read_text())
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("build step: 8.00 min", proc.stdout)
+        self.assertIn("cargo timings: 2 units, span 0.01 min, summed 0.01 min", proc.stdout)
+        self.assertIn("(GitHub reads this invocation: 0)", proc.stdout)
+
+    def test_a_run_without_a_timings_report_says_so(self):
+        proc = self.run_compile(None)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("cargo timings: absent", proc.stdout)
+
+    def test_a_report_without_its_unit_data_is_refused(self):
+        proc = self.run_compile("<html>no units</html>")
+        self.assertEqual(proc.returncode, 4)
+        self.assertIn("UNIT_DATA", proc.stderr)
+
+
 class MeasurementOnlyCommandTests(unittest.TestCase):
     """The rewritten workflow is GitHub-hosted, so it cannot run here: these hold its text to each edit, and the
     hosted demonstration runs the report cites (their cache steps and the recorders' artifacts) are its execution."""
@@ -667,6 +699,20 @@ class MeasurementOnlyCommandTests(unittest.TestCase):
         self.assertNotIn("sampler.py", text)
         self.assertNotIn("testrunner.py", text)
         self.assertIn("save-cache: false", text)
+
+    def test_a_cold_compile_only_run_builds_once_from_no_rust_cache_and_still_writes_none(self):
+        proc, text = self.run_tool("--exclude=x", "--cold-rust", "--compile-only")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertNotRegex(text, r"cache-save-if: (?!false)")
+        self.assertNotIn("sampler.py", text)
+        for job in ("test-linux", "test-macos", "test-windows"):
+            body = text.split(f"\n  {job}:\n")[1]
+            toolchain = body.split("setup-rust-toolchain@")[1].split("\n      - ")[0]
+            self.assertIn("\n          cache: false\n", toolchain)
+            gate = body.split("- name: Test the affected projects\n")[1].split("\n      - ")[0]
+            self.assertIn("cargo test --workspace --all-features --locked --no-run --timings || status=$?", gate)
+            self.assertNotIn("just ci-", gate)
+            self.assertIn(f"name: spike-profile-{job}", body.split("\n  budgets:\n")[0])
 
     def test_shell_text_and_an_unknown_workflow_are_refused(self):
         self.assertEqual(self.run_tool("--exclude=a;$(x)")[0].returncode, 2)

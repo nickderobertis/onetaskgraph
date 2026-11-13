@@ -2,7 +2,7 @@
 """Apply the spike's measurement-only changes to a tree's `.github/workflows/ci.yml`.
 
     python3 spike/ci-profile/measurement_only.py <ci.yml> [--exclude=P,Q]
-        [--step-env=[JOB:]NAME=VALUE]... [--no-recorders]
+        [--step-env=[JOB:]NAME=VALUE]... [--no-recorders] [--cold-rust] [--compile-only]
 
 The same text edits apply to today's workflow and to the workflow of #3956 and its parent, so
 both sides of a comparison carry byte-identical measurement changes:
@@ -17,7 +17,12 @@ both sides of a comparison carry byte-identical measurement changes:
   recording runner as CARGO_TARGET_<triple>_RUNNER) unless `--no-recorders`, and each
   `--step-env` a prototype sets;
 - `--exclude` passes projects to `ci-job.sh --exclude=` (the tasks only the workflow edit
-  itself selected), so a demonstration runs the selection its source edit makes.
+  itself selected), so a demonstration runs the selection its source edit makes;
+- `--cold-rust` turns the Rust build cache off in each test job's toolchain step
+  (`cache: false`: nothing is restored, and nothing could be saved), so the job builds cold;
+- `--compile-only` replaces each test job's gate with one cold-comparable build,
+  `cargo test --workspace --all-features --locked --no-run --timings`, and uploads cargo's
+  timings report as `spike-profile-<job>`; it implies `--no-recorders`.
 Exit status: 0 the file was rewritten; 2 a usage error, or an expected site of the workflow
 is missing (named on standard error).
 """
@@ -37,6 +42,8 @@ TRIPLES = {
 PROJECT_LIST = re.compile(r"[A-Za-z0-9_.@/-]+(,[A-Za-z0-9_.@/-]+)*")
 STEP_ENV = re.compile(r"(?:(test-linux|test-macos|test-windows):)?([A-Z][A-Z0-9_]*)=([A-Za-z0-9_.:/+-]*)")
 USAGE_EXIT = 2
+# One cold-comparable build of every test target the jobs compile in the plain profile.
+COMPILE_COMMAND = "cargo test --workspace --all-features --locked --no-run --timings"
 
 
 class SiteMissing(Exception):
@@ -57,6 +64,8 @@ class Options:
     exclude: str = ""
     step_env: tuple[StepEnv, ...] = field(default_factory=tuple)
     recorders: bool = True
+    cold_rust: bool = False
+    compile_only: bool = False
 
 
 def sub(pattern: str, replacement: str, text: str, what: str, minimum: int = 1) -> str:
@@ -95,6 +104,15 @@ def test_step(job: str, options: Options) -> str:
     )
     command = f"just ci-{job}" + (f" --exclude={options.exclude}" if options.exclude else "")
     lines = [f"export {e.name}={e.value}" for e in options.step_env if e.job in (None, job)]
+    if options.compile_only:
+        lines += [
+            'mkdir -p "$RUNNER_TEMP/spike"',
+            "status=0",
+            f"{COMPILE_COMMAND} || status=$?",
+            'cp -R target/cargo-timings "$RUNNER_TEMP/spike/" || true',
+            'exit "$status"',
+        ]
+        return "        shell: bash\n        run: |\n" + "".join(f"          {line}\n" for line in lines)
     if options.recorders:
         lines += [
             'mkdir -p "$RUNNER_TEMP/spike"',
@@ -131,7 +149,21 @@ def apply(text: str, options: Options) -> str:
             raise SiteMissing(f"no {job} job")
         body = sub(rf"        run: just ci-{job}\n", test_step(job, options), block.group(0), f"{job} test step")
         body = sub(r"(\n    timeout-minutes: )\d+", r"\g<1>60", body, f"{job} timeout")
-        if options.recorders:
+        if options.cold_rust:
+            body = sub(
+                r"(- uses: actions-rust-lang/setup-rust-toolchain@v\d+\n        with:\n)",
+                r"\1          cache: false\n",
+                body,
+                f"{job} rust cache off",
+            )
+        if options.compile_only:
+            body = sub(
+                r"(\n      - name: Report cache entries and task executions\n)",
+                "\n" + upload_step(job).rstrip("\n") + r"\1",
+                body,
+                f"{job} upload",
+            )
+        elif options.recorders:
             body = sub(
                 r"(\n      - name: Test the affected projects\n)",
                 "\n" + install_step(job).rstrip("\n") + r"\1",
@@ -156,6 +188,8 @@ def parse(argv: list[str]) -> tuple[str, Options]:
     parser.add_argument("--exclude", default="")
     parser.add_argument("--step-env", action="append", default=[])
     parser.add_argument("--no-recorders", action="store_true")
+    parser.add_argument("--cold-rust", action="store_true")
+    parser.add_argument("--compile-only", action="store_true")
     args = parser.parse_args(argv)
     # Both are written into a bash line of the workflow, so they are held to plain words.
     if args.exclude and not PROJECT_LIST.fullmatch(args.exclude):
@@ -166,7 +200,8 @@ def parse(argv: list[str]) -> tuple[str, Options]:
         if not match:
             parser.error(f"--step-env takes [JOB:]NAME=VALUE with an upper-case name and a plain value, not {item!r}")
         pairs.append(StepEnv(match.group(1), match.group(2), match.group(3)))
-    return args.workflow, Options(args.exclude, tuple(pairs), not args.no_recorders)
+    recorders = not (args.no_recorders or args.compile_only)
+    return args.workflow, Options(args.exclude, tuple(pairs), recorders, args.cold_rust, args.compile_only)
 
 
 def main(argv: list[str]) -> int:
