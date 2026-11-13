@@ -128,6 +128,21 @@ class CommandTests(unittest.TestCase):
         )
         self.assertNotIn("model_on_control_s", job)
 
+    def test_a_task_left_out_is_out_of_both_sides_timelines_and_recorded(self):
+        control = {"build": (0, 100, 100), "core:test": (100, 400, 200), "scripts:distribution-test": (0, 900, 500)}
+        prototype = {**control, "scripts:distribution-test": (0, 60, 50)}  # failed early, for another reason
+        self.assertEqual(self.deltas("split", control, prototype).returncode, 0)
+        job = json.loads((self.root / "d.json").read_text())["sides"]["split"]["jobs"]["test-macos"]
+        self.assertEqual((job["control"]["gate_span_s"], job["side"]["gate_span_s"]), (900.0, 400.0))
+        args = ["deltas", str(self.root), "--control", "1,2", "--side", "split=3,4", "--out", str(self.root / "d.json")]
+        proc = command(*args, "--leave-out", "test-macos:scripts:distribution-test")
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        job = json.loads((self.root / "d.json").read_text())["sides"]["split"]["jobs"]["test-macos"]
+        self.assertEqual((job["control"]["gate_span_s"], job["side"]["gate_span_s"]), (400.0, 400.0))
+        self.assertEqual(job["left_out"], ["scripts:distribution-test"])
+        self.assertNotIn("scripts:distribution-test", job["elapsed_saved_s"])
+        self.assertEqual(command(*args, "--leave-out", "nowhere").returncode, 2)
+
     def test_the_model_is_checked_on_the_control_runs_own_timelines_and_graphs(self):
         control = {"build": (0, 100, 100), "onetaskgraph-e2e:test": (100, 700, 300), "other:test": (0, 650, 300)}
         prototype = {**control, "onetaskgraph-e2e:test": (100, 640, 200)}

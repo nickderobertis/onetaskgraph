@@ -2,7 +2,7 @@
 """Price the measured prototypes over the 30-PR population, in elapsed job minutes.
 
     python3 spike/ci-profile/prototype_replay.py deltas SUMMARIES --control R,R --side NAME=R,R... --out FILE
-        [--side-only JOB:TASK]... [--graphs DIR]
+        [--side-only JOB:TASK]... [--leave-out JOB:TASK]... [--graphs DIR]
     python3 spike/ci-profile/prototype_replay.py replay HISTORY PRS DELTAS --graphs DIR
 
 `deltas` reads the run summaries `ciprofile.py profile <run> --json` wrote into SUMMARIES
@@ -21,7 +21,10 @@ The sides must have scheduled the same Nx tasks in every job, or the comparison 
 the tasks one side scheduled and the other did not; a task the prototype itself adds is let
 through only when declared with `--side-only JOB:TASK`, and is recorded. A task both sides
 scheduled but only one executed is compared over the runs that executed it and recorded under
-`executed_by_one_side`.
+`executed_by_one_side`. A task that ended for a reason the comparison is not about (a prototype
+that fails a journey unrelated to what it measures, ending it early) is left out of both sides'
+timelines with `--leave-out JOB:TASK`, recorded under `left_out`; the job wall clock cannot be
+corrected for it and is reported as measured.
 
 `replay` estimates, for every PR of HISTORY (`ciprofile.py history` output, each task with its
 interval), how much sooner each job would have ended had the prototype been in place, with
@@ -89,7 +92,7 @@ class JobSummary:
     scheduled: frozenset[str]
 
 
-def summary(directory: Path, run: int) -> dict[str, JobSummary]:
+def summary(directory: Path, run: int, leave_out: frozenset[tuple[str, str]] = frozenset()) -> dict[str, JobSummary]:
     path = directory / f"profile-{run}.json"
     record = obj(json.loads(path.read_text()), str(path))
     out = {}
@@ -101,6 +104,8 @@ def summary(directory: Path, run: int) -> dict[str, JobSummary]:
         scheduled: set[str] = set()
         for raw_task in items(job.get("tasks"), f"{path} {name} tasks"):
             task = obj(raw_task, f"{path} {name} task")
+            if (name, str(task.get("task"))) in leave_out:
+                continue
             scheduled.add(str(task.get("task")))
             if task.get("result") != "executed":
                 continue
@@ -152,17 +157,24 @@ def added_cost(measured: list[JobSummary], added: list[str]) -> dict[str, float]
     return {t: -round(means[t], 1) for t in added}
 
 
+@dataclass(frozen=True)
+class Comparison:
+    """What a comparison declares: the tasks the prototype adds, the tasks left out of both sides, the graphs."""
+
+    side_only: frozenset[tuple[str, str]] = frozenset()
+    leave_out: frozenset[tuple[str, str]] = frozenset()
+    graphs: Path | None = None
+
+
 def deltas(
-    directory: Path,
-    control: list[int],
-    sides: dict[str, list[int]],
-    side_only: frozenset[tuple[str, str]] = frozenset(),
-    graphs: Path | None = None,
+    directory: Path, control: list[int], sides: dict[str, list[int]], declared: Comparison | None = None
 ) -> dict:
-    base = [summary(directory, r) for r in control]
+    declared = declared or Comparison()
+    side_only, leave_out, graphs = declared.side_only, declared.leave_out, declared.graphs
+    base = [summary(directory, r, leave_out) for r in control]
     out: dict = {"control": control, "sides": {}}
     for side, runs in sides.items():
-        measured = [summary(directory, r) for r in runs]
+        measured = [summary(directory, r, leave_out) for r in runs]
         per_job: dict[str, dict[str, Any]] = {}
         for job in JobName:
             c = [s[job.value] for s in base if job.value in s]
@@ -171,11 +183,11 @@ def deltas(
                 continue
             c_sched = frozenset().union(*(p.scheduled for p in c))
             m_sched = frozenset().union(*(p.scheduled for p in m))
-            declared = {t for j, t in side_only if j == job.value}
-            if c_sched - m_sched or (m_sched - c_sched) - declared:
+            added = {t for j, t in side_only if j == job.value}
+            if c_sched - m_sched or (m_sched - c_sched) - added:
                 raise Invalid(
                     f"{side} {job.value}: the selections differ (control only {sorted(c_sched - m_sched)},"
-                    f" {side} only {sorted((m_sched - c_sched) - declared)}); hold them equal before comparing"
+                    f" {side} only {sorted((m_sched - c_sched) - added)}); hold them equal before comparing"
                 )
             c_exec, m_exec = {t for p in c for t in p.intervals}, {t for p in m for t in p.intervals}
 
@@ -189,6 +201,7 @@ def deltas(
                 "control": job_figures(c),
                 "side": job_figures(m),
                 "side_only": sorted(m_sched - c_sched),
+                "left_out": sorted(t for j, t in leave_out if j == job.value),
                 "executed_by_one_side": {"control": sorted(c_exec - m_exec), side: sorted((m_exec - c_exec) & c_sched)},
                 "elapsed_saved_s": (saved := diff(elapsed) | added_cost(m, sorted((m_sched - c_sched) & m_exec))),
                 "share_saved_s": diff(lambda p: p.shares),
@@ -278,6 +291,7 @@ def main(argv: list[str]) -> int:
     d.add_argument("--side", action="append", required=True)
     d.add_argument("--out", type=Path, required=True)
     d.add_argument("--side-only", action="append", default=[], help="JOB:TASK the prototype itself adds")
+    d.add_argument("--leave-out", action="append", default=[], help="JOB:TASK left out of both sides' timelines")
     d.add_argument("--graphs", type=Path, help="taskgraphs.py output holding run-<id>.json for the control runs")
     r = sub.add_parser("replay")
     for name in ("history", "prs", "deltas"):
@@ -292,13 +306,16 @@ def main(argv: list[str]) -> int:
                 if name not in SIDES:
                     ap.error(f"--side takes {'|'.join(SIDES)}=R,R, not {item!r}")
                 sides[name] = run_ids(ids)
-            declared = set()
-            for item in args.side_only:
+            declared, left = set(), set()
+            for flag, item in [("--side-only", i) for i in args.side_only] + [
+                ("--leave-out", i) for i in args.leave_out
+            ]:
                 job, _, task = item.partition(":")
                 if job not in {j.value for j in JobName} or ":" not in task:
-                    ap.error(f"--side-only takes JOB:PROJECT:TARGET, not {item!r}")
-                declared.add((job, task))
-            measured = deltas(args.summaries, args.control, sides, frozenset(declared), args.graphs)
+                    ap.error(f"{flag} takes JOB:PROJECT:TARGET, not {item!r}")
+                (declared if flag == "--side-only" else left).add((job, task))
+            comparison = Comparison(frozenset(declared), frozenset(left), args.graphs)
+            measured = deltas(args.summaries, args.control, sides, comparison)
             args.out.write_text(json.dumps(measured, indent=1) + "\n")
             return 0
         lines = replay(
