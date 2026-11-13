@@ -135,6 +135,13 @@ def count(value: Any, where: str) -> int:
     return value
 
 
+def positive(value: int, where: str) -> int:
+    """A GitHub identifier, or a count that cannot be zero."""
+    if value < 1:
+        raise Invalid(f"{where}: expected a positive whole number, got {value!r}")
+    return value
+
+
 def timestamp(value: Any, where: str) -> float:
     """Seconds since the epoch of an ISO-8601 time; one with no offset is UTC, as GitHub's logs are."""
     if not isinstance(value, str) or not (m := ISO_TIME.fullmatch(value)):
@@ -233,7 +240,7 @@ class Job:
             if (s := Step.parse(raw_step, f"{where} step {i}")) is not None
         )
         return cls(
-            JobId(take(record, "id", int, where)),
+            JobId(positive(take(record, "id", int, where), where)),
             take(record, "name", str, where),
             conclusion(record.get("conclusion"), where),
             start,
@@ -259,10 +266,11 @@ class Run:
         created = take(record, "created_at", str, where)
         timestamp(created, where)
         numbers = tuple(
-            take(obj(p, where), "number", int, where) for p in items(record.get("pull_requests") or [], where)
+            positive(take(obj(p, where), "number", int, where), where)
+            for p in items(record.get("pull_requests") or [], where)
         )
         return cls(
-            RunId(take(record, "id", int, where)),
+            RunId(positive(take(record, "id", int, where), where)),
             take(record, "head_sha", str, where),
             take(record, "head_branch", str, where),
             take(record, "event", str, where),
@@ -283,7 +291,7 @@ class Artifact:
         record = obj(raw, "artifact")
         where = f"artifact {record.get('id')}"
         return cls(
-            ArtifactId(take(record, "id", int, where)),
+            ArtifactId(positive(take(record, "id", int, where), where)),
             take(record, "name", str, where),
             take(record, "expired", bool, where),
         )
@@ -542,7 +550,7 @@ class JobRecord:
     def parse(cls, raw: Any, where: str) -> JobRecord:
         record = obj(raw, where)
         return cls(
-            take(record, "job_id", int, where),
+            positive(take(record, "job_id", int, where), where),
             conclusion(record.get("conclusion"), where),
             seconds(take(record, "wall_s", (int, float), where), where),
             source_of(take(record, "source", str, where), where),
@@ -584,11 +592,11 @@ class FirstRunRecord:
                 raise Invalid(f"{where}: unknown job {name!r}") from error
             jobs[key] = JobRecord.parse(job, f"{where} {name}")
         return cls(
-            take(record, "run", int, where),
+            positive(take(record, "run", int, where), where),
             take(record, "head_sha", str, where),
             iso_time(take(record, "created_at", str, where), where),
             conclusion(record.get("conclusion"), where),
-            take(record, "runs_of_pr", int, where),
+            positive(take(record, "runs_of_pr", int, where), where),
             jobs,
         )
 

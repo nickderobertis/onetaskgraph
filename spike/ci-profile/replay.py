@@ -337,7 +337,11 @@ def main(argv: list[str]) -> int:
         return USAGE_EXIT
     report(result)
     if args.json:
-        args.json.write_text(json.dumps(result.to_json(), indent=1))
+        try:
+            args.json.write_text(json.dumps(result.to_json(), indent=1))
+        except OSError as error:
+            print(f"replay: {type(error).__name__}: {error}", file=sys.stderr)
+            return USAGE_EXIT
     return 0
 
 

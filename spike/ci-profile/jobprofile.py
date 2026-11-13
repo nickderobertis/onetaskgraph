@@ -13,6 +13,7 @@ On a demonstration run the test step is divided again by the sampler's record (`
 
 from __future__ import annotations
 
+import json
 import re
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -245,17 +246,20 @@ def account_steps(p: JobProfile, log: list[LogLine]) -> None:
     restore = 0.0
     for section in sections:
         span, title = section.span, section.title
-        if title.startswith("Swatinem/rust-cache"):
-            text = "\n".join(line.text for line in log if span.start <= line.t <= span.end)
-            size = CACHE_SIZE.search(text)
-            p.rust_cache = RustCache(
-                round(span.end - span.start, 1),
-                size.group(1) if size else None,
-                "restored from" in text.lower() and "No cache found" not in text,
-            )
-            restore += span.end - span.start
-        elif title.startswith(("astral-sh/setup-uv", "oven-sh/setup-bun")):
-            restore += restore_inside(log, span)
+        match title:
+            case _ if title.startswith("Swatinem/rust-cache"):
+                text = "\n".join(line.text for line in log if span.start <= line.t <= span.end)
+                size = CACHE_SIZE.search(text)
+                p.rust_cache = RustCache(
+                    round(span.end - span.start, 1),
+                    size.group(1) if size else None,
+                    "restored from" in text.lower() and "No cache found" not in text,
+                )
+                restore += span.end - span.start
+            case _ if title.startswith(("astral-sh/setup-uv", "oven-sh/setup-bun")):
+                restore += restore_inside(log, span)
+            case _:
+                pass
     for step in p.job.steps:
         kind = step_kind(step.name)
         if kind is StepKind.TEST:
@@ -439,8 +443,8 @@ def by_process(records: list, window: Interval) -> ProcessDivision:
                 totals.count += 1
                 totals.lifetime += record.end - record.start
                 totals.cpu += record.cpu
-            case Tick() if window.start <= record.t <= window.end:
-                divide_tick(record, buckets)
+            case Tick() if (share := overlap(record, window)) > 0:
+                divide_tick(record, buckets, share)
             case _:
                 pass
     return ProcessDivision(dict(buckets), dict(exits))
@@ -451,13 +455,23 @@ def by_process(records: list, window: Interval) -> ProcessDivision:
 LONGEST_TICK = 5.0
 
 
-def divide_tick(tick: Tick, buckets: dict[str, Seconds]) -> None:
-    dt = min(tick.dt, LONGEST_TICK)
+def overlap(tick: Tick, window: Interval) -> float:
+    """The share of a tick's interval, (t - dt, t], that lies inside the window."""
+    if tick.dt <= 0:
+        return 1.0 if window.start <= tick.t <= window.end else 0.0
+    inside = min(tick.t, window.end) - max(tick.t - tick.dt, window.start)
+    return max(0.0, inside) / tick.dt
+
+
+def divide_tick(tick: Tick, buckets: dict[str, Seconds], share: float = 1.0) -> None:
+    """Credit `share` of one tick's interval to what was running in it."""
+    sampled = min(tick.dt, LONGEST_TICK)
+    dt = sampled * share
     if tick.dt > LONGEST_TICK:
-        buckets["unsampled(recorder stalled)"] += tick.dt - LONGEST_TICK
+        buckets["unsampled(recorder stalled)"] += (tick.dt - LONGEST_TICK) * share
     work_cpu = sum(v for k, v in tick.cpu.items() if k not in ORCHESTRATION)
     leaves = {k for k, n in tick.leaves.items() if n and k not in ORCHESTRATION}
-    if work_cpu < IDLE_CPU_SHARE * dt:
+    if work_cpu < IDLE_CPU_SHARE * sampled:
         waiting = {Category.TEST_BINARY, Category.CLI_UNDER_TEST} & leaves
         label = (
             "wait:in-tests(network,sleep,poll)"
@@ -473,6 +487,4 @@ def divide_tick(tick: Tick, buckets: dict[str, Seconds]) -> None:
 
 
 def sampler_records(lines: list[str]) -> list:
-    import json  # noqa: PLC0415 — only a demonstration run carries a sampler record
-
     return [r for line in lines if line.strip() and (r := sampler_record(json.loads(line))) is not None]

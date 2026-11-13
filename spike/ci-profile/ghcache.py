@@ -14,6 +14,7 @@ import asyncio
 import io
 import json
 import os
+import shutil
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -175,6 +176,9 @@ class GitHub:
 
 
 def extract(data: bytes, directory: Path) -> None:
+    """Replace `directory` with the artifact's kept files, so nothing of an interrupted extraction remains."""
+    shutil.rmtree(directory, ignore_errors=True)
+    directory.mkdir(parents=True)
     root = directory.resolve()
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
         for entry in archive.namelist():

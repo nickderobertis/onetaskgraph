@@ -227,13 +227,13 @@ class ClientTests(unittest.TestCase):
 
     def test_jobs_are_paged_to_their_end(self):
         root = scratch(self)
-        page = [{**JOB, "id": i} for i in range(100)]
+        page = [{**JOB, "id": i} for i in range(1, 101)]
         env = fake_gh(
             root,
             remaining=4000,
             responses={
                 f"actions/runs/{RUN}/jobs?per_page=100&page=1": {"total_count": 101, "jobs": page},
-                f"actions/runs/{RUN}/jobs?per_page=100&page=2": {"total_count": 101, "jobs": [{**JOB, "id": 100}]},
+                f"actions/runs/{RUN}/jobs?per_page=100&page=2": {"total_count": 101, "jobs": [{**JOB, "id": 101}]},
             },
         )
         with unittest.mock.patch.dict("os.environ", env):
@@ -1004,3 +1004,96 @@ class RemainingPathTests(unittest.TestCase):
             self.assertEqual((proc.returncode, proc.stdout.strip()), (7, "args=" + " ".join(args)))
         self.assertFalse(record.exists())
         self.assertEqual(len((root / "tests.jsonl.spawns").read_text().splitlines()), 3)
+
+
+WORKFLOWS = HERE / "data/workflows"
+
+
+class LatestPathTests(unittest.TestCase):
+    def test_a_date_only_window_is_measured_as_whole_days(self):
+        root = scratch(self)
+        query = (
+            "actions/workflows/ci.yml/runs?event=pull_request&created=2026-11-01T00:00:00Z..2026-11-02T00:00:00Z"
+            "&per_page=100&page=1"
+        )
+        env = fake_gh(root, remaining=4000, responses={query: {"workflow_runs": []}})
+        proc = command("ciprofile.py", "durations", "2026-11-01", "2026-11-02", env=env)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("created 2026-11-01T00:00:00Z..2026-11-02T00:00:00Z: 0", proc.stdout)
+
+    def test_an_empty_pr_list_leaves_an_empty_history_not_a_stale_one(self):
+        root = scratch(self)
+        cache = fixture_cache(root)
+        listing = cache / "lists/event_pull_request_created_>_2026-11-01.1.json"
+        listing.parent.mkdir(parents=True)
+        listing.write_text(json.dumps({"workflow_runs": [RUN_RECORD]}))
+        (root / "prs.json").write_text("[]")
+        out = root / "h.json"
+        out.write_text('{"stale": true}')
+        proc = command(
+            "ciprofile.py",
+            "history",
+            str(root / "prs.json"),
+            "--out",
+            str(out),
+            env={"CIPROFILE_CACHE": str(cache), "CIPROFILE_OFFLINE": "1"},
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(json.loads(out.read_text()), {})
+
+    def test_3956s_workflow_and_its_parents_take_the_same_edits(self):
+        for workflow in sorted(WORKFLOWS.glob("ci-*.yml")):
+            copy = scratch(self) / "ci.yml"
+            shutil.copy(workflow, copy)
+            proc = command("measurement_only.py", str(copy), "--exclude=x")
+            self.assertEqual(proc.returncode, 0, f"{workflow.name}: {proc.stderr}")
+            text = copy.read_text()
+            self.assertNotIn("save-cache: ${{", text)
+            self.assertNotRegex(text, r"CACHE_READ_ONLY: (?!'1')")
+            self.assertEqual(text.count("spike/ci-profile/sampler.py"), 3, workflow.name)
+
+    def test_an_extraction_interrupted_part_way_is_replaced_whole(self):
+        root = scratch(self)
+        env = ClientTests().artifact_gh(root, {"tests.jsonl": b"fresh\n"})
+        directory = root / f"cache/runs/{RUN}/artifacts/spike-profile-test-macos"
+        directory.mkdir(parents=True)
+        (directory / "tests.jsonl").write_bytes(b"half")
+        (directory / "stale.json").write_bytes(b"{}")
+        with unittest.mock.patch.dict("os.environ", env):
+            gh = ghcache.GitHub(cache=root / "cache", offline=False)
+            self.assertEqual(
+                asyncio.run(gh.artifact_member(models.RunId(RUN), "spike-profile-test-macos", "tests.jsonl")),
+                b"fresh\n",
+            )
+        self.assertFalse((directory / "stale.json").exists())
+
+    def test_a_tick_straddling_the_window_is_credited_only_its_overlap(self):
+        busy = {models.Category.COMPILE: 1}
+        records = [
+            models.Tick(10.5, 1.0, busy, {models.Category.COMPILE: 1.0}),
+            models.Tick(20.25, 1.0, busy, {models.Category.COMPILE: 1.0}),
+        ]
+        division = prof.by_process(records, prof.Interval(10.0, 19.5))
+        self.assertAlmostEqual(division.seconds["compile"], 0.5 + 0.25)  # (9.5, 10.5] and (19.25, 20.25] each cut
+
+    def test_an_unwritable_replay_report_exits_2(self):
+        root = scratch(self)
+        ReplayRefusalTests().history_with(root, "3990", "c:test")
+        (root / "p.json").write_text(json.dumps([{"pr": 3990, "files": []}]))
+        proc = command(
+            "replay.py",
+            str(root / "h.json"),
+            str(root / "p.json"),
+            str(root / "after"),
+            str(root / "after"),
+            "--json",
+            str(root / "no/such/dir/r.json"),
+        )
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("FileNotFoundError", proc.stderr)
+
+    def test_identifiers_must_be_positive(self):
+        with self.assertRaisesRegex(models.Invalid, "positive"):
+            models.Job.parse({**JOB, "id": 0})
+        with self.assertRaisesRegex(models.Invalid, "positive"):
+            models.Run.parse({**RUN_RECORD, "pull_requests": [{"number": -1}]})

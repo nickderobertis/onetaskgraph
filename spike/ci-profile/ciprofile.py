@@ -325,6 +325,7 @@ async def history(gh: ghcache.GitHub, prs_file: Path, since: str, out_file: Path
     runs = await gh.runs_list(f"event=pull_request&created=>={since}", pages=4)
     out: dict[int, FirstRunRecord] = {}
     unmatched = []
+    out_file.write_text("{}")  # a list with no PR still leaves its (empty) history, never a stale one
     for pr in prs:
         mine = runs_of(pr, runs)
         if not mine:
@@ -358,9 +359,14 @@ def positive(text: str) -> int:
     return int(text)
 
 
+def full_time(text: str) -> str:
+    """A window bound as an ISO-8601 time: a date alone means that day's first second in UTC."""
+    return text if "T" in text else f"{text}T00:00:00Z"
+
+
 def instant(text: str) -> str:
     try:
-        timestamp(text if "T" in text else f"{text}T00:00:00Z", "a window bound")
+        timestamp(full_time(text), "a window bound")
     except Invalid as error:
         raise argparse.ArgumentTypeError(str(error)) from error
     return text
@@ -401,10 +407,11 @@ async def run_command(args: argparse.Namespace) -> int:
         case "profile":
             return await profile_run(gh, RunId(args.run), args.jobs, args.json, args.top)
         case "durations":
-            if timestamp(args.until, "until") <= timestamp(args.since, "since"):
+            since, until = full_time(args.since), full_time(args.until)
+            if timestamp(until, "until") <= timestamp(since, "since"):
                 print("ciprofile: the window's end must follow its start", file=sys.stderr)
                 return USAGE_EXIT
-            return await durations(gh, args.since, args.until)
+            return await durations(gh, since, until)
         case "history":
             return await history(gh, args.prs_file, args.since, args.out, args.which)
     return USAGE_EXIT
