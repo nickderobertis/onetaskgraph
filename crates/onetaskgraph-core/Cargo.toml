@@ -32,6 +32,7 @@ onetaskgraph-in-memory.workspace = true
 onetaskgraph-linear = { workspace = true, optional = true }
 onetaskgraph-local-md.workspace = true
 onetaskgraph-plugin-api.workspace = true
+onetaskgraph-template.workspace = true
 jsonschema.workspace = true
 minijinja.workspace = true
 # A public projection's content is read for the local links it could not carry.
