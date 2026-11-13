@@ -597,7 +597,7 @@ def history(raw: Any) -> dict[int, FirstRunRecord]:
     """A whole `ciprofile.py history` document, keyed by PR number."""
     out = {}
     for pr, entry in obj(raw, "history").items():
-        if not isinstance(pr, str) or not re.fullmatch(r"[0-9]+", pr):
-            raise Invalid(f"history: {pr!r} is not a pull request number")
+        if not isinstance(pr, str) or not re.fullmatch(r"[1-9][0-9]*", pr):
+            raise Invalid(f"history: {pr!r} is not a pull request number written canonically")
         out[int(pr)] = FirstRunRecord.parse(entry, f"history #{pr}")
     return out

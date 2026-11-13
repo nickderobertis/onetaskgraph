@@ -193,6 +193,8 @@ def parse_prs(raw: object) -> dict[int, frozenset[str]]:
     for entry in items(raw, "prs"):
         record = obj(entry, "prs entry")
         pr = take(record, "pr", int, "prs entry")
+        if pr in out:
+            raise Invalid(f"#{pr} is listed twice")
         out[pr] = frozenset(repository_path(f, f"#{pr} files") for f in items(record.get("files"), f"#{pr} files"))
     return out
 

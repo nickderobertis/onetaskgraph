@@ -125,7 +125,7 @@ class GitHub:
             body = obj(json.loads(legacy.read_text()), str(legacy))
             found = items(body.get(kind), f"{legacy} {kind}")
             total = body.get("total_count", len(found))
-            if isinstance(total, int) and not isinstance(total, bool) and total <= len(found):
+            if isinstance(total, int) and not isinstance(total, bool) and 0 <= total <= len(found):
                 return found
         return await self._pages(f"runs/{run_id}/{kind}", f"actions/runs/{run_id}/{kind}?", kind)
 

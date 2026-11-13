@@ -443,8 +443,15 @@ def by_process(records: list, window: Interval) -> ProcessDivision:
     return ProcessDivision(dict(buckets), dict(exits))
 
 
+# A tick this much longer than the sampler's own interval means the recorder itself stalled: the
+# excess is named unsampled rather than credited to whatever happened to be alive at its end.
+LONGEST_TICK = 5.0
+
+
 def divide_tick(tick: Tick, buckets: dict[str, Seconds]) -> None:
-    dt = min(tick.dt, 5.0)
+    dt = min(tick.dt, LONGEST_TICK)
+    if tick.dt > LONGEST_TICK:
+        buckets["unsampled(recorder stalled)"] += tick.dt - LONGEST_TICK
     work_cpu = sum(v for k, v in tick.cpu.items() if k not in ORCHESTRATION)
     leaves = {k for k, n in tick.leaves.items() if n and k not in ORCHESTRATION}
     if work_cpu < IDLE_CPU_SHARE * dt:

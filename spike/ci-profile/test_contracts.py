@@ -27,6 +27,7 @@ import ghcache  # noqa: E402
 import jobprofile as prof  # noqa: E402
 import measurement_only  # noqa: E402
 import models  # noqa: E402
+import replay  # noqa: E402
 import sampler  # noqa: E402
 from test_ciprofile import (  # noqa: E402
     EXECUTIONS,
@@ -854,3 +855,52 @@ class TickDivisionTests(unittest.TestCase):
             division.seconds,
             {"wait:subprocess(git)": 1.0, "wait:subprocess(none)": 1.0, "orchestration(nx,shell)": 1.0},
         )
+
+
+class ListingAndRecorderEdgeTests(unittest.TestCase):
+    def test_a_run_listing_is_paged_up_to_its_limit(self):
+        root = scratch(self)
+        base = "actions/workflows/ci.yml/runs?event=pull_request&per_page=100&page="
+        full = [{**RUN_RECORD, "id": 1000 + i} for i in range(100)]
+        env = fake_gh(
+            root,
+            remaining=4000,
+            responses={
+                f"{base}1": {"workflow_runs": full},
+                f"{base}2": {"workflow_runs": full},
+                f"{base}3": {"workflow_runs": [RUN_RECORD]},
+            },
+        )
+        with unittest.mock.patch.dict("os.environ", env):
+            gh = ghcache.GitHub(cache=root / "cache", offline=False)
+            self.assertEqual(len(asyncio.run(gh.runs_list("event=pull_request", pages=2))), 200)
+            self.assertEqual(len(asyncio.run(gh.runs_list("event=pull_request", pages=5))), 201)
+        pages = [c for c in (root / "calls.log").read_text().splitlines() if "page=" in c]
+        self.assertEqual(len(pages), 3)  # the second listing reread no cached page
+
+    def test_a_process_whose_cpu_cannot_be_read_keeps_its_last_reading(self):
+        table, seen = FakeProcessTable(), {}
+        flaky = FakeProcess(50, 1, "git", created=100.5, cpu=0.4)
+        table.processes = [flaky]
+        sampler.sample(table, seen, me=999, previous=100.0, tick=1.0)
+
+        def refuse() -> FakeTimes:
+            raise OSError("access denied")
+
+        flaky.cpu_times = refuse  # ty: ignore[invalid-assignment] — the OS refusing a read, as psutil raises it
+        second = sampler.sample(table, seen, me=999, previous=101.0, tick=1.0)
+        self.assertEqual(second.cpu.get(models.Category.GIT, 0.0), 0.0)
+        self.assertEqual(seen[50].last_cpu, 0.4)
+        self.assertIn(50, second.alive)
+
+    def test_a_tick_far_longer_than_the_interval_names_its_excess_unsampled(self):
+        division = prof.by_process(
+            [models.Tick(9.0, 8.0, {models.Category.COMPILE: 1}, {models.Category.COMPILE: 8.0})], prof.Interval(0, 10)
+        )
+        self.assertEqual(division.seconds, {"compile": 5.0, "unsampled(recorder stalled)": 3.0})
+
+    def test_duplicate_and_non_canonical_pull_requests_are_refused(self):
+        with self.assertRaisesRegex(models.Invalid, "listed twice"):
+            replay.parse_prs([{"pr": 1, "files": []}, {"pr": 1, "files": []}])
+        with self.assertRaisesRegex(models.Invalid, "canonically"):
+            models.history({"01": {}})
