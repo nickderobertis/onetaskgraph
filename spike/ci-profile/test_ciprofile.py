@@ -384,6 +384,7 @@ class ReplayCommandTests(unittest.TestCase):
             json.dumps({"files": ["crates/onetaskgraph-core/tests/engine.rs", "biome.json"]})
         )
         (self.root / "after/scripts__distribution-test.json").write_text(json.dumps({"files": []}))
+        (self.root / "before/scripts__distribution-test.json").write_text(json.dumps({"files": []}))
         history = {
             "4000": {
                 "run": 1,
@@ -522,7 +523,7 @@ class SamplerCommandTests(unittest.TestCase):
         try:
             import psutil  # noqa: F401, PLC0415  # ty: ignore[unresolved-import] — the recorder's own dependency, absent here is a skip
         except ImportError:
-            self.skipTest("psutil is not installed (the Nx target provides it through uv)")
+            self.skipTest("psutil is not installed here; a demonstration run installs it beside the recorder")
         out = scratch(self) / "samples.jsonl"
         recorder = subprocess.Popen([sys.executable, str(HERE / "sampler.py"), str(out), "--tick", "0.2"])
         try:

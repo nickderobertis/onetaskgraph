@@ -198,6 +198,8 @@ def parse_prs(raw: object) -> dict[int, frozenset[str]]:
 
 
 def load_inputs(directory: Path) -> dict[TaskId, frozenset[str]]:
+    if not directory.is_dir() or not any(directory.glob("*.json")):
+        raise Invalid(f"{directory}: expected a directory of `nx show target inputs` records")
     out = {}
     for path in sorted(directory.glob("*.json")):
         record = obj(json.loads(path.read_text()), str(path))

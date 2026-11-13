@@ -25,7 +25,9 @@ sys.path.insert(0, str(HERE))
 # E402: the modules under test sit beside this file and are found through the sys.path entry above.
 import ghcache  # noqa: E402
 import jobprofile as prof  # noqa: E402
+import measurement_only  # noqa: E402
 import models  # noqa: E402
+import sampler  # noqa: E402
 from test_ciprofile import (  # noqa: E402
     EXECUTIONS,
     JOB,
@@ -638,7 +640,6 @@ class FakeProcessTable:
 
 class SamplerAccountingTests(unittest.TestCase):
     def test_a_working_descendant_hides_its_ancestors_and_the_sidecar_is_nobodys_work(self):
-        import sampler  # noqa: PLC0415 — beside this file
 
         table = FakeProcessTable()
         table.processes = [
@@ -663,7 +664,6 @@ class SamplerAccountingTests(unittest.TestCase):
         )
 
     def test_cpu_is_counted_from_when_the_sampler_first_saw_a_process_and_a_reused_pid_is_a_new_process(self):
-        import sampler  # noqa: PLC0415 — beside this file
 
         table, seen = FakeProcessTable(), {}
         old = FakeProcess(30, 1, "python3", created=1.0, cpu=50.0)  # running long before the sampler started
@@ -687,7 +687,6 @@ class SamplerAccountingTests(unittest.TestCase):
 
 class MoreProducerContractTests(unittest.TestCase):
     def test_each_jobs_runner_target_is_the_triple_of_the_image_it_runs_on(self):
-        import measurement_only  # noqa: PLC0415 — beside this file
 
         workflow = (REPO / ".github/workflows/ci.yml").read_text()
         images = dict(re.findall(r"\n  (test-[a-z]+):\n(?:    [^\n]*\n)*?    runs-on: ([\w.-]+)", workflow))
@@ -781,3 +780,77 @@ class ShimInstallTests(unittest.TestCase):
         self.assertEqual([r.wait(timeout=300) for r in runners], [0, 0, 0, 0])
         self.assertTrue((record.parent / "cargo-shim/cargo").exists())
         self.assertEqual(len([p for p in (record.parent / "cargo-shim").iterdir() if p.is_dir()]), 0)
+
+
+class ReplayRefusalTests(unittest.TestCase):
+    def history_with(self, root: Path, pr: str, task: str) -> None:
+        record = {
+            "run": 1,
+            "head_sha": "e" * 40,
+            "created_at": "2026-11-12T00:00:00Z",
+            "conclusion": "success",
+            "runs_of_pr": 1,
+            "jobs": {
+                "test-linux": {
+                    "job_id": 1,
+                    "conclusion": "success",
+                    "wall_s": 60,
+                    "source": "log",
+                    "tasks": {task: {"result": "executed", "seconds": 60, "share_s": 60}},
+                }
+            },
+        }
+        (root / "h.json").write_text(json.dumps({pr: record}))
+        (root / "after").mkdir()
+        (root / "after/c__test.json").write_text(json.dumps({"files": ["crates/c/src/a.rs"]}))
+
+    def run_replay(self, root: Path, *extra: str):
+        return command(
+            "replay.py", str(root / "h.json"), str(root / "p.json"), str(root / "after"), str(root / "after"), *extra
+        )
+
+    def test_a_pr_the_history_names_but_the_list_does_not_exits_2_naming_it(self):
+        root = scratch(self)
+        self.history_with(root, "3990", "c:test")
+        (root / "p.json").write_text(json.dumps([{"pr": 3991, "files": []}]))
+        proc = self.run_replay(root)
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("#3990 is in the history but not in the PR list", proc.stderr)
+
+    def test_a_target_with_no_resolved_inputs_is_reported_unresolved(self):
+        root = scratch(self)
+        self.history_with(root, "3990", "d:test")
+        (root / "p.json").write_text(json.dumps([{"pr": 3990, "files": ["crates/d/src/a.rs"]}]))
+        proc = self.run_replay(root, "--json", str(root / "r.json"))
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertIn("test-linux: (not resolved) 1", proc.stdout)
+        reason = json.loads((root / "r.json").read_text())["rows"]["3990"]["test-linux"]["d:test"]
+        self.assertEqual((reason["matched"], reason["why"]), (None, "inputs not resolved for this target"))
+
+    def test_a_missing_inputs_directory_and_a_malformed_history_time_are_refused(self):
+        root = scratch(self)
+        self.history_with(root, "3990", "c:test")
+        (root / "p.json").write_text(json.dumps([{"pr": 3990, "files": []}]))
+        proc = command(
+            "replay.py", str(root / "h.json"), str(root / "p.json"), str(root / "nowhere"), str(root / "after")
+        )
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("expected a directory", proc.stderr)
+        history = json.loads((root / "h.json").read_text())
+        history["3990"]["created_at"] = "yesterday"
+        with self.assertRaisesRegex(models.Invalid, "not an ISO-8601 time"):
+            models.history(history)
+
+
+class TickDivisionTests(unittest.TestCase):
+    def test_an_idle_subprocess_no_leaves_and_busy_orchestration_each_have_their_own_name(self):
+        records = [
+            models.Tick(1.0, 1.0, {models.Category.GIT: 1}, {}),
+            models.Tick(2.0, 1.0, {}, {}),
+            models.Tick(3.0, 1.0, {models.Category.NX: 1}, {models.Category.GIT: 0.5}),
+        ]
+        division = prof.by_process(records, prof.Interval(0, 10))
+        self.assertEqual(
+            division.seconds,
+            {"wait:subprocess(git)": 1.0, "wait:subprocess(none)": 1.0, "orchestration(nx,shell)": 1.0},
+        )

@@ -153,6 +153,11 @@ def task_id(value: str, where: str) -> TaskId:
     return TaskId(value)
 
 
+def iso_time(value: str, where: str) -> str:
+    timestamp(value, where)
+    return value
+
+
 def source_of(value: str, where: str) -> Source:
     try:
         return Source(value)
@@ -581,7 +586,7 @@ class FirstRunRecord:
         return cls(
             take(record, "run", int, where),
             take(record, "head_sha", str, where),
-            take(record, "created_at", str, where),
+            iso_time(take(record, "created_at", str, where), where),
             conclusion(record.get("conclusion"), where),
             take(record, "runs_of_pr", int, where),
             jobs,
