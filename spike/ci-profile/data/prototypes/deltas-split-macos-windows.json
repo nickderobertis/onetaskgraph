@@ -1,0 +1,186 @@
+{
+ "control": [
+  43457659504,
+  43457450179
+ ],
+ "sides": {
+  "split": {
+   "runs": [
+    43504759508,
+    43504773180
+   ],
+   "jobs": {
+    "test-macos": {
+     "runs": [
+      2,
+      2
+     ],
+     "control": {
+      "wall_s": 2029.5,
+      "gate_span_s": 1862.5,
+      "runs_wall_s": [
+       2256.0,
+       1803.0
+      ],
+      "runs_gate_span_s": [
+       2070.7,
+       1654.4
+      ]
+     },
+     "side": {
+      "wall_s": 1398.5,
+      "gate_span_s": 1260.8,
+      "runs_wall_s": [
+       1245.0,
+       1552.0
+      ],
+      "runs_gate_span_s": [
+       1127.4,
+       1394.2
+      ]
+     },
+     "side_only": [],
+     "left_out": [],
+     "executed_by_one_side": {
+      "control": [],
+      "split": []
+     },
+     "elapsed_saved_s": {
+      "github-nx-policy:coverage-read-set": -0.1,
+      "github-workflows:bootstrap": 0.2,
+      "onetaskgraph-core:test": 246.9,
+      "onetaskgraph-e2e:budgets": 0.1,
+      "onetaskgraph-e2e:test": 303.1,
+      "onetaskgraph-github-projects-e2e:budgets": 16.5,
+      "onetaskgraph-github-projects-e2e:test": 293.2,
+      "onetaskgraph-github-projects:test": 177.4,
+      "onetaskgraph-linear-e2e:budgets": 30.1,
+      "onetaskgraph-linear-e2e:test": 169.5,
+      "onetaskgraph-linear:test": 245.4,
+      "onetaskgraph-status-options-e2e:test": 10.6,
+      "onetaskgraph:build": -44.8,
+      "onetaskgraph:test": 11.9,
+      "scripts:distribution-check": 128.8,
+      "scripts:distribution-test": 418.1,
+      "sdk-python:test": 73.9,
+      "sdk-typescript:generate-check": -20.5,
+      "sdk-typescript:test": 14.0,
+      "workspace:test": 74.2
+     },
+     "share_saved_s": {
+      "github-nx-policy:coverage-read-set": -0.1,
+      "github-workflows:bootstrap": 0.0,
+      "onetaskgraph-core:test": 62.6,
+      "onetaskgraph-e2e:budgets": 0.2,
+      "onetaskgraph-e2e:test": 67.3,
+      "onetaskgraph-github-projects-e2e:budgets": 8.2,
+      "onetaskgraph-github-projects-e2e:test": 74.1,
+      "onetaskgraph-github-projects:test": 37.0,
+      "onetaskgraph-linear-e2e:budgets": 7.5,
+      "onetaskgraph-linear-e2e:test": 42.2,
+      "onetaskgraph-linear:test": 56.5,
+      "onetaskgraph-status-options-e2e:test": 4.2,
+      "onetaskgraph:build": 1.7,
+      "onetaskgraph:test": 4.0,
+      "scripts:distribution-check": 28.2,
+      "scripts:distribution-test": 97.2,
+      "sdk-python:test": 43.2,
+      "sdk-typescript:generate-check": -5.1,
+      "sdk-typescript:test": 14.1,
+      "workspace:test": 58.0
+     },
+     "work_saved_s": {},
+     "model_on_control_s": [
+      74.2,
+      74.2
+     ]
+    },
+    "test-windows": {
+     "runs": [
+      2,
+      2
+     ],
+     "control": {
+      "wall_s": 2037.0,
+      "gate_span_s": 1812.2,
+      "runs_wall_s": [
+       2126.0,
+       1948.0
+      ],
+      "runs_gate_span_s": [
+       1896.3,
+       1728.1
+      ]
+     },
+     "side": {
+      "wall_s": 2014.5,
+      "gate_span_s": 1802.1,
+      "runs_wall_s": [
+       1983.0,
+       2046.0
+      ],
+      "runs_gate_span_s": [
+       1780.2,
+       1824.0
+      ]
+     },
+     "side_only": [],
+     "left_out": [],
+     "executed_by_one_side": {
+      "control": [],
+      "split": []
+     },
+     "elapsed_saved_s": {
+      "github-nx-policy:coverage-read-set": -0.0,
+      "github-workflows:bootstrap": 0.4,
+      "onetaskgraph-core:test": 0.6,
+      "onetaskgraph-e2e:budgets": -0.0,
+      "onetaskgraph-e2e:test": -9.0,
+      "onetaskgraph-github-projects-e2e:budgets": -2.0,
+      "onetaskgraph-github-projects-e2e:test": 3.9,
+      "onetaskgraph-github-projects:test": 3.0,
+      "onetaskgraph-linear-e2e:budgets": 8.0,
+      "onetaskgraph-linear-e2e:test": -1.3,
+      "onetaskgraph-linear:test": -1.7,
+      "onetaskgraph-status-options-e2e:test": 1.2,
+      "onetaskgraph:build": 0.6,
+      "onetaskgraph:test": 0.1,
+      "scripts:distribution-check": -3.5,
+      "scripts:distribution-test": -17.1,
+      "sdk-python:test": 3.4,
+      "sdk-typescript:generate-check": -2.0,
+      "sdk-typescript:test": 8.0,
+      "workspace:test": -3.0
+     },
+     "share_saved_s": {
+      "github-nx-policy:coverage-read-set": -0.1,
+      "github-workflows:bootstrap": 0.1,
+      "onetaskgraph-core:test": 0.3,
+      "onetaskgraph-e2e:budgets": 0.0,
+      "onetaskgraph-e2e:test": -2.4,
+      "onetaskgraph-github-projects-e2e:budgets": -0.6,
+      "onetaskgraph-github-projects-e2e:test": 1.7,
+      "onetaskgraph-github-projects:test": 0.8,
+      "onetaskgraph-linear-e2e:budgets": 2.0,
+      "onetaskgraph-linear-e2e:test": 0.4,
+      "onetaskgraph-linear:test": -0.2,
+      "onetaskgraph-status-options-e2e:test": 0.3,
+      "onetaskgraph:build": -0.2,
+      "onetaskgraph:test": 0.0,
+      "scripts:distribution-check": 0.6,
+      "scripts:distribution-test": -3.2,
+      "sdk-python:test": 1.8,
+      "sdk-typescript:generate-check": -0.5,
+      "sdk-typescript:test": 12.2,
+      "workspace:test": -2.9
+     },
+     "work_saved_s": {},
+     "model_on_control_s": [
+      8.0,
+      8.0
+     ]
+    }
+   }
+  }
+ }
+}

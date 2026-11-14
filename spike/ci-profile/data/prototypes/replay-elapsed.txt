@@ -1,0 +1,9 @@
+pyramid: runs [43422794958, 43422857812] against control [43422783410, 43422844825]
+  test-linux   measured gate span (min) 24.0, 23.3 -> 23.3, 24.8, wall 25.9, 25.0 -> 25.0, 26.8; estimated shortening +0.00 min/PR over 30, +0.00 over the 18 typical (0 without intervals)
+  test-macos   measured gate span (min) 29.1, 26.5 -> 27.3, 26.7, wall 32.0, 29.0 -> 29.5, 29.2; estimated shortening +0.00 min/PR over 30, +0.00 over the 18 typical (0 without intervals)
+  test-windows measured gate span (min) 23.5, 30.3 -> 29.9, 29.2, wall 26.5, 34.0 -> 33.6, 33.1; estimated shortening -0.32 min/PR over 30, -0.40 over the 18 typical (0 without intervals)
+split: runs [43528710535, 43528719773] against control [43457659504, 43457450179]
+  test-linux   measured gate span (min) 27.9, 22.9 -> 29.8, 29.5, wall 29.9, 24.7 -> 31.7, 31.3; estimated shortening +0.00 min/PR over 30, +0.00 over the 18 typical (0 without intervals)
+split: runs [43504759508, 43504773180] against control [43457659504, 43457450179]
+  test-macos   measured gate span (min) 34.5, 27.6 -> 18.8, 23.2, wall 37.6, 30.1 -> 20.8, 25.9; estimated shortening +0.00 min/PR over 30, +0.00 over the 18 typical (0 without intervals)
+  test-windows measured gate span (min) 31.6, 28.8 -> 29.7, 30.4, wall 35.4, 32.5 -> 33.0, 34.1; estimated shortening +0.00 min/PR over 30, +0.00 over the 18 typical (0 without intervals)

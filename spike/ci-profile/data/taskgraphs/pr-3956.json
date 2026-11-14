@@ -1,0 +1,214 @@
+{
+ "sha": "b77e5367c8910d1a021ed76fbf09183bb8a398fb",
+ "targets": [
+  "build",
+  "coverage",
+  "coverage-clear",
+  "distribution-check",
+  "distribution-test",
+  "test",
+  "test-uncovered"
+ ],
+ "dependencies": {
+  "onetaskgraph-github-projects-e2e:coverage": [
+   "workspace:coverage-clear",
+   "onetaskgraph:coverage",
+   "onetaskgraph-github-projects:coverage"
+  ],
+  "onetaskgraph-github-projects-e2e:test": [
+   "onetaskgraph:build"
+  ],
+  "onetaskgraph-status-options-e2e:coverage": [
+   "workspace:coverage-clear",
+   "onetaskgraph:coverage"
+  ],
+  "onetaskgraph-status-options-e2e:test": [
+   "onetaskgraph:build"
+  ],
+  "onetaskgraph-github-projects:coverage": [
+   "workspace:coverage-clear"
+  ],
+  "onetaskgraph-github-projects:test": [],
+  "onetaskgraph-status-options:coverage": [
+   "workspace:coverage-clear"
+  ],
+  "onetaskgraph-status-options:test": [],
+  "onetaskgraph-live-janitor:build": [],
+  "onetaskgraph-live-janitor:coverage": [
+   "workspace:coverage-clear"
+  ],
+  "onetaskgraph-live-janitor:test": [],
+  "linear-documents-policy:coverage": [],
+  "linear-documents-policy:test": [
+   "linear-documents-policy:bootstrap"
+  ],
+  "onetaskgraph-e2e-support:coverage": [
+   "workspace:coverage-clear"
+  ],
+  "onetaskgraph-e2e-support:test": [],
+  "onetaskgraph-github-live:coverage": [
+   "workspace:coverage-clear"
+  ],
+  "onetaskgraph-github-live:test": [],
+  "onetaskgraph-linear-e2e:coverage": [
+   "workspace:coverage-clear",
+   "onetaskgraph:coverage"
+  ],
+  "onetaskgraph-linear-e2e:test": [
+   "onetaskgraph:build",
+   "onetaskgraph-linear:test"
+  ],
+  "onetaskgraph-plugin-api:coverage": [
+   "workspace:coverage-clear"
+  ],
+  "onetaskgraph-plugin-api:test": [],
+  "onetaskgraph-in-memory:coverage": [
+   "workspace:coverage-clear"
+  ],
+  "onetaskgraph-in-memory:test": [],
+  "onetaskgraph-local-md:coverage": [
+   "workspace:coverage-clear"
+  ],
+  "onetaskgraph-local-md:test": [],
+  "onetaskgraph-linear:coverage": [],
+  "onetaskgraph-linear:test": [],
+  "onetaskgraph-core:coverage": [
+   "workspace:coverage-clear"
+  ],
+  "onetaskgraph-core:test": [],
+  "onetaskgraph-core:test-uncovered": [],
+  "onetaskgraph-live:coverage": [
+   "workspace:coverage-clear"
+  ],
+  "onetaskgraph-live:test": [],
+  "onetaskgraph-e2e:coverage": [
+   "workspace:coverage-clear",
+   "onetaskgraph:coverage"
+  ],
+  "onetaskgraph-e2e:test": [
+   "onetaskgraph:build"
+  ],
+  "github-cache-policy:coverage": [],
+  "github-cache-policy:test": [
+   "github-cache-policy:cache-journeys"
+  ],
+  "onetaskgraph:build": [],
+  "onetaskgraph:coverage": [
+   "workspace:coverage-clear"
+  ],
+  "onetaskgraph:test": [
+   "onetaskgraph:build"
+  ],
+  "github-nx-policy:coverage": [],
+  "github-nx-policy:test": [
+   "github-nx-policy:nx-inputs",
+   "github-nx-policy:nx-hashes"
+  ],
+  "report-job:coverage": [],
+  "report-job:test": [],
+  "pool-maintenance:coverage": [],
+  "pool-maintenance:test": [],
+  "sdk-typescript:build": [],
+  "sdk-typescript:coverage": [
+   "sdk-typescript:generate-check"
+  ],
+  "sdk-typescript:test": [
+   "sdk-typescript:generate-check"
+  ],
+  "github-workflow-policy:coverage": [],
+  "github-workflow-policy:test": [
+   "github-workflow-policy:policy-tests",
+   "github-workflow-policy:rust-cache-action",
+   "github-workflow-policy:release-tail"
+  ],
+  "screenshots:coverage": [],
+  "screenshots:test": [],
+  "sdk-python:coverage": [
+   "onetaskgraph:build"
+  ],
+  "sdk-python:test": [
+   "onetaskgraph:build"
+  ],
+  "sdk-python:test-uncovered": [],
+  "workspace:coverage": [
+   "onetaskgraph:coverage",
+   "onetaskgraph-core:coverage",
+   "onetaskgraph-e2e:coverage",
+   "onetaskgraph-e2e-support:coverage",
+   "onetaskgraph-github-projects-e2e:coverage",
+   "onetaskgraph-in-memory:coverage",
+   "onetaskgraph-linear-e2e:coverage",
+   "onetaskgraph-live:coverage",
+   "onetaskgraph-local-md:coverage",
+   "onetaskgraph-plugin-api:coverage",
+   "onetaskgraph-status-options:coverage",
+   "onetaskgraph-status-options-e2e:coverage",
+   "onetaskgraph-live-janitor:coverage",
+   "onetaskgraph-github-live:coverage"
+  ],
+  "workspace:coverage-clear": [],
+  "workspace:test": [],
+  "workspace:test-uncovered": [],
+  "github-workflows:coverage": [],
+  "github-workflows:test": [
+   "github-workflows:ci-jobs",
+   "github-workflows:ci-contexts",
+   "github-workflows:budget-journeys",
+   "github-workflows:cd-journeys"
+  ],
+  "scripts:coverage": [],
+  "scripts:distribution-check": [],
+  "scripts:distribution-test": [
+   "onetaskgraph:build"
+  ],
+  "scripts:test": [
+   "onetaskgraph:build"
+  ],
+  "linear-documents-policy:bootstrap": [
+   "github-workflows:bootstrap"
+  ],
+  "github-workflows:bootstrap": [],
+  "github-cache-policy:cache-journeys": [
+   "github-cache-policy:bootstrap"
+  ],
+  "github-cache-policy:bootstrap": [
+   "github-workflows:bootstrap"
+  ],
+  "github-nx-policy:nx-inputs": [
+   "github-nx-policy:bootstrap"
+  ],
+  "github-nx-policy:bootstrap": [
+   "github-workflows:bootstrap"
+  ],
+  "github-nx-policy:nx-hashes": [
+   "github-nx-policy:bootstrap"
+  ],
+  "sdk-typescript:generate-check": [
+   "onetaskgraph:build"
+  ],
+  "github-workflow-policy:policy-tests": [
+   "github-workflow-policy:bootstrap"
+  ],
+  "github-workflow-policy:bootstrap": [
+   "github-workflows:bootstrap"
+  ],
+  "github-workflow-policy:rust-cache-action": [
+   "github-workflow-policy:bootstrap"
+  ],
+  "github-workflow-policy:release-tail": [
+   "github-workflow-policy:bootstrap"
+  ],
+  "github-workflows:ci-jobs": [
+   "github-workflows:bootstrap"
+  ],
+  "github-workflows:ci-contexts": [
+   "github-workflows:bootstrap"
+  ],
+  "github-workflows:budget-journeys": [
+   "github-workflows:bootstrap"
+  ],
+  "github-workflows:cd-journeys": [
+   "github-workflows:bootstrap"
+  ]
+ }
+}

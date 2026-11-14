@@ -1,0 +1,6 @@
+# The harness uses `match` and StrEnum, so it needs Python 3.11; every hosted runner has 3.12 or later.
+target-version = "py311"
+line-length = 120
+
+[lint]
+select = ["E", "F", "W", "I", "UP", "B", "PL"]

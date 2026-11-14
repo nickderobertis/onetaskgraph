@@ -1,0 +1,978 @@
+diff --git a/crates/onetaskgraph-e2e/tests/e2e/assets.rs b/crates/onetaskgraph-e2e/tests/e2e/assets.rs
+index 24aeb820..4dd76b81 100644
+--- a/crates/onetaskgraph-e2e/tests/e2e/assets.rs
++++ b/crates/onetaskgraph-e2e/tests/e2e/assets.rs
+@@ -293,6 +293,7 @@ fn with_decoys(references: &str) -> String {
+ }
+ 
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/assets.rs"]
+ fn a_document_and_a_task_store_their_assets_and_show_lists_each_in_first_reference_order() {
+     let folders = Folders::new();
+     let shot = images::png(1, SCREENSHOT);
+@@ -418,6 +419,7 @@ fn a_document_and_a_task_store_their_assets_and_show_lists_each_in_first_referen
+ }
+ 
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/assets.rs"]
+ fn every_refusal_a_create_owes_names_the_file_or_reference_and_writes_nothing() {
+     let folders = Folders::new();
+     let png = images::png(10, 50_000);
+@@ -508,6 +510,7 @@ fn every_refusal_a_create_owes_names_the_file_or_reference_and_writes_nothing()
+ }
+ 
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/assets.rs"]
+ fn a_render_keeps_stored_assets_replaces_one_by_name_and_drops_one_no_longer_referenced() {
+     let folders = Folders::new();
+     let template = folders.text("pictures.md", PICTURES);
+@@ -603,6 +606,7 @@ fn a_render_keeps_stored_assets_replaces_one_by_name_and_drops_one_no_longer_ref
+ }
+ 
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/assets.rs"]
+ fn every_refusal_a_render_owes_names_the_asset_and_leaves_the_record_as_it_was() {
+     let folders = Folders::new();
+     let template = folders.text("pictures.md", PICTURES);
+@@ -668,6 +672,7 @@ fn every_refusal_a_render_owes_names_the_asset_and_leaves_the_record_as_it_was()
+ }
+ 
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/assets.rs"]
+ fn two_records_keep_their_own_bytes_under_one_asset_name() {
+     let folders = Folders::new();
+     let body = folders.text("shot.md", "![shot](./shot.png)\n");
+@@ -748,6 +753,7 @@ fn two_records_keep_their_own_bytes_under_one_asset_name() {
+ }
+ 
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/assets.rs"]
+ fn a_document_replaced_by_id_holds_exactly_the_replacing_calls_assets() {
+     let folders = Folders::new();
+     let both = folders.text("both.md", "![x](./x.png) ![y](./y.gif)\n");
+@@ -827,6 +833,7 @@ fn a_document_replaced_by_id_holds_exactly_the_replacing_calls_assets() {
+ }
+ 
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/assets.rs"]
+ fn a_document_replaced_by_id_on_a_plugin_serving_assets_takes_its_uploads_away() {
+     // A destination over the protocol lists no assets, so what it serves is known only from its
+     // own record of uploads: a replacement naming none still has to take those away.
+@@ -955,6 +962,7 @@ fn carried_whole(original: &Value, copied: &Value) {
+ }
+ 
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/assets.rs"]
+ fn a_project_copy_carries_its_tasks_assets_and_its_document_follows_with_its_own() {
+     let folders = Folders::new();
+     let (task, document, ..) = rendered_pair(&folders, 50);
+@@ -1009,6 +1017,7 @@ fn a_project_copy_carries_its_tasks_assets_and_its_document_follows_with_its_own
+ }
+ 
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/assets.rs"]
+ fn a_task_copy_and_a_document_copy_each_carry_their_assets_byte_for_byte() {
+     let folders = Folders::new();
+     let (task, document, ..) = rendered_pair(&folders, 60);
+@@ -1025,6 +1034,7 @@ fn a_task_copy_and_a_document_copy_each_carry_their_assets_byte_for_byte() {
+ }
+ 
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/assets.rs"]
+ fn a_copy_whose_assets_cannot_be_installed_leaves_the_destination_as_it_was() {
+     let folders = Folders::new();
+     let (task, ..) = rendered_pair(&folders, 180);
+@@ -1068,6 +1078,7 @@ fn a_copy_whose_assets_cannot_be_installed_leaves_the_destination_as_it_was() {
+ }
+ 
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/assets.rs"]
+ fn a_copy_into_a_source_that_stores_no_assets_is_refused_naming_it_and_writes_nothing() {
+     let folders = Folders::new();
+     let (task, document, ..) = rendered_pair(&folders, 70);
+@@ -1124,6 +1135,7 @@ fn a_copy_into_a_source_that_stores_no_assets_is_refused_naming_it_and_writes_no
+ }
+ 
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/assets.rs"]
+ fn a_copy_of_a_record_referencing_an_asset_it_does_not_hold_is_refused_naming_both() {
+     let folders = Folders::new();
+     std::fs::create_dir_all(folders.notes.join("tasks")).expect("a tasks folder");
+@@ -1148,6 +1160,7 @@ fn a_copy_of_a_record_referencing_an_asset_it_does_not_hold_is_refused_naming_bo
+ /// (docs/plugin-protocol.md §4.9a): an answer that leaves it out says nothing about what landed,
+ /// so the copy is refused naming the member, and an answer of `null` is taken.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/assets.rs"]
+ fn an_answer_to_a_write_carrying_assets_must_carry_content_and_may_carry_null() {
+     let folders = Folders::new();
+     let (task, document, _, _) = rendered_pair(&folders, 120);
+@@ -1182,6 +1195,7 @@ fn an_answer_to_a_write_carrying_assets_must_carry_content_and_may_carry_null()
+ }
+ 
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/assets.rs"]
+ fn a_copy_of_a_record_with_no_asset_reference_sends_no_asset_member_to_any_plugin() {
+     let folders = Folders::new();
+     let body = folders.text("plain.md", &with_decoys("no pictures of its own"));
+@@ -1302,6 +1316,7 @@ fn code_pair(folders: &Folders, shots: &str, assets: &[String]) -> (String, Stri
+ }
+ 
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/assets.rs"]
+ fn image_syntax_escaped_or_in_code_is_no_reference_and_a_copy_leaves_it_byte_for_byte() {
+     let folders = Folders::new();
+     let screen = images::png(170, SCREENSHOT);
+@@ -1392,6 +1407,7 @@ fn image_syntax_escaped_or_in_code_is_no_reference_and_a_copy_leaves_it_byte_for
+ }
+ 
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/assets.rs"]
+ fn a_record_whose_only_image_syntax_is_escaped_or_in_code_is_a_record_without_assets() {
+     let folders = Folders::new();
+     // Created with no `--asset` at all: nothing it names is a reference it would not hold.
+@@ -1447,6 +1463,7 @@ const QUOTED_FENCE: &str = "# Nested\n\n- > ~~~\n  > ![example](./before.png)\n
+                             ![real](./before.png)\n";
+ 
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/assets.rs"]
+ fn a_fence_in_a_quote_in_a_list_item_stays_code_through_a_copy_into_a_plugin_serving_assets() {
+     let folders = Folders::new();
+     let before = images::png(180, SCREENSHOT);
+@@ -1520,6 +1537,7 @@ fn recorded(shown: &Value) -> Vec<(String, String, String)> {
+ }
+ 
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/assets.rs"]
+ fn a_copy_into_a_plugin_serving_assets_rewrites_references_and_reuploads_only_changed_bytes() {
+     let folders = Folders::new();
+     let (task, document, screen, detail) = rendered_pair(&folders, 80);
+@@ -1675,6 +1693,7 @@ fn a_copy_into_a_plugin_serving_assets_rewrites_references_and_reuploads_only_ch
+ }
+ 
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/assets.rs"]
+ fn an_undone_copy_through_the_protocol_puts_back_the_uploads_it_replaced() {
+     let folders = Folders::new();
+     let template = folders.text("pictures.md", PICTURES);
+@@ -1751,6 +1770,7 @@ fn an_undone_copy_through_the_protocol_puts_back_the_uploads_it_replaced() {
+ }
+ 
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/assets.rs"]
+ fn the_png_generator_holds_its_range_and_its_tolerance() {
+     for (seed, size) in [(1, 50_000), (2, 123_456), (3, 500_000)] {
+         let png = images::png(seed, size);
+@@ -1787,6 +1807,7 @@ fn the_png_generator_holds_its_range_and_its_tolerance() {
+ }
+ 
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/assets.rs"]
+ fn a_record_whose_assets_cannot_be_read_is_shown_without_them_and_the_failure_named() {
+     let folders = Folders::new();
+     let body = folders.text("pictured.md", "![p](./p.png)\n");
+@@ -1843,6 +1864,7 @@ fn a_record_whose_assets_cannot_be_read_is_shown_without_them_and_the_failure_na
+ }
+ 
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/assets.rs"]
+ fn every_way_of_showing_a_record_lists_its_assets_and_says_where_each_is() {
+     let folders = Folders::new();
+     let body = folders.text("shown.md", "![b](./b.png) ![a](./a.gif)\n");
+@@ -1954,6 +1976,7 @@ fn every_way_of_showing_a_record_lists_its_assets_and_says_where_each_is() {
+ }
+ 
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/assets.rs"]
+ fn a_render_dry_run_reports_an_asset_change_and_writes_nothing() {
+     let folders = Folders::new();
+     let template = folders.text("pictures.md", PICTURES);
+@@ -1996,6 +2019,7 @@ fn a_render_dry_run_reports_an_asset_change_and_writes_nothing() {
+ }
+ 
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/assets.rs"]
+ fn the_reference_host_carries_a_copys_assets_and_refuses_a_rendered_create_with_them() {
+     let sandbox = Sandbox::new();
+     let notes = sandbox.subdirectory("notes");
+@@ -2113,6 +2137,7 @@ fn exchange(
+ }
+ 
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/assets.rs"]
+ fn the_reference_host_refuses_a_write_recording_uploads_it_carries_no_assets_for() {
+     let sandbox = Sandbox::new();
+     let root = sandbox.subdirectory("hosted");
+@@ -2184,6 +2209,7 @@ fn the_reference_host_refuses_a_write_recording_uploads_it_carries_no_assets_for
+ }
+ 
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/assets.rs"]
+ fn the_python_peer_refuses_a_write_recording_uploads_it_carries_no_assets_for() {
+     let folders = Folders::new();
+     let store = folders.inputs.join("peer.json");
+@@ -2220,6 +2246,7 @@ fn the_python_peer_refuses_a_write_recording_uploads_it_carries_no_assets_for()
+ }
+ 
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/assets.rs"]
+ fn a_source_over_the_protocol_refuses_a_regenerate_storing_assets_before_sending_anything() {
+     use onetaskgraph_plugin_api::{
+         AssetName, AssetPayload, AssetWrite, NativeId, SourceName, SourcePlugin,
+@@ -2344,6 +2371,7 @@ fn peer_reading(folders: &Folders, names: &[&str], contents: &[&str]) -> (Vec<bo
+ }
+ 
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/assets.rs"]
+ fn the_python_peer_reads_the_asset_convention_exactly_as_the_contract_does() {
+     use onetaskgraph_plugin_api::{AssetName, rewrite_asset_references};
+     let folders = Folders::new();
+@@ -2490,6 +2518,7 @@ fn sorted(mut names: Vec<String>) -> Vec<String> {
+ }
+ 
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/assets.rs"]
+ fn the_protocol_document_states_exactly_the_asset_members_the_binary_emits() {
+     let bundle: Value =
+         serde_json::from_str(&stdout(&Folders::new().exits(&["schema"], 0))).expect("a bundle");
+@@ -2582,6 +2611,7 @@ fn the_protocol_document_states_exactly_the_asset_members_the_binary_emits() {
+ }
+ 
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/assets.rs"]
+ fn task_assets_writes_each_asset_a_task_holds_under_its_name_and_lists_exactly_those() {
+     let folders = Folders::new();
+     let diagram = images::png(200, 60_000);
+@@ -2734,6 +2764,7 @@ fn task_assets_writes_each_asset_a_task_holds_under_its_name_and_lists_exactly_t
+ }
+ 
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/assets.rs"]
+ fn task_assets_of_a_missing_task_or_an_unreadable_source_fails_naming_the_id_and_the_reason() {
+     let folders = Folders::new();
+     let out = folders.sandbox.subdirectory("out");
+diff --git a/crates/onetaskgraph-e2e/tests/e2e/held_writes.rs b/crates/onetaskgraph-e2e/tests/e2e/held_writes.rs
+index 0d6cbf06..eb35ea4b 100644
+--- a/crates/onetaskgraph-e2e/tests/e2e/held_writes.rs
++++ b/crates/onetaskgraph-e2e/tests/e2e/held_writes.rs
+@@ -302,6 +302,7 @@ fn every_verb_is_held(stores: &Stores, destination: &str, what: &str) {
+ }
+ 
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/held_writes.rs"]
+ fn every_task_write_verb_held_to_a_version_lands_at_it_and_is_refused_once_it_moved() {
+     for cached in [false, true] {
+         for destination in DESTINATIONS {
+@@ -333,6 +334,7 @@ fn every_task_write_verb_held_to_a_version_lands_at_it_and_is_refused_once_it_mo
+ }
+ 
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/held_writes.rs"]
+ fn a_held_write_on_a_task_nothing_holds_is_refused_as_any_write_of_it_is() {
+     let stores = Stores::new(false);
+     stores.note("A", "Task A");
+@@ -352,6 +354,7 @@ fn a_held_write_on_a_task_nothing_holds_is_refused_as_any_write_of_it_is() {
+ }
+ 
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/held_writes.rs"]
+ fn a_held_copy_names_one_task() {
+     let stores = Stores::new(false);
+     stores.note("A", "Task A");
+@@ -394,6 +397,7 @@ fn memory(sandbox: &Sandbox, title: &str) {
+ }
+ 
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/held_writes.rs"]
+ fn an_in_memory_task_held_to_a_version_lands_at_it_and_is_refused_at_another() {
+     let sandbox = Sandbox::new();
+     let folder = sandbox.subdirectory("folder");
+@@ -528,6 +532,7 @@ fn priority_of(path: &Path) -> String {
+ }
+ 
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/held_writes.rs"]
+ fn two_writes_held_to_one_version_of_a_folder_task_never_both_land() {
+     let sandbox = Sandbox::new();
+     let folder = sandbox.subdirectory("folder");
+@@ -591,6 +596,7 @@ fn untouched(task: &Value, written: &str) -> Value {
+ }
+ 
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/held_writes.rs"]
+ fn a_guarded_priority_set_writes_only_over_a_priority_it_names_and_answers_held_otherwise() {
+     for destination in DESTINATIONS {
+         let stores = Stores::new(false);
+@@ -725,6 +731,7 @@ fn a_guarded_priority_set_writes_only_over_a_priority_it_names_and_answers_held_
+ }
+ 
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/held_writes.rs"]
+ fn a_repositories_update_replaces_the_list_alone_and_clears_it() {
+     for destination in DESTINATIONS {
+         let stores = Stores::new(false);
+@@ -831,6 +838,7 @@ fn a_repositories_update_replaces_the_list_alone_and_clears_it() {
+ }
+ 
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/held_writes.rs"]
+ fn an_in_memory_task_takes_a_guarded_priority_and_a_repositories_update() {
+     let sandbox = Sandbox::new();
+     std::fs::create_dir_all(sandbox.subdirectory("folder").join("tasks")).expect("a folder");
+@@ -928,6 +936,7 @@ fn an_in_memory_task_takes_a_guarded_priority_and_a_repositories_update() {
+ }
+ 
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/held_writes.rs"]
+ fn a_guard_reads_as_held_or_written_to_a_person_and_metadata_off_a_task_takes_no_version() {
+     let stores = Stores::new(false);
+     stores.note("A", "Task A");
+@@ -1042,6 +1051,7 @@ fn hosted(sandbox: &Sandbox, title: &str) {
+ }
+ 
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/held_writes.rs"]
+ fn a_write_held_across_the_stdio_plugin_protocol_lands_at_its_version_and_is_refused_at_another() {
+     let sandbox = Sandbox::new();
+     let run = |arguments: &[&str], code: i32| -> Value {
+@@ -1100,6 +1110,7 @@ fn a_write_held_across_the_stdio_plugin_protocol_lands_at_its_version_and_is_ref
+ }
+ 
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/held_writes.rs"]
+ fn a_write_expecting_a_version_and_held_to_it_takes_both_on_a_cached_board() {
+     let stores = Stores::new(true);
+     stores.note("A", "Task A");
+@@ -1153,6 +1164,7 @@ fn a_write_expecting_a_version_and_held_to_it_takes_both_on_a_cached_board() {
+ }
+ 
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/held_writes.rs"]
+ fn a_held_copy_carrying_comments_checks_its_first_write_and_lands_the_rest() {
+     for destination in DESTINATIONS {
+         let stores = Stores::new(false);
+diff --git a/crates/onetaskgraph-e2e/tests/e2e/section_links.rs b/crates/onetaskgraph-e2e/tests/e2e/section_links.rs
+index 50934afa..a27b1d8d 100644
+--- a/crates/onetaskgraph-e2e/tests/e2e/section_links.rs
++++ b/crates/onetaskgraph-e2e/tests/e2e/section_links.rs
+@@ -782,6 +782,7 @@ fn source_of(sandbox: &Sandbox, kind: &str) -> Source {
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback stand-ins this suite already drives for both hosted destinations. AGENTS.md puts a journey crossing more than one plugin in this suite.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn authored_section_links_land_in_each_destinations_form_and_a_repeat_copy_writes_nothing() {
+     for kind in KINDS {
+         let sandbox = Sandbox::new();
+@@ -814,12 +815,14 @@ fn authored_section_links_land_in_each_destinations_form_and_a_repeat_copy_write
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: local Markdown and loopback stand-ins exercise the engine's cross-plugin public-copy screen, so this journey belongs in the engine e2e suite.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn private_authored_section_links_reach_public_local_md_counterparts() {
+     private_authored_section_links_reach_public_counterparts("local-md");
+ }
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: local Markdown and loopback stand-ins exercise the engine's cross-plugin public-copy screen, so this journey belongs in the engine e2e suite.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn private_authored_section_links_reach_public_github_counterparts() {
+     private_authored_section_links_reach_public_counterparts("github-projects");
+ }
+@@ -911,6 +914,7 @@ fn private_authored_section_links_reach_public_counterparts(kind: &str) {
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: local Markdown and loopback stand-ins exercise the engine's cross-plugin public-copy screen, so this journey belongs in the engine e2e suite.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn private_pending_links_do_not_replace_authored_destinations_that_match_the_placeholder() {
+     for kind in ["local-md", "github-projects"] {
+         let sandbox = Sandbox::new();
+@@ -953,6 +957,7 @@ fn private_pending_links_do_not_replace_authored_destinations_that_match_the_pla
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: local Markdown and loopback stand-ins exercise the engine's cross-plugin public-copy screen, so this journey belongs in the engine e2e suite.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn private_pending_links_to_a_planned_task_left_out_by_the_destination_become_text() {
+     let sandbox = Sandbox::new();
+     let (mut source, _) = authored(&sandbox, "plans");
+@@ -1004,6 +1009,7 @@ fn private_pending_links_to_a_planned_task_left_out_by_the_destination_become_te
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: local Markdown and loopback stand-ins exercise the engine's cross-plugin public-copy screen, so this journey belongs in the engine e2e suite.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn a_reference_only_comment_without_a_counterpart_is_screened_before_public_copy() {
+     let sandbox = Sandbox::new();
+     let (mut source, _) = authored(&sandbox, "plans");
+@@ -1046,6 +1052,7 @@ fn a_reference_only_comment_without_a_counterpart_is_screened_before_public_copy
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: local Markdown and loopback stand-ins exercise the engine's cross-plugin public-copy screen, so this journey belongs in the engine e2e suite.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn a_public_counterparts_relative_path_does_not_authorize_an_uncopied_private_record() {
+     let sandbox = Sandbox::new();
+     let (mut source, _) = authored(&sandbox, "plans");
+@@ -1148,6 +1155,7 @@ fn a_public_counterparts_relative_path_does_not_authorize_an_uncopied_private_re
+ /// The folder canonicalizes each file it reads, so the locations compared are canonical however
+ /// the root is spelled, and this holds the configured spelling end to end.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn a_root_configured_with_forward_slashes_has_its_relative_section_links_read() {
+     let sandbox = Sandbox::new();
+     let (mut authored_config, authored_target) = authored(&sandbox, "plans");
+@@ -1183,6 +1191,7 @@ fn a_root_configured_with_forward_slashes_has_its_relative_section_links_read()
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: folders of Markdown and the loopback stand-ins this suite already drives, two boards of one loopback server and two loopback Linear workspaces among them.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn every_pair_of_kinds_writes_the_others_section_links_in_its_own_form_and_repeats_write_nothing() {
+     for from in KINDS {
+         for to in KINDS {
+@@ -1238,6 +1247,7 @@ fn every_pair_of_kinds_writes_the_others_section_links_in_its_own_form_and_repea
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: two folders of Markdown, one loopback board and one loopback Linear workspace.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn a_chain_of_whole_project_copies_ends_with_the_authored_links_and_every_repeat_writes_nothing() {
+     let sandbox = Sandbox::new();
+     let (authored_config, authored_target) = authored(&sandbox, "authored");
+@@ -1330,6 +1340,7 @@ fn a_chain_of_whole_project_copies_ends_with_the_authored_links_and_every_repeat
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: one loopback board, one loopback Linear workspace and a folder of Markdown.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn hand_written_tracker_links_are_read_by_what_they_name_and_one_outside_the_project_is_left() {
+     // A board whose bodies a person edited by hand: a link on GitHub's canonical host, and one
+     // to an issue the copied project does not hold.
+@@ -1464,6 +1475,7 @@ fn heading_links(content: &str) -> Vec<String> {
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace, serving editor states captured from real Linear records.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn every_captured_linear_heading_is_linked_by_the_fragment_its_stored_id_gives_it() {
+     for (sample, folder) in [
+         ("TES2-773", "tasks"),
+@@ -1583,6 +1595,7 @@ fn reads(document: &str, variables: &Value, root: &str, id: &str) -> bool {
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace, whose request log is what is held.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn linear_heading_ids_come_from_each_writes_own_answer_and_cost_no_request() {
+     // A project whose every link points at a record written earlier in the copy: the project
+     // record links to nothing and the referring task follows the task it names.
+@@ -1733,6 +1746,7 @@ fn linear_heading_ids_come_from_each_writes_own_answer_and_cost_no_request() {
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn a_linear_heading_its_record_does_not_store_is_linked_by_the_record_alone_and_counted() {
+     // The served state holds no heading of that text at that position.
+     let (sandbox, workspace, _) = into_linear(|_| {});
+@@ -1815,6 +1829,7 @@ fn a_linear_heading_its_record_does_not_store_is_linked_by_the_record_alone_and_
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback stand-ins this suite already drives for both hosted destinations.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn a_comment_carried_on_copy_has_its_section_links_written_in_the_destinations_form() {
+     for kind in KINDS {
+         let sandbox = Sandbox::new();
+@@ -2076,6 +2091,7 @@ fn masked(text: &str) -> String {
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown, one loopback board and the loopback Linear workspace.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn links_linear_stores_in_angle_brackets_are_finished_and_a_fan_out_names_its_own_copies() {
+     // What the live check observed of TES2: every link destination stored in angle brackets.
+     // A link finished after its record was first written is finished there all the same.
+@@ -2153,6 +2169,7 @@ fn authored_target_of(sandbox: &Sandbox) -> String {
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn a_refused_section_link_update_takes_the_whole_copy_back() {
+     // The target's same-record link is finished in an update after its create, and Linear
+     // refuses that update: the copy fails, saying so, and the workspace holds nothing it wrote.
+@@ -2193,6 +2210,7 @@ fn a_refused_section_link_update_takes_the_whole_copy_back() {
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the file-backed stdio peer this suite already spawns.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn a_destination_with_no_section_form_receives_every_fragment_as_written() {
+     // A stdio plugin states no section form, so its documents' links are pointed at its own
+     // records and every fragment is carried byte for byte, nothing counted.
+@@ -2255,6 +2273,7 @@ fn a_destination_with_no_section_form_receives_every_fragment_as_written() {
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn cyclic_links_through_bodies_and_a_comment_land_and_repeats_refresh_only_the_copy_record() {
+     // Two tasks whose bodies link each other's heading, and a comment on the first linking the
+     // second: whichever lands first, each link is finished once its target has landed, and each
+@@ -2425,6 +2444,7 @@ fn refreshes_only_the_copy_record(
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn a_comment_finished_after_its_task_landed_is_in_the_record_its_task_keeps() {
+     // Two tasks with plain bodies, each with a comment linking a heading of the other, copied into
+     // a Linear workspace: the task that lands first has its comment finished by an edit once the
+@@ -2538,6 +2558,7 @@ fn a_comment_finished_after_its_task_landed_is_in_the_record_its_task_keeps() {
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn a_refused_comment_edit_finishing_a_section_link_takes_the_whole_copy_back() {
+     // A comment written before the task it links had landed is finished by an edit, and Linear
+     // refuses that edit: the copy fails and the workspace holds nothing it wrote.
+@@ -2599,6 +2620,7 @@ fn a_refused_comment_edit_finishing_a_section_link_takes_the_whole_copy_back() {
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace, behind the store's local cache.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn a_linear_destination_behind_the_local_cache_still_names_each_headings_stored_id() {
+     // With the cache on, a copy's links still name the ids Linear stored its headings under,
+     // on the first copy and on a later copy of the design document alone, and a repeat copy
+@@ -2640,6 +2662,7 @@ fn a_linear_destination_behind_the_local_cache_still_names_each_headings_stored_
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn a_comment_linking_a_linear_record_the_copy_does_not_write_names_its_stored_heading_id() {
+     // The project is copied first, without comments; then one task alone with its comment, which
+     // links a task already in Linear that this copy does not write: that task is read once for
+@@ -2716,6 +2739,7 @@ fn a_comment_linking_a_linear_record_the_copy_does_not_write_names_its_stored_he
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback board.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn a_boards_content_write_and_update_store_the_anchors_and_read_back_as_authored() {
+     // A task's content replaced on its own, and through `task update`, with a body holding
+     // headings: the board holds an anchor before each heading, and a read gives the body back.
+@@ -2767,6 +2791,7 @@ fn a_boards_content_write_and_update_store_the_anchors_and_read_back_as_authored
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn a_comment_removed_before_its_section_link_is_finished_is_written_afresh() {
+     // The comment a copy wrote before the task it links had landed is gone by the time its link
+     // is finished: it is written afresh, once, finished.
+@@ -2876,6 +2901,7 @@ fn a_comment_removed_before_its_section_link_is_finished_is_written_afresh() {
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace, behind the store's local cache.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn a_repeat_copy_behind_the_cache_of_a_link_to_a_project_heading_writes_nothing() {
+     // A task links a heading of its project's description. Copied again into a Linear workspace
+     // behind the local cache, the project — a target this copy does not write — is read once for
+@@ -2961,6 +2987,7 @@ fn a_repeat_copy_behind_the_cache_of_a_link_to_a_project_heading_writes_nothing(
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback board.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn a_same_record_link_in_angle_brackets_and_one_naming_no_heading_are_each_handled() {
+     // A body whose only links name its own record: one in angle brackets, written in GitHub's
+     // form, and one naming no heading it holds, carried as written and counted.
+@@ -3033,6 +3060,7 @@ fn a_same_record_link_in_angle_brackets_and_one_naming_no_heading_are_each_handl
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: folders of Markdown and the loopback board.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn a_task_linking_its_own_record_and_its_comments_fragment_are_written_for_the_destination() {
+     // A task's body links its own file by a path relative to it, and a comment on it links one
+     // of its headings by a fragment alone: the body's link names the task's own record wherever
+@@ -3122,6 +3150,7 @@ fn a_task_linking_its_own_record_and_its_comments_fragment_are_written_for_the_d
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: folders of Markdown and the loopback board.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn a_relative_link_to_another_record_without_a_fragment_names_that_records_counterpart() {
+     // Two tasks each link the other by a path relative to its own file and no fragment, so
+     // whichever a folder of Markdown creates first links a record whose file is not there yet:
+@@ -3198,6 +3227,7 @@ fn a_relative_link_to_another_record_without_a_fragment_names_that_records_count
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Only local Markdown and loopback tracker fakes; no credentials or remote service.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn a_private_trackers_task_read_restores_its_authored_same_record_links() {
+     use sha2::{Digest as _, Sha256};
+     let hash = |body: &str| format!("sha256:{:x}", Sha256::digest(body.as_bytes()));
+@@ -3258,6 +3288,7 @@ fn a_private_trackers_task_read_restores_its_authored_same_record_links() {
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Only folders of Markdown and loopback tracker fakes, never live APIs.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn public_copies_keep_sections_and_screen_private_record_links_in_bodies_and_comments() {
+     for home_kind in KINDS {
+         for destination_kind in KINDS {
+@@ -3344,6 +3375,7 @@ fn public_copies_keep_sections_and_screen_private_record_links_in_bodies_and_com
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No remote API: the board is the loopback fake and both other stores are local folders.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn a_private_source_refusing_the_address_check_prevents_a_public_copy_and_a_retry_recovers() {
+     let sandbox = Sandbox::new();
+     let (plans, _) = authored(&sandbox, "plans");
+@@ -3383,6 +3415,7 @@ fn a_private_source_refusing_the_address_check_prevents_a_public_copy_and_a_retr
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Only two local Markdown stores and the portable public-boundary subprocess; no remote service.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn removing_private_links_keeps_a_copied_renderings_body_digest_truthful() {
+     use sha2::{Digest as _, Sha256};
+     let digest = |body: &str| format!("sha256:{:x}", Sha256::digest(body.as_bytes()));
+@@ -3420,6 +3453,7 @@ fn removing_private_links_keeps_a_copied_renderings_body_digest_truthful() {
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Local Markdown and an in-memory source with one-row pages; no network or credentials.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn standalone_copies_remove_later_pages_private_addresses_and_preserve_similar_public_links() {
+     let sandbox = Sandbox::new();
+     let (plans, _) = authored(&sandbox, "plans");
+@@ -3478,6 +3512,7 @@ fn standalone_copies_remove_later_pages_private_addresses_and_preserve_similar_p
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] The Linear workspace is a loopback fake; the source and destination are local Markdown.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn a_private_inventory_cursor_cycle_refuses_before_publication_and_a_retry_recovers() {
+     let sandbox = Sandbox::new();
+     let (plans, _) = authored(&sandbox, "plans");
+@@ -3524,6 +3559,7 @@ fn a_private_inventory_cursor_cycle_refuses_before_publication_and_a_retry_recov
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Loopback Linear and local Markdown only; malformed pages come from the real HTTP fake.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn oversized_private_inventory_pages_are_refused_before_publication_and_recover() {
+     for collection in ["issues", "projects", "documents"] {
+         let sandbox = Sandbox::new();
+@@ -3590,6 +3626,7 @@ fn oversized_private_inventory_pages_are_refused_before_publication_and_recover(
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Native Markdown comes from the loopback tracker fakes, never a live service.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn native_fragment_only_links_read_as_the_readme_authored_form() {
+     for kind in ["github-projects", "linear"] {
+         let sandbox = Sandbox::new();
+@@ -3661,6 +3698,7 @@ fn native_fragment_only_links_read_as_the_readme_authored_form() {
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Only local Markdown and the loopback Linear fake, which refuses one real HTTP query per case.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn a_private_inventory_failure_after_earlier_pages_refuses_publication_and_recovers() {
+     use onetaskgraph_linear::graphql;
+     for (collection, operation) in [
+@@ -3800,6 +3838,7 @@ fn copy_design(sandbox: &Sandbox) -> (Landed, [u64; 3]) {
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: local Markdown and loopback stand-ins exercise the engine's cross-plugin public-copy screen, so this journey belongs in the engine e2e suite.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn a_private_documents_definition_used_in_a_table_cell_points_at_the_public_counterpart() {
+     for kind in KINDS {
+         let sandbox = Sandbox::new();
+@@ -3828,6 +3867,7 @@ fn a_private_documents_definition_used_in_a_table_cell_points_at_the_public_coun
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: local Markdown and loopback stand-ins exercise the engine's cross-plugin public-copy screen, so this journey belongs in the engine e2e suite.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn a_private_documents_path_in_a_table_cell_and_its_definition_each_point_at_the_counterpart() {
+     for kind in KINDS {
+         let sandbox = Sandbox::new();
+@@ -3867,6 +3907,7 @@ fn a_private_documents_path_in_a_table_cell_and_its_definition_each_point_at_the
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: local Markdown and loopback stand-ins exercise the engine's cross-plugin public-copy screen, so this journey belongs in the engine e2e suite.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn a_private_documents_references_with_no_public_counterpart_are_removed_and_counted() {
+     for kind in KINDS {
+         let sandbox = Sandbox::new();
+@@ -3907,6 +3948,7 @@ fn a_private_documents_references_with_no_public_counterpart_are_removed_and_cou
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: a folder of Markdown and a spawned stdio peer exercise the engine's public-copy screen.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn a_private_documents_references_reach_a_stdio_destinations_counterpart_and_no_further() {
+     let sandbox = Sandbox::new();
+     let (mut source, _) = authored(&sandbox, "plans");
+@@ -3958,6 +4000,7 @@ fn a_private_documents_references_reach_a_stdio_destinations_counterpart_and_no_
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: local Markdown and a loopback stand-in exercise the engine's cross-plugin public-copy screen, so this journey belongs in the engine e2e suite.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn a_private_documents_angled_definition_under_an_escaped_label_keeps_its_shape() {
+     for kind in ["local-md", "github-projects"] {
+         let sandbox = Sandbox::new();
+@@ -3986,6 +4029,7 @@ fn a_private_documents_angled_definition_under_an_escaped_label_keeps_its_shape(
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: two folders of Markdown exercise the engine's copy, so this journey belongs in the engine e2e suite.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn a_definition_and_a_bare_path_are_left_as_they_are_when_no_private_source_is_configured() {
+     let sandbox = Sandbox::new();
+     let (source, _) = authored(&sandbox, "plans");
+@@ -4020,6 +4064,7 @@ fn a_definition_and_a_bare_path_are_left_as_they_are_when_no_private_source_is_c
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: local Markdown and a loopback stand-in exercise the engine's cross-plugin public-copy screen, so this journey belongs in the engine e2e suite.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn a_definition_and_a_bare_path_naming_each_other_are_finished_in_the_copy_that_writes_both() {
+     for kind in ["local-md", "github-projects"] {
+         let sandbox = Sandbox::new();
+@@ -4076,6 +4121,7 @@ fn a_definition_and_a_bare_path_naming_each_other_are_finished_in_the_copy_that_
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: two folders of Markdown exercise the engine's public-copy screen, so this journey belongs in the engine e2e suite.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn a_private_documents_only_address_being_a_bare_path_is_still_screened() {
+     let sandbox = Sandbox::new();
+     private_design(&sandbox, "local-md", "| T | ../tasks/T.md |\n");
+@@ -4093,6 +4139,7 @@ fn a_private_documents_only_address_being_a_bare_path_is_still_screened() {
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: two folders of Markdown exercise the engine's public-copy screen, so this journey belongs in the engine e2e suite.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn a_bare_path_to_a_private_record_of_another_project_is_removed_and_not_counted() {
+     let sandbox = Sandbox::new();
+     let (_, root) = private_design(&sandbox, "local-md", "| other | `../tasks/Other.md` |\n");
+@@ -4195,6 +4242,7 @@ fn every_form_lands_identically_on_a_private_destination(kind: &str, source_priv
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: local Markdown and loopback stand-ins exercise the engine's cross-plugin reading of a body, so this journey belongs in the engine e2e suite.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn every_form_of_a_section_link_lands_identically_on_a_private_linear_source() {
+     every_form_lands_identically_on_a_private_destination("linear", true);
+     every_form_lands_identically_on_a_private_destination("linear", false);
+@@ -4202,6 +4250,7 @@ fn every_form_of_a_section_link_lands_identically_on_a_private_linear_source() {
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: local Markdown and loopback stand-ins exercise the engine's cross-plugin reading of a body, so this journey belongs in the engine e2e suite.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn every_form_of_a_section_link_lands_identically_on_a_private_folder() {
+     let sandbox = Sandbox::new();
+     let design = format!("{EVERY_FORM}{NAMES_NOTHING}");
+@@ -4248,12 +4297,14 @@ fn every_form_of_a_section_link_lands_identically_on_a_private_folder() {
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: local Markdown and loopback stand-ins exercise the engine's cross-plugin reading of a body, so this journey belongs in the engine e2e suite.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn every_form_of_a_section_link_lands_identically_on_a_private_github_board() {
+     every_form_lands_identically_on_a_private_destination("github-projects", true);
+ }
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: local Markdown and loopback stand-ins exercise the engine's cross-plugin reading of a body, so this journey belongs in the engine e2e suite.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn a_path_alone_naming_no_known_record_is_left_on_a_private_destination() {
+     for kind in KINDS {
+         let sandbox = Sandbox::new();
+@@ -4316,6 +4367,7 @@ fn a_path_alone_naming_no_known_record_is_left_on_a_private_destination() {
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: local Markdown and loopback stand-ins exercise the engine's cross-plugin reading of a body, so this journey belongs in the engine e2e suite.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn a_definition_and_a_path_alone_stay_as_written_with_no_boundary_active() {
+     // The state the README names apart: no source declared private, so nothing screens this
+     // body and it is read for whole references and inline links alone.
+@@ -4343,6 +4395,7 @@ fn a_definition_and_a_path_alone_stay_as_written_with_no_boundary_active() {
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: local Markdown and loopback stand-ins exercise the engine's cross-plugin reading of a body, so this journey belongs in the engine e2e suite.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn tasks_and_a_comment_naming_each_other_by_a_path_alone_are_finished_on_a_private_destination() {
+     for kind in KINDS {
+         let sandbox = Sandbox::new();
+@@ -4422,6 +4475,7 @@ fn tasks_and_a_comment_naming_each_other_by_a_path_alone_are_finished_on_a_priva
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: local Markdown and a loopback board exercise the engine's section forms across plugins, so this journey belongs in the engine e2e suite.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn a_github_issues_link_to_its_own_heading_is_its_own_www_url_on_a_first_and_a_repeat_copy() {
+     let sandbox = Sandbox::new();
+     let (plans, _) = authored(&sandbox, "plans");
+@@ -4507,6 +4561,7 @@ fn a_github_issues_link_to_its_own_heading_is_its_own_www_url_on_a_first_and_a_r
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No external service or credential: local Markdown and a loopback board exercise the engine's public-copy screen across plugins, so this journey belongs in the engine e2e suite.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn an_issues_own_url_on_a_private_board_never_reaches_a_public_copy() {
+     let sandbox = Sandbox::new();
+     let (plans, _) = authored(&sandbox, "plans");
+@@ -4684,6 +4739,7 @@ fn budget_table_in_linear(
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace exercise the engine's copy across two plugins.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn a_budget_table_of_reference_links_lands_on_linear_as_heading_links_and_a_repeat_writes_nothing()
+ {
+     for visibility in [Some("private"), Some("public"), None] {
+@@ -4717,6 +4773,7 @@ fn a_budget_table_of_reference_links_lands_on_linear_as_heading_links_and_a_repe
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace exercise the engine's public-copy screen.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn a_private_folders_budget_table_lands_on_a_public_linear_as_links_or_as_text_alone() {
+     let sandbox = Sandbox::new();
+     let mut plans = budget_plan(&sandbox, "plans");
+@@ -4773,6 +4830,7 @@ fn a_private_folders_budget_table_lands_on_a_public_linear_as_links_or_as_text_a
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: folders of Markdown and the loopback Linear workspace exercise the engine's copy across two plugins.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn a_budget_link_through_a_private_linear_comes_back_to_a_folder_as_a_relative_path_and_its_slug() {
+     let sandbox = Sandbox::new();
+     let plans = budget_plan(&sandbox, "plans");
+@@ -4845,6 +4903,7 @@ fn mutually_linked(sandbox: &Sandbox) -> Store {
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace exercise the engine's copy across two plugins.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn a_url_a_follow_up_finished_and_linear_autolinked_is_recorded_rather_than_refused() {
+     let sandbox = Sandbox::new();
+     let linear = mutually_linked(&sandbox);
+@@ -4904,6 +4963,7 @@ fn a_url_a_follow_up_finished_and_linear_autolinked_is_recorded_rather_than_refu
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace exercise the engine's copy across two plugins.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn a_persons_change_a_follow_ups_answer_reports_is_refused_past_linears_own_autolink() {
+     let sandbox = Sandbox::new();
+     let linear = mutually_linked(&sandbox);
+@@ -4944,6 +5004,7 @@ fn a_persons_change_a_follow_ups_answer_reports_is_refused_past_linears_own_auto
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace exercise the engine's copy across two plugins.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn a_comment_carried_to_linear_has_its_reference_link_written_inline() {
+     let sandbox = Sandbox::new();
+     let plans = budget_plan(&sandbox, "plans");
+@@ -5018,6 +5079,7 @@ fn a_comment_carried_to_linear_has_its_reference_link_written_inline() {
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace exercise the engine's copy across two plugins.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn a_budget_table_copied_before_its_tasks_and_with_no_stored_heading_ids_still_links() {
+     // Copied first, each cell is an inline link naming a task with no counterpart yet, as
+     // authored; the copy after its tasks landed points it at them, and a repeat writes nothing.
+@@ -5106,6 +5168,7 @@ fn budget_plan_naming_an_issue(sandbox: &Sandbox) -> (Value, String) {
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace exercise the engine's copy across two plugins.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn a_design_document_naming_an_issue_by_url_beside_its_budget_table_lands_and_a_repeat_writes_nothing()
+  {
+     let sandbox = Sandbox::new();
+@@ -5132,6 +5195,7 @@ fn a_design_document_naming_an_issue_by_url_beside_its_budget_table_lands_and_a_
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace exercise the engine's copy across two plugins.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn a_persons_change_to_a_design_document_after_its_first_write_is_refused() {
+     let sandbox = Sandbox::new();
+     let (plans, _) = budget_plan_naming_an_issue(&sandbox);
+@@ -5181,6 +5245,7 @@ fn landed_task(report: &BTreeMap<String, Value>, key: &str) -> String {
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace exercise the engine's copy across two plugins.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn a_relation_linear_derives_from_a_link_is_no_change_and_any_other_still_is() {
+     let sandbox = Sandbox::new();
+     let linear = mutually_linked(&sandbox);
+@@ -5235,6 +5300,7 @@ fn a_relation_linear_derives_from_a_link_is_no_change_and_any_other_still_is() {
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace exercise the engine's copy across two plugins.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn a_relation_linear_derived_to_a_task_outside_the_copy_is_still_a_change() {
+     // Alone, the copy holds no body of the far end, so it cannot say Linear made the relation.
+     let sandbox = Sandbox::new();
+@@ -5265,6 +5331,7 @@ fn a_relation_linear_derived_to_a_task_outside_the_copy_is_still_a_change() {
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace exercise the engine's copy across two plugins.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn a_relation_a_plan_names_and_a_link_derives_is_written_and_a_repeat_writes_nothing() {
+     let sandbox = Sandbox::new();
+     let linear = mutually_linked(&sandbox);
+@@ -5306,6 +5373,7 @@ fn finishes_the_bare_address(query: &str, variables: &Value) -> bool {
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace exercise the engine's copy across two plugins.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn the_write_of_what_linear_normalized_is_itself_held_to_its_answer() {
+     // Linear autolinked the follow-up's URL, and a person's line arrives in the answer to the
+     // write that sends that autolink back: refused, naming the line.
+@@ -5332,6 +5400,7 @@ fn the_write_of_what_linear_normalized_is_itself_held_to_its_answer() {
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace exercise the engine's copy across two plugins.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn a_refused_write_of_what_linear_normalized_takes_the_whole_copy_back() {
+     let sandbox = Sandbox::new();
+     let linear = mutually_linked(&sandbox);
+@@ -5362,6 +5431,7 @@ fn a_refused_write_of_what_linear_normalized_takes_the_whole_copy_back() {
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace exercise the engine's copy across two plugins.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn a_bare_path_to_a_landed_document_is_stored_under_its_title_and_a_repeat_writes_nothing() {
+     let sandbox = Sandbox::new();
+     let linear = mutually_linked(&sandbox);
+@@ -5388,6 +5458,7 @@ fn a_bare_path_to_a_landed_document_is_stored_under_its_title_and_a_repeat_write
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: folders of Markdown and the loopback Linear workspace exercise the engine's copy across two plugins.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn every_reference_style_spelling_is_written_inline_on_linear_and_left_elsewhere() {
+     let design = "[Collapsed][] and [shortcut] and [full][t].\n\n`[code][t]` stays, as does \
+          ![alt][img], and a note.[^1]\n\n[both][shared] shares its target with ![pic][shared].\n\n\
+@@ -5482,6 +5553,7 @@ fn designs_naming_each_other(sandbox: &Sandbox) -> Store {
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace exercise the engine's copy across two plugins.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn a_follow_up_finishing_a_documents_address_stored_under_its_title_is_no_change() {
+     let sandbox = Sandbox::new();
+     let linear = designs_naming_each_other(&sandbox);
+@@ -5518,6 +5590,7 @@ fn a_follow_up_finishing_a_documents_address_stored_under_its_title_is_no_change
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace exercise the engine's copy across two plugins.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn a_person_relabelling_an_address_linear_titled_is_refused() {
+     // A document's address under anything but its title, and an issue's under anything but its
+     // identifier, is no autolink of Linear's: the follow-up's answer reports a person's edit.
+@@ -5586,6 +5659,7 @@ fn a_person_relabelling_an_address_linear_titled_is_refused() {
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace exercise the engine's copy across two plugins.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn a_follow_ups_answer_changing_a_links_text_or_target_is_refused() {
+     for (from, to) in [
+         ("[the docs]", "[edited]"),
+@@ -5684,6 +5758,7 @@ fn copied_to(report: &str, id: &str) -> String {
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace exercise the engine's copy across two plugins.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn a_rendering_inlined_and_normalized_on_linear_records_the_digest_of_what_linear_holds() {
+     let sandbox = Sandbox::new();
+     let linear = mutually_linked(&sandbox);
+@@ -5727,6 +5802,7 @@ fn a_rendering_inlined_and_normalized_on_linear_records_the_digest_of_what_linea
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace exercise the engine's copy across two plugins.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn a_hand_edited_rendering_inlined_on_linear_carries_its_provenance_as_it_came() {
+     let sandbox = Sandbox::new();
+     let _linear = mutually_linked(&sandbox);
+@@ -5763,6 +5839,7 @@ fn a_hand_edited_rendering_inlined_on_linear_carries_its_provenance_as_it_came()
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace exercise the engine's copy across two plugins.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn a_project_naming_itself_by_a_bare_path_is_stored_under_its_title_and_a_repeat_writes_nothing() {
+     let sandbox = Sandbox::new();
+     let linear = mutually_linked(&sandbox);
+@@ -5793,6 +5870,7 @@ fn a_project_naming_itself_by_a_bare_path_is_stored_under_its_title_and_a_repeat
+ 
+ // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace exercise the engine's copy across two plugins.
+ #[test]
++#[ignore = "spike pyramid prototype: proven in-process by crates/onetaskgraph-core/tests/section_links.rs"]
+ fn a_non_ascii_address_a_follow_up_finished_is_autolinked_under_itself_and_not_refused() {
+     let sandbox = Sandbox::new();
+     let linear = designs_naming_each_other(&sandbox);

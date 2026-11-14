@@ -1,0 +1,45 @@
+2026-11-12T04:03:14.7363918Z Cache Size: ~32 MB (33843768 B)
+2026-11-12T04:03:19.8543700Z Cache Size: ~0 MB (1154 B)
+2026-11-12T04:03:30.7362633Z ##[group]Run Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+2026-11-12T04:03:39.1217266Z Cache Size: ~1362 MB (1428490425 B)
+2026-11-12T04:04:12.9417534Z ##[group]Run just ci-test-linux
+2026-11-12T04:04:16.3960889Z [test-uncovered] > nx run sdk-python:test-uncovered
+2026-11-12T04:04:24.1837010Z [scripts:distribution-check] > nx run scripts:distribution-check
+2026-11-12T04:04:25.0491767Z [test] 🔁 > nx run onetaskgraph-linear:test  [remote cache]
+2026-11-12T04:04:25.5318751Z [test] > nx run onetaskgraph:build
+2026-11-12T04:04:25.9864529Z [test] 🔁 > nx run github-workflows:ci-jobs  [remote cache]
+2026-11-12T04:04:26.0104592Z [test] 🔁 > nx run github-workflows:ci-contexts  [remote cache]
+2026-11-12T04:04:30.9549952Z [test-uncovered,coverage] {"type":"test","event":"ok","name":"onetaskgraph-plugin-api::onetaskgraph_plugin_api$asset::tests::a_record_whose_digest_is_not_one_is_refused_where_it_is_read","exec_time":0.030882668}
+2026-11-12T04:04:30.9566213Z [test-uncovered,coverage] {"type":"test","event":"ok","name":"onetaskgraph-plugin-api::onetaskgraph_plugin_api$asset::tests::an_escaped_image_and_image_syntax_inside_code_are_not_references","exec_time":0.043192222}
+2026-11-12T04:04:30.9572075Z [test-uncovered,coverage] {"type":"test","event":"ok","name":"onetaskgraph-plugin-api::onetaskgraph_plugin_api$asset::tests::a_rewrite_touches_the_targets_it_maps_and_nothing_else","exec_time":0.040725175}
+2026-11-12T04:04:36.8874823Z [test-uncovered,coverage] onetaskgraph-live-janitor: [1m[92m    Blocking[0m waiting for file lock on package cache
+2026-11-12T04:04:36.8875296Z [test-uncovered,coverage] onetaskgraph-live-janitor: [1m[92m    Blocking[0m waiting for file lock on package cache
+2026-11-12T04:05:51.5976010Z [test-uncovered,coverage] onetaskgraph-live-janitor: [1m[92m   Compiling[0m onetaskgraph-plugin-api v0.14.13 (/home/runner/work/onetaskgraph/onetaskgraph/crates/onetaskgraph-plugin-api)
+2026-11-12T04:05:51.6026422Z [test-uncovered,coverage] onetaskgraph-live-janitor: [1m[92m   Compiling[0m onetaskgraph-github-live v0.14.13 (/home/runner/work/onetaskgraph/onetaskgraph/crates/onetaskgraph-github-live)
+2026-11-12T04:05:57.8296121Z [test-uncovered,coverage] onetaskgraph-live-janitor: [1m[92m   Compiling[0m onetaskgraph-linear v0.14.13 (/home/runner/work/onetaskgraph/onetaskgraph/crates/onetaskgraph-linear)
+2026-11-12T04:06:37.6916057Z [test-uncovered,coverage] onetaskgraph-live-janitor: [1m[92m    Finished[0m `test` profile [unoptimized] target(s) in 2m 04s
+2026-11-12T04:06:37.8131384Z [test-uncovered,coverage] onetaskgraph-live-janitor: [32;1m    Starting[0m [1m11[0m tests across [1m4[0m binaries
+2026-11-12T04:08:46.1582925Z [test-uncovered,coverage] workspace: running 2 tests
+2026-11-12T04:08:47.3119577Z [test-uncovered,coverage] workspace: running 0 tests
+2026-11-12T04:26:34.3377246Z Nx cache: stored 6 entries, 173090 bytes; replayed 28 entries
+2026-11-12T04:03:37.5473470Z ##[group]Run Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+2026-11-12T04:03:45.4628930Z Cache Size: ~615 MB (644528848 B)
+2026-11-12T04:03:53.6274600Z Cache Size: ~13 MB (14039847 B)
+2026-11-12T04:03:54.6926230Z Cache Size: ~0 MB (442286 B)
+2026-11-12T04:04:06.2752620Z ##[group]Run just ci-test-macos
+2026-11-12T04:04:16.9356190Z [scripts:distribution-check] > nx run scripts:distribution-check
+2026-11-12T04:04:19.0599580Z [scripts:distribution-test] > nx run onetaskgraph:build
+2026-11-12T04:04:21.5054340Z [test,budgets] 🔁 > nx run onetaskgraph-linear:test  [remote cache]
+2026-11-12T04:04:21.8086670Z [test,budgets] > nx run onetaskgraph:build
+2026-11-12T04:04:22.7147160Z [test,budgets] 🔁 > nx run onetaskgraph-plugin-api:test  [remote cache]
+2026-11-12T04:04:22.8763080Z [test,budgets] 🔁 > nx run onetaskgraph-status-options:test  [remote cache]
+2026-11-12T04:05:30.9411540Z [scripts:distribution-test] scripts: [1m[92m   Compiling[0m onetaskgraph-plugin-api v0.14.13 (/Users/runner/work/onetaskgraph/onetaskgraph/crates/onetaskgraph-plugin-api)
+2026-11-12T04:05:40.0710560Z [scripts:distribution-test] scripts: [1m[92m   Compiling[0m onetaskgraph-github-projects v0.14.13 (/Users/runner/work/onetaskgraph/onetaskgraph/crates/onetaskgraph-github-projects)
+2026-11-12T04:05:40.0800740Z [scripts:distribution-test] scripts: [1m[92m   Compiling[0m onetaskgraph-linear v0.14.13 (/Users/runner/work/onetaskgraph/onetaskgraph/crates/onetaskgraph-linear)
+2026-11-12T04:06:06.4992080Z [test,budgets] onetaskgraph-github-projects: running 12 tests
+2026-11-12T04:06:06.6477580Z [test,budgets] onetaskgraph-github-projects: running 14 tests
+2026-11-12T04:06:06.9359470Z [test,budgets] onetaskgraph-github-projects: running 2 tests
+2026-11-12T04:18:10.3631450Z [scripts:distribution-test] scripts: [1m[92m    Finished[0m `release` profile [optimized] target(s) in 12m 39s
+2026-11-12T04:18:11.0497860Z [scripts:distribution-test] scripts: [1m[92m    Blocking[0m waiting for file lock on package cache
+2026-11-12T04:18:42.5325590Z [scripts:distribution-test] scripts: [1m[92m    Finished[0m `release` profile [optimized] target(s) in 31.77s
+2026-11-12T04:21:34.8065350Z Nx cache: stored 6 entries, 36153 bytes; replayed 15 entries

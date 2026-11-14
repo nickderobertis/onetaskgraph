@@ -1,0 +1,39 @@
+{
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "name": "spike-ci-profile",
+  "projectType": "library",
+  "tags": ["lang:python", "layer:workspace"],
+  "//": "The CI test-speed spike's measurement harness: a hosted run's job wall clock divided by category, the recorders a demonstration run carries, and the replay of recent pull requests against finer Nx keys. Its tests drive each command through its real entry point, with a stand-in `gh` at the process boundary. Its lint and type checks run the uv workspace's own locked ruff and ty; it declares no dependency of its own (psutil is installed only in a demonstration run's step, and the recorder journey skips without it).",
+  "targets": {
+    "format-check": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "uv run --project sdks/python --frozen ruff format --check spike/ci-profile"
+      },
+      "cache": false,
+      "//": "Uncached, as every target here: the harness is a spike's, read and run rarely."
+    },
+    "lint": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "uv run --project sdks/python --frozen ruff check spike/ci-profile"
+      },
+      "cache": false
+    },
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "uv run --project sdks/python --frozen ty check --python-version 3.13 spike/ci-profile"
+      },
+      "cache": false
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "python3 -m unittest discover -s spike/ci-profile -p 'test_*.py'"
+      },
+      "cache": false,
+      "//": "Uncached: its runner journeys compile a cargo shim and a libtest binary with the host's rustc, which no input of this project describes."
+    }
+  }
+}
