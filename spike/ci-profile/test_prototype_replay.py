@@ -143,6 +143,16 @@ class CommandTests(unittest.TestCase):
         self.assertNotIn("scripts:distribution-test", job["elapsed_saved_s"])
         self.assertEqual(command(*args, "--leave-out", "nowhere").returncode, 2)
 
+    def test_only_the_named_jobs_are_compared(self):
+        tasks = {"build": (0, 100, 100), "core:test": (100, 400, 200)}
+        self.assertEqual(self.deltas("split", tasks, tasks).returncode, 0)
+        args = ["deltas", str(self.root), "--control", "1,2", "--side", "split=3,4", "--out", str(self.root / "d.json")]
+        self.assertEqual(command(*args, "--jobs", "test-linux").returncode, 0)
+        self.assertEqual(json.loads((self.root / "d.json").read_text())["sides"]["split"]["jobs"], {})
+        self.assertEqual(command(*args, "--jobs", "test-macos").returncode, 0)
+        self.assertIn("test-macos", json.loads((self.root / "d.json").read_text())["sides"]["split"]["jobs"])
+        self.assertEqual(command(*args, "--jobs", "lint").returncode, 2)
+
     def test_the_model_is_checked_on_the_control_runs_own_timelines_and_graphs(self):
         control = {"build": (0, 100, 100), "onetaskgraph-e2e:test": (100, 700, 300), "other:test": (0, 650, 300)}
         prototype = {**control, "onetaskgraph-e2e:test": (100, 640, 200)}

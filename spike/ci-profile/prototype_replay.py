@@ -2,7 +2,7 @@
 """Price the measured prototypes over the 30-PR population, in elapsed job minutes.
 
     python3 spike/ci-profile/prototype_replay.py deltas SUMMARIES --control R,R --side NAME=R,R... --out FILE
-        [--side-only JOB:TASK]... [--leave-out JOB:TASK]... [--graphs DIR]
+        [--side-only JOB:TASK]... [--leave-out JOB:TASK]... [--graphs DIR] [--jobs JOB,JOB]
     python3 spike/ci-profile/prototype_replay.py replay HISTORY PRS DELTAS --graphs DIR
 
 `deltas` reads the run summaries `ciprofile.py profile <run> --json` wrote into SUMMARIES
@@ -24,7 +24,8 @@ scheduled but only one executed is compared over the runs that executed it and r
 `executed_by_one_side`. A task that ended for a reason the comparison is not about (a prototype
 that fails a journey unrelated to what it measures, ending it early) is left out of both sides'
 timelines with `--leave-out JOB:TASK`, recorded under `left_out`; the job wall clock cannot be
-corrected for it and is reported as measured.
+corrected for it and is reported as measured. `--jobs` compares only the named jobs, so a side
+whose valid runs differ by platform is compared one set of jobs at a time.
 
 `replay` estimates, for every PR of HISTORY (`ciprofile.py history` output, each task with its
 interval), how much sooner each job would have ended had the prototype been in place, with
@@ -74,6 +75,14 @@ MOVED = re.compile(
 CORE = re.compile(r"crates/onetaskgraph-core/")
 TYPICAL = re.compile(r"crates/[^/]+/(src/|tests/|build\.rs$|Cargo\.toml$)")
 WORK_BINARY = re.compile(r"^instrumented:(?P<crate>[\w-]+)::")
+
+
+def job_names(text: str) -> list[str]:
+    names = [x for x in text.split(",") if x]
+    valid = {j.value for j in JobName}
+    if not names or any(n not in valid for n in names):
+        raise argparse.ArgumentTypeError(f"a comma-separated list of {', '.join(sorted(valid))}")
+    return names
 
 
 def run_ids(text: str) -> list[int]:
@@ -164,6 +173,7 @@ class Comparison:
     side_only: frozenset[tuple[str, str]] = frozenset()
     leave_out: frozenset[tuple[str, str]] = frozenset()
     graphs: Path | None = None
+    jobs: frozenset[str] = frozenset(j.value for j in JobName)
 
 
 def deltas(
@@ -177,6 +187,8 @@ def deltas(
         measured = [summary(directory, r, leave_out) for r in runs]
         per_job: dict[str, dict[str, Any]] = {}
         for job in JobName:
+            if job.value not in declared.jobs:
+                continue
             c = [s[job.value] for s in base if job.value in s]
             m = [s[job.value] for s in measured if job.value in s]
             if not c or not m:
@@ -293,6 +305,7 @@ def main(argv: list[str]) -> int:
     d.add_argument("--side-only", action="append", default=[], help="JOB:TASK the prototype itself adds")
     d.add_argument("--leave-out", action="append", default=[], help="JOB:TASK left out of both sides' timelines")
     d.add_argument("--graphs", type=Path, help="taskgraphs.py output holding run-<id>.json for the control runs")
+    d.add_argument("--jobs", type=job_names, default=[j.value for j in JobName], help="compare only these jobs")
     r = sub.add_parser("replay")
     for name in ("history", "prs", "deltas"):
         r.add_argument(name, type=Path)
@@ -314,7 +327,7 @@ def main(argv: list[str]) -> int:
                 if job not in {j.value for j in JobName} or ":" not in task:
                     ap.error(f"{flag} takes JOB:PROJECT:TARGET, not {item!r}")
                 (declared if flag == "--side-only" else left).add((job, task))
-            comparison = Comparison(frozenset(declared), frozenset(left), args.graphs)
+            comparison = Comparison(frozenset(declared), frozenset(left), args.graphs, frozenset(args.jobs))
             measured = deltas(args.summaries, args.control, sides, comparison)
             args.out.write_text(json.dumps(measured, indent=1) + "\n")
             return 0
