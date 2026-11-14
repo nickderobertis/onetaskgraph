@@ -14,7 +14,10 @@ use std::process::Output;
 use serde_json::{Value, json};
 
 use crate::common::{Sandbox, stderr, stdout};
-use crate::fixtures::{LinearWorkspace, document, github_projects_with_board, linear_workspace};
+use crate::document_store::interpreter;
+use crate::fixtures::{
+    LinearWorkspace, document, github_projects_with_board, linear_rate_limited, linear_workspace,
+};
 
 /// A task template: one required answer.
 const TASK: &str = "---\n\
@@ -2005,4 +2008,712 @@ fn a_document_check_on_a_source_with_no_documents_is_refused_naming_it() {
             stderr(&refused)
         );
     }
+}
+
+/// `project attestation check PROJECT --kind plan-review --tasks --bar bar-1`: each task's
+/// state and reason, by id, sorted.
+fn task_states(plan: &Plan, project: &str) -> Vec<(String, Value, Value)> {
+    let arguments = [
+        "project",
+        "attestation",
+        "check",
+        project,
+        "--kind",
+        KIND,
+        "--tasks",
+        "--bar",
+        BAR,
+        "--json",
+    ];
+    let output = plan.run(&arguments);
+    let checked: Value = serde_json::from_str(&stdout(&output)).unwrap_or_else(|error| {
+        panic!(
+            "a project check answers JSON ({error}): {}",
+            stderr(&output)
+        )
+    });
+    // It exits 0 exactly when every task's record is `valid`, and 3 otherwise.
+    let all_valid = checked["tasks"]
+        .as_array()
+        .is_some_and(|tasks| tasks.iter().all(|task| task["state"] == "valid"));
+    assert_eq!(
+        output.status.code(),
+        Some(if all_valid { 0 } else { 3 }),
+        "a project check answering {checked}: {}",
+        stderr(&output)
+    );
+    let mut states: Vec<(String, Value, Value)> = checked["tasks"]
+        .as_array()
+        .unwrap_or_else(|| panic!("one entry per task: {checked}"))
+        .iter()
+        .map(|entry| {
+            (
+                entry["id"].as_str().expect("an id").to_owned(),
+                entry["state"].clone(),
+                entry["reason"].clone(),
+            )
+        })
+        .collect();
+    states.sort_by(|left, right| left.0.cmp(&right.0));
+    states
+}
+
+/// `states`, in the order [`task_states`] answers them in.
+fn sorted(mut states: Vec<(String, Value, Value)>) -> Vec<(String, Value, Value)> {
+    states.sort_by(|left, right| left.0.cmp(&right.0));
+    states
+}
+
+/// A `valid` entry of [`task_states`].
+fn valid(id: &str) -> (String, Value, Value) {
+    (id.to_owned(), json!("valid"), Value::Null)
+}
+
+/// Where the outcome copying `source` landed, in a copy's report.
+fn landed(report: &Value, source: &str) -> String {
+    report["items"]
+        .as_array()
+        .expect("outcomes")
+        .iter()
+        .find(|outcome| outcome["source"] == source)
+        .and_then(|outcome| outcome["destination"].as_str())
+        .unwrap_or_else(|| panic!("{source} landed: {report}"))
+        .to_owned()
+}
+
+/// `project copy FROM --to TO --documents --no-interactive`, answering its report.
+fn copy_plan(plan: &Plan, from: &str, to: &str) -> Value {
+    plan.json(&[
+        "project",
+        "copy",
+        from,
+        "--to",
+        to,
+        "--documents",
+        "--no-interactive",
+    ])
+}
+
+/// The planning lifecycle a host configures this store with: `source` (the folder of
+/// Markdown under [`Plan`]'s `notes`) declared private, where plans are authored and reviewed;
+/// two loopback boards `plans` and `shipped`, a folder `published` and a loopback Linear
+/// `linear`, each declared public — so a copy out of `source` records no origin naming it on
+/// any of them — and a `write_policy` whose check passes every write.
+fn private_authoring(source: &str) -> Plan {
+    let mut plan = Plan::new(false);
+    let (board, _) = github_projects_with_board(&plan.sandbox);
+    let (second, _) = github_projects_with_board(&plan.sandbox);
+    let (linear, held) = linear_workspace(
+        &plan.sandbox,
+        json!({"tasks": [], "projects": [], "documents": [], "labels": [],
+               "task_dependencies": [], "project_dependencies": []}),
+    );
+    plan.linear = Some(held);
+    let published = plan.sandbox.subdirectory("published");
+    let mut configured: Value = serde_json::from_str(&document(&json!({
+        source: {"plugin": "local-md", "visibility": "private", "config": {"root": plan.notes}},
+        "plans": {"plugin": "github-projects", "visibility": "public", "config": board},
+        "shipped": {"plugin": "github-projects", "visibility": "public", "config": second},
+        "published": {"plugin": "local-md", "visibility": "public",
+                      "config": {"root": published}},
+        "linear": {"plugin": "linear", "visibility": "public", "config": linear},
+    })))
+    .expect("a document");
+    configured["write_policy"] = json!({
+        "check_command": [
+            interpreter(), "-c", "import sys; sys.stdin.read(); print('{\"verdict\": \"pass\"}')"
+        ],
+        "visibility_command": [
+            interpreter(), "-c",
+            "import sys; sys.stdin.read(); print('{\"visibility\": \"public\"}')"
+        ],
+    });
+    plan.sandbox
+        .project_document(&serde_json::to_string_pretty(&configured).expect("a document"));
+    plan.sandbox
+        .secrets_file("GITHUB_PROJECTS_FIXTURE_TOKEN=test-token\nLINEAR_API_KEY=fixture-key\n");
+    plan
+}
+
+#[test]
+fn a_reviewed_plan_copied_onto_boards_keeps_every_review_valid_until_its_content_moves() {
+    // Two tasks reviewed where they are authored, B depending on A, and C beside them; the
+    // project copied with its documents onto a board and checked there; copied on from that
+    // board onto a second, which gives A a second new identity; copied onto a folder and into
+    // Linear; then B's body edited and the project copied over the board's items again.
+    let plan = private_authoring("authoring");
+    let project = "authoring:launch";
+    plan.exits(
+        &[
+            "project",
+            "create",
+            "authoring",
+            "--id",
+            "launch",
+            "--title",
+            "Launch",
+        ],
+        0,
+    );
+    let create = |title: &str, text: &str, extra: &[&str]| -> String {
+        let file = plan.file(&format!("{title}.md"), text);
+        let mut arguments = vec![
+            "task",
+            "create",
+            "authoring",
+            "--project",
+            "launch",
+            "--title",
+            title,
+            "--body-file",
+            &file,
+            "--no-interactive",
+        ];
+        arguments.extend_from_slice(extra);
+        stdout(&plan.exits(&arguments, 0)).trim().to_owned()
+    };
+    let a = create("A", "Do A.\n", &[]);
+    let b = create("B", "Do B after A.\n", &["--depends-on", &a]);
+    let c = create("C", "Do C.\n", &[]);
+    plan.attest("task", &a);
+    plan.attest("task", &b);
+    let reviewed = |ids: [&str; 3]| {
+        sorted(vec![
+            valid(ids[0]),
+            valid(ids[1]),
+            (ids[2].to_owned(), json!("absent"), Value::Null),
+        ])
+    };
+    assert_eq!(
+        task_states(&plan, project),
+        reviewed([&a, &b, &c]),
+        "where they were reviewed"
+    );
+
+    let first = copy_plan(&plan, project, "plans");
+    let on_board = landed(&first, project);
+    let (board_a, board_b, board_c) = (landed(&first, &a), landed(&first, &b), landed(&first, &c));
+    assert_eq!(
+        task_states(&plan, &on_board),
+        reviewed([&board_a, &board_b, &board_c]),
+        "on the board, B's copy — whose edge names A's copy — holds its review"
+    );
+
+    // Copied on from the board, A's copy gets a second new identity: B's edge still names A.
+    let chained = copy_plan(&plan, &on_board, "shipped");
+    let shipped = landed(&chained, &on_board);
+    let (shipped_b, shipped_c) = (landed(&chained, &board_b), landed(&chained, &board_c));
+    assert_eq!(
+        task_states(&plan, &shipped),
+        reviewed([&landed(&chained, &board_a), &shipped_b, &shipped_c]),
+        "two copies from where it was reviewed"
+    );
+
+    // A folder and Linear, each declared public, hold the reviews the same way.
+    for destination in ["published", "linear"] {
+        let copied = copy_plan(&plan, project, destination);
+        assert_eq!(
+            task_states(&plan, &landed(&copied, project)),
+            reviewed([
+                &landed(&copied, &a),
+                &landed(&copied, &b),
+                &landed(&copied, &c)
+            ]),
+            "{destination}: B's copy holds its review"
+        );
+    }
+
+    // On a copy, an edge added, removed or pointed at another item still voids the review.
+    let moved = json!("content-moved");
+    plan.after(
+        "task",
+        &shipped_b,
+        &["task", "update", &shipped_b, "--depends-on", &shipped_c],
+        "void",
+        moved.clone(),
+        "the copy's edge pointed at another item",
+    );
+    plan.after(
+        "task",
+        &shipped_b,
+        &["task", "update", &shipped_b, "--no-depends-on"],
+        "void",
+        moved.clone(),
+        "the copy's edge removed",
+    );
+    plan.after(
+        "task",
+        &shipped_b,
+        &["task", "update", &shipped_b, "--depends-on", &shipped_c],
+        "void",
+        moved.clone(),
+        "an edge added to the copy",
+    );
+
+    // B's body edited where it is authored, and the project copied again over the board's
+    // items: B's review is void there, A's still holds.
+    let edited = plan.file("b-edited.md", "Do B after A, twice.\n");
+    plan.exits(&["task", "content", "set", &b, "--file", &edited], 0);
+    let again = copy_plan(&plan, project, "plans");
+    assert_eq!(landed(&again, &a), board_a, "the re-copy updates A's copy");
+    assert_eq!(landed(&again, &b), board_b, "the re-copy updates B's copy");
+    assert_eq!(
+        task_states(&plan, &on_board),
+        sorted(vec![
+            valid(&board_a),
+            (board_b.clone(), json!("void"), moved.clone()),
+            (board_c.clone(), json!("absent"), Value::Null),
+        ]),
+        "B's body moved and A's did not"
+    );
+
+    // Where they are authored, an edge added, removed or pointed elsewhere voids it too.
+    plan.after(
+        "task",
+        &b,
+        &["task", "update", &b, "--depends-on", &c],
+        "void",
+        moved.clone(),
+        "the edge pointed at another item",
+    );
+    plan.after(
+        "task",
+        &b,
+        &["task", "update", &b, "--no-depends-on"],
+        "void",
+        moved.clone(),
+        "the edge removed",
+    );
+    plan.after(
+        "task",
+        &b,
+        &["task", "update", &b, "--depends-on", &a, "--depends-on", &c],
+        "void",
+        moved,
+        "an edge added",
+    );
+}
+
+#[test]
+fn a_record_the_previous_release_wrote_reads_valid_and_travels_through_a_copy() {
+    // `notes:a` and `notes:b`, B depending on A, each attested by the released v0.14.14 binary
+    // (fixtures/attestations/v0.14.14). B's edge names a far end no copy made, so its digest is
+    // the one that release computed — with `notes` undeclared, and declared private.
+    let placed = |plan: &Plan| {
+        for (directory, name, text) in [
+            (
+                "projects",
+                "launch.md",
+                include_str!("fixtures/attestations/v0.14.14/launch.md"),
+            ),
+            (
+                "tasks",
+                "a.md",
+                include_str!("fixtures/attestations/v0.14.14/a.md"),
+            ),
+            (
+                "tasks",
+                "b.md",
+                include_str!("fixtures/attestations/v0.14.14/b.md"),
+            ),
+        ] {
+            let held = plan.notes.join(directory);
+            std::fs::create_dir_all(&held).expect("the folder's directory");
+            std::fs::write(held.join(name), text).expect("a recorded file");
+        }
+    };
+    let plain = Plan::new(false);
+    placed(&plain);
+    assert_eq!(
+        task_states(&plain, "notes:launch"),
+        sorted(vec![valid("notes:a"), valid("notes:b")]),
+        "the previous release's records, read by this one"
+    );
+
+    let plan = private_authoring("notes");
+    placed(&plan);
+    assert_eq!(
+        task_states(&plan, "notes:launch"),
+        sorted(vec![valid("notes:a"), valid("notes:b")]),
+        "the previous release's records, with their source declared private"
+    );
+    let copied = copy_plan(&plan, "notes:launch", "plans");
+    assert_eq!(
+        task_states(&plan, &landed(&copied, "notes:launch")),
+        sorted(vec![
+            valid(&landed(&copied, "notes:a")),
+            valid(&landed(&copied, "notes:b"))
+        ]),
+        "copied onto a board, the previous release's records hold"
+    );
+}
+
+#[test]
+fn the_item_a_private_copy_was_made_from_is_found_only_when_its_link_says_so_unambiguously() {
+    // Every answer the private side's correspondence gives, through the binary over folders of
+    // Markdown: `authoring` and `vault` declared private, beside a private Linear workspace that
+    // answers every request rate limited and one whose credential is absent; `published` and
+    // `onward` declared public. Authoring's `a` records `vault:root-a` as its root, and `b`
+    // depends on it; project `downstream` depends on project `upstream`, listed after sixty
+    // other projects so the one linking to its copy is past the first page.
+    let plan = Plan::new(false);
+    let vault = plan.sandbox.subdirectory("vault");
+    let published = plan.sandbox.subdirectory("published");
+    let onward = plan.sandbox.subdirectory("onward");
+    let (limited, _) = linear_rate_limited(&plan.sandbox);
+    // A private workspace whose credential is not there at all.
+    let (mut keyless, _) = linear_rate_limited(&plan.sandbox);
+    keyless["api_key_env"] = json!("ONETASKGRAPH_TEST_NO_SUCH_KEY");
+    let mut configured: Value = serde_json::from_str(&document(&json!({
+        "authoring": {"plugin": "local-md", "visibility": "private",
+                      "config": {"root": plan.notes}},
+        "secret": {"plugin": "linear", "visibility": "private", "config": limited},
+        "keyless": {"plugin": "linear", "visibility": "private", "config": keyless},
+        "vault": {"plugin": "local-md", "visibility": "private", "config": {"root": vault}},
+        "published": {"plugin": "local-md", "visibility": "public",
+                      "config": {"root": published}},
+        "onward": {"plugin": "local-md", "visibility": "public", "config": {"root": onward}},
+    })))
+    .expect("a document");
+    configured["write_policy"] = json!({
+        "check_command": [
+            interpreter(), "-c", "import sys; sys.stdin.read(); print('{\"verdict\": \"pass\"}')"
+        ],
+        "visibility_command": [
+            interpreter(), "-c",
+            "import sys; sys.stdin.read(); print('{\"visibility\": \"public\"}')"
+        ],
+    });
+    plan.sandbox
+        .project_document(&serde_json::to_string_pretty(&configured).expect("a document"));
+    plan.sandbox.secrets_file("LINEAR_API_KEY=fixture-key\n");
+    let write = |root: &Path, relative: &str, text: &str| {
+        let file = root.join(relative);
+        std::fs::create_dir_all(file.parent().expect("a directory")).expect("the directory");
+        std::fs::write(file, text).expect("a file");
+    };
+    write(
+        &plan.notes,
+        "projects/launch.md",
+        "---\ntitle: Launch\nstatus: todo\n---\n",
+    );
+    for n in 0..60 {
+        write(
+            &plan.notes,
+            &format!("projects/filler-{n:02}.md"),
+            &format!("---\ntitle: Filler {n}\nstatus: todo\n---\n"),
+        );
+    }
+    write(
+        &plan.notes,
+        "projects/upstream.md",
+        "---\ntitle: Upstream\nstatus: todo\n---\n",
+    );
+    write(
+        &plan.notes,
+        "projects/downstream.md",
+        "---\ntitle: Downstream\nstatus: todo\ndepends_on: [{id: upstream, item: project}]\n---\n",
+    );
+    let a_file = "---\ntitle: A\nstatus: todo\nproject: launch\n\
+                  metadata:\n  \"onetaskgraph.origin\": \"vault:root-a\"\n---\nDo A.\n";
+    write(&plan.notes, "tasks/a.md", a_file);
+    write(
+        &plan.notes,
+        "tasks/b.md",
+        "---\ntitle: B\nstatus: todo\nproject: launch\ndepends_on: [a]\n---\nDo B.\n",
+    );
+    plan.attest("task", "authoring:b");
+    plan.attest("project", "authoring:downstream");
+    plan.holds(
+        "task",
+        "authoring:b",
+        "valid",
+        Value::Null,
+        "where it was reviewed",
+    );
+
+    // The copy of `a` names no root: `authoring:a` links to it — past a private source that
+    // cannot be asked — and the root `authoring:a` records is what B's copy names.
+    let first = copy_plan(&plan, "authoring:launch", "published");
+    let (copy_a, copy_b) = (landed(&first, "authoring:a"), landed(&first, "authoring:b"));
+    plan.holds(
+        "task",
+        &copy_b,
+        "valid",
+        Value::Null,
+        "by the root of the private item its far end was copied from",
+    );
+    // Copied on, A's copy's copy records A's copy, which is read once for the root behind it.
+    let second = copy_plan(&plan, &landed(&first, "authoring:launch"), "onward");
+    let onward_b = landed(&second, &copy_b);
+    plan.holds("task", &onward_b, "valid", Value::Null, "two copies on");
+
+    // A second private item linking to A's copy is no confident answer: the edge names the
+    // copy itself, and the record goes void until it is gone.
+    let copy_native = copy_a.split_once(':').expect("qualified").1;
+    write(
+        &vault,
+        "tasks/decoy.md",
+        &format!(
+            "---\ntitle: Decoy\nstatus: todo\n\
+             metadata:\n  \"onetaskgraph.copies\": {{\"published\": \"{copy_a}\"}}\n---\n"
+        ),
+    );
+    plan.holds(
+        "task",
+        &copy_b,
+        "void",
+        json!("content-moved"),
+        "two private items link to its far end",
+    );
+    std::fs::remove_file(vault.join("tasks/decoy.md")).expect("the decoy goes");
+    plan.holds("task", &copy_b, "valid", Value::Null, "one link again");
+
+    // A root that is no qualified id is refused, never guessed — on the private item found,
+    // and on the copy read for the root behind it.
+    let refused = |id: &str, naming: &str, why: &str| {
+        let output = plan.run(&["task", "attestation", "check", id, "--kind", KIND]);
+        assert_ne!(output.status.code(), Some(0), "{why}: {}", stdout(&output));
+        assert!(
+            stderr(&output).contains(naming) && stderr(&output).contains("not a qualified id"),
+            "{why}: {:?}\n{}\n{}",
+            output.status.code(),
+            stdout(&output),
+            stderr(&output)
+        );
+    };
+    // `a`'s file now holds the link the copy recorded beside its root: it is edited in place.
+    let linked = std::fs::read_to_string(plan.notes.join("tasks/a.md")).expect("a's file");
+    write(
+        &plan.notes,
+        "tasks/a.md",
+        &linked.replacen("vault:root-a", "nowhere", 1),
+    );
+    refused(
+        &copy_b,
+        "authoring:a",
+        "the private item records a malformed root",
+    );
+    write(&plan.notes, "tasks/a.md", &linked);
+    plan.holds("task", &copy_b, "valid", Value::Null, "its root restored");
+    let held = published.join("tasks").join(format!("{copy_native}.md"));
+    let text = std::fs::read_to_string(&held).expect("A's copy");
+    std::fs::write(
+        &held,
+        text.replacen(
+            "metadata:\n",
+            "metadata:\n  \"onetaskgraph.origin\": \"nowhere\"\n",
+            1,
+        ),
+    )
+    .expect("an edit");
+    refused(
+        &onward_b,
+        &copy_a,
+        "the recorded root records a malformed root",
+    );
+    // A's copy deleted, as a person deletes a file: the root it would have recorded is gone,
+    // and `authoring:a`'s link to it still names the item it was copied from.
+    std::fs::remove_file(&held).expect("A's copy deleted");
+    plan.holds(
+        "task",
+        &onward_b,
+        "valid",
+        Value::Null,
+        "the copy between it and its root deleted",
+    );
+    std::fs::write(&held, text).expect("restored");
+
+    // A project's edge. The copy writes `downstream` without its edge to a project outside it,
+    // so the edge is given to the copy by hand, naming the copy of `upstream` — which names no
+    // root, and which `authoring:upstream` links to.
+    let upstream = landed(
+        &copy_plan(&plan, "authoring:upstream", "published"),
+        "authoring:upstream",
+    );
+    let downstream = landed(
+        &copy_plan(&plan, "authoring:downstream", "published"),
+        "authoring:downstream",
+    );
+    plan.holds(
+        "project",
+        &downstream,
+        "void",
+        json!("content-moved"),
+        "the copy holds no edge",
+    );
+    let file = published.join("projects/downstream.md");
+    let text = std::fs::read_to_string(&file).expect("downstream's copy");
+    let upstream_native = upstream.split_once(':').expect("qualified").1;
+    std::fs::write(
+        &file,
+        text.replacen(
+            "status: todo\n",
+            &format!("status: todo\ndepends_on: [{{id: {upstream_native}, item: project}}]\n"),
+            1,
+        ),
+    )
+    .expect("an edge");
+    plan.holds(
+        "project",
+        &downstream,
+        "valid",
+        Value::Null,
+        "its edge names the copy of the project it depended on",
+    );
+    // A second project of the same private source linking to that copy — on the page before
+    // the one `authoring:upstream` is listed on — is no confident answer either.
+    write(
+        &plan.notes,
+        "projects/aa-decoy.md",
+        &format!(
+            "---\ntitle: Decoy\nstatus: todo\n\
+             metadata:\n  \"onetaskgraph.copies\": {{\"published\": \"{upstream}\"}}\n---\n"
+        ),
+    );
+    plan.holds(
+        "project",
+        &downstream,
+        "void",
+        json!("content-moved"),
+        "two projects link to its far end",
+    );
+    std::fs::remove_file(plan.notes.join("projects/aa-decoy.md")).expect("the decoy goes");
+
+    // Copied on, the copy of `upstream`'s copy records it, and it is read for the root behind
+    // it; a read of it that fails fails the check.
+    let onward_upstream = landed(&copy_plan(&plan, &upstream, "onward"), &upstream);
+    let onward_downstream = landed(&copy_plan(&plan, &downstream, "onward"), &downstream);
+    let file = onward.join(format!(
+        "projects/{}.md",
+        onward_downstream.split_once(':').expect("qualified").1
+    ));
+    let text = std::fs::read_to_string(&file).expect("downstream's onward copy");
+    let onward_native = onward_upstream.split_once(':').expect("qualified").1;
+    assert!(
+        text.contains("depends_on:") && text.contains(onward_native),
+        "a copy between public sources carries the edge to the onward copy of `upstream`: {text}"
+    );
+    plan.holds(
+        "project",
+        &onward_downstream,
+        "valid",
+        Value::Null,
+        "two copies on, by the root behind the project its far end records",
+    );
+    let upstream_file = published.join(format!("projects/{upstream_native}.md"));
+    let upstream_text = std::fs::read_to_string(&upstream_file).expect("upstream's copy");
+    std::fs::write(&upstream_file, "---\ntitle: [unclosed\n---\n").expect("a broken file");
+    let unread = plan.run(&[
+        "project",
+        "attestation",
+        "check",
+        &onward_downstream,
+        "--kind",
+        KIND,
+    ]);
+    assert_ne!(
+        unread.status.code(),
+        Some(0),
+        "the recorded project unreadable: {}",
+        stdout(&unread)
+    );
+    assert!(
+        stderr(&unread).contains("published"),
+        "the failure names the source holding it: {}",
+        stderr(&unread)
+    );
+    std::fs::write(&upstream_file, upstream_text).expect("restored");
+
+    // A far end in a public source that nothing private links to is named by its own id, so a
+    // record taken over it holds; a private source failing for any other reason than being
+    // unreachable fails the check rather than reading as no link.
+    write(
+        &published,
+        "tasks/p.md",
+        "---\ntitle: P\nstatus: todo\nproject: launch\n\
+         metadata:\n  \"onetaskgraph.origin\": \"vault:root-p\"\n---\nDo P.\n",
+    );
+    write(
+        &published,
+        "tasks/q.md",
+        "---\ntitle: Q\nstatus: todo\nproject: launch\ndepends_on: [p, n]\n---\nDo Q.\n",
+    );
+    write(
+        &published,
+        "tasks/n.md",
+        "---\ntitle: N\nstatus: todo\nproject: launch\n---\nDo N.\n",
+    );
+    plan.attest("task", "published:q");
+    plan.holds(
+        "task",
+        "published:q",
+        "valid",
+        Value::Null,
+        "a far end no private item links to",
+    );
+    write(&vault, "tasks/broken.md", "---\ntitle: [unclosed\n---\n");
+    let broken = plan.run(&[
+        "task",
+        "attestation",
+        "check",
+        "published:q",
+        "--kind",
+        KIND,
+    ]);
+    assert_ne!(
+        broken.status.code(),
+        Some(0),
+        "a private source failing: {}",
+        stdout(&broken)
+    );
+    assert!(
+        stderr(&broken).contains("vault"),
+        "the failure names the private source: {}",
+        stderr(&broken)
+    );
+    std::fs::remove_file(vault.join("tasks/broken.md")).expect("the broken file goes");
+
+    // Copied on, Q's copy's far end records `published:p`, which is read for the root it
+    // records in turn — `vault:root-p` — and a read of it that fails fails the check.
+    let tasks = plan.json(&[
+        "task",
+        "copy",
+        "published:p",
+        "published:n",
+        "published:q",
+        "--to",
+        "onward",
+    ]);
+    let onward_q = landed(&tasks, "published:q");
+    plan.holds(
+        "task",
+        &onward_q,
+        "valid",
+        Value::Null,
+        "by the root its far end's origin records",
+    );
+    let p_file = published.join("tasks/p.md");
+    let p_text = std::fs::read_to_string(&p_file).expect("p's file");
+    std::fs::write(&p_file, "---\ntitle: [unclosed\n---\n").expect("a broken file");
+    let unread = plan.run(&["task", "attestation", "check", &onward_q, "--kind", KIND]);
+    assert_ne!(
+        unread.status.code(),
+        Some(0),
+        "the recorded root unreadable: {}",
+        stdout(&unread)
+    );
+    assert!(
+        stderr(&unread).contains("published"),
+        "the failure names the source holding it: {}",
+        stderr(&unread)
+    );
+    std::fs::write(&p_file, p_text).expect("restored");
+    plan.holds(
+        "task",
+        &onward_q,
+        "valid",
+        Value::Null,
+        "its far end's origin restored",
+    );
 }

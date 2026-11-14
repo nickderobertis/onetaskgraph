@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 from collections.abc import Coroutine
 from pathlib import Path
 from typing import NamedTuple
@@ -22,10 +23,15 @@ from onetaskgraph_sdk import (
     AttestationState,
     Attested,
     Client,
+    CopyReport,
     GlobalId,
     OnetaskgraphError,
     ProjectAttestationCheck,
     VoidReason,
+)
+from onetaskgraph_sdk._generated.copy_report import CopyOutcomeCreatedOrWouldCreate
+from onetaskgraph_sdk._generated.project_attestation_check import (
+    AttestationState as TaskAttestationState,
 )
 
 
@@ -122,3 +128,98 @@ def test_a_refused_attestation_raises_with_the_failure(binary: Path, tmp_path: P
     assert refused.value.exit_code == 1
     assert refused.value.failure is not None
     assert refused.value.failure.kind == "invalid-attestation"
+
+
+class TaskState(NamedTuple):
+    """One task's attestation state, as a project's per-task check answers it."""
+
+    task: GlobalId
+    state: TaskAttestationState
+
+
+class Landed(NamedTuple):
+    """Where one item a copy read landed."""
+
+    source: GlobalId
+    destination: GlobalId
+
+
+def test_a_dependent_task_copied_out_of_a_private_folder_keeps_its_review(
+    binary: Path, tmp_path: Path
+) -> None:
+    """B, depending on A, copied from a private folder to a public one checks ``valid`` there.
+
+    A copy out of a source declared private records no origin naming it, so the copy of A
+    names no root of its own; the store finds it through the link the private A keeps. The
+    copy's edge pointed elsewhere still voids the review.
+    """
+    for folder in ("authoring", "published"):
+        (tmp_path / folder).mkdir()
+    passing = [sys.executable, "-c", 'import sys; sys.stdin.read(); print(\'{"verdict": "pass"}\')']
+    public = [
+        sys.executable,
+        "-c",
+        'import sys; sys.stdin.read(); print(\'{"visibility": "public"}\')',
+    ]
+    (tmp_path / "onetaskgraph.yaml").write_text(
+        json.dumps(
+            {
+                "sources": {
+                    "authoring": {
+                        "plugin": "local-md",
+                        "visibility": "private",
+                        "config": {"root": "authoring"},
+                    },
+                    "published": {
+                        "plugin": "local-md",
+                        "visibility": "public",
+                        "config": {"root": "published"},
+                    },
+                },
+                "write_policy": {"check_command": passing, "visibility_command": public},
+            }
+        ),
+        encoding="utf-8",
+    )
+    client = Client(binary, cwd=tmp_path)
+    run(client.project_create("authoring", "launch", "Launch", body="The plan.\n"))
+    a = run(client.task_create("authoring", "launch", "A", body="Do A.\n")).items[0].id.root
+    b = (
+        run(client.task_create("authoring", "launch", "B", body="Do B.\n", depends_on=[a]))
+        .items[0]
+        .id.root
+    )
+    c = run(client.task_create("authoring", "launch", "C", body="Do C.\n")).items[0].id.root
+    for task in (a, b, c):
+        run(client.task_attest(task, "plan-review", "review-plan", "bar-1"))
+
+    def states(project: GlobalId) -> list[TaskState]:
+        """Each task's state under `project`, in qualified-id order."""
+        checked = run(client.project_attestation_check(project, "plan-review", tasks=True))
+        assert isinstance(checked, ProjectAttestationCheck)
+        held = [TaskState(GlobalId(entry.id.root), entry.state) for entry in checked.tasks]
+        return sorted(held, key=lambda state: state.task.root)
+
+    def all_valid(ids: list[GlobalId]) -> list[TaskState]:
+        valid = TaskAttestationState("valid")
+        return sorted((TaskState(task, valid) for task in ids), key=lambda state: state.task.root)
+
+    originals = [GlobalId(task) for task in (a, b, c)]
+    assert states(GlobalId("authoring:launch")) == all_valid(originals)
+    report = run(client.project_copy("authoring:launch", to="published", documents=True))
+    assert isinstance(report, CopyReport)
+    landed: list[Landed] = []
+    for outcome in (item.root for item in report.items):
+        assert isinstance(outcome, CopyOutcomeCreatedOrWouldCreate)
+        assert outcome.destination is not None
+        landed.append(Landed(GlobalId(outcome.source.root), GlobalId(outcome.destination.root)))
+
+    def copy_of(source: GlobalId) -> GlobalId:
+        return next(each.destination for each in landed if each.source == source)
+
+    copies = [copy_of(task) for task in originals]
+    assert states(copy_of(GlobalId("authoring:launch"))) == all_valid(copies)
+
+    run(client.task_update(copies[1], depends_on=[copies[2]]))
+    moved = run(client.task_attestation_check(copies[1], "plan-review", bar="bar-1"))
+    assert (moved.state, moved.reason) == (AttestationState("void"), VoidReason("content-moved"))

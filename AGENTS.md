@@ -1530,7 +1530,9 @@ them do; this is the inventory of what is owed, not a status board.
      answer, a dependency edge, its repositories or a caller key not excluded voids it as
      `content-moved`, an excluded key or a status change does not, another `--bar` answers
      `bar-moved`, and a project copied with its documents lands copies holding the source's
-     records, each `valid`.
+     records, each `valid` — a dependent task's too where its source is declared private and the
+     copy records no origin naming it, its far end named through the private item's link to its
+     copy, on a board, a folder, Linear and a board copied on from that board.
 154. A project template declaring `members` creates the project and every member task, each from
      its own template — a loader document's included — with its answers stored, its provenance
      recorded and its `depends_on` as `blocks` edges; a member its schema refuses refuses the
