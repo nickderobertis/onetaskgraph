@@ -249,6 +249,11 @@ mod source_host;
 // depending on the engine at any depth.
 mod status_complete;
 mod surface;
+// `task delete` and `project copy --close-orphans` over folders of Markdown, with no credential
+// and no network, in about a second. The verb and the orphan close are the engine's and the
+// binary's, so no one plugin crate's edge is narrower; the board's half is in the GitHub
+// Projects e2e suite.
+mod task_delete;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
 // narrower edge for it: the template journeys configure no source, reach no network and finish
 // in under a second, and `template` is a verb of this binary, so this suite of the binary's own

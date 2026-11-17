@@ -135,6 +135,8 @@ onetaskgraph task create <SOURCE> --project P --title TITLE
                          [--delivers ID]... [--metadata KEY=JSON]... [--asset PATH]...
                          [--classification public|private] [--assignee PERSON]
                          [--term-scope REPOSITORY... | --term-scope-empty]
+onetaskgraph task delete <ID>   # removes the task; refused while a task of its source depends on
+                                # it — see "Dropping a task from a plan"
 onetaskgraph task render <ID> [--template FILE | --template-loader FILE] [--search-path DIR]...
                          [--answers FILE] [--var NAME=VALUE]... [--unset NAME]... [--dry-run]
                          [--asset PATH]... [--term-scope REPOSITORY... | --term-scope-empty]
@@ -152,7 +154,7 @@ onetaskgraph project graph <ID> [--format mermaid|json] [--direction auto|td|lr]
                            [--group-by KEY] [--complete]
                                                  # see "Drawing a project's dependency graph"
 onetaskgraph project copy <ID> --to <SOURCE> [--no-tasks | --member TASK-ID...]
-                                                 [--documents]
+                                                 [--documents] [--close-orphans]
                                                  [--match-by KEY] [--recreate] [--dry-run]
 onetaskgraph project copy <ID> --to <SOURCE> --member TASK-ID... --members-only
                                                  # into the project already there, untouched
@@ -883,6 +885,7 @@ copied from, which is what makes the next copy of it an update.
 | `--no-link` | Write nothing at all to the source — no `onetaskgraph.copies` link — and report every link `skipped`. The next copy finds each counterpart by the destination's own `onetaskgraph.origin`. |
 | `--source S`, `--commented-since RFC3339`, `--metadata KEY=VALUE` | `task copy` only, in place of ids: copy what `task list` with the same narrowing answers. Refused beside ids. |
 | `--status CATEGORY` | `task copy` only, repeatable: keep only the tasks at these categories, as `task list --status` keeps them. In a query a task at another category is not read for its comments, not copied and not named in the answer — and on a GitHub board, a status filter naming only open categories (any but `done`, `cancelled` and `unknown`, which a closed issue reads as when closed for a reason that implies neither) narrows the board-scoped issue search with `is:open`, each candidate's category still confirmed from its own item. Beside ids, an id whose task is at another category is read only as far as its status and answered `{"source": …, "action": "skipped", "reason": "status <category> is not one of <categories>"}`, neither copied nor read for its comments, without changing the exit code. The comment snapshot a host keeps is this shape: `task copy --source board --commented-since <instant> --status backlog --to snapshot`, into a folder configured with the board's own status names. |
+| `--close-orphans` | `project copy` only: close each orphan the copy finds open. A destination task filed under the project's copy whose source task is gone, at any category but `done` or `cancelled`, gets the write `task status set <orphan> cancelled` makes, every effect of that write included — on a GitHub board, its issue closed as not planned — once the rest of the copy has landed, and is reported `{"source": …, "action": "closed", "destination": …}`. One already `done` or `cancelled` is left exactly as it is and reported `orphaned`. A `--dry-run` reports `closed` and writes nothing; a close the destination refuses is reported `failed`, as an item the copy could not write is, and the copy exits `4`. Without it every orphan is left as it is and reported `orphaned`, byte for byte as before. Refused as a usage error, before anything is read, beside `--member`, `--members-only` and `--no-tasks`: those do not walk every task of the project, so they cannot tell a dropped task from one they left out. |
 | `--member TASK-ID` | Copy the project and exactly the tasks named, repeating the flag for each, when you know which of them changed. A task not named is not read at the destination, not written and not reported, so a one-task change costs what one task costs rather than a read of the whole project. A named task the destination does not hold yet is still created. An edge to a task not named is written to the destination id that task records at `onetaskgraph.origin`, and a copy whose edge names a task recording none is refused before anything is written, naming that task. A copy naming members was not told about the rest, so it reports nothing `orphaned`. |
 | `--members-only` | With `--member`, and refused without one: copy the named tasks into the project the destination already holds, and leave that project exactly as it is. It is found by the `onetaskgraph.copies` link the source project records, then by the origin it records, then by asking the destination for the project recording it as its origin — never read to be compared, never written, and not reported, so adding one task to a board's project costs that task alone and cannot overwrite the project's title, body, labels or fields. A project the destination does not hold yet is refused before anything is written, naming the `project copy` that creates it. Everything else is `--member`'s: the same edges, the same `delivered` and `via`, and nothing `orphaned`. |
 
@@ -915,7 +918,8 @@ repositories, metadata and the edges — except `url`, `location`, `key`, `creat
 issued by that backend, so the one the source wore is not the one the destination does. Nothing is silently dropped: a field the destination cannot
 represent, or a metadata key it cannot carry, refuses the write and names it. A copy never
 deletes work either, so a destination item the source no longer holds is left exactly as it
-is and reported as `orphaned` — and a copy over an item the destination already holds never
+is and reported as `orphaned` — unless `project copy --close-orphans` was asked to close it,
+which sets an open one `cancelled` and nothing else — and a copy over an item the destination already holds never
 deletes a caller's metadata key that item holds: a key only the destination holds stays, a
 key both hold takes the source's value, and a re-copy that changes nothing else is
 `unchanged`. Which reserved keys are whose, and the two an update drops when they no longer
@@ -954,6 +958,28 @@ has kept it under an id the copy was never told, so that one item cannot be take
 copy undoes everything else, names the destination and the method whose answer was malformed,
 and tells you to inspect that destination before copying again, rather than to copy again and
 land a second one beside it.
+
+### Dropping a task from a plan
+
+A plan changes as its work is understood, and a task that is no longer needed is removed from
+its source with `task delete`, then its copies are closed by the next copy of its project:
+
+```sh
+onetaskgraph task delete drafts:fix-login          # prints `deleted task drafts:fix-login`
+onetaskgraph project copy drafts:plan --to board --close-orphans
+```
+
+`task delete <ID>` removes the task and everything its source stores for that task alone — a
+folder of Markdown's file, the template answers it holds and its image assets — through the
+source's own removal, so `task show`, `task list`, `project show` and `project graph` no longer
+report it. It asks for no confirmation, like `task comment delete`; `--json` prints
+`{"deleted": "<ID>"}` and it exits `0` once the task is gone. It removes nothing, exiting
+non-zero and saying why, when the id names no task, when its source has no write side, and when
+any task of the same source depends on it — each dependent named on standard error by its
+qualified id, to rewire first with `task update <ID> --depends-on …` or `--no-depends-on`. It only
+removes: a copy of the task in another source is not touched. That copy is what the next
+`project copy --close-orphans` reports and closes as `closed` — on a GitHub board, its issue
+closed as not planned — while a copy already `done` or `cancelled` stays as it is, `orphaned`.
 
 ### A create safe to retry
 
@@ -1251,7 +1277,8 @@ cannot vouch for one without another read:
 ```
 
 `action` says which of the things above happened to that item — `created`, `updated`,
-`unchanged`, `orphaned`, `skipped` for an id `--status` left out, or `failed` for a task its
+`unchanged`, `orphaned`, `closed` for an orphan `--close-orphans` closed, `skipped` for an id
+`--status` left out, or `failed` for a task its
 destination cannot represent or a copy left unwritten because it kept changing while it was
 read — and `destination` is `null` for a dry run that would have created something and absent
 from a `failed` and a `skipped` item. The vocabulary itself is the
@@ -1269,7 +1296,7 @@ the same copy created, found by its create key ([below](#a-create-safe-to-retry)
 it is always `created`, because none did. `link` says what became of the item's own link, on those same three actions of a
 copy that writes: `recorded`, `unchanged`, `unrecorded` where its source could not hold
 one, or `skipped` under `--no-link`, which writes nothing at all to the source. A dry run
-reports `via` and leaves `link` out, and an `orphaned` item, a `failed` one and a dry run's `oversize` one carry neither.
+reports `via` and leaves `link` out, and an `orphaned` item, a `closed` one, a `failed` one and a dry run's `oversize` one carry neither.
 In the generated SDKs the six rule words are the type `CopyVia` and `created` is
 `NoCounterpart`, and the link words are `CopyLink`.
 <!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->

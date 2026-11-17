@@ -302,7 +302,16 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
     let bundle: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("schema output is valid JSON");
 
-    assert_eq!(bundle["version"], 64);
+    assert_eq!(bundle["version"], 65);
+    // Version 65: what `task delete` answers with, and the `closed` copy action.
+    assert!(bundle["roots"]["TaskDeleted"]["properties"]["deleted"].is_object());
+    assert!(
+        bundle["roots"]["CopyAction"]["oneOf"]
+            .as_array()
+            .expect("the actions are a oneOf")
+            .iter()
+            .any(|variant| variant["properties"]["action"]["const"] == "closed")
+    );
     // Version 64: a Linear configuration's `metadata_fields`.
     assert!(
         bundle["roots"]["LinearConfig"]["properties"]["metadata_fields"].is_object(),
@@ -464,6 +473,7 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
             "task attestation check",
             "task update",
             "task create",
+            "task delete",
             "task render",
             "task answers",
             "task assets",
