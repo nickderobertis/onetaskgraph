@@ -33,6 +33,9 @@ mod cache_budget;
 mod cache_kinds;
 mod cache_writes;
 mod closed_status;
+// `task delete` at a folder of Markdown and `project copy --close-orphans` closing the board issue
+// it left behind, against the loopback board.
+mod close_orphans;
 mod connections;
 mod copy_cost;
 mod copy_recopy;
