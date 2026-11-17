@@ -577,3 +577,93 @@ fn closing_an_orphan_keeps_the_tasks_it_delivers_in_step() {
     assert_eq!(category(&sandbox, "copies:open"), "cancelled");
     assert!(copies.join("tasks/open.md").is_file());
 }
+
+#[test]
+fn close_orphans_closes_a_dropped_tasks_copy_in_the_member_a_route_filed_it_under() {
+    // `notes` routes widgetco work to `team`: the plan's home lands in `notes` beside its
+    // library task, and its two widgetco tasks in a member project in `team`. Dropping one of
+    // those, the re-copy walks the member too and closes the copy there.
+    let sandbox = Sandbox::new();
+    let plan = sandbox.subdirectory("plan");
+    let notes = sandbox.subdirectory("notes");
+    let team = sandbox.subdirectory("team");
+    for (kind, id, front) in [
+        ("projects", "goal", "title: One goal"),
+        (
+            "tasks",
+            "lib",
+            "title: Library\nproject: goal\nrepositories: [github.com/nickderobertis/lib]",
+        ),
+        (
+            "tasks",
+            "app",
+            "title: App\nproject: goal\nrepositories: [github.com/widgetco/app]",
+        ),
+        (
+            "tasks",
+            "site",
+            "title: Site\nproject: goal\nrepositories: [github.com/widgetco/site]",
+        ),
+    ] {
+        std::fs::create_dir_all(plan.join(kind)).expect("a folder");
+        std::fs::write(
+            plan.join(kind).join(format!("{id}.md")),
+            format!("---\n{front}\n---\nBody of {id}.\n"),
+        )
+        .expect("a record");
+    }
+    sandbox.project_document(&document(&json!({
+        "plan": {"plugin": "local-md", "config": {"root": plan}},
+        "notes": {
+            "plugin": "local-md",
+            "config": {"root": notes},
+            "routes": [{"repositories": ["github.com/widgetco/*"], "to": "team"}],
+        },
+        "team": {"plugin": "local-md", "config": {"root": team}},
+    })));
+    let first = parsed(
+        &sandbox,
+        &["project", "copy", "plan:goal", "--to", "notes", "--json"],
+    );
+    let site = first["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .find(|item| item["source"] == "plan:site")
+        .expect("the site task")["destination"]
+        .as_str()
+        .expect("where it landed")
+        .to_owned();
+    assert!(site.starts_with("team:"), "{first:#}");
+    printed(&sandbox, &["task", "delete", "plan:site"]);
+    let notes_before = tree(&notes);
+
+    let report = parsed(
+        &sandbox,
+        &[
+            "project",
+            "copy",
+            "plan:goal",
+            "--to",
+            "notes",
+            "--close-orphans",
+            "--json",
+        ],
+    );
+
+    let closed: Vec<&Value> = report["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .filter(|item| item["action"] == "closed")
+        .collect();
+    assert_eq!(closed.len(), 1, "{report:#}");
+    assert_eq!(closed[0]["source"], "plan:site");
+    assert_eq!(closed[0]["destination"], site.as_str());
+    assert_eq!(category(&sandbox, &site), "cancelled");
+    assert_eq!(
+        tree(&notes),
+        notes_before,
+        "nothing in the home's source moved"
+    );
+}

@@ -469,6 +469,8 @@ fn a_task_delete_whose_reads_fail_removes_nothing_until_they_answer() {
 
 #[test]
 fn a_board_draft_is_not_deleted_and_the_refusal_says_why() {
+    // The task is read and nothing depends on it, so the removal itself is what the board's
+    // plugin refuses: GitHub removes an item by deleting its issue, and a draft is not one.
     let sandbox = Sandbox::new();
     let config = github_projects_with_draft(&sandbox);
     sandbox.project_document(&document(&json!({
@@ -494,4 +496,62 @@ fn a_board_draft_is_not_deleted_and_the_refusal_says_why() {
         .get_output()
         .clone();
     assert!(stdout(&shown).contains("Sketch the next plan"));
+}
+
+#[test]
+fn a_copy_that_fails_before_it_lands_closes_no_orphan() {
+    // The board refuses the update the re-copy owes its one changed task, so the copy fails
+    // before it lands — and the orphan it would have closed is left open, as is everything else.
+    let plan = Plan::refusing(&[graphql::UPDATE_ISSUE]);
+    let (copied, _) = plan.json(&["project", "copy", "plans:P", "--to", "board", "--json"]);
+    let at: BTreeMap<String, String> = said(&copied)
+        .into_iter()
+        .map(|(source, (_, destination))| {
+            (
+                source.trim_start_matches("plans:").to_owned(),
+                destination.unwrap().trim_start_matches("board:").to_owned(),
+            )
+        })
+        .collect();
+    plan.run(&["task", "delete", "plans:open"], 0);
+    std::fs::write(
+        plan.sandbox.subdirectory("plans").join("tasks/stay.md"),
+        "---\ntitle: Task stay\nstatus: todo\nproject: P\n---\nThe stay task, edited.\n",
+    )
+    .expect("an edit");
+    let before = plan.held(&at);
+
+    let output = plan
+        .sandbox
+        .command()
+        .args([
+            "project",
+            "copy",
+            "plans:P",
+            "--to",
+            "board",
+            "--close-orphans",
+            "--json",
+        ])
+        .assert()
+        .get_output()
+        .clone();
+
+    assert_eq!(output.status.code(), Some(1), "{}", stdout(&output));
+    assert!(
+        stderr(&output).contains("updateIssue"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(
+        !stdout(&output).contains("\"closed\""),
+        "{}",
+        stdout(&output)
+    );
+    assert_eq!(
+        plan.held(&at),
+        before,
+        "a copy that did not land closed nothing"
+    );
+    assert_eq!(plan.board.item(&at["open"]).unwrap()["state"], "OPEN");
 }

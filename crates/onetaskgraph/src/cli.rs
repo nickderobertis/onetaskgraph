@@ -1664,9 +1664,8 @@ pub struct CommentEditArgs {
 #[derive(Debug, Args)]
 pub struct TaskDeleteArgs {
     /// The task's qualified id, `<source>:<native-id>`.
-    ///
-    /// llmlint: ignore[invalid_states_unrepresentable] — as `CommentAddArgs::id`.
     #[arg(value_name = "ID")]
+    // llmlint: ignore[invalid_states_unrepresentable] As `CommentAddArgs::id`: a `GlobalId` here would refuse an unqualified id under clap's wording, and `qualified` in `main` converts it immediately, saying what a qualified id is and where to read the configured names.
     pub id: String,
 }
 
@@ -2674,8 +2673,8 @@ pub struct ProjectCopyArgs {
     ///
     /// Refused beside --member, --members-only and --no-tasks, which do not walk every task of
     /// the project, so they cannot tell a dropped task from one they left out.
-    // llmlint: ignore[invalid_states_unrepresentable] Clap refuses it beside --member, --members-only and --no-tasks at parse, as it refuses --documents beside --member; the conversion sets `CopyRequest::close_orphans`, which `Engine::copy` refuses beside any narrowed scope before anything is read.
     #[arg(long = "close-orphans", conflicts_with_all = ["member", "members_only", "no_tasks"])]
+    // llmlint: ignore[invalid_states_unrepresentable] Clap refuses it beside --member, --members-only and --no-tasks at parse, as it refuses --documents beside --member; the conversion sets `CopyRequest::close_orphans`, which `Engine::copy` refuses beside any narrowed scope before anything is read.
     pub close_orphans: bool,
 
     /// Keep the destination's copies of each copied task's comments in step with the
