@@ -669,147 +669,307 @@ fn close_orphans_closes_a_dropped_tasks_copy_in_the_member_a_route_filed_it_unde
     );
 }
 
+/// A folder declared private, `drafts`, holding project `P` and these tasks, copied once into a
+/// folder that is not, `public`: a copy that withholds provenance, so no copy it lands names an
+/// origin, and a dropped task's copy is found by what `task delete` records on `P`.
+struct PrivatePlan {
+    sandbox: Sandbox,
+    drafts: PathBuf,
+    public: PathBuf,
+    /// Each draft task's copy in `public`, by the task's qualified id.
+    landed: BTreeMap<String, String>,
+}
+
+impl PrivatePlan {
+    fn new(tasks: &[(&str, &str, &[&str])]) -> Self {
+        let sandbox = Sandbox::new();
+        let drafts = folder(&sandbox, "drafts", tasks);
+        let public = sandbox.subdirectory("public");
+        // A store declaring a visibility is held to the public boundary, so its write policy
+        // passes every write and answers every repository public: what is under test is the
+        // record.
+        let mut configuration: Value = serde_json::from_str(&document(&json!({
+            "drafts": {"plugin": "local-md", "config": {"root": drafts}, "visibility": "private"},
+            "public": {"plugin": "local-md", "config": {"root": public}}
+        })))
+        .expect("a document");
+        configuration["write_policy"] = json!({
+            "check_command": [
+                interpreter(), "-c",
+                "import sys; sys.stdin.read(); print('{\"verdict\": \"pass\"}')"
+            ],
+            "visibility_command": [
+                interpreter(), "-c",
+                "import sys; sys.stdin.read(); print('{\"visibility\": \"public\"}')"
+            ],
+        });
+        sandbox.project_document(&serde_json::to_string_pretty(&configuration).expect("renders"));
+        let first = parsed(&sandbox, &Self::COPY);
+        let landed = actions(&first)
+            .into_iter()
+            .filter(|(source, _, _)| source != "drafts:P")
+            .map(|(source, action, destination)| {
+                assert_eq!(action, "created", "{first:#}");
+                (source, destination.expect("a destination"))
+            })
+            .collect();
+        Self {
+            sandbox,
+            drafts,
+            public,
+            landed,
+        }
+    }
+
+    const COPY: [&'static str; 6] = ["project", "copy", "drafts:P", "--to", "public", "--json"];
+
+    /// One copy of the plan with these flags besides, which had to succeed.
+    fn copy(&self, flags: &[&str]) -> Value {
+        parsed(&self.sandbox, &[&Self::COPY[..], flags].concat())
+    }
+
+    /// What `P` records at `onetaskgraph.deleted_copies`, as `project show` reads it.
+    fn record(&self) -> Value {
+        parsed(&self.sandbox, &["project", "show", "drafts:P", "--json"])["items"][0]["item"]
+            ["metadata"]["onetaskgraph.deleted_copies"]
+            .clone()
+    }
+
+    /// The record `P` holds of `tasks`' copies, each as its delete recorded it.
+    fn recording(&self, tasks: &[&str]) -> Value {
+        let mut record = serde_json::Map::new();
+        for task in tasks {
+            let (at, native) = self.landed[*task].split_once(':').expect("a qualified id");
+            record
+                .entry(at)
+                .or_insert_with(|| json!({}))
+                .as_object_mut()
+                .expect("an object")
+                .insert(native.to_owned(), json!(task));
+        }
+        Value::Object(record)
+    }
+}
+
+/// What a copy report says of every item but those left `unchanged`.
+fn moved(report: &Value) -> Vec<(String, String, Option<String>)> {
+    actions(report)
+        .into_iter()
+        .filter(|(_, action, _)| action != "unchanged")
+        .collect()
+}
+
 #[test]
 fn a_private_folders_deleted_task_closes_its_copy_that_carries_no_origin_at_the_next_closing_copy()
 {
-    // A copy out of a folder declared private into one that is not records no origin on the
-    // copies it lands, so a dropped task's copy is found by what `task delete` recorded on the
-    // source project: the delete changes nothing but the private folder, a copy without
-    // `--close-orphans` leaves that copy and the record alone, the closing copy cancels the copy
-    // and takes the record's entry out, and a delete whose record cannot be written removes
-    // nothing.
-    let sandbox = Sandbox::new();
-    let drafts = folder(
-        &sandbox,
-        "drafts",
-        &[("stay", "Stay", &[]), ("open", "Open", &[])],
-    );
-    let public = sandbox.subdirectory("public");
-    // A store declaring a visibility is held to the public boundary, so its write policy passes
-    // every write and answers every repository public: what is under test is the record.
-    let mut configuration: Value = serde_json::from_str(&document(&json!({
-        "drafts": {"plugin": "local-md", "config": {"root": drafts}, "visibility": "private"},
-        "public": {"plugin": "local-md", "config": {"root": public}}
-    })))
-    .expect("a document");
-    configuration["write_policy"] = json!({
-        "check_command": [
-            interpreter(), "-c", "import sys; sys.stdin.read(); print('{\"verdict\": \"pass\"}')"
-        ],
-        "visibility_command": [
-            interpreter(), "-c",
-            "import sys; sys.stdin.read(); print('{\"visibility\": \"public\"}')"
-        ],
-    });
-    sandbox.project_document(&serde_json::to_string_pretty(&configuration).expect("renders"));
-    let copy = ["project", "copy", "drafts:P", "--to", "public", "--json"];
-    let first = parsed(&sandbox, &copy);
-    let landed: BTreeMap<String, String> = actions(&first)
-        .into_iter()
-        .map(|(source, action, destination)| {
-            assert_eq!(action, "created", "{first:#}");
-            (source, destination.expect("a destination"))
-        })
-        .collect();
-    let copied = &landed["drafts:open"];
-    let metadata = |id: &str| -> Value {
-        parsed(&sandbox, &["task", "show", id, "--json"])["items"][0]["item"]["metadata"].clone()
-    };
+    // The delete changes nothing but the private folder; a copy without `--close-orphans` and a
+    // closing dry run leave the dropped task's copy and the record alone; the closing copy
+    // cancels that copy alone and takes the record's entry out; and the copy after it says and
+    // writes nothing of the dropped task.
+    let plan = PrivatePlan::new(&[("stay", "Stay", &[]), ("open", "Open", &[])]);
+    let copied = plan.landed["drafts:open"].clone();
     assert_eq!(
-        metadata(copied).get("onetaskgraph.origin"),
+        parsed(&plan.sandbox, &["task", "show", &copied, "--json"])["items"][0]["item"]["metadata"]
+            .get("onetaskgraph.origin"),
         None,
         "the copy names no private origin"
     );
-    let record = || -> Value {
-        parsed(&sandbox, &["project", "show", "drafts:P", "--json"])["items"][0]["item"]["metadata"]
-            ["onetaskgraph.deleted_copies"]
-            .clone()
-    };
-
-    // A source project the record cannot be written to refuses the delete, removing nothing.
-    let projects = drafts.join("projects");
-    let unwritable = tree(&drafts);
-    let permissions = |mode| {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&projects, std::fs::Permissions::from_mode(mode))
-            .expect("the project folder's permissions");
-    };
-    permissions(0o555);
-    let refused = run(&sandbox, &["task", "delete", "drafts:open"]);
-    permissions(0o755);
-    assert_ne!(refused.status.code(), Some(0), "{}", stdout(&refused));
-    assert_eq!(stdout(&refused), "");
-    assert!(stderr(&refused).contains("next:"), "{}", stderr(&refused));
+    let published = tree(&plan.public);
     assert_eq!(
-        tree(&drafts),
-        unwritable,
-        "a refused delete removed nothing"
-    );
-
-    // The delete records the copy on the project and touches nothing in the public folder.
-    let published = tree(&public);
-    assert_eq!(
-        printed(&sandbox, &["task", "delete", "drafts:open"]),
+        printed(&plan.sandbox, &["task", "delete", "drafts:open"]),
         "deleted task drafts:open\n"
     );
-    let (at, native) = copied.split_once(':').expect("a qualified id");
-    assert_eq!(record(), json!({at: {native: "drafts:open"}}));
+    let recorded = plan.recording(&["drafts:open"]);
+    assert_eq!(plan.record(), recorded);
     assert_eq!(
-        tree(&public),
+        tree(&plan.public),
         published,
         "a delete reached the public folder"
     );
 
-    // A copy without the flag does not read the record: nothing of the dropped task is
-    // reported, nothing is written, and the record stays for the closing copy.
-    let flagless = parsed(&sandbox, &copy);
-    assert!(
-        actions(&flagless)
-            .iter()
-            .all(|(source, action, _)| source != "drafts:open" && action == "unchanged"),
-        "{flagless:#}"
+    // Neither a copy without the flag nor a closing dry run writes anything or the record; only
+    // the dry run, which reads the record, says anything of the dropped task.
+    assert_eq!(moved(&plan.copy(&[])), vec![]);
+    let closed = (
+        "drafts:open".to_owned(),
+        "closed".to_owned(),
+        Some(copied.clone()),
     );
-    assert_eq!(tree(&public), published);
-    assert_eq!(record(), json!({at: {native: "drafts:open"}}));
+    assert_eq!(
+        moved(&plan.copy(&["--close-orphans", "--dry-run"])),
+        vec![closed.clone()]
+    );
+    assert_eq!(tree(&plan.public), published);
+    assert_eq!(plan.record(), recorded);
 
     // The closing copy cancels the copy alone and takes its entry out of the record.
-    let closing = [&copy[..], &["--close-orphans"]].concat();
-    let report = parsed(&sandbox, &closing);
+    let report = plan.copy(&["--close-orphans"]);
     validates(
-        &bundle(&sandbox),
+        &bundle(&plan.sandbox),
         "CopyReport",
         &report,
         "project copy --json",
     );
-    let closed: Vec<_> = actions(&report)
-        .into_iter()
-        .filter(|(_, action, _)| action != "unchanged")
-        .collect();
-    assert_eq!(
-        closed,
-        vec![(
-            "drafts:open".to_owned(),
-            "closed".to_owned(),
-            Some(copied.clone())
-        )]
-    );
-    assert_eq!(category(&sandbox, copied), "cancelled");
-    let after = tree(&public);
+    assert_eq!(moved(&report), vec![closed]);
+    assert_eq!(category(&plan.sandbox, &copied), "cancelled");
+    let after = tree(&plan.public);
     let changed: Vec<&PathBuf> = published
         .iter()
         .filter(|(path, bytes)| after.get(*path) != Some(*bytes))
         .map(|(path, _)| path)
         .collect();
     assert_eq!(changed.len(), 1, "one copy changed: {changed:?}");
-    assert_eq!(record(), json!({}));
+    assert_eq!(plan.record(), json!({}));
 
     // With nothing left on record, the next closing copy says and writes nothing of it.
-    let again = parsed(&sandbox, &closing);
-    assert!(
-        actions(&again)
-            .iter()
-            .all(|(source, _, _)| source != "drafts:open"),
-        "{again:#}"
+    assert_eq!(moved(&plan.copy(&["--close-orphans"])), vec![]);
+    assert_eq!(tree(&plan.public), after);
+}
+
+#[test]
+fn a_recorded_copy_already_finished_or_landed_again_is_taken_off_the_record_and_not_closed() {
+    // Two dropped tasks: `finished`'s copy a person already set done, which is reported
+    // `orphaned` and left as it is, and `again`'s copy, which a new draft task of the same title
+    // takes over by `--match-by title` in the very copy that would close it — so it serves a task
+    // the source still holds and is not closed. Both entries go from the record.
+    let plan = PrivatePlan::new(&[
+        ("stay", "Stay", &[]),
+        ("finished", "Finished", &[]),
+        ("again", "Again", &[]),
+    ]);
+    let finished = plan.landed["drafts:finished"].clone();
+    let again = plan.landed["drafts:again"].clone();
+    printed(&plan.sandbox, &["task", "status", "set", &finished, "done"]);
+    for task in ["drafts:finished", "drafts:again"] {
+        printed(&plan.sandbox, &["task", "delete", task]);
+    }
+    assert_eq!(
+        plan.record(),
+        plan.recording(&["drafts:finished", "drafts:again"])
     );
-    assert_eq!(tree(&public), after);
+    std::fs::write(
+        plan.drafts.join("tasks/renewed.md"),
+        "---\ntitle: Again\nproject: P\n---\nThe body of again.\n",
+    )
+    .expect("a new draft task");
+    let finished_before = tree(&plan.public);
+
+    let report = plan.copy(&["--close-orphans", "--match-by", "title"]);
+    let said = moved(&report);
+    assert!(
+        said.contains(&(
+            "drafts:finished".to_owned(),
+            "orphaned".to_owned(),
+            Some(finished.clone())
+        )),
+        "{report:#}"
+    );
+    assert!(
+        said.iter()
+            .all(|(source, action, destination)| action != "closed"
+                && (source != "drafts:renewed" || destination.as_ref() == Some(&again))),
+        "{report:#}"
+    );
+    assert_eq!(category(&plan.sandbox, &finished), "done");
+    assert_ne!(category(&plan.sandbox, &again), "cancelled");
+    let finished_file = |tree: &BTreeMap<PathBuf, Vec<u8>>| {
+        tree.iter()
+            .find(|(path, _)| path.ends_with(format!("{}.md", finished.split_once(':').unwrap().1)))
+            .map(|(_, bytes)| bytes.clone())
+    };
+    assert_eq!(
+        finished_file(&tree(&plan.public)),
+        finished_file(&finished_before)
+    );
+    assert_eq!(plan.record(), json!({}));
+}
+
+/// Set the permissions of `folder` to `mode`.
+#[cfg(unix)]
+fn permit(folder: &Path, mode: u32) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(folder, std::fs::Permissions::from_mode(mode))
+        .expect("the folder's permissions");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_delete_that_cannot_record_or_cannot_remove_leaves_the_task_and_the_record_as_they_were() {
+    // A project folder the record cannot be written into refuses the delete before anything is
+    // removed; a task folder the file cannot be removed from refuses it after the record was
+    // written, which puts the record back. Then the delete goes through.
+    let plan = PrivatePlan::new(&[("stay", "Stay", &[]), ("open", "Open", &[])]);
+    for (folder, what) in [("projects", "the record"), ("tasks", "the removal")] {
+        let before = tree(&plan.drafts);
+        permit(&plan.drafts.join(folder), 0o555);
+        let refused = run(&plan.sandbox, &["task", "delete", "drafts:open"]);
+        permit(&plan.drafts.join(folder), 0o755);
+        assert_ne!(
+            refused.status.code(),
+            Some(0),
+            "{what}: {}",
+            stdout(&refused)
+        );
+        assert_eq!(stdout(&refused), "", "{what}");
+        assert!(
+            stderr(&refused).contains("next:"),
+            "{what}: {}",
+            stderr(&refused)
+        );
+        assert!(
+            listed(&plan.sandbox, "drafts").contains(&"drafts:open".to_owned()),
+            "{what}"
+        );
+        let record = plan.record();
+        assert!(
+            record.is_null() || record == json!({}),
+            "{what}: the record names nothing: {record}"
+        );
+        if folder == "projects" {
+            assert_eq!(tree(&plan.drafts), before, "{what}: nothing moved");
+        }
+    }
+    printed(&plan.sandbox, &["task", "delete", "drafts:open"]);
+    assert_eq!(plan.record(), plan.recording(&["drafts:open"]));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_close_the_destination_refuses_keeps_its_entry_for_the_next_closing_copy() {
+    // The public folder refuses the close: the copy reports it `failed` and exits 4, and the
+    // entry stays, so the next closing copy closes it and takes the entry out.
+    let plan = PrivatePlan::new(&[("stay", "Stay", &[]), ("open", "Open", &[])]);
+    let copied = plan.landed["drafts:open"].clone();
+    printed(&plan.sandbox, &["task", "delete", "drafts:open"]);
+    let recorded = plan.record();
+    let tasks = plan.public.join("tasks");
+    permit(&tasks, 0o555);
+    let refused = run(
+        &plan.sandbox,
+        &[&PrivatePlan::COPY[..], &["--close-orphans"]].concat(),
+    );
+    permit(&tasks, 0o755);
+    assert_eq!(refused.status.code(), Some(4), "{}", stderr(&refused));
+    let report: Value = serde_json::from_str(&stdout(&refused)).expect("the report");
+    assert_eq!(
+        moved(&report)
+            .into_iter()
+            .map(|(source, action, _)| (source, action))
+            .collect::<Vec<_>>(),
+        vec![("drafts:open".to_owned(), "failed".to_owned())]
+    );
+    assert_ne!(category(&plan.sandbox, &copied), "cancelled");
+    assert_eq!(plan.record(), recorded, "a refused close keeps its entry");
+
+    let closing = plan.copy(&["--close-orphans"]);
+    assert_eq!(
+        moved(&closing),
+        vec![(
+            "drafts:open".to_owned(),
+            "closed".to_owned(),
+            Some(copied.clone())
+        )]
+    );
+    assert_eq!(category(&plan.sandbox, &copied), "cancelled");
+    assert_eq!(plan.record(), json!({}));
 }

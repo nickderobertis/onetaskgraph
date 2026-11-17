@@ -1575,59 +1575,102 @@ struct SettledDeletedCopy {
     project: GlobalId,
     /// The counterpart the entry names.
     destination: GlobalId,
-    /// Whether the entry goes only once the copy has closed the counterpart: true for one it
-    /// reported `closed`, false for one already done or cancelled, or no longer filed there.
-    once_closed: bool,
+    /// When the entry goes.
+    settle: Settle,
+}
+
+/// When a settled entry of a project's `onetaskgraph.deleted_copies` is taken out.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Settle {
+    /// At once: its counterpart is already done or cancelled, no longer filed under the
+    /// project's copy, or landed by this copy for a task the source still holds.
+    Now,
+    /// Only once the copy's close of its counterpart has been made, so a close the destination
+    /// refused is tried again by the next closing copy.
+    OnceClosed,
+}
+
+/// How an orphan walk found one recorded counterpart.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Sighting {
+    /// Not filed under the project's copy, as far as the walk has read.
+    Unseen,
+    /// Filed there and still open.
+    Open,
+    /// Filed there and already done or cancelled.
+    Finished,
 }
 
 /// The entries of a source project's `onetaskgraph.deleted_copies` naming one destination an
-/// orphan walk reads, and which of them it has found.
+/// orphan walk reads, and how it found each.
 struct Recorded {
-    /// Each counterpart's native id there, the deleted task it was a copy of, and how the walk
-    /// found it: `None` until found, then whether it was still open.
-    entries: BTreeMap<String, (GlobalId, Option<bool>)>,
+    /// Each counterpart's native id there, with the deleted task it was a copy of.
+    entries: BTreeMap<NativeId, (GlobalId, Sighting)>,
+    /// The record's counterparts this copy itself landed, for tasks the source still holds:
+    /// never orphans, and settled at once.
+    landed: Vec<NativeId>,
 }
 
 impl Recorded {
-    /// The entries of `record` for `destination`, leaving out a counterpart this copy itself
-    /// landed — which serves a task the source still holds.
+    /// The entries of `record` for `destination`, a counterpart this copy itself landed set
+    /// apart from the rest.
     fn of(
         record: &super::delete::DeletedCopies,
         destination: &SourceName,
         landed: &[GlobalId],
     ) -> Self {
-        let entries = record
-            .get(destination.as_str())
+        let (landed, entries): (Vec<_>, Vec<_>) = record
+            .get(destination)
             .into_iter()
             .flatten()
-            .filter(|(native, _)| {
-                !landed
+            .partition(|(native, _)| {
+                landed
                     .iter()
-                    .any(|id| &id.source == destination && id.native.as_str() == native.as_str())
-            })
-            .map(|(native, task)| (native.clone(), (task.clone(), None)))
-            .collect();
-        Self { entries }
+                    .any(|id| &id.source == destination && &id.native == *native)
+            });
+        Self {
+            entries: entries
+                .into_iter()
+                .map(|(native, task)| (native.clone(), (task.clone(), Sighting::Unseen)))
+                .collect(),
+            landed: landed
+                .into_iter()
+                .map(|(native, _)| native.clone())
+                .collect(),
+        }
     }
 
-    /// The deleted task `counterpart` was a copy of, when the record names it, noting it found.
+    /// The deleted task `counterpart` was a copy of, when the record names it, noting how it was
+    /// found.
     fn found(&mut self, counterpart: &NativeId, open: bool) -> Option<GlobalId> {
-        let (task, found) = self.entries.get_mut(counterpart.as_str())?;
-        *found = Some(open);
+        let (task, sighting) = self.entries.get_mut(counterpart)?;
+        *sighting = if open {
+            Sighting::Open
+        } else {
+            Sighting::Finished
+        };
         Some(task.clone())
     }
 
-    /// Every entry the walk settled, under `destination`: each found still open, to go once
-    /// closed, and every other — found done or cancelled, or not found at all — to go now.
-    fn settled(self, destination: &SourceName) -> Vec<(GlobalId, bool)> {
+    /// Every entry the walk settled, under `destination`: one found still open goes once it is
+    /// closed, and every other goes now.
+    fn settled(self, destination: &SourceName) -> Vec<(GlobalId, Settle)> {
+        let at = |native: NativeId| GlobalId::new(destination.clone(), native);
         self.entries
             .into_iter()
-            .map(|(native, (_, found))| {
-                (
-                    GlobalId::new(destination.clone(), NativeId::from(native)),
-                    found == Some(true),
-                )
+            .map(|(native, (_, sighting))| {
+                let settle = if sighting == Sighting::Open {
+                    Settle::OnceClosed
+                } else {
+                    Settle::Now
+                };
+                (at(native), settle)
             })
+            .chain(
+                self.landed
+                    .into_iter()
+                    .map(|native| (at(native), Settle::Now)),
+            )
             .collect()
     }
 }
@@ -1635,7 +1678,7 @@ impl Recorded {
 /// What one orphan walk answers: its orphans, and the recorded entries it settled.
 struct Walked {
     orphans: Vec<CopyOutcome>,
-    settled: Vec<(GlobalId, bool)>,
+    settled: Vec<(GlobalId, Settle)>,
 }
 
 impl Walked {
@@ -1643,10 +1686,10 @@ impl Walked {
     fn settled(&self, project: &GlobalId) -> Vec<SettledDeletedCopy> {
         self.settled
             .iter()
-            .map(|(destination, once_closed)| SettledDeletedCopy {
+            .map(|(destination, settle)| SettledDeletedCopy {
                 project: project.clone(),
                 destination: destination.clone(),
-                once_closed: *once_closed,
+                settle: *settle,
             })
             .collect()
     }
@@ -4485,6 +4528,9 @@ impl Engine {
             // A routed plan's tasks are filed under its members too, so each member is walked
             // in its own source for what the source plan no longer holds.
             if self.routes.routes(&request.destination) {
+                // The same walk, reading the same record for the member's source: the routed
+                // journey in tests/e2e/task_delete.rs drives this loop by origin, and the
+                // record's matching is driven by the unrouted private journeys beside it.
                 for member in self.members_named(&filed, running).await? {
                     let there = self.writable(&member.source)?;
                     let walked = self
@@ -5623,14 +5669,17 @@ impl Engine {
     /// the destination refused is tried again by the next such copy.
     ///
     /// A record that cannot be read or written is left as it is: the entries it keeps name
-    /// counterparts a later copy finds already closed, and settles then.
+    /// counterparts a later closing copy finds already cancelled and settles at once, the path
+    /// `a_recorded_copy_already_finished_or_landed_again_is_taken_off_the_record_and_not_closed`
+    /// drives. Failing this write on purpose would mean failing a source write between two that
+    /// must succeed in one process, which no fixture here can time.
     async fn forget_deleted_copies(&self, report: &CopyReport, settled: Vec<SettledDeletedCopy>) {
         let mut by_project: Vec<(GlobalId, Vec<GlobalId>)> = Vec::new();
         for entry in settled {
             let closed = report.items.iter().any(|outcome| {
                 matches!(&outcome.action, CopyAction::Closed { destination } if *destination == entry.destination)
             });
-            if entry.once_closed && !closed {
+            if entry.settle == Settle::OnceClosed && !closed {
                 continue;
             }
             match by_project
@@ -5651,8 +5700,8 @@ impl Engine {
             let mut record =
                 super::delete::deleted_copies(held.metadata.get(MetadataKey::DELETED_COPIES_KEY));
             for counterpart in &forgotten {
-                if let Some(entries) = record.get_mut(counterpart.source.as_str()) {
-                    entries.remove(counterpart.native.as_str());
+                if let Some(entries) = record.get_mut(&counterpart.source) {
+                    entries.remove(&counterpart.native);
                 }
             }
             let _ = source

@@ -183,12 +183,14 @@ impl MetadataKey {
     /// destination item it had. Ids only. Read only by an unnarrowed `project copy
     /// --close-orphans` into that destination, which closes each counterpart still open and
     /// takes its entry out; no copy carries it.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] Recording and settling the entries is the engine's (`engine/delete.rs` and `engine/copy.rs`), and none of that is here: this crate is where every reserved key is spelled once (`docs/metadata.md` is held to these constants), and `MetadataKey`'s field is private to this crate, so a constructor here is the only way the engine names a reserved key on the narrow write, as `attestations` and `creating` do. No trait or type changes.
     pub const DELETED_COPIES_KEY: &'static str = "onetaskgraph.deleted_copies";
 
     /// [`Self::DELETED_COPIES_KEY`], as the key `task delete` and the copy that closes what it
     /// records write it under.
     #[must_use]
     // llmlint: ignore[invalid_states_unrepresentable] The same seam as `copies`: a key type of its own would change the three narrow metadata writes every plugin implements, which this crate keeps still (AGENTS.md); `new`, deserialization, the command line and both SDKs refuse the key.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] As `DELETED_COPIES_KEY` above: the only way the engine names a reserved key on the narrow write is a constructor of this type, whose field is private to this crate.
     pub fn deleted_copies() -> Self {
         Self(Self::DELETED_COPIES_KEY.to_owned())
     }

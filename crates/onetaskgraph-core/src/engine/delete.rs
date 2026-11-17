@@ -19,7 +19,7 @@ use std::num::NonZeroU32;
 
 use std::collections::BTreeMap;
 
-use onetaskgraph_plugin_api::{Direction, MetadataKey, NativeId, Task};
+use onetaskgraph_plugin_api::{Direction, MetadataKey, NativeId, SourceName, Task};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -28,12 +28,16 @@ use super::{Completeness, DependencyRequest, Engine, EngineError, Paging};
 use crate::GlobalId;
 use crate::resolve::ResolvedSource;
 
-/// What a project records at [`MetadataKey::DELETED_COPIES_KEY`]: for each destination source
-/// name, each counterpart's native id there mapped to the qualified id of the deleted task it
-/// was a copy of. An entry that is not that shape is left out of what is read.
-pub(super) type DeletedCopies = BTreeMap<String, BTreeMap<String, GlobalId>>;
+/// What a project records at [`MetadataKey::DELETED_COPIES_KEY`]: for each destination source,
+/// each counterpart's native id there mapped to the qualified id of the deleted task it was a
+/// copy of.
+pub(super) type DeletedCopies = BTreeMap<SourceName, BTreeMap<NativeId, GlobalId>>;
 
-/// The record `value` holds, its ill-formed entries left out.
+/// The record `value` holds.
+///
+/// An entry that is not that shape is left out rather than refusing the delete or the copy
+/// that reads it: only the engine writes the key, so one is a hand edit, and dropping it costs
+/// at most a copy left open where refusing would block every later delete under the project.
 pub(super) fn deleted_copies(value: Option<&Value>) -> DeletedCopies {
     let Some(Value::Object(held)) = value else {
         return DeletedCopies::new();
@@ -43,11 +47,17 @@ pub(super) fn deleted_copies(value: Option<&Value>) -> DeletedCopies {
             let Value::Object(entries) = entries else {
                 return None;
             };
-            let entries: BTreeMap<String, GlobalId> = entries
+            let entries: BTreeMap<NativeId, GlobalId> = entries
                 .iter()
-                .filter_map(|(native, task)| Some((native.clone(), task.as_str()?.parse().ok()?)))
+                .filter_map(|(native, task)| {
+                    Some((
+                        NativeId::from(native.as_str()),
+                        task.as_str()?.parse().ok()?,
+                    ))
+                })
                 .collect();
-            (!entries.is_empty()).then(|| (destination.clone(), entries))
+            let destination = SourceName::try_from(destination.clone()).ok()?;
+            (!entries.is_empty()).then_some((destination, entries))
         })
         .collect()
 }
@@ -61,9 +71,9 @@ pub(super) fn deleted_copies_value(record: &DeletedCopies) -> Value {
             .map(|(destination, entries)| {
                 let entries = entries
                     .iter()
-                    .map(|(native, task)| (native.clone(), Value::String(task.to_string())))
+                    .map(|(native, task)| (native.to_string(), Value::String(task.to_string())))
                     .collect();
-                (destination.clone(), Value::Object(entries))
+                (destination.to_string(), Value::Object(entries))
             })
             .collect(),
     )
@@ -198,9 +208,9 @@ async fn record_copies(
     let mut record = deleted_copies(Some(&before));
     for (destination, native) in links {
         record
-            .entry(destination.to_string())
+            .entry(destination)
             .or_default()
-            .insert(native.to_string(), id.clone());
+            .insert(native, id.clone());
     }
     source
         .source()
@@ -212,4 +222,31 @@ async fn record_copies(
         .await
         .map_err(failed)?;
     Ok(Some((project.clone(), before)))
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{deleted_copies, deleted_copies_value};
+
+    #[test]
+    fn a_record_drops_what_is_ill_formed_and_keeps_the_rest_through_a_write() {
+        // Only the engine writes the key, so an ill-formed entry is a hand edit: it is left out
+        // of what is read, and so out of what the next write puts back, while every well-formed
+        // entry survives that write unchanged.
+        let held = json!({
+            "board": {"I-1": "drafts:open", "I-2": 7, "I-3": "not a qualified id"},
+            "not a source name!": {"I-4": "drafts:gone"},
+            "empty": {},
+            "listed": ["drafts:x"],
+        });
+        let record = deleted_copies(Some(&held));
+        assert_eq!(
+            deleted_copies_value(&record),
+            json!({"board": {"I-1": "drafts:open"}})
+        );
+        assert!(deleted_copies(Some(&json!("not an object"))).is_empty());
+        assert!(deleted_copies(None).is_empty());
+    }
 }
