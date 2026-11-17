@@ -249,6 +249,22 @@ pub struct CopyRequest {
     /// task copy takes them: beside a project or a document copy any condition is refused, as
     /// [`EngineError::ConditionsNotTasks`], before anything is read.
     pub conditions: CopyConditions,
+    /// Whether a project copy closes each orphan it finds open — `--close-orphans`.
+    ///
+    /// Without it an orphan is left exactly as it is and reported [`CopyAction::Orphaned`]. With
+    /// it, each orphan the walk finds at a category other than `done` or `cancelled` is given
+    /// the write `task status set <orphan> cancelled` makes, every effect of that write
+    /// included, once the rest of the copy has landed, and reported [`CopyAction::Closed`]; a
+    /// dry run reports it so and writes nothing. One already `done` or `cancelled` is reported
+    /// `orphaned` as before. A close the destination refuses is reported
+    /// [`CopyAction::Failed`].
+    ///
+    /// Only a copy that walks every member of its projects finds orphans, so beside any other
+    /// scope — a task or document copy, [`CopyScope::Members`], [`CopyScope::MembersOnly`], or
+    /// a project copy without its tasks — it is refused, as
+    /// [`EngineError::CloseOrphansNarrowed`], before anything is read.
+    // llmlint: ignore[invalid_states_unrepresentable] Folding this into `CopyScope::Projects` would make it unrepresentable beside the narrowed scopes, but `CopyScope` is matched and built by name by every Rust caller of this request and shared with the report; one more flag beside `create`, `comments` and `statuses` keeps their shape, and the combinations it allows that mean nothing are refused by `Engine::copy` before anything is read, which `close_orphans_beside_a_narrowed_copy_is_refused_before_anything_is_read` in tests/copy.rs holds.
+    pub close_orphans: bool,
 }
 
 /// A copy selection option, named as the command line spells it in a conflict refusal.
@@ -843,6 +859,14 @@ pub enum CopyAction {
         /// The item that was left alone.
         destination: GlobalId,
     },
+    /// The destination held a counterpart the source no longer does, open, and a copy asked to
+    /// close its orphans — [`CopyRequest::close_orphans`] — gave it the write `task status set
+    /// <orphan> cancelled` makes: on a GitHub board, its issue closed as not planned. A dry run
+    /// reports it and writes nothing. Nothing else of it was written and no link was touched.
+    Closed {
+        /// The item that was closed.
+        destination: GlobalId,
+    },
     /// The item changed while the copy read it, and changed again while the copy read it a
     /// second time, so nothing was written for it — never a mix of two of its revisions.
     ///
@@ -878,7 +902,8 @@ impl CopyAction {
             Self::Created { destination, .. } => destination.as_ref(),
             Self::Updated { destination, .. }
             | Self::Unchanged { destination, .. }
-            | Self::Orphaned { destination } => Some(destination),
+            | Self::Orphaned { destination }
+            | Self::Closed { destination } => Some(destination),
             Self::Failed { .. } | Self::Skipped { .. } | Self::Oversize { .. } => None,
         }
     }
@@ -891,6 +916,7 @@ impl CopyAction {
             Self::Updated { via, .. } | Self::Unchanged { via, .. } => Some(*via),
             Self::Created { .. }
             | Self::Orphaned { .. }
+            | Self::Closed { .. }
             | Self::Failed { .. }
             | Self::Skipped { .. }
             | Self::Oversize { .. } => None,
@@ -906,6 +932,7 @@ impl CopyAction {
             | Self::Updated { link, .. }
             | Self::Unchanged { link, .. } => *link,
             Self::Orphaned { .. }
+            | Self::Closed { .. }
             | Self::Failed { .. }
             | Self::Skipped { .. }
             | Self::Oversize { .. } => None,
@@ -921,6 +948,7 @@ impl CopyAction {
             | Self::Updated { comments, .. }
             | Self::Unchanged { comments, .. } => comments.as_ref(),
             Self::Orphaned { .. }
+            | Self::Closed { .. }
             | Self::Failed { .. }
             | Self::Skipped { .. }
             | Self::Oversize { .. } => None,
@@ -940,6 +968,7 @@ impl CopyAction {
         !matches!(
             self,
             Self::Orphaned { .. }
+                | Self::Closed { .. }
                 | Self::Failed { .. }
                 | Self::Skipped { .. }
                 | Self::Oversize { .. }
@@ -953,6 +982,7 @@ impl CopyAction {
             | Self::Updated { link, .. }
             | Self::Unchanged { link, .. } => Some(link),
             Self::Orphaned { .. }
+            | Self::Closed { .. }
             | Self::Failed { .. }
             | Self::Skipped { .. }
             | Self::Oversize { .. } => None,
@@ -2291,6 +2321,12 @@ impl Engine {
         if !request.statuses.is_empty() && request.scope != CopyScope::Tasks {
             return Err(EngineError::StatusesNotTasks);
         }
+        // Only a copy that walks every member of its projects finds what the source dropped.
+        if request.close_orphans
+            && !matches!(request.scope, CopyScope::Projects { tasks: true, .. })
+        {
+            return Err(EngineError::CloseOrphansNarrowed);
+        }
         let conditions = &request.conditions;
         if (!conditions.status.is_empty()
             || conditions.otherwise.is_some()
@@ -2355,6 +2391,9 @@ impl Engine {
                         )
                         .await,
                     );
+                }
+                if !request.dry_run {
+                    self.close_orphans(&mut report).await;
                 }
                 report.spent = spent_between(&before, &readings(&metered).await);
                 Ok(report)
@@ -4323,15 +4362,24 @@ impl Engine {
         {
             let destination = self.writable(&filed.source)?;
             outcomes.extend(
-                self.orphans(destination, &id, &filed.native, &members)
-                    .await?,
+                self.orphans(
+                    destination,
+                    &id,
+                    &filed.native,
+                    &members,
+                    request.close_orphans,
+                )
+                .await?,
             );
             // A routed plan's tasks are filed under its members too, so each member is walked
             // in its own source for what the source plan no longer holds.
             if self.routes.routes(&request.destination) {
                 for member in self.members_named(&filed, running).await? {
                     let there = self.writable(&member.source)?;
-                    outcomes.extend(self.orphans(there, &id, &member.native, &members).await?);
+                    outcomes.extend(
+                        self.orphans(there, &id, &member.native, &members, request.close_orphans)
+                            .await?,
+                    );
                 }
             }
         }
@@ -5364,13 +5412,16 @@ impl Engine {
     /// Asked of the destination project's own members — a query narrowed to that one project
     /// — so what it costs is that project's tasks and never the rest of the store; each answer
     /// is still held to its filing here, so a source that answers the wider set is read
-    /// exactly as before. A copy never deletes, so each is left exactly as it is and reported.
+    /// exactly as before. A copy never deletes, so each is left exactly as it is and reported
+    /// `orphaned` — or, when the copy was asked to `close` them, one still open is reported
+    /// `closed`, for [`Self::close_orphans`] to close once the copy has landed.
     async fn orphans(
         &self,
         destination: &ResolvedSource,
         project: &GlobalId,
         at_destination: &NativeId,
         copied: &[GlobalId],
+        close: bool,
     ) -> Result<Vec<CopyOutcome>, EngineError> {
         let mut orphans = Vec::new();
         let mut cursor: Option<Cursor> = None;
@@ -5406,8 +5457,18 @@ impl Engine {
                     held: None,
                     expected: ExpectedWrite::default(),
                     source: origin,
-                    action: CopyAction::Orphaned {
-                        destination: GlobalId::new(destination.name().clone(), task.id.clone()),
+                    action: {
+                        let destination =
+                            GlobalId::new(destination.name().clone(), task.id.clone());
+                        let open = !matches!(
+                            task.status.category,
+                            StatusCategory::Done | StatusCategory::Cancelled
+                        );
+                        if close && open {
+                            CopyAction::Closed { destination }
+                        } else {
+                            CopyAction::Orphaned { destination }
+                        }
                     },
                     placed: None,
                 });
@@ -5421,6 +5482,32 @@ impl Engine {
             match page.next {
                 Some(next) => cursor = Some(next),
                 None => return Ok(orphans),
+            }
+        }
+    }
+
+    /// Close each orphan the walk reported `closed`, with the write `task status set <orphan>
+    /// cancelled` makes, every effect of it included — once the whole copy has landed, and
+    /// outside its journal, so a close is never what undoes a copy that landed.
+    ///
+    /// A close the destination refuses is reported against that orphan as
+    /// [`CopyAction::Failed`], as an item the copy could not write is, and the others still
+    /// close. What a close keeps in step joins the report's `delivered`.
+    async fn close_orphans(&self, report: &mut CopyReport) {
+        for outcome in &mut report.items {
+            let CopyAction::Closed { destination } = &outcome.action else {
+                continue;
+            };
+            match self
+                .set_task_status(destination, StatusCategory::Cancelled)
+                .await
+            {
+                Ok(closed) => report.delivered.extend(closed.delivered),
+                Err(error) => {
+                    outcome.action = CopyAction::Failed {
+                        error: Failure::from(&error),
+                    };
+                }
             }
         }
     }

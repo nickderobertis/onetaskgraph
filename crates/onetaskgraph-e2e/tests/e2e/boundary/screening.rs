@@ -430,6 +430,7 @@ fn plan_copy_request() -> onetaskgraph_core::CopyRequest {
         status_policy: onetaskgraph_core::StatusPolicy::Source,
         statuses: Vec::new(),
         conditions: Default::default(),
+        close_orphans: false,
     }
 }
 
@@ -513,6 +514,7 @@ async fn copied_through(
         status_policy: onetaskgraph_core::StatusPolicy::Source,
         statuses: Vec::new(),
         conditions: Default::default(),
+        close_orphans: false,
     };
     let copied = engine.copy(&request).await;
     (store, policy, copied)

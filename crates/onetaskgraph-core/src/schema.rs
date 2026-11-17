@@ -40,8 +40,8 @@ use crate::{
     MetadataSet, PageToken, Predicate, ProjectGraph, ProjectStatusSet, PublicProjections,
     Qualified, QualifiedEdge, QualifiedEndpoint, QueryPlan, QueryResponse, ReconcileOutcome,
     Regenerated, SearchHit, SearchKind, SourceFailure, SourceListing, SourcePlan, StatusReconciled,
-    StatusesReconciled, TaskAssetNames, TaskContentSet, TaskDetail, TaskDetails, TaskPrioritySet,
-    TaskStatusSet, TaskUpdated, TemplateAnswers,
+    StatusesReconciled, TaskAssetNames, TaskContentSet, TaskDeleted, TaskDetail, TaskDetails,
+    TaskPrioritySet, TaskStatusSet, TaskUpdated, TemplateAnswers,
 };
 
 /// The bundle's own version, bumped whenever any root's schema changes — added, removed,
@@ -57,7 +57,7 @@ use crate::{
 /// that it moves whenever [`schema_bundle`] below emits a different document. The golden
 /// that holds it to that is `PUBLISHED_BUNDLES` in `tests/engine.rs`, which records every
 /// root's schema by digest from this version on.
-pub const SCHEMA_BUNDLE_VERSION: u32 = 64;
+pub const SCHEMA_BUNDLE_VERSION: u32 = 65;
 
 /// The same typed envelope the command line serializes, keeping the payload's root name.
 pub(crate) fn write_answer_schema<T: schemars::JsonSchema>() -> Schema {
@@ -181,6 +181,8 @@ pub fn schema_bundle() -> Value {
     roots.insert("PageOfComment", schema_for!(Page<Comment>));
     roots.insert("CommentList", schema_for!(CommentList));
     roots.insert("DeletedComment", write_answer_schema::<DeletedComment>());
+    // What `task delete` answers with: the qualified id of the task it removed.
+    roots.insert("TaskDeleted", write_answer_schema::<TaskDeleted>());
     roots.insert("TaskDetail", write_answer_schema::<TaskDetail>());
     // What `task show-many` answers with: one `TaskDetail` per id, in request order.
     roots.insert("TaskDetails", schema_for!(TaskDetails));

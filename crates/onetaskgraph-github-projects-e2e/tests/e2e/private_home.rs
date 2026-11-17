@@ -805,6 +805,7 @@ fn the_library_copy_reads_each_destination_again_at_each_copy_over_the_same_sour
         status_policy: onetaskgraph_core::StatusPolicy::Source,
         statuses: Vec::new(),
         conditions: Default::default(),
+        close_orphans: false,
     };
     let runtime = tokio::runtime::Runtime::new().expect("a runtime");
     let mut reads = Vec::new();
@@ -920,6 +921,7 @@ fn overlapping_library_copies_read_visibility_independently() {
         status_policy: onetaskgraph_core::StatusPolicy::Source,
         statuses: Vec::new(),
         conditions: Default::default(),
+        close_orphans: false,
     };
     let first_request = request("first");
     let second_request = request("second");
@@ -1287,6 +1289,7 @@ fn a_project_copy_visibility_rate_limit_holds_off_later_reads() {
         status_policy: onetaskgraph_core::StatusPolicy::Source,
         statuses: Vec::new(),
         conditions: Default::default(),
+        close_orphans: false,
     };
     tokio::runtime::Runtime::new()
         .expect("a runtime")

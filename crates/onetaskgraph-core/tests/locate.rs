@@ -100,6 +100,7 @@ async fn several_tasks_are_answered_in_the_order_named_and_nothing_meters_spends
             expect: None,
             statuses: Vec::new(),
             conditions: Default::default(),
+            close_orphans: false,
         })
         .await
         .expect("the copy");

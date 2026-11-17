@@ -473,6 +473,7 @@ fn copy_of(items: &[&str], scope: CopyScope) -> CopyRequest {
         status_policy: onetaskgraph_core::StatusPolicy::Source,
         statuses: Vec::new(),
         conditions: Default::default(),
+        close_orphans: false,
     }
 }
 
@@ -510,6 +511,7 @@ fn via(outcome: &CopyOutcome) -> Option<String> {
     match &outcome.action {
         CopyAction::Created { .. } => assert_eq!(word.as_deref(), Some("created")),
         CopyAction::Orphaned { .. }
+        | CopyAction::Closed { .. }
         | CopyAction::Failed { .. }
         | CopyAction::Skipped { .. }
         | CopyAction::Oversize { .. } => {

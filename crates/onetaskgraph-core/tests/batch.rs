@@ -249,6 +249,7 @@ fn copy(items: &[&str], versions: HashMap<GlobalId, String>) -> CopyRequest {
             versions,
             ..Default::default()
         },
+        close_orphans: false,
     }
 }
 

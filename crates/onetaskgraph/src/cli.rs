@@ -553,6 +553,20 @@ pub enum TaskCommand {
     /// (local-md) stores the answers beside it for a later `task render`. An image its body
     /// references as `![alt](./<name>)` is stored with it from --asset.
     Create(TaskCreateArgs),
+    /// Delete one task by its qualified id, `<source>:<native-id>`.
+    ///
+    /// It removes the task and everything its source stores for that task alone — its
+    /// stored template answers and its image assets — so `task show`, `task list`, `project
+    /// show` and `project graph` no longer report it. It asks for no confirmation, prints
+    /// `deleted task <ID>` (`{"deleted": "<ID>"}` under --json) and exits 0 once the task is
+    /// removed.
+    ///
+    /// It is refused, removing nothing, when the id names no task, when its source has no
+    /// write side, and when any task of the same source depends on it — each dependent named
+    /// by its qualified id, to rewire with `task update --depends-on` or `--no-depends-on`
+    /// first. It only removes: a copy of the task in another source is not touched, and the
+    /// next `project copy --close-orphans` of its project closes that copy.
+    Delete(TaskDeleteArgs),
     /// Regenerate one task's content from its template in place, and nothing else about it.
     ///
     /// The answers start from the ones stored beside it when they are in step with its
@@ -1646,6 +1660,16 @@ pub struct CommentEditArgs {
     pub term_scope: TermScopeArgs,
 }
 
+/// `onetaskgraph task delete`.
+#[derive(Debug, Args)]
+pub struct TaskDeleteArgs {
+    /// The task's qualified id, `<source>:<native-id>`.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — as `CommentAddArgs::id`.
+    #[arg(value_name = "ID")]
+    pub id: String,
+}
+
 /// `onetaskgraph task comment delete`.
 #[derive(Debug, Args)]
 pub struct CommentDeleteArgs {
@@ -2639,6 +2663,20 @@ pub struct ProjectCopyArgs {
     // llmlint: ignore[invalid_states_unrepresentable] Clap rejects this flag without a member at parse; the command conversion then constructs MembersOnly with nonempty CopyItems. Keeping the clap argument beside member follows this boundary's existing flag representation.
     #[arg(long = "members-only", requires = "member")]
     pub members_only: bool,
+
+    /// Close each orphan this copy finds open: a destination task filed under the project's
+    /// copy whose source task is gone, at a status other than done or cancelled, is given the
+    /// write `task status set <orphan> cancelled` makes — on a GitHub board, its issue closed
+    /// as not planned — and reported `closed` with its id. An orphan already done or cancelled
+    /// is left as it is and reported `orphaned`; a --dry-run reports `closed` and writes
+    /// nothing; a close that fails is reported as an item that could not be written is, and the
+    /// copy exits 4. Without it every orphan is left as it is and reported `orphaned`.
+    ///
+    /// Refused beside --member, --members-only and --no-tasks, which do not walk every task of
+    /// the project, so they cannot tell a dropped task from one they left out.
+    // llmlint: ignore[invalid_states_unrepresentable] Clap refuses it beside --member, --members-only and --no-tasks at parse, as it refuses --documents beside --member; the conversion sets `CopyRequest::close_orphans`, which `Engine::copy` refuses beside any narrowed scope before anything is read.
+    #[arg(long = "close-orphans", conflicts_with_all = ["member", "members_only", "no_tasks"])]
+    pub close_orphans: bool,
 
     /// Keep the destination's copies of each copied task's comments in step with the
     /// source's, as `task copy --comments` does.
