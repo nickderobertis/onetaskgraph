@@ -565,7 +565,10 @@ pub enum TaskCommand {
     /// write side, and when any task of the same source depends on it — each dependent named
     /// by its qualified id, to rewire with `task update --depends-on` or `--no-depends-on`
     /// first. It only removes: a copy of the task in another source is not touched, and the
-    /// next `project copy --close-orphans` of its project closes that copy.
+    /// next `project copy --close-orphans` of its project closes that copy. So that copy can
+    /// still be found where it carries no origin, a task filed under a project leaves the ids
+    /// of its copies on that project, at `onetaskgraph.deleted_copies`, and a source that
+    /// cannot hold them refuses the delete.
     Delete(TaskDeleteArgs),
     /// Regenerate one task's content from its template in place, and nothing else about it.
     ///
@@ -2669,7 +2672,9 @@ pub struct ProjectCopyArgs {
     /// as not planned — and reported `closed` with its id. An orphan already done or cancelled
     /// is left as it is and reported `orphaned`; a --dry-run reports `closed` and writes
     /// nothing; a close that fails is reported as an item that could not be written is, and the
-    /// copy exits 4. Without it every orphan is left as it is and reported `orphaned`.
+    /// copy exits 4. Without it every orphan is left as it is and reported `orphaned`. The
+    /// copies a `task delete` recorded on the source project are orphans too, found by that
+    /// record where they carry no origin, and each one closed is taken out of it.
     ///
     /// Refused beside --member, --members-only and --no-tasks, which do not walk every task of
     /// the project, so they cannot tell a dropped task from one they left out.

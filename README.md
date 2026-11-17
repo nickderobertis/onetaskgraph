@@ -981,6 +981,16 @@ removes: a copy of the task in another source is not touched. That copy is what 
 `project copy --close-orphans` reports and closes as `closed` — on a GitHub board, its issue
 closed as not planned — while a copy already `done` or `cancelled` stays as it is, `orphaned`.
 
+A deletion changes only the store it runs against, and reaches a destination at that copy and
+no sooner. A copy out of a source declared private into one that is not records no origin on
+the copies it lands, so before removing a task filed under a project, `task delete` records the
+ids of the task's copies — what its `onetaskgraph.copies` link named — on that project at
+`onetaskgraph.deleted_copies`. A source that cannot hold the record refuses the delete. Only
+an unnarrowed `project copy --close-orphans` into a destination reads that record: it closes
+each recorded copy still filed under the project's copy there, then takes the entry out. A copy
+without the flag, and a narrowed one, never read it, so they leave the record for the next
+closing copy.
+
 ### A create safe to retry
 
 <!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by the journeys in

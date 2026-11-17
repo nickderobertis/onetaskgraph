@@ -19,7 +19,7 @@ Keys are free-form, with two prefixes reserved:
      in `crates/onetaskgraph-e2e/tests/e2e/surface.rs` reads this bullet, and fails when the keys it
      lists or the count it states in words differ from the constants each key is spelled once
      as — `MetadataKey::COPIES_KEY` among them. -->
-- `onetaskgraph.` belongs to this product. It defines exactly twenty keys, each spelled
+- `onetaskgraph.` belongs to this product. It defines exactly twenty-one keys, each spelled
   once so no source can invent its own: `onetaskgraph.repositories`
   (`Repository::METADATA_KEY`), `onetaskgraph.depends_on`
   (`DependencyEdge::RECORDED_KEY`), `onetaskgraph.delivers` (`TaskRef::DELIVERS_KEY`),
@@ -39,7 +39,9 @@ Keys are free-form, with two prefixes reserved:
   (`MetadataKey::CREATE_KEY`), which an item a copy created keeps (README, "A create safe to
   retry") — and the typed links an item holds, `onetaskgraph.links`
   (`TaskLink::METADATA_KEY`; README, "Relations: a parent, and typed links"), which every
-  endpoint of a link holds and no copy carries —
+  endpoint of a link holds and no copy carries, and `onetaskgraph.deleted_copies`
+  (`MetadataKey::DELETED_COPIES_KEY`), which a source project holds of a deleted task's copies
+  until `project copy --close-orphans` closes them —
   in the contract crate, and
   `onetaskgraph.origin` (`GlobalId::ORIGIN_KEY`) and `onetaskgraph.lineage`
   (`GlobalId::LINEAGE_KEY`) in the engine —

@@ -174,6 +174,25 @@ impl MetadataKey {
     // llmlint: ignore[code_lands_in_the_domain_that_owns_it] Composing and checking an attestation is the engine's, and none of that is here: this crate is where every reserved key is spelled once (`docs/metadata.md` is held to these constants), and the only way the engine can name a reserved key on the narrow metadata seam every plugin implements is a constructor of this type, whose field is private to this crate — the same seam `COPIES_KEY` and `CREATING_KEY` use.
     pub const ATTESTATIONS_KEY: &'static str = "onetaskgraph.attestations";
 
+    /// The reserved key a **source** project records, at `task delete`, where each copy of a
+    /// task deleted from it landed: a JSON object mapping a destination source name to an
+    /// object mapping each counterpart's native id there to the deleted task's qualified id.
+    ///
+    /// It exists because a copy that withholds provenance writes no origin on its counterpart,
+    /// so once the task and its [`Self::COPIES_KEY`] link are gone nothing else says which
+    /// destination item it had. Ids only. Read only by an unnarrowed `project copy
+    /// --close-orphans` into that destination, which closes each counterpart still open and
+    /// takes its entry out; no copy carries it.
+    pub const DELETED_COPIES_KEY: &'static str = "onetaskgraph.deleted_copies";
+
+    /// [`Self::DELETED_COPIES_KEY`], as the key `task delete` and the copy that closes what it
+    /// records write it under.
+    #[must_use]
+    // llmlint: ignore[invalid_states_unrepresentable] The same seam as `copies`: a key type of its own would change the three narrow metadata writes every plugin implements, which this crate keeps still (AGENTS.md); `new`, deserialization, the command line and both SDKs refuse the key.
+    pub fn deleted_copies() -> Self {
+        Self(Self::DELETED_COPIES_KEY.to_owned())
+    }
+
     /// [`Self::COPIES_KEY`], as the one reserved key a narrow metadata write may carry.
     ///
     /// Not a way round [`Self::new`] for a caller: nothing a person types reaches this, and

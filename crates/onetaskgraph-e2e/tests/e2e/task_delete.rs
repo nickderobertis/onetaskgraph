@@ -15,6 +15,7 @@ use std::process::Output;
 use serde_json::{Value, json};
 
 use crate::common::{Sandbox, stderr, stdout};
+use crate::document_store::interpreter;
 use crate::fixtures::document;
 use crate::machine::{bundle, validates};
 
@@ -666,4 +667,149 @@ fn close_orphans_closes_a_dropped_tasks_copy_in_the_member_a_route_filed_it_unde
         notes_before,
         "nothing in the home's source moved"
     );
+}
+
+#[test]
+fn a_private_folders_deleted_task_closes_its_copy_that_carries_no_origin_at_the_next_closing_copy()
+{
+    // A copy out of a folder declared private into one that is not records no origin on the
+    // copies it lands, so a dropped task's copy is found by what `task delete` recorded on the
+    // source project: the delete changes nothing but the private folder, a copy without
+    // `--close-orphans` leaves that copy and the record alone, the closing copy cancels the copy
+    // and takes the record's entry out, and a delete whose record cannot be written removes
+    // nothing.
+    let sandbox = Sandbox::new();
+    let drafts = folder(
+        &sandbox,
+        "drafts",
+        &[("stay", "Stay", &[]), ("open", "Open", &[])],
+    );
+    let public = sandbox.subdirectory("public");
+    // A store declaring a visibility is held to the public boundary, so its write policy passes
+    // every write and answers every repository public: what is under test is the record.
+    let mut configuration: Value = serde_json::from_str(&document(&json!({
+        "drafts": {"plugin": "local-md", "config": {"root": drafts}, "visibility": "private"},
+        "public": {"plugin": "local-md", "config": {"root": public}}
+    })))
+    .expect("a document");
+    configuration["write_policy"] = json!({
+        "check_command": [
+            interpreter(), "-c", "import sys; sys.stdin.read(); print('{\"verdict\": \"pass\"}')"
+        ],
+        "visibility_command": [
+            interpreter(), "-c",
+            "import sys; sys.stdin.read(); print('{\"visibility\": \"public\"}')"
+        ],
+    });
+    sandbox.project_document(&serde_json::to_string_pretty(&configuration).expect("renders"));
+    let copy = ["project", "copy", "drafts:P", "--to", "public", "--json"];
+    let first = parsed(&sandbox, &copy);
+    let landed: BTreeMap<String, String> = actions(&first)
+        .into_iter()
+        .map(|(source, action, destination)| {
+            assert_eq!(action, "created", "{first:#}");
+            (source, destination.expect("a destination"))
+        })
+        .collect();
+    let copied = &landed["drafts:open"];
+    let metadata = |id: &str| -> Value {
+        parsed(&sandbox, &["task", "show", id, "--json"])["items"][0]["item"]["metadata"].clone()
+    };
+    assert_eq!(
+        metadata(copied).get("onetaskgraph.origin"),
+        None,
+        "the copy names no private origin"
+    );
+    let record = || -> Value {
+        parsed(&sandbox, &["project", "show", "drafts:P", "--json"])["items"][0]["item"]["metadata"]
+            ["onetaskgraph.deleted_copies"]
+            .clone()
+    };
+
+    // A source project the record cannot be written to refuses the delete, removing nothing.
+    let projects = drafts.join("projects");
+    let unwritable = tree(&drafts);
+    let permissions = |mode| {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&projects, std::fs::Permissions::from_mode(mode))
+            .expect("the project folder's permissions");
+    };
+    permissions(0o555);
+    let refused = run(&sandbox, &["task", "delete", "drafts:open"]);
+    permissions(0o755);
+    assert_ne!(refused.status.code(), Some(0), "{}", stdout(&refused));
+    assert_eq!(stdout(&refused), "");
+    assert!(stderr(&refused).contains("next:"), "{}", stderr(&refused));
+    assert_eq!(
+        tree(&drafts),
+        unwritable,
+        "a refused delete removed nothing"
+    );
+
+    // The delete records the copy on the project and touches nothing in the public folder.
+    let published = tree(&public);
+    assert_eq!(
+        printed(&sandbox, &["task", "delete", "drafts:open"]),
+        "deleted task drafts:open\n"
+    );
+    let (at, native) = copied.split_once(':').expect("a qualified id");
+    assert_eq!(record(), json!({at: {native: "drafts:open"}}));
+    assert_eq!(
+        tree(&public),
+        published,
+        "a delete reached the public folder"
+    );
+
+    // A copy without the flag does not read the record: nothing of the dropped task is
+    // reported, nothing is written, and the record stays for the closing copy.
+    let flagless = parsed(&sandbox, &copy);
+    assert!(
+        actions(&flagless)
+            .iter()
+            .all(|(source, action, _)| source != "drafts:open" && action == "unchanged"),
+        "{flagless:#}"
+    );
+    assert_eq!(tree(&public), published);
+    assert_eq!(record(), json!({at: {native: "drafts:open"}}));
+
+    // The closing copy cancels the copy alone and takes its entry out of the record.
+    let closing = [&copy[..], &["--close-orphans"]].concat();
+    let report = parsed(&sandbox, &closing);
+    validates(
+        &bundle(&sandbox),
+        "CopyReport",
+        &report,
+        "project copy --json",
+    );
+    let closed: Vec<_> = actions(&report)
+        .into_iter()
+        .filter(|(_, action, _)| action != "unchanged")
+        .collect();
+    assert_eq!(
+        closed,
+        vec![(
+            "drafts:open".to_owned(),
+            "closed".to_owned(),
+            Some(copied.clone())
+        )]
+    );
+    assert_eq!(category(&sandbox, copied), "cancelled");
+    let after = tree(&public);
+    let changed: Vec<&PathBuf> = published
+        .iter()
+        .filter(|(path, bytes)| after.get(*path) != Some(*bytes))
+        .map(|(path, _)| path)
+        .collect();
+    assert_eq!(changed.len(), 1, "one copy changed: {changed:?}");
+    assert_eq!(record(), json!({}));
+
+    // With nothing left on record, the next closing copy says and writes nothing of it.
+    let again = parsed(&sandbox, &closing);
+    assert!(
+        actions(&again)
+            .iter()
+            .all(|(source, _, _)| source != "drafts:open"),
+        "{again:#}"
+    );
+    assert_eq!(tree(&public), after);
 }

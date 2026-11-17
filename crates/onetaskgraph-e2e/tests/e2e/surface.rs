@@ -1233,6 +1233,7 @@ fn the_reserved_key_inventory_names_exactly_the_keys_the_code_spells() {
         MetadataKey::ATTESTATIONS_KEY,
         MetadataKey::CREATING_KEY,
         MetadataKey::CREATE_KEY,
+        MetadataKey::DELETED_COPIES_KEY,
         onetaskgraph_core::GlobalId::ORIGIN_KEY,
         onetaskgraph_core::GlobalId::LINEAGE_KEY,
         onetaskgraph_plugin_api::TaskLink::METADATA_KEY,
@@ -1279,6 +1280,7 @@ fn the_reserved_key_inventory_names_exactly_the_keys_the_code_spells() {
         "eighteen",
         "nineteen",
         "twenty",
+        "twenty-one",
     ];
     assert!(
         bullet.contains(&format!("defines exactly {} keys", words[spelled.len()])),
