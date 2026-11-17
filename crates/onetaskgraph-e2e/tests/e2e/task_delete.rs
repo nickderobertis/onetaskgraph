@@ -678,6 +678,8 @@ struct PrivatePlan {
     public: PathBuf,
     /// Each draft task's copy in `public`, by the task's qualified id.
     landed: BTreeMap<String, String>,
+    /// `P`'s copy in `public`.
+    project: String,
 }
 
 impl PrivatePlan {
@@ -705,6 +707,11 @@ impl PrivatePlan {
         });
         sandbox.project_document(&serde_json::to_string_pretty(&configuration).expect("renders"));
         let first = parsed(&sandbox, &Self::COPY);
+        let project = actions(&first)
+            .into_iter()
+            .find(|(source, _, _)| source == "drafts:P")
+            .and_then(|(_, _, destination)| destination)
+            .expect("P's copy");
         let landed = actions(&first)
             .into_iter()
             .filter(|(source, _, _)| source != "drafts:P")
@@ -718,6 +725,7 @@ impl PrivatePlan {
             drafts,
             public,
             landed,
+            project,
         }
     }
 
@@ -820,6 +828,12 @@ fn a_private_folders_deleted_task_closes_its_copy_that_carries_no_origin_at_the_
         .collect();
     assert_eq!(changed.len(), 1, "one copy changed: {changed:?}");
     assert_eq!(plan.record(), json!({}));
+    let shown = parsed(&plan.sandbox, &["project", "show", &plan.project, "--json"]);
+    assert_eq!(
+        shown["items"][0]["item"]["metadata"].get("onetaskgraph.deleted_copies"),
+        None,
+        "no copy carries the record to the destination's project"
+    );
 
     // With nothing left on record, the next closing copy says and writes nothing of it.
     assert_eq!(moved(&plan.copy(&["--close-orphans"])), vec![]);
@@ -836,16 +850,21 @@ fn a_recorded_copy_already_finished_or_landed_again_is_taken_off_the_record_and_
         ("stay", "Stay", &[]),
         ("finished", "Finished", &[]),
         ("again", "Again", &[]),
+        ("vanished", "Vanished", &[]),
     ]);
     let finished = plan.landed["drafts:finished"].clone();
     let again = plan.landed["drafts:again"].clone();
     printed(&plan.sandbox, &["task", "status", "set", &finished, "done"]);
-    for task in ["drafts:finished", "drafts:again"] {
+    let dropped = ["drafts:finished", "drafts:again", "drafts:vanished"];
+    for task in dropped {
         printed(&plan.sandbox, &["task", "delete", task]);
     }
-    assert_eq!(
-        plan.record(),
-        plan.recording(&["drafts:finished", "drafts:again"])
+    assert_eq!(plan.record(), plan.recording(&dropped));
+    // A third, `vanished`, had its copy deleted by a person as well: nothing is filed there to
+    // close or report, and its entry goes too.
+    printed(
+        &plan.sandbox,
+        &["task", "delete", &plan.landed["drafts:vanished"]],
     );
     std::fs::write(
         plan.drafts.join("tasks/renewed.md"),
@@ -862,6 +881,11 @@ fn a_recorded_copy_already_finished_or_landed_again_is_taken_off_the_record_and_
             "orphaned".to_owned(),
             Some(finished.clone())
         )),
+        "{report:#}"
+    );
+    assert!(
+        said.iter()
+            .all(|(source, _, _)| source != "drafts:vanished"),
         "{report:#}"
     );
     assert!(
@@ -884,7 +908,6 @@ fn a_recorded_copy_already_finished_or_landed_again_is_taken_off_the_record_and_
     assert_eq!(plan.record(), json!({}));
 }
 
-/// Set the permissions of `folder` to `mode`.
 #[cfg(unix)]
 fn permit(folder: &Path, mode: u32) {
     use std::os::unix::fs::PermissionsExt;
@@ -972,4 +995,30 @@ fn a_close_the_destination_refuses_keeps_its_entry_for_the_next_closing_copy() {
     );
     assert_eq!(category(&plan.sandbox, &copied), "cancelled");
     assert_eq!(plan.record(), json!({}));
+}
+
+#[test]
+fn a_task_filed_under_a_project_its_source_does_not_hold_is_deleted_recording_nothing() {
+    // No project copy walks a project the source does not hold, so there is no record for a
+    // closing copy to read: the task copied on its own is deleted, and nothing is recorded on
+    // the plan's project or reaches the public folder.
+    let plan = PrivatePlan::new(&[("stay", "Stay", &[])]);
+    std::fs::write(
+        plan.drafts.join("tasks/lost.md"),
+        "---\ntitle: Lost\nproject: Ghost\n---\nThe body of lost.\n",
+    )
+    .expect("a task under a project the folder does not hold");
+    let copied = parsed(
+        &plan.sandbox,
+        &["task", "copy", "drafts:lost", "--to", "public", "--json"],
+    );
+    assert_eq!(actions(&copied)[0].1, "created", "{copied:#}");
+    let published = tree(&plan.public);
+    assert_eq!(
+        printed(&plan.sandbox, &["task", "delete", "drafts:lost"]),
+        "deleted task drafts:lost\n"
+    );
+    assert!(!listed(&plan.sandbox, "drafts").contains(&"drafts:lost".to_owned()));
+    assert!(plan.record().is_null(), "{}", plan.record());
+    assert_eq!(tree(&plan.public), published);
 }

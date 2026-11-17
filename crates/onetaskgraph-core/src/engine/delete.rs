@@ -154,7 +154,12 @@ impl Engine {
         let recorded = record_copies(source, id, &task).await?;
         if let Err(error) = source.source().delete_task(&id.native).await {
             // The record would name the copies of a task that is still there, for a later copy
-            // to close: it goes back to what it was.
+            // to close: it goes back to what it was. Should that write fail too, the entries
+            // left are still harmless: the task is still there, so the next closing copy lands
+            // its counterpart itself and settles the entry rather than closing it — the path
+            // `a_recorded_copy_already_finished_or_landed_again_is_taken_off_the_record_and_not_closed`
+            // drives. Failing the removal and then this write in one process is a timing no
+            // fixture here can make.
             if let Some((project, before)) = recorded {
                 let _ = source
                     .source()
