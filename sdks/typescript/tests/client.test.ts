@@ -580,6 +580,63 @@ test("a copy keeps only the statuses it names, by query and beside ids, through 
   }
 });
 
+test("a task delete and a copy closing its orphan drive the real binary", async () => {
+  // Two folders of Markdown: a task deleted at `from` takes its file with it, and the next
+  // project copy with `closeOrphans` closes its copy in `into`, which names `cancelled`.
+  const root = mkdtempSync(resolve(tmpdir(), "onetaskgraph-sdk-delete-"));
+  mkdirSync(resolve(root, "from/projects"), { recursive: true });
+  mkdirSync(resolve(root, "from/tasks"), { recursive: true });
+  mkdirSync(resolve(root, "into"), { recursive: true });
+  writeFileSync(resolve(root, "from/projects/P-1.md"), "---\ntitle: Engine\n---\n");
+  writeFileSync(
+    resolve(root, "from/tasks/T-1.md"),
+    "---\ntitle: Alpha\nstatus: todo\nproject: P-1\n---\nthe core\n",
+  );
+  writeFileSync(
+    resolve(root, "from/tasks/T-2.md"),
+    "---\ntitle: Beta\nstatus: todo\nproject: P-1\ndepends_on: [T-1]\n---\nmore\n",
+  );
+  const mapping = { todo: "todo", cancelled: "cancelled" };
+  writeFileSync(
+    resolve(root, "onetaskgraph.yaml"),
+    JSON.stringify({
+      sources: {
+        from: {
+          plugin: "local-md",
+          config: { root: resolve(root, "from"), status_mapping: mapping },
+        },
+        into: {
+          plugin: "local-md",
+          config: { root: resolve(root, "into"), status_mapping: mapping },
+        },
+      },
+    }),
+  );
+  try {
+    const deleting = new OnetaskgraphClient({ binaryPath: binary, cwd: root });
+    await deleting.projectCopy("from:P-1", "into");
+
+    await expect(deleting.taskDelete("from:T-1")).rejects.toThrow("from:T-2");
+    expect(existsSync(resolve(root, "from/tasks/T-1.md"))).toBe(true);
+
+    expect(await deleting.taskDelete("from:T-2")).toEqual({ deleted: "from:T-2" });
+    expect(existsSync(resolve(root, "from/tasks/T-2.md"))).toBe(false);
+
+    const closed = await deleting.projectCopy("from:P-1", "into", { closeOrphans: true });
+    expect(closed.items.map((item) => [item.source, item.action])).toEqual([
+      ["from:P-1", "unchanged"],
+      ["from:T-1", "unchanged"],
+      ["from:T-2", "closed"],
+    ]);
+    const shown = await deleting.taskShow("into:T-2");
+    expect(shown.items[0]?.item.status.category).toBe("cancelled");
+    expect(projectCopyFlags({ closeOrphans: true })).toContain("--close-orphans");
+    expect(projectCopyFlags({})).not.toContain("--close-orphans");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("a document copy drives the real binary and is refused by a source with none", async () => {
   // `notes` is a folder of Markdown, whose documents are files that outlive the process,
   // so what one client call copied the next one reads back — which is what proves the copy

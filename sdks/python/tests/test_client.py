@@ -783,6 +783,48 @@ def test_project_copy_carries_its_documents_when_asked(binary: Path, tmp_path: P
     assert [item.root.action for item in again.items] == ["unchanged"] * 3
 
 
+def test_task_delete_and_a_copy_closing_its_orphan_drive_the_binary(
+    binary: Path, tmp_path: Path
+) -> None:
+    """Delete a copied task, refused while another depends on it, then close its copy."""
+    root = folders(tmp_path)
+    # The destination names `cancelled`, so the close has a status to write.
+    configuration = json.loads((root / "onetaskgraph.yaml").read_text(encoding="utf-8"))
+    configuration["sources"]["into"]["config"]["status_mapping"]["cancelled"] = "cancelled"
+    (root / "onetaskgraph.yaml").write_text(json.dumps(configuration), encoding="utf-8")
+    (root / "from" / "projects").mkdir()
+    (root / "from" / "projects" / "P-1.md").write_text(
+        "---\ntitle: Engine\nstatus: todo\n---\nthe engine\n", encoding="utf-8"
+    )
+    (root / "from" / "tasks" / "T-1.md").write_text(
+        "---\ntitle: Alpha engine\nstatus: todo\nproject: P-1\n---\nthe core\n",
+        encoding="utf-8",
+    )
+    (root / "from" / "tasks" / "T-2.md").write_text(
+        "---\ntitle: Beta engine\nstatus: todo\nproject: P-1\ndepends_on: [T-1]\n---\nmore\n",
+        encoding="utf-8",
+    )
+    client = Client(binary, cwd=root)
+    run(client.project_copy(id="from:P-1", to="into"))
+
+    with pytest.raises(OnetaskgraphError, match="from:T-2"):
+        run(client.task_delete("from:T-1"))
+    assert (root / "from" / "tasks" / "T-1.md").is_file()
+
+    deleted = run(client.task_delete("from:T-2"))
+    assert deleted.deleted.root == "from:T-2"
+    assert not (root / "from" / "tasks" / "T-2.md").exists()
+
+    closed = run(client.project_copy(id="from:P-1", to="into", close_orphans=True))
+    assert [(item.root.source.root, item.root.action) for item in closed.items] == [
+        ("from:P-1", "unchanged"),
+        ("from:T-1", "unchanged"),
+        ("from:T-2", "closed"),
+    ]
+    shown = run(client.task_show("into:T-2"))
+    assert shown.items[0].item.status.category == "cancelled"
+
+
 def test_project_copy_drives_the_binary(binary: Path, tmp_path: Path) -> None:
     """Copy a project and the tasks in it, then copy it again without duplicating them."""
     root = folders(tmp_path)

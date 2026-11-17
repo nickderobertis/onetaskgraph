@@ -63,6 +63,7 @@ if TYPE_CHECKING:
         TaskAssetNames,
         TaskAssigneeSet,
         TaskContentSet,
+        TaskDeleted,
         TaskDetail,
         TaskDetails,
         TaskPrioritySet,
@@ -115,6 +116,7 @@ POSITIONALS: dict[tuple[str, ...], tuple[str, ...]] = {
     ("task", "content", "set"): ("id",),
     ("task", "copy"): ("ids",),
     ("task", "create"): ("source",),
+    ("task", "delete"): ("id",),
     ("task", "deps"): ("id",),
     ("task", "find"): ("source",),
     ("task", "locate"): ("ids",),
@@ -1650,6 +1652,7 @@ class GeneratedClient:
         self,
         id: GlobalId | str,
         *,
+        close_orphans: bool | None = None,
         comments: bool | None = None,
         default_sources: list[str] | tuple[str, ...] | None = None,
         documents: bool | None = None,
@@ -1675,6 +1678,7 @@ class GeneratedClient:
         self,
         id: GlobalId | str,
         *,
+        close_orphans: bool | None = None,
         comments: bool | None = None,
         default_sources: list[str] | tuple[str, ...] | None = None,
         documents: bool | None = None,
@@ -1700,6 +1704,7 @@ class GeneratedClient:
         self,
         id: GlobalId | str,
         *,
+        close_orphans: bool | None = None,
         comments: bool | None = None,
         default_sources: list[str] | tuple[str, ...] | None = None,
         documents: bool | None = None,
@@ -1724,6 +1729,7 @@ class GeneratedClient:
         self,
         id: GlobalId | str,
         *,
+        close_orphans: bool | None = None,
         comments: bool | None = None,
         default_sources: list[str] | tuple[str, ...] | None = None,
         documents: bool | None = None,
@@ -1748,6 +1754,7 @@ class GeneratedClient:
             ["project", "copy"],
             _models.CopyReport | _models.SanitizeDryRun,
             id=id,
+            close_orphans=close_orphans,
             comments=comments,
             default_sources=default_sources,
             documents=documents,
@@ -4465,6 +4472,69 @@ class GeneratedClient:
                 answers,
                 template is not None or template_loader is not None or body_file is not None,
             ),
+        )
+
+    @overload
+    async def task_delete(
+        self,
+        id: GlobalId | str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> TaskDeleted: ...
+
+    @overload
+    async def task_delete(
+        self,
+        id: GlobalId | str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> TaskDeleted | SanitizeDryRun: ...
+
+    @overload
+    async def task_delete(
+        self,
+        id: GlobalId | str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> TaskDeleted | SanitizeDryRun: ...
+
+    async def task_delete(
+        self,
+        id: GlobalId | str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> TaskDeleted | SanitizeDryRun:
+        """Run ``onetaskgraph task delete``."""
+        return await self._invoke(
+            ["task", "delete"],
+            _models.TaskDeleted | _models.SanitizeDryRun,
+            id=id,
+            default_sources=default_sources,
+            page_size=page_size,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
+            set=set,
         )
 
     @overload
