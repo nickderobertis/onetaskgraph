@@ -183,7 +183,9 @@ warm_fatal() {
   fatal "$1" "read the evidence lists measure.sh wrote, kept in $KEPT, then $2"
 }
 make_fixture "$scratch/warm"
+{ echo "=== check-measure diag: warm fixture right after make_fixture"; find "$scratch/warm/target" -maxdepth 3 | head -60; } >&2
 status="$(measure "$scratch/warm" --json)"
+echo "=== measure diag file:" >&2; cat "$scratch/warm/diag.txt" >&2 || true
 [ "$status" -eq 0 ] || warm_fatal \
   "the measurement over a warm, cache-restored workspace exited $status, not 0: $(cat "$scratch/out")" \
   "fix measure.sh's setup so the timed pass faces one run's superseded builds and nothing else"

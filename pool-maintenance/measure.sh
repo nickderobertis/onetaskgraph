@@ -81,6 +81,26 @@ seconds_reported() {
   python3 -c 'import json, sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["value"])' "$1"
 }
 
+# DIAGNOSTICS ONLY (throwaway): what cargo and the filesystem look like around the first prune.
+diag() {
+  {
+    echo "=== diag: $1"
+    echo "--- pwd: $(pwd)"
+    echo "--- env:"; env | grep -E '^(CARGO|RUST|TMP|HOME|PATH|NX_|RUNNER|GITHUB_ACTIONS|XDG)' | sort
+    echo "--- cargo: $(command -v cargo) $(cargo --version 2>&1); rustup active: $(rustup show active-toolchain 2>&1)"
+    echo "--- metadata dirs:"; cargo metadata --format-version 1 --no-deps 2>&1 | python3 -c 'import json,sys
+t=sys.stdin.read()
+try:
+    d=json.loads(t); print(d.get("target_directory"), d.get("build_directory"))
+except Exception: print(t[:2000])'
+    echo "--- config get --show-origin:"; __CARGO_TEST_CHANNEL_OVERRIDE_DO_NOT_USE_THIS=nightly cargo -Zunstable-options config get --show-origin 2>&1 | head -60
+    echo "--- .cargo dirs upward:"; d="$(pwd)"; while :; do ls -la "$d/.cargo" 2>/dev/null && cat "$d"/.cargo/config* 2>/dev/null; [ "$d" = / ] && break; d="$(dirname "$d")"; done
+    echo "--- CARGO_HOME config:"; ls -la "${CARGO_HOME:-$HOME/.cargo}" 2>&1 | head -30; cat "${CARGO_HOME:-$HOME/.cargo}"/config* 2>&1 | head -40
+    echo "--- target tree:"; find target -maxdepth 3 2>&1 | head -60
+    echo "--- mounts:"; df -h . /tmp 2>&1; mount 2>/dev/null | grep -E ' /tmp | / ' | head
+  } >>"$ROOT/diag.txt" 2>&1
+}
+
 # (a) Clear any backlog, untimed, until a pass over a fresh ordinary build removes nothing:
 # each pass's seconds go to a file of this run's own. A pass after the first removes only an
 # old build the build before it superseded by making a sibling anew, and what a build makes
@@ -95,9 +115,12 @@ while :; do
     echo "pool-maintenance/measure.sh: $BACKLOG_PASSES_AT_MOST untimed passes each removed builds, so the target directory never reached a steady state to time a pass from; see $EVIDENCE/backlog-removed-$BACKLOG_PASSES_AT_MOST.txt for the last pass's removals." >&2
     exit 1
   fi
+  [ "$pass" -gt 1 ] || diag "before the first ordinary build"
   ordinary_build
+  [ "$pass" -gt 1 ] || diag "after the first ordinary build, before the first prune"
   list_entries > "$EVIDENCE/backlog-before-$pass.txt"
   ONEBUDGETSPEC_RESULT="$scratch/backlog-$pass.json" just pool-maintenance >&2
+  [ "$pass" -gt 1 ] || diag "after the first prune"
   list_entries > "$EVIDENCE/backlog-after-$pass.txt"
   backlog_seconds="${backlog_seconds:+$backlog_seconds, }$(seconds_reported "$scratch/backlog-$pass.json" | tr -d '\r')"
   LC_ALL=C comm -23 "$EVIDENCE/backlog-before-$pass.txt" "$EVIDENCE/backlog-after-$pass.txt" \
