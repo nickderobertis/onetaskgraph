@@ -395,6 +395,8 @@ pub enum TaskCommand {
     List(TaskListArgs),
     /// Show one task by its qualified id, `<source>:<native-id>`.
     Show(TaskShowArgs),
+    /// SPIKE MOCK (drop-task-cleanly spike-visual): delete one task by its qualified id.
+    Delete(SpikeTaskDeleteArgs),
     /// Show several tasks by their qualified ids, each as `task show` reports it.
     ///
     /// One detail per id, in the order given, and the ids may span sources. An id that cannot
@@ -2639,6 +2641,9 @@ pub struct ProjectCopyArgs {
     // llmlint: ignore[invalid_states_unrepresentable] Clap rejects this flag without a member at parse; the command conversion then constructs MembersOnly with nonempty CopyItems. Keeping the clap argument beside member follows this boundary's existing flag representation.
     #[arg(long = "members-only", requires = "member")]
     pub members_only: bool,
+    /// SPIKE MOCK (drop-task-cleanly spike-visual): close each open orphan.
+    #[arg(long = "close-orphans", conflicts_with_all = ["member", "no_tasks"])]
+    pub close_orphans: bool,
 
     /// Keep the destination's copies of each copied task's comments in step with the
     /// source's, as `task copy --comments` does.
@@ -3047,4 +3052,12 @@ fn assignment_setting(assignment: &str) -> Result<Setting, String> {
             flag: format!("--set {path}"),
         },
     })
+}
+
+/// SPIKE MOCK (drop-task-cleanly spike-visual): `task delete <ID>`.
+#[derive(Debug, Args)]
+pub struct SpikeTaskDeleteArgs {
+    /// The task's qualified id, `<source>:<native-id>`.
+    #[arg(value_name = "ID")]
+    pub id: String,
 }

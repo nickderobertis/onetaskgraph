@@ -539,6 +539,10 @@ async fn run_inner(
         }
 
         Command::Task {
+            command: TaskCommand::Delete(args),
+        } => spike_task_delete(out, loaded, &args.id).await,
+
+        Command::Task {
             command: TaskCommand::Show(args),
         } => {
             let id = qualified(&args.item.id)?;
@@ -1060,6 +1064,9 @@ async fn run_inner(
                 copy_request(named(std::iter::once(args.id.as_str()))?, scope, &args.copy)?;
             request.comments = args.comments;
             request.status_policy = args.status_policy.into();
+            if args.close_orphans {
+                return spike_copy_closing_orphans(out, loaded, &request).await;
+            }
             copy(out, loaded, &request, None).await
         }
 
@@ -3075,4 +3082,107 @@ mod tests {
             "{message}"
         );
     }
+}
+
+// ---------------------------------------------------------------------------------------
+// SPIKE MOCK (drop-task-cleanly spike-visual). Throwaway: shows the human output of
+// `task delete` and `project copy --close-orphans`; never lands.
+// ---------------------------------------------------------------------------------------
+
+async fn spike_task_delete(out: &mut impl Write, loaded: &Loaded, raw: &str) -> Result<u8, Failure> {
+    let id = qualified(raw)?;
+    let engine = engine(loaded);
+    let detail = engine
+        .task_without_comments_pinned(&id, None)
+        .await
+        .map_err(|error| Failure::from(&error))?;
+    let Some(task) = detail.response.items.first() else {
+        return Err(Failure::decided("not-found", format!("no task {id}\nnext: run `onetaskgraph task list` to see the tasks that exist.")));
+    };
+    let edges = engine
+        .task_dependencies(&DependencyRequest {
+            id: id.clone(),
+            direction: onetaskgraph_plugin_api::Direction::DependedOnBy,
+            completeness: Completeness::NamingUnasked,
+            paging: Paging { limit: loaded.config.page_size(), token: None },
+        })
+        .await
+        .map_err(|error| Failure::from(&error))?;
+    let dependents: Vec<String> = edges
+        .items
+        .iter()
+        .filter(|edge| edge.to.id == id && edge.from.id.source == id.source)
+        .map(|edge| edge.from.id.to_string())
+        .collect();
+    if !dependents.is_empty() {
+        let list = dependents.iter().map(|d| format!("  {d}")).collect::<Vec<_>>().join("\n");
+        return Err(Failure::decided(
+            "task-has-dependents",
+            format!(
+                "task {id} was not deleted: {} depend{} on it:\n{list}\n\
+                 next: rewire each dependent with `onetaskgraph task update <ID> --depends-on …` \
+                 (or --no-depends-on), then delete {id} again.",
+                if dependents.len() == 1 { "1 task".to_owned() } else { format!("{} tasks", dependents.len()) },
+                if dependents.len() == 1 { "s" } else { "" },
+            ),
+        ));
+    }
+    if let Some(onetaskgraph_plugin_api::Location::Path(path)) = &task.item.location {
+        std::fs::remove_file(path).map_err(|error| Failure::decided("write", format!("{error}")))?;
+    }
+    let rendered = match loaded.config.output() {
+        OutputFormat::Text => format!("deleted task {id}"),
+        OutputFormat::Json => format!("{{\"deleted\": \"{id}\"}}"),
+    };
+    emit(out, &rendered, "the delete")?;
+    Ok(0)
+}
+
+async fn spike_copy_closing_orphans(
+    out: &mut impl Write,
+    loaded: &Loaded,
+    request: &CopyRequest,
+) -> Result<u8, Failure> {
+    let engine = engine(loaded);
+    let report = engine.copy(request).await.map_err(|error| write_failed(&engine, &error))?;
+    let mut closed: Vec<String> = Vec::new();
+    for outcome in &report.items {
+        if let CopyAction::Orphaned { destination } = &outcome.action {
+            let detail = engine
+                .task_without_comments_pinned(destination, None)
+                .await
+                .map_err(|error| Failure::from(&error))?;
+            let open = detail.response.items.first().is_some_and(|task| {
+                !matches!(
+                    task.item.status.category,
+                    onetaskgraph_plugin_api::StatusCategory::Done
+                        | onetaskgraph_plugin_api::StatusCategory::Cancelled
+                )
+            });
+            if open {
+                if !request.dry_run {
+                    engine
+                        .set_task_status(destination, onetaskgraph_plugin_api::StatusCategory::Cancelled)
+                        .await
+                        .map_err(|error| write_failed(&engine, &error))?;
+                }
+                closed.push(destination.to_string());
+            }
+        }
+    }
+    let rendered = render::copied(&report)
+        .lines()
+        .map(|line| {
+            let closes = line.trim_end().ends_with("orphaned")
+                && closed.iter().any(|d| line.split_whitespace().nth(1) == Some(d.as_str()));
+            if closes {
+                format!("{}closed", line.trim_end().strip_suffix("orphaned").unwrap_or(line))
+            } else {
+                line.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    emit(out, rendered.trim_end(), "the copy")?;
+    Ok(failed_exit(&report))
 }
