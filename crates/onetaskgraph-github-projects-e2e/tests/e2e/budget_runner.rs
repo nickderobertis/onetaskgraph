@@ -352,6 +352,7 @@ fn a_store_cost_report_hands_over_the_larger_scale_and_refuses_another_workload(
 fn plan_copy_scenario(budget: &str) -> &'static str {
     super::plan_copy::SCENARIOS
         .iter()
+        .chain(std::iter::once(&super::plan_copy::DROPPED))
         .find(|scenario| budget.ends_with(&format!("-{scenario}")))
         .copied()
         .unwrap_or(super::plan_copy::SCENARIOS[0])

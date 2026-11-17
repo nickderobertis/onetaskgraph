@@ -47,6 +47,14 @@ pub(super) const WORKLOAD: &str = "generated 10-item plan";
 /// The three scenarios the copy budgets measure, by the name a recording gives each.
 pub(super) const SCENARIOS: [&str; 3] = ["first", "changed", "unchanged"];
 
+/// The scenario `github-plan-copy-points-dropped` measures, by the name its recording gives it:
+/// one `project copy --close-orphans` of the plan after one of its tasks was deleted at the
+/// source, closing that task's copy on the board.
+pub(super) const DROPPED: &str = "dropped";
+
+/// The task the dropped scenario deletes: the last of the plan, on which no task depends.
+const DROPPED_TASK: usize = TASKS;
+
 /// The board size the spike's `plans` board stood at, rounded, and ten times it.
 pub(super) const SMALL: usize = 2_000;
 pub(super) const LARGE: usize = 20_000;
@@ -657,6 +665,39 @@ impl Plan {
         }
     }
 
+    /// One `project copy` of the plan with `extra` arguments, and no document copy after it: its
+    /// report, standing for both reports, and every request the board answered for it, timed as
+    /// [`Self::copy_timed`] times a command.
+    pub fn copy_project_timed(&self, extra: &[&str]) -> Scenario {
+        let before = self.board.calls().len();
+        let lease = self.clock.lease(self.client);
+        let simulated = self.clock.now();
+        let started = std::time::Instant::now();
+        let screened_before = self.boundary_calls().len();
+        let arguments = [
+            &["project", "copy", "notes:P", "--to", "board", "--json"][..],
+            extra,
+        ]
+        .concat();
+        let output = self.run(&arguments);
+        let real = started.elapsed();
+        lease.wait_for_detach();
+        let phases = vec![("project", self.clock.now() - simulated, real)];
+        drop(lease);
+        let report = success(&output);
+        Scenario {
+            project: report.clone(),
+            document: report,
+            calls: self.own_calls(before),
+            phases,
+            boundary: vec![Phase {
+                kind: "project",
+                screening: self.boundary_calls()[screened_before..].to_vec(),
+                calls: self.own_calls(before),
+            }],
+        }
+    }
+
     /// One scenario as one command — `project copy --documents`, the plan's document carried in
     /// the same copy as its project and tasks — with its report, standing for both reports, and
     /// every request the board answered for it, timed as [`Self::copy_timed`] times a command.
@@ -788,7 +829,11 @@ fn the_points_budgets_state_the_prices_they_are_measured_at() {
             );
         }
     }
-    assert_eq!(described, SCENARIOS.len(), "a points budget per scenario");
+    assert_eq!(
+        described,
+        SCENARIOS.len() + 1,
+        "a points budget per scenario, and one for a plan a task was dropped from"
+    );
 }
 
 /// What one scenario cost, in each of the figures the copy budgets read.
@@ -1939,6 +1984,215 @@ fn a_task_taken_out_of_the_plan_is_reported_orphaned_and_left_as_it_was() {
                 at[&format!("T-{n}")]
             )),
             "the reference to T-{n} names its counterpart"
+        );
+    }
+}
+
+/// The plan copied onto its board, then task [`DROPPED_TASK`] deleted from it at the source and
+/// the project copied again with `--close-orphans`: that re-copy as measured, after it is held to
+/// closing the dropped task's issue as not planned and to leaving every other item of the board's
+/// plan exactly as it was. Answers it beside the board id of each closing mutation could name.
+fn dropped_of(plan: &Plan) -> (Scenario, Vec<String>) {
+    let (at, gone, before) = copied_then_deleted(plan);
+    let left = &at[&format!("T-{DROPPED_TASK}")];
+    let dropped = plan.copy_project_timed(&["--close-orphans"]);
+    never_walks("a re-copy closing an orphan", &dropped.calls);
+    for item in dropped.project["items"].as_array().unwrap() {
+        let source = item["source"].as_str().unwrap();
+        let expected = if source == gone {
+            "closed"
+        } else {
+            "unchanged"
+        };
+        assert_eq!(item["action"], expected, "{:#}", dropped.project);
+    }
+    assert_eq!(
+        &landed(&dropped.project, &gone),
+        left,
+        "the dropped task's copy is the one closed"
+    );
+    let closed = plan.github.item(left).unwrap();
+    assert_eq!(
+        (&closed["state"], &closed["reason"]),
+        (&json!("CLOSED"), &json!("NOT_PLANNED")),
+        "{closed:#}"
+    );
+    assert_eq!(closed["title"], before[left]["title"]);
+    for (native, item) in &before {
+        if native != left {
+            assert_eq!(&plan.github.item(native).unwrap(), item, "{native} moved");
+        }
+    }
+    let named = [
+        left.clone(),
+        closed["item"].as_str().unwrap_or(left).to_owned(),
+    ];
+    (dropped, named.to_vec())
+}
+
+/// The plan copied onto its board and task [`DROPPED_TASK`] deleted at the source: the board id
+/// of each record's counterpart, the deleted task's qualified id, and every counterpart as the
+/// board held it after the delete.
+fn copied_then_deleted(plan: &Plan) -> (Counterparts, String, BTreeMap<String, Value>) {
+    plan.place_as_measured();
+    let first = plan.copy_timed();
+    let at = counterparts(&first.project, &first.document);
+    let gone = format!("notes:T-{DROPPED_TASK}");
+    let deleted = plan.run(&["task", "delete", &gone]);
+    assert_eq!(
+        stdout(&deleted),
+        format!("deleted task {gone}\n"),
+        "{}",
+        stderr(&deleted)
+    );
+    let before = at
+        .values()
+        .map(|native| (native.clone(), plan.github.item(native).unwrap()))
+        .collect();
+    (at, gone, before)
+}
+
+/// What the dropped scenario cost: its points, those of its reads, those of its mutations, and
+/// those of the mutations naming the item it closed — the close's own — with every request by
+/// operation.
+fn dropped_cost(scenario: &Scenario, closed: &[String]) -> (u64, Value) {
+    let mutation = |call: &Call| matches!(call.kind, Kind::Mutation | Kind::AliasedMutations);
+    let priced = |keep: &dyn Fn(&Call) -> bool| -> u64 {
+        scenario
+            .calls
+            .iter()
+            .filter(|call| keep(call))
+            .map(spike_points)
+            .sum()
+    };
+    let names_the_closed = |call: &Call| {
+        let bytes = String::from_utf8_lossy(&call.bytes);
+        mutation(call) && closed.iter().any(|id| bytes.contains(id.as_str()))
+    };
+    let points = priced(&|_| true);
+    (
+        points,
+        json!({"points": points, "reads": priced(&|call| !mutation(call)),
+               "mutations": priced(&mutation),
+               "close mutations": priced(&names_the_closed),
+               "requests by operation": tally(&scenario.calls)}),
+    )
+}
+
+/// One configuration a plan copy is measured in: how a recording names it, and its plan on a
+/// board of so many items.
+type Configured = (&'static str, fn(usize) -> Plan);
+
+#[test]
+fn a_recopy_after_a_task_was_deleted_closes_its_one_orphan_whatever_the_boards_size() {
+    // The dropped scenario with no write policy, screened, and in the host's configuration out
+    // of a folder declaring nothing, on a board of 2,000 items and of 20,000: the close is the one
+    // write, the board's size moves no request, and what each cost is recorded as
+    // `github-plan-copy-points-dropped`'s telemetry. Out of a folder declared private the board
+    // holds no origin to find an orphan by, which the journey after this one holds.
+    let configurations: [Configured; 3] = [
+        ("unscreened", |items| Plan::new(items, Vec::new())),
+        ("screened", |items| Plan::screened(items, Vec::new(), None)),
+        (HOST_PUBLIC, |items| Plan::host(items, Vec::new(), false)),
+    ];
+    let mut detail = serde_json::Map::new();
+    let mut largest = 0;
+    for (label, plan) in configurations {
+        let mut shapes = Vec::new();
+        for items in [SMALL, LARGE] {
+            let (scenario, closed) = dropped_of(&plan(items));
+            let (points, cost) = dropped_cost(&scenario, &closed);
+            assert!(
+                cost["close mutations"].as_u64() > Some(0),
+                "{label} on {items} items closed nothing: {cost:#}"
+            );
+            assert_eq!(
+                cost["close mutations"], cost["mutations"],
+                "{label} on {items} items wrote something other than the close: {cost:#}"
+            );
+            largest = largest.max(points);
+            shapes.push(tally(&scenario.calls));
+            detail.insert(format!("{label}, on a board of {items} items"), cost);
+        }
+        assert_eq!(
+            shapes[0], shapes[1],
+            "{label}: the dropped re-copy sent different requests on a board of {SMALL} and of \
+             {LARGE}"
+        );
+    }
+    let budget = "github-plan-copy-points-dropped";
+    // What the budget's description says is measured is what this measures: the host's
+    // configuration out of a source declaring no visibility, and why not a private one.
+    let budgets = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("budgets.yaml"),
+    )
+    .unwrap();
+    let described = budgets
+        .split("\n  - id: ")
+        .find(|entry| entry.starts_with(budget))
+        .expect("the budget is registered");
+    for stated in [
+        "with no write policy, screened, and in the host's configuration out of a source \
+         declaring no visibility",
+        "a copy out of a source declared private records no origin on the board, so its \
+         re-copy finds no orphan and writes nothing",
+    ] {
+        assert!(
+            described.contains(stated),
+            "{budget} does not state {stated:?}"
+        );
+    }
+    let directory = super::budget_runner::directory();
+    std::fs::create_dir_all(&directory).unwrap();
+    std::fs::write(
+        onetaskgraph_e2e_support::telemetry::file_in(&directory, budget),
+        serde_json::to_vec(&json!({"budget": budget, "value": largest as f64,
+            "detail": Value::Object(detail).to_string(), "plan": WORKLOAD, "board": SMALL,
+            "scenario": DROPPED}))
+        .unwrap(),
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_private_sources_recopy_after_a_task_was_deleted_closes_nothing_it_cannot_attribute() {
+    // Out of a folder declared private the board's copies carry no origin — the correspondence is
+    // each source task's own link, and the delete took the dropped task's with it — so the walk
+    // finds no orphan: the re-copy reports and writes nothing for the dropped task's copy, and
+    // leaves it, and every other item of the plan, exactly as it was.
+    let plan = Plan::host(SMALL, Vec::new(), true);
+    let (at, gone, before) = copied_then_deleted(&plan);
+    let recopy = plan.copy_project_timed(&["--close-orphans"]);
+    let reported: Vec<(&str, &str)> = recopy.project["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| {
+            (
+                item["source"].as_str().unwrap(),
+                item["action"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert!(
+        reported
+            .iter()
+            .all(|(source, action)| *source != gone && *action == "unchanged"),
+        "{reported:?}"
+    );
+    assert!(
+        !recopy
+            .calls
+            .iter()
+            .any(|call| matches!(call.kind, Kind::Mutation | Kind::AliasedMutations)),
+        "the re-copy wrote: {:?}",
+        tally(&recopy.calls)
+    );
+    for native in at.values() {
+        assert_eq!(
+            plan.github.item(native).as_ref(),
+            before.get(native),
+            "{native} moved"
         );
     }
 }
