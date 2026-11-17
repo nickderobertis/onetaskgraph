@@ -104,22 +104,9 @@ impl Plan {
     }
 }
 
-/// The mutations of the board's documents: any of them sent is a write.
+/// Whether `document` writes to the board: every GraphQL mutation does, whatever it changes.
 fn writes(document: &str) -> bool {
-    [
-        graphql::UPDATE_ISSUE,
-        graphql::UPDATE_DRAFT,
-        graphql::UPDATE_FIELD,
-        graphql::UPDATE_FIELDS,
-        graphql::WRITE_FIELD_VALUES,
-        graphql::CLEAR_FIELD,
-        graphql::CLOSE_ISSUES,
-        graphql::UPDATE_ISSUES,
-        graphql::DELETE_ISSUE,
-        graphql::CREATE_ISSUE,
-        graphql::CREATE_ISSUES,
-    ]
-    .contains(&document)
+    document.trim_start().starts_with("mutation")
 }
 
 /// What a report says of each item, by its source id: its action and its destination.
