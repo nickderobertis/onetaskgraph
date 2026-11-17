@@ -45,8 +45,11 @@ scratch="$(mktemp -d)" || fatal \
   "check the permissions of \$TMPDIR and 'df -h' for free space, then rerun"
 trap 'rm -rf "$scratch"' EXIT
 
-# Every build the fixture makes goes into its own target directory, whatever the caller set.
-unset CARGO_TARGET_DIR CARGO_BUILD_TARGET_DIR ONEBUDGETSPEC_RESULT
+# Every build the fixture makes goes into its own target directory, whatever the caller set,
+# and with this repository's pinned toolchain, as measure.sh's builds here do: outside this
+# checkout rustup otherwise picks its default, and cargo 1.100 lays out a target directory the
+# pinned pruner and measure.sh's listing do not read.
+unset CARGO_TARGET_DIR CARGO_BUILD_TARGET_DIR ONEBUDGETSPEC_RESULT RUSTUP_TOOLCHAIN
 
 # Older than the pruner's 2-day window, and newer than the date measure.sh backdates the
 # alternative build to, as a cache restored from an earlier run is.
@@ -59,7 +62,7 @@ make_fixture() {
   local fx="$1"
   mkdir -p "$fx/.cargo" "$fx/pool-maintenance" "$fx/crates/a/src" "$fx/crates/b/src" \
     "$fx/vendor/c/src"
-  cp "$ROOT/justfile" "$fx/justfile"
+  cp "$ROOT/justfile" "$ROOT/rust-toolchain.toml" "$fx/"
   cp "$ROOT/pool-maintenance/measure.sh" "$ROOT/pool-maintenance/budgets.yaml" \
     "$fx/pool-maintenance/"
   printf '[build]\ntarget-dir = "target"\n\n[profile.dev]\ndebug = 0\n' >"$fx/.cargo/config.toml"
