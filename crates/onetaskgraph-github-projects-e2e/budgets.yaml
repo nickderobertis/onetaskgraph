@@ -306,6 +306,20 @@ budgets:
     unit: requests
     direction: max
     threshold: 3
+  # llmlint: ignore[budgets_track_product_owner_outcomes] The user ruled that every store operation the engine uses carries its own per-backend request bound, paired with the engine's backend-agnostic store-operation budgets; a session or hourly total cannot show one operation's requests regressing, which is what this bound is for.
+  - id: github-requests-per-task-delete
+    description: >-
+      The requests one `task delete` of one issue item sends through the binary on a fresh process
+      with the cache off, the dependents check included, the larger over boards of 1,100 and of
+      11,000 items. Its detail reports each board size's figure, split into reads and mutations.
+      It protects every manager's share of the board token.
+    labels: [github]
+    measure: reported
+    # llmlint: ignore[budget_commands_measure_directly] Every budget of this file selects its own report-only entry in `budget_runner`, the harness-runner convention this crate's budgets landed with; this one reads only the telemetry `store_cost.rs` recorded during the crate's test run, refuses a recording of another workload, scale or figure, and hands the figure to onebudgetspec, which alone judges it.
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_task_delete", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-github-projects-e2e"]
+    unit: requests
+    direction: max
+    threshold: 3
   - id: sanitize-sweep-requests
     description: >-
       GitHub requests a sweep and its rerun send: every request a non-dry-run `onetaskgraph sources sanitize` and one rerun send to a loopback board of 2,000 items holding 0 to 20 comments each, read from the sweeps' own reports. It protects the board token's hourly allowance, shared by every manager on a host, from a sweep that grows with the board.

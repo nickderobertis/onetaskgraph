@@ -207,6 +207,10 @@ fn report_status_write() {
 fn report_settlement_update() {
     report_store_cost(super::store_cost::SETTLEMENT_WORKLOAD);
 }
+#[test]
+fn report_task_delete() {
+    report_store_cost(super::store_cost::DELETE_WORKLOAD);
+}
 // llmlint: ignore-end[budget_commands_measure_directly]
 // llmlint: ignore-end[tests_assert_real_behavior]
 
