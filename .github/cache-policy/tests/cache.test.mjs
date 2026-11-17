@@ -5,11 +5,12 @@ import { createHash } from "node:crypto";
 import {
   chmodSync,
   copyFileSync,
-  cpSync,
   existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -1031,9 +1032,93 @@ function selectionRoutes(answers, repository, pr, execution, run) {
     };
 }
 
+// The cacheable task each session runs through real Nx. The journey proves the sidecar, trust,
+// promotion and the cache-use figure, not the task, so it is the cheapest task still hashed
+// from the workspace's real inputs: a test suite executed here four times took most of the
+// time limit on a contended runner.
+const PROBE_TASK = "github-cache-policy:cache-journey-probe";
+const PROBE_OUTPUT = "cache journey probe: executed";
+function addProbeTask(workspace) {
+  const file = join(workspace, ".github/cache-policy/project.json");
+  const project = JSON.parse(readFileSync(file, "utf8"));
+  project.targets["cache-journey-probe"] = {
+    executor: "nx:run-commands",
+    options: { command: `node -e "console.log('${PROBE_OUTPUT}')"` },
+    cache: true,
+    outputs: [],
+    inputs: project.targets["cache-journeys"].inputs,
+  };
+  writeFileSync(file, JSON.stringify(project));
+}
+// How many budget scenarios run at once: enough that a contended runner gives the journey its
+// share, few enough that no one CLI nears its own timeout on a three-core macOS runner.
+const BUDGET_SCENARIOS_AT_ONCE = 6;
+async function pooled(items, width, work) {
+  const results = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const index = next++;
+      results[index] = await work(items[index]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(width, items.length) }, worker));
+  return results;
+}
+// spawnSync's answer, without holding the event loop while the child runs.
+function spawnAsync(program, args, options) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(program, args, { ...options, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8").on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.setEncoding("utf8").on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.once("error", reject);
+    child.once("close", (status, signal) => resolve({ status, signal, stdout, stderr }));
+  });
+}
+// A GitHub HTTP double serving one directory's routes.json and fixture files.
+async function githubDouble(directory) {
+  const server = spawn(
+    "python3",
+    [join(root, ".github/cache-policy/tests/fixtures/nx-cache-http.py"), directory],
+    { stdio: ["pipe", "ignore", "inherit"] },
+  );
+  await until(() => existsSync(join(directory, "url")) || server.exitCode !== null);
+  assert.equal(server.exitCode, null, `the GitHub double for ${directory} exited`);
+  const url = readFileSync(join(directory, "url"), "utf8");
+  assert.ok(loopback(url), "fixture server must use loopback HTTP");
+  return {
+    url,
+    close: async () => {
+      if (server.exitCode !== null) return;
+      const exited = new Promise((resolve) => server.once("exit", resolve));
+      server.stdin.end();
+      await exited;
+    },
+  };
+}
+// A report folder whose files are hard links to the source report's, so a scenario can rewrite
+// its two documents without copying the payload archives beside them.
+function linkReport(source, folder) {
+  mkdirSync(folder, { recursive: true });
+  for (const entry of readdirSync(source, { recursive: true, withFileTypes: true })) {
+    const from = join(entry.parentPath, entry.name);
+    const to = join(folder, from.slice(source.length + 1));
+    if (entry.isDirectory()) mkdirSync(to, { recursive: true });
+    else if (!["executions.json", "manifest.json"].includes(entry.name)) {
+      mkdirSync(dirname(to), { recursive: true });
+      linkSync(from, to);
+    }
+  }
+}
 // Release selection is simulated; executions, task hashes, cache payloads and the
 // promotion receipt below are produced by this journey's real Nx/sidecar/CLI runs.
-function proveCacheBudget({ dir, workspace, env, pr, laterPr, routes, stage }) {
+async function proveCacheBudget({ dir, workspace, env, pr, laterPr, routes, stage }) {
   const repository = env.GITHUB_REPOSITORY;
   const prefix = `/repos/${repository}`;
   const end = new Date(Date.now() + 60_000).toISOString();
@@ -1183,17 +1268,12 @@ function proveCacheBudget({ dir, workspace, env, pr, laterPr, routes, stage }) {
     specification,
     JSON.stringify({ schema_version: document.schema_version, budgets: [budget] }),
   );
-  // Each scenario rewrites every document before the CLI reads it. The unchanged
-  // payload archives are copied once; all four ZIPs share one Python invocation.
-  const budgetFolders = reports.map((record, index) => {
-    const folder = join(dir, `budget-report-${index}`);
-    cpSync(record.path, folder, { recursive: true });
-    return folder;
-  });
-  const receiptFolder = join(dir, "budget-receipt");
-  mkdirSync(receiptFolder);
-  stage("budget fixture prepared");
-  for (const scenario of [
+  // Each scenario has a directory and a GitHub double of its own, so their CLIs run side by
+  // side: each is a chain of short processes, a real gh among them for every request, and run
+  // one chain at a time on a contended runner they left the journey no room in its time limit.
+  // A report's payload archives are linked rather than copied, and every scenario's ZIPs are
+  // written by one Python invocation.
+  const scenarios = [
     "replayed",
     "evicted",
     "failed-store",
@@ -1212,7 +1292,9 @@ function proveCacheBudget({ dir, workspace, env, pr, laterPr, routes, stage }) {
     "untrusted-receipt",
     "invalid-receipt",
     "zero-eligible",
-  ]) {
+  ];
+  const archives = [];
+  const prepared = scenarios.map((scenario) => {
     const answers = structuredClone(baseline);
     const documents = reports.map(({ execution, manifest }) => ({
       execution: structuredClone(execution),
@@ -1332,35 +1414,57 @@ function proveCacheBudget({ dir, workspace, env, pr, laterPr, routes, stage }) {
         for (const task of doc.execution.tasks) task.result = "local_hit";
       }
     }
-    for (const [index, folder] of budgetFolders.entries()) {
+    const scenarioDir = join(dir, `budget-${scenario}`);
+    for (const [index, record] of reports.entries()) {
+      const folder = join(scenarioDir, `report-${index}`);
+      linkReport(record.path, folder);
       writeFileSync(join(folder, "executions.json"), JSON.stringify(documents[index].execution));
       writeFileSync(join(folder, "manifest.json"), JSON.stringify(documents[index].manifest));
+      archives.push([folder, join(scenarioDir, `budget-report-${index}.zip`)]);
     }
+    const receiptFolder = join(scenarioDir, "budget-receipt");
+    mkdirSync(receiptFolder);
     writeFileSync(join(receiptFolder, "receipt.json"), JSON.stringify(currentReceipt));
-    zip([
-      ...budgetFolders.map((folder, index) => [folder, join(dir, `budget-report-${index}.zip`)]),
-      [receiptFolder, join(dir, "budget-receipt.zip")],
-    ]);
-    writeFileSync(join(dir, "routes.json"), JSON.stringify(answers));
-    stage(`budget ${scenario} archives`);
-    const result = spawnSync(
-      process.execPath,
-      [join(root, "node_modules/@onebudgetspec/cli/bin/onebudgetspec.js"), "check", specification],
-      {
-        cwd: workspace,
-        encoding: "utf8",
-        timeout: 120_000,
-        env: {
-          ...fixtureEnvironment(),
-          ...env,
-          GITHUB_REF_NAME: "v-cache-journey-simulated",
-          RUNNER_TEMP: join(dir, `budget-${scenario}-temp`),
-          NODE_TEST_CONTEXT: undefined,
-        },
-      },
-    );
-    const output = result.stdout + result.stderr;
-    stage(`budget ${scenario} CLI`);
+    archives.push([receiptFolder, join(scenarioDir, "budget-receipt.zip")]);
+    writeFileSync(join(scenarioDir, "routes.json"), JSON.stringify(answers));
+    return { scenario, scenarioDir };
+  });
+  zip(archives);
+  stage("budget archives");
+  const results = await pooled(
+    prepared,
+    BUDGET_SCENARIOS_AT_ONCE,
+    async ({ scenario, scenarioDir }) => {
+      const double = await githubDouble(scenarioDir);
+      try {
+        const result = await spawnAsync(
+          process.execPath,
+          [
+            join(root, "node_modules/@onebudgetspec/cli/bin/onebudgetspec.js"),
+            "check",
+            specification,
+          ],
+          {
+            cwd: workspace,
+            timeout: 120_000,
+            env: {
+              ...fixtureEnvironment(),
+              ...env,
+              GITHUB_API_URL: double.url.replace(/\/$/, ""),
+              GITHUB_REF_NAME: "v-cache-journey-simulated",
+              RUNNER_TEMP: join(dir, `budget-${scenario}-temp`),
+              NODE_TEST_CONTEXT: undefined,
+            },
+          },
+        );
+        return { scenario, status: result.status, output: result.stdout + result.stderr };
+      } finally {
+        await double.close();
+      }
+    },
+  );
+  stage("budget CLIs");
+  for (const { scenario, status, output } of results) {
     if (
       [
         "missing-job",
@@ -1371,7 +1475,7 @@ function proveCacheBudget({ dir, workspace, env, pr, laterPr, routes, stage }) {
         "zero-eligible",
       ].includes(scenario)
     ) {
-      assert.notEqual(result.status, 0, `${scenario}: ${output}`);
+      assert.notEqual(status, 0, `${scenario}: ${output}`);
       assert.doesNotMatch(output, /aggregate: \d+\/\d+ remote hits/, `${scenario}: ${output}`);
     } else {
       const expected = [
@@ -1657,7 +1761,7 @@ async function provePromotion({ dir, workspace, action, sourceEnv, stage }) {
         [
           "node_modules/nx/dist/bin/nx.js",
           "run",
-          "github-workflows:ci-jobs",
+          PROBE_TASK,
           "--excludeTaskDependencies",
           "--outputStyle=static",
         ],
@@ -1675,7 +1779,7 @@ async function provePromotion({ dir, workspace, action, sourceEnv, stage }) {
     },
   );
   stage("later PR replay");
-  proveCacheBudget({ dir, workspace, env: sourceEnv, pr, laterPr, routes, stage });
+  await proveCacheBudget({ dir, workspace, env: sourceEnv, pr, laterPr, routes, stage });
 }
 
 test("CI and release-plz promote a replay-only run, share it with a later PR, and report cache-use with simulated release selection", {
@@ -1700,6 +1804,7 @@ test("CI and release-plz promote a replay-only run, share it with a later PR, an
   }
   symlinkSync(join(root, "node_modules"), join(workspace, "node_modules"), "dir");
   symlinkSync(join(root, ".github/node_modules"), join(workspace, ".github/node_modules"), "dir");
+  addProbeTask(workspace);
   stage("workspace prepared");
   const action = join(dir, "action");
   command("git", ["init", "--quiet", action], dir);
@@ -1823,14 +1928,14 @@ test("CI and release-plz promote a replay-only run, share it with a later PR, an
           [
             "node_modules/nx/dist/bin/nx.js",
             "run",
-            "github-workflows:ci-jobs",
+            PROBE_TASK,
             "--excludeTaskDependencies",
             "--outputStyle=static",
           ],
           workspace,
           env,
         );
-        assert.match(result, /the finished workflows hold the four jobs/);
+        assert.ok(result.includes(PROBE_OUTPUT), result);
         stage(`${identity} real Nx`);
         command("bash", ["-eo", "pipefail", "-c", report.run], workspace, env);
         const manifest = manifestFile(join(runDir, "nx-cache-report/manifest.json"));
@@ -1861,7 +1966,7 @@ test("CI and release-plz promote a replay-only run, share it with a later PR, an
         assert.ok(
           executions.tasks.some(
             (task) =>
-              task.task === "github-workflows:ci-jobs" &&
+              task.task === PROBE_TASK &&
               task.result === (identity === "replay" ? "remote_hit" : "executed"),
           ),
         );
