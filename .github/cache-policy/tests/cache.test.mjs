@@ -323,6 +323,7 @@ function cacheProblems(ci, release) {
     const stop = steps.find((step) => step.cancel === "nx-cache");
     if (JSON.stringify(stop) !== JSON.stringify({ cancel: "nx-cache" }))
       problems.push(`${name}: teardown must be a bare cancel step`);
+    problems.push(...sidecarStopProblems(name, steps));
   }
   if (
     release.on.workflow_dispatch ||
@@ -340,6 +341,7 @@ function cacheProblems(ci, release) {
     JSON.stringify({ cancel: "nx-cache" })
   )
     problems.push("promotion teardown must be a bare cancel step");
+  problems.push(...sidecarStopProblems("release-plz", steps));
   const promote = steps.findIndex((step) => step.run?.includes("nx-remote-cache.mjs promote"));
   if (promote < 0) problems.push("release-plz must promote first");
   for (const [index, step] of steps.entries()) {
@@ -355,6 +357,28 @@ function cacheProblems(ci, release) {
         problems.push("every release-plz operation requires a main push after promotion");
     }
   }
+  return problems;
+}
+// The runner's `cancel:` of a background step can report it Failed ("timed out after 0
+// minutes") when its process exits before the runner marks it cancelled, which failed a
+// test-windows job whose every test passed. So the sidecar ends itself first: it carries the
+// stop preload, an always-run step asks it to stop, `wait:` takes its own result, and the
+// bare `cancel:` after them finds nothing left to cancel.
+const SIDECAR_PRELOAD = "--require ./scripts/nx-cache-sidecar.cjs";
+const SIDECAR_STOP = "node scripts/nx-cache-sidecar.cjs stop";
+function sidecarStopProblems(name, steps) {
+  const sidecar = steps.find((step) => step.id === "nx-cache");
+  const cancel = steps.findIndex((step) => step.cancel === "nx-cache");
+  const problems = [];
+  if (sidecar?.env?.NODE_OPTIONS !== SIDECAR_PRELOAD)
+    problems.push(`${name}: sidecar must load the stop preload`);
+  if (
+    cancel < 2 ||
+    JSON.stringify(steps[cancel - 1]) !== JSON.stringify({ wait: "nx-cache" }) ||
+    steps[cancel - 2].run !== SIDECAR_STOP ||
+    steps[cancel - 2].if !== "always()"
+  )
+    problems.push(`${name}: the sidecar must be stopped, always, and waited on before its cancel`);
   return problems;
 }
 test("the four existing CI jobs share the pinned cache and promotion precedes release-plz", () => {
@@ -408,12 +432,273 @@ test("cache shape refuses an untrusted writer, duplicate local store, invalid ca
     (_ci, release) => {
       release.on.workflow_dispatch = {};
     },
+    (ci) => {
+      delete ci.jobs["test-windows"].steps.find((step) => step.id === "nx-cache").env.NODE_OPTIONS;
+    },
+    (ci) => {
+      const steps = ci.jobs["test-macos"].steps;
+      steps.splice(
+        steps.findIndex((step) => step.wait === "nx-cache"),
+        1,
+      );
+    },
+    (ci) => {
+      delete ci.jobs["test-linux"].steps.find((step) => step.run === SIDECAR_STOP).if;
+    },
+    (_ci, release) => {
+      const steps = release.jobs["release-plz"].steps;
+      steps.splice(
+        steps.findIndex((step) => step.run === SIDECAR_STOP),
+        1,
+      );
+    },
   ]) {
     const ci = workflow("ci");
     const release = workflow("release-plz");
     mutate(ci, release);
     assert.ok(cacheProblems(ci, release).length);
   }
+});
+
+// Spawns a sidecar the way its workflow step runs it — the step's NODE_OPTIONS, from the
+// workspace — and resolves with how it ended. Nothing here ever signals it.
+function workflowSidecar(args, env) {
+  const sidecar = workflow("ci").jobs["test-windows"].steps.find((step) => step.id === "nx-cache");
+  const child = spawn(process.execPath, args, {
+    cwd: root,
+    env: { ...fixtureEnvironment(), ...env, NODE_OPTIONS: sidecar.env.NODE_OPTIONS },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let logs = "";
+  child.stdout.on("data", (chunk) => {
+    logs += chunk;
+  });
+  child.stderr.on("data", (chunk) => {
+    logs += chunk;
+  });
+  const ended = new Promise((resolve) =>
+    child.once("exit", (code, signal) => resolve({ code, signal, logs })),
+  );
+  return { child, ended, logs: () => logs };
+}
+function workflowStopStep(env) {
+  const steps = workflow("ci").jobs["test-windows"].steps;
+  const stop = steps[steps.findIndex((step) => step.cancel === "nx-cache") - 2];
+  return spawnSync("bash", ["-eo", "pipefail", "-c", stop.run], {
+    cwd: root,
+    env: { ...fixtureEnvironment(), NODE_TEST_CONTEXT: undefined, ...env },
+    encoding: "utf8",
+    timeout: 60_000,
+  });
+}
+
+test("the workflow's stop step ends the real pinned sidecar by its own drain, exit 0, with no signal", {
+  timeout: 120_000,
+}, async () => {
+  const dir = tree();
+  const action = join(dir, "action");
+  command("git", ["init", "--quiet", action], dir);
+  command(
+    "git",
+    ["fetch", "--quiet", "--depth=1", "https://github.com/op-nx/github-cache.git", OP_NX_COMMIT],
+    action,
+  );
+  command("git", ["checkout", "--quiet", "--detach", OP_NX_COMMIT], action);
+  const port = await unusedPort();
+  const env = {
+    RUNNER_TEMP: dir,
+    INPUT_PORT: String(port),
+    NX_SELF_HOSTED_REMOTE_CACHE_SERVER: `http://127.0.0.1:${port}`,
+    NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN: "a".repeat(64),
+    CACHE_READ_ONLY: "1",
+  };
+  const sidecar = workflowSidecar([join(action, "start-cache-server/index.js")], env);
+  try {
+    await until(() => sidecar.logs().includes("listening") || sidecar.child.exitCode !== null);
+    assert.match(sidecar.logs(), /listening/);
+    const stop = workflowStopStep(env);
+    assert.equal(stop.status, 0, stop.stdout + stop.stderr);
+    assert.equal(stop.stderr, "");
+    const ended = await sidecar.ended;
+    assert.deepEqual([ended.code, ended.signal], [0, null], ended.logs);
+  } finally {
+    if (sidecar.child.exitCode === null) sidecar.child.kill("SIGKILL");
+  }
+});
+
+test("the stop step names a sidecar whose drain fails, and has nothing to do when none started", async () => {
+  const dir = tree();
+  const env = { RUNNER_TEMP: dir };
+  const idle = workflowStopStep(env);
+  assert.deepEqual([idle.status, idle.stderr], [0, ""]);
+  const sidecar = workflowSidecar(
+    ["-e", "process.once('SIGTERM', () => process.exit(3)); setInterval(() => {}, 1000);"],
+    env,
+  );
+  try {
+    await until(() => existsSync(join(dir, "nx-cache-sidecar", "started")));
+    const stop = workflowStopStep(env);
+    assert.equal(stop.status, 1);
+    assert.match(stop.stderr, /exited with code 3 while draining/);
+    assert.deepEqual([(await sidecar.ended).code, (await sidecar.ended).signal], [3, null]);
+  } finally {
+    if (sidecar.child.exitCode === null) sidecar.child.kill("SIGKILL");
+  }
+});
+
+// A sidecar stand-in under the workflow's preload: `body` is its node source.
+async function standInSidecar(t, dir, body) {
+  const sidecar = workflowSidecar(["-e", `${body}; setInterval(() => {}, 1000);`], {
+    RUNNER_TEMP: dir,
+  });
+  t.after(() => {
+    if (sidecar.child.exitCode === null && sidecar.child.signalCode === null)
+      sidecar.child.kill("SIGKILL");
+  });
+  await until(() => existsSync(join(dir, "nx-cache-sidecar", "started")));
+  return sidecar;
+}
+const handshake = (dir, name) => join(dir, "nx-cache-sidecar", name);
+
+test("a sidecar with no drain registered still stops at once, exit 0", {
+  timeout: 20_000,
+}, async (t) => {
+  const dir = tree();
+  const sidecar = await standInSidecar(t, dir, "");
+  const stop = workflowStopStep({ RUNNER_TEMP: dir, NX_CACHE_SIDECAR_STOP_WAIT_MS: "5000" });
+  assert.deepEqual([stop.status, stop.stderr], [0, ""]);
+  const ended = await sidecar.ended;
+  assert.deepEqual([ended.code, ended.signal], [0, null]);
+});
+
+test("a stop and an exit left from an earlier sidecar neither stop the next one nor pass for it", {
+  timeout: 20_000,
+}, async (t) => {
+  const dir = tree();
+  mkdirSync(join(dir, "nx-cache-sidecar"));
+  writeFileSync(handshake(dir, "stop"), "");
+  writeFileSync(handshake(dir, "exited"), "0\n");
+  const sidecar = await standInSidecar(t, dir, "process.once('SIGTERM', () => process.exit(0))");
+  // The preload clears both before it records the start the stop step waits on.
+  assert.equal(existsSync(handshake(dir, "stop")), false, "a stale stop file survived the start");
+  assert.equal(existsSync(handshake(dir, "exited")), false, "a stale exit passed for the new one");
+  assert.equal(sidecar.child.exitCode, null);
+  const stop = workflowStopStep({ RUNNER_TEMP: dir, NX_CACHE_SIDECAR_STOP_WAIT_MS: "5000" });
+  assert.deepEqual([stop.status, stop.stderr], [0, ""]);
+  assert.deepEqual([(await sidecar.ended).code, (await sidecar.ended).signal], [0, null]);
+});
+
+test("a node child of the sidecar does not take over its handshake", {
+  timeout: 20_000,
+}, async (t) => {
+  const dir = tree();
+  const sidecar = await standInSidecar(
+    t,
+    dir,
+    "process.once('SIGTERM', () => process.exit(0)); require('node:child_process').spawnSync(process.execPath, ['-e', ''], { stdio: 'ignore' }); require('node:fs').writeFileSync(require('node:path').join(process.env.RUNNER_TEMP, 'child-ran'), '')",
+  );
+  await until(() => existsSync(join(dir, "child-ran")));
+  assert.equal(readFileSync(handshake(dir, "started"), "utf8"), `${sidecar.child.pid}\n`);
+  assert.equal(existsSync(handshake(dir, "exited")), false, "the child's exit was recorded");
+  const stop = workflowStopStep({ RUNNER_TEMP: dir, NX_CACHE_SIDECAR_STOP_WAIT_MS: "5000" });
+  assert.deepEqual([stop.status, stop.stderr], [0, ""]);
+});
+
+test("a drain that hangs past the bound is killed and named", { timeout: 20_000 }, async (t) => {
+  const dir = tree();
+  const sidecar = await standInSidecar(t, dir, "process.on('SIGTERM', () => {})");
+  try {
+    const stop = workflowStopStep({ RUNNER_TEMP: dir, NX_CACHE_SIDECAR_STOP_WAIT_MS: "500" });
+    assert.equal(stop.status, 1);
+    assert.match(
+      stop.stderr,
+      /did not finish its drain within 500 ms of being asked to stop, so it was killed/,
+    );
+    assert.equal((await sidecar.ended).signal, "SIGKILL");
+  } finally {
+    if (sidecar.child.exitCode === null) sidecar.child.kill("SIGKILL");
+  }
+});
+
+test("a started file that is not a process id is refused, signalling nothing", () => {
+  const dir = tree();
+  mkdirSync(join(dir, "nx-cache-sidecar"));
+  writeFileSync(handshake(dir, "started"), "-1\n");
+  const stop = workflowStopStep({ RUNNER_TEMP: dir, NX_CACHE_SIDECAR_STOP_WAIT_MS: "5000" });
+  assert.equal(stop.status, 1);
+  assert.match(stop.stderr, /the started file is "-1", not an integer from 1 to 2147483647/);
+  assert.match(stop.stderr, /could not be read or written/);
+});
+
+test("the stop command refuses what it cannot act on, naming it, and ends a usage error 2", () => {
+  const refused = (env, pattern) => {
+    const stop = workflowStopStep(env);
+    assert.equal(stop.status, 1, stop.stderr);
+    assert.match(stop.stderr, pattern);
+  };
+  const dir = tree();
+  const handshakeDir = join(dir, "nx-cache-sidecar");
+  mkdirSync(handshakeDir);
+  writeFileSync(handshake(dir, "started"), `${process.pid}\n`);
+  refused(
+    { RUNNER_TEMP: dir, NX_CACHE_SIDECAR_STOP_WAIT_MS: "99999999999" },
+    /NX_CACHE_SIDECAR_STOP_WAIT_MS is "99999999999", not an integer from 1 to 600000/,
+  );
+  refused({ RUNNER_TEMP: "" }, /RUNNER_TEMP is not set/);
+  // A pid no process holds: the kill fails, and the step says so rather than claiming it.
+  writeFileSync(handshake(dir, "started"), "2147483646\n");
+  refused(
+    { RUNNER_TEMP: dir, NX_CACHE_SIDECAR_STOP_WAIT_MS: "300" },
+    /within 300 ms of being asked to stop, and killing it failed \(ESRCH\)/,
+  );
+  rmSync(handshake(dir, "stop"));
+  mkdirSync(handshake(dir, "exited"));
+  refused({ RUNNER_TEMP: dir }, /EISDIR[\s\S]*could not be read or written/);
+  rmSync(handshakeDir, { recursive: true });
+  mkdirSync(handshake(dir, "started"), { recursive: true });
+  refused({ RUNNER_TEMP: dir }, /EISDIR[\s\S]*could not be read or written/);
+  const usage = spawnSync(process.execPath, [join(root, "scripts/nx-cache-sidecar.cjs")], {
+    encoding: "utf8",
+  });
+  assert.equal(usage.status, 2);
+  assert.match(usage.stderr, /usage: .* 2 on a usage error/);
+});
+
+test("a sidecar whose handshake directory cannot be made fails at start, naming it", async (t) => {
+  const dir = tree();
+  writeFileSync(join(dir, "nx-cache-sidecar"), "a file where the directory goes");
+  const sidecar = workflowSidecar(["-e", "setInterval(() => {}, 1000)"], { RUNNER_TEMP: dir });
+  t.after(() => {
+    if (sidecar.child.exitCode === null) sidecar.child.kill("SIGKILL");
+  });
+  const ended = await sidecar.ended;
+  assert.equal(ended.code, 1);
+  assert.match(
+    ended.logs,
+    /could not set up the stop handshake in .*(EEXIST|ENOTDIR).*re-run the job/,
+  );
+});
+
+test("a sidecar started with no RUNNER_TEMP fails at start, naming it", async () => {
+  const sidecar = workflowSidecar(["-e", "setInterval(() => {}, 1000)"], { RUNNER_TEMP: "" });
+  const ended = await sidecar.ended;
+  assert.equal(ended.code, 1);
+  assert.match(ended.logs, /RUNNER_TEMP is not set/);
+});
+
+test("a sidecar that cannot record its exit says so, and the stop step reports it unstopped", async (t) => {
+  const dir = tree();
+  const sidecar = await standInSidecar(t, dir, "process.once('SIGTERM', () => process.exit(0))");
+  const handshakeDir = join(dir, "nx-cache-sidecar");
+  writeFileSync(handshake(dir, "stop"), "");
+  chmodSync(handshakeDir, 0o555);
+  t.after(() => chmodSync(handshakeDir, 0o755));
+  const ended = await sidecar.ended;
+  assert.equal(ended.code, 0);
+  assert.match(ended.logs, /could not record exit code 0 in .*EACCES.*re-run the job/);
+  const stop = workflowStopStep({ RUNNER_TEMP: dir, NX_CACHE_SIDECAR_STOP_WAIT_MS: "300" });
+  assert.equal(stop.status, 1);
+  assert.match(stop.stderr, /did not finish its drain within 300 ms/);
 });
 
 test("trust refuses writes for fork and Dependabot PRs, and permits a repository contributor", () => {

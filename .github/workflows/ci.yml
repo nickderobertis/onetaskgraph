@@ -191,6 +191,8 @@ jobs:
           NX_SELF_HOSTED_REMOTE_CACHE_SERVER: http://127.0.0.1:3000
           NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN: ${{ steps.nx-cache-trust.outputs.token }}
           CACHE_READ_ONLY: ${{ steps.nx-cache-trust.outputs.read_only == 'true' && '1' || '' }}
+          # Its clean stop: see scripts/nx-cache-sidecar.cjs for why it is not left to `cancel:`.
+          NODE_OPTIONS: --require ./scripts/nx-cache-sidecar.cjs
           GITHUB_TOKEN: ${{ github.token }}
       - name: Wait for the cache recording proxy
         shell: bash
@@ -291,6 +293,11 @@ jobs:
           name: nx-cache-entries-${{ github.job }}
           path: ${{ runner.temp }}/nx-cache-report
           retention-days: 7
+      - name: Stop the cache sidecar
+        if: always()
+        shell: bash
+        run: node scripts/nx-cache-sidecar.cjs stop
+      - wait: nx-cache
       - cancel: nx-cache
 
   test-linux:
@@ -396,6 +403,8 @@ jobs:
           NX_SELF_HOSTED_REMOTE_CACHE_SERVER: http://127.0.0.1:3000
           NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN: ${{ steps.nx-cache-trust.outputs.token }}
           CACHE_READ_ONLY: ${{ steps.nx-cache-trust.outputs.read_only == 'true' && '1' || '' }}
+          # Its clean stop: see scripts/nx-cache-sidecar.cjs for why it is not left to `cancel:`.
+          NODE_OPTIONS: --require ./scripts/nx-cache-sidecar.cjs
           GITHUB_TOKEN: ${{ github.token }}
       - name: Wait for the cache recording proxy
         shell: bash
@@ -493,6 +502,11 @@ jobs:
           name: nx-cache-entries-${{ github.job }}
           path: ${{ runner.temp }}/nx-cache-report
           retention-days: 7
+      - name: Stop the cache sidecar
+        if: always()
+        shell: bash
+        run: node scripts/nx-cache-sidecar.cjs stop
+      - wait: nx-cache
       - cancel: nx-cache
 
   test-windows:
@@ -586,6 +600,8 @@ jobs:
           NX_SELF_HOSTED_REMOTE_CACHE_SERVER: http://127.0.0.1:3000
           NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN: ${{ steps.nx-cache-trust.outputs.token }}
           CACHE_READ_ONLY: ${{ steps.nx-cache-trust.outputs.read_only == 'true' && '1' || '' }}
+          # Its clean stop: see scripts/nx-cache-sidecar.cjs for why it is not left to `cancel:`.
+          NODE_OPTIONS: --require ./scripts/nx-cache-sidecar.cjs
           GITHUB_TOKEN: ${{ github.token }}
       - name: Wait for the cache recording proxy
         shell: bash
@@ -625,6 +641,11 @@ jobs:
           name: nx-cache-entries-${{ github.job }}
           path: ${{ runner.temp }}/nx-cache-report
           retention-days: 7
+      - name: Stop the cache sidecar
+        if: always()
+        shell: bash
+        run: node scripts/nx-cache-sidecar.cjs stop
+      - wait: nx-cache
       - cancel: nx-cache
 
   test-macos:
@@ -700,6 +721,8 @@ jobs:
           NX_SELF_HOSTED_REMOTE_CACHE_SERVER: http://127.0.0.1:3000
           NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN: ${{ steps.nx-cache-trust.outputs.token }}
           CACHE_READ_ONLY: ${{ steps.nx-cache-trust.outputs.read_only == 'true' && '1' || '' }}
+          # Its clean stop: see scripts/nx-cache-sidecar.cjs for why it is not left to `cancel:`.
+          NODE_OPTIONS: --require ./scripts/nx-cache-sidecar.cjs
           GITHUB_TOKEN: ${{ github.token }}
       - name: Wait for the cache recording proxy
         shell: bash
@@ -738,6 +761,11 @@ jobs:
           name: nx-cache-entries-${{ github.job }}
           path: ${{ runner.temp }}/nx-cache-report
           retention-days: 7
+      - name: Stop the cache sidecar
+        if: always()
+        shell: bash
+        run: node scripts/nx-cache-sidecar.cjs stop
+      - wait: nx-cache
       - cancel: nx-cache
 
   # The budget report: the released action's own job, on every pull request and every push to main,
