@@ -112,3 +112,17 @@ def no_ambient_configuration(configuration_prefix: str, monkeypatch: pytest.Monk
     for name in list(os.environ):
         if name.startswith(configuration_prefix):
             monkeypatch.delenv(name)
+
+
+@pytest.fixture(autouse=True)
+def no_user_configuration(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Give every test an empty configuration home, so no host's user layer reaches the binary.
+
+    The binary reads `$XDG_CONFIG_HOME/onetaskgraph/config.yaml` and the `secrets.env` beside it,
+    falling back to `$HOME/.config`. A host keeping one — sources declared private and a
+    `write_policy` turn the public boundary on — changes what a copy does, so a test would pass in
+    CI and fail on that host. A test needing a user layer still names its own `XDG_CONFIG_HOME`.
+    """
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path_factory.mktemp("config-home")))

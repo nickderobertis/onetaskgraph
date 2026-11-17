@@ -2689,6 +2689,7 @@ test("projectCopy flags agree with the binary help and validate membersOnly and 
     documents: true,
     members: ["from:T-1"],
     membersOnly: true,
+    closeOrphans: true,
     termScope: ["github.com/example/project"],
     statusPolicy: "preserve-destination",
   });
