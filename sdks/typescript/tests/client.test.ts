@@ -632,6 +632,9 @@ test("a task delete and a copy closing its orphan drive the real binary", async 
     expect(shown.items[0]?.item.status.category).toBe("cancelled");
     expect(projectCopyFlags({ closeOrphans: true })).toContain("--close-orphans");
     expect(projectCopyFlags({})).not.toContain("--close-orphans");
+    expect(() => projectCopyFlags({ closeOrphans: "yes" as unknown as boolean })).toThrow(
+      "projectCopy: closeOrphans must be a boolean",
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

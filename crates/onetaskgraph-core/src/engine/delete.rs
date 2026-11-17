@@ -79,11 +79,11 @@ impl Engine {
                 error: failure.error,
             });
         }
-        let mut dependents: Vec<String> = Vec::new();
+        let mut dependents: Vec<GlobalId> = Vec::new();
         for edge in edges.items {
-            let dependent = edge.from.id.to_string();
+            let dependent = edge.from.id;
             if edge.to.id == *id
-                && edge.from.id.source == id.source
+                && dependent.source == id.source
                 && !dependents.contains(&dependent)
             {
                 dependents.push(dependent);
@@ -91,7 +91,7 @@ impl Engine {
         }
         if !dependents.is_empty() {
             return Err(EngineError::TaskHasDependents {
-                id: id.to_string(),
+                id: id.clone(),
                 dependents,
             });
         }

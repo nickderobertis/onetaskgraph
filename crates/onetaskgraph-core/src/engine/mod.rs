@@ -1054,11 +1054,10 @@ pub enum EngineError {
         .dependents.iter().map(|dependent| format!("  {dependent}")).collect::<Vec<_>>().join("\n")
     )]
     TaskHasDependents {
-        /// The task that was not deleted, qualified.
-        id: String,
-        /// Each item of its source that depends on it, qualified, in the order its source
-        /// answered them.
-        dependents: Vec<String>,
+        /// The task that was not deleted.
+        id: GlobalId,
+        /// Each item of its source that depends on it, in the order its source answered them.
+        dependents: Vec<GlobalId>,
     },
 
     /// `--close-orphans` was given to a copy that does not walk every member of the projects it

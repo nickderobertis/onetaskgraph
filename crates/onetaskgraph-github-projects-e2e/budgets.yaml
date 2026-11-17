@@ -311,8 +311,7 @@ budgets:
     description: >-
       The requests one `task delete` of one issue item sends through the binary on a fresh process
       with the cache off, the dependents check included, the larger over boards of 1,100 and of
-      11,000 items. Its detail reports each board size's figure, split into reads and mutations.
-      It protects every manager's share of the board token.
+      11,000 items. It protects every manager's share of the board token.
     labels: [github]
     measure: reported
     # llmlint: ignore[budget_commands_measure_directly] Every budget of this file selects its own report-only entry in `budget_runner`, the harness-runner convention this crate's budgets landed with; this one reads only the telemetry `store_cost.rs` recorded during the crate's test run, refuses a recording of another workload, scale or figure, and hands the figure to onebudgetspec, which alone judges it.

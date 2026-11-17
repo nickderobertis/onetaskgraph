@@ -295,6 +295,28 @@ fn an_unknown_or_unqualified_id_is_refused_and_removes_nothing() {
     assert_eq!(tree(&root), before);
 }
 
+#[test]
+fn a_task_of_a_source_with_no_write_side_is_not_deleted() {
+    let sandbox = Sandbox::new();
+    sandbox.project_document(&document(&json!({
+        "frozen": {"plugin": "in-memory", "config": {
+            "capabilities": {"writes": "unsupported"},
+            "tasks": [{"id": "T-1", "title": "Kept", "labels": [],
+                       "status": {"category": "todo", "name": "Todo"}}]}}
+    })));
+    let refused = run(&sandbox, &["task", "delete", "frozen:T-1", "--json"]);
+    assert_eq!(refused.status.code(), Some(1), "{}", stderr(&refused));
+    let failure: Value = serde_json::from_str(&stdout(&refused)).expect("a failure document");
+    assert_eq!(failure["failure"]["kind"], "not-writable", "{failure}");
+    assert!(
+        stderr(&refused).contains(
+            "source frozen cannot delete a task: its plugin is in-memory, which has no write side"
+        ),
+        "{}",
+        stderr(&refused)
+    );
+}
+
 /// A plan of four tasks copied into `copies`, then three of them deleted at the source: `open`
 /// left as the copy wrote it, `finished` set `done` and `abandoned` set `cancelled` at the
 /// destination first. Answers the two folders.
@@ -492,4 +514,66 @@ fn close_orphans_beside_a_copy_that_does_not_walk_every_task_is_refused_before_a
     }
     assert_eq!(tree(&plans), plans_before);
     assert_eq!(tree(&copies), copies_before);
+}
+
+#[test]
+fn closing_an_orphan_keeps_the_tasks_it_delivers_in_step() {
+    // The open orphan delivers a ticket the destination holds of its own: closing the orphan is
+    // the write `task status set … cancelled` makes, so the ticket is re-evaluated against it and
+    // the copy reports that beside the close.
+    let sandbox = Sandbox::new();
+    let (_, copies) = dropped_plan(&sandbox);
+    let ticket = parsed(
+        &sandbox,
+        &[
+            "task",
+            "create",
+            "copies",
+            "--project",
+            "P",
+            "--title",
+            "Ticket",
+            "--json",
+        ],
+    )["items"][0]["id"]
+        .as_str()
+        .expect("an id")
+        .to_owned();
+    printed(
+        &sandbox,
+        &[
+            "task",
+            "update",
+            "copies:open",
+            "--delivers",
+            &ticket,
+            "--json",
+        ],
+    );
+
+    let report = parsed(
+        &sandbox,
+        &[
+            "project",
+            "copy",
+            "plans:P",
+            "--to",
+            "copies",
+            "--close-orphans",
+            "--json",
+        ],
+    );
+
+    assert_eq!(actions(&report)[4].1, "closed", "{report:#}");
+    let delivered = report["delivered"]
+        .as_array()
+        .expect("what the close kept in step");
+    assert!(
+        delivered
+            .iter()
+            .any(|entry| entry["ticket"] == ticket.as_str() && entry["deliverer"] == "copies:open"),
+        "{report:#}"
+    );
+    assert_eq!(category(&sandbox, "copies:open"), "cancelled");
+    assert!(copies.join("tasks/open.md").is_file());
 }
