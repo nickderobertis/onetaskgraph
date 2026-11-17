@@ -632,6 +632,8 @@ test("a task delete and a copy closing its orphan drive the real binary", async 
     expect(shown.items[0]?.item.status.category).toBe("cancelled");
     expect(projectCopyFlags({ closeOrphans: true })).toContain("--close-orphans");
     expect(projectCopyFlags({})).not.toContain("--close-orphans");
+    // A JavaScript caller is not held to the type, so the cast hands the flag builder the
+    // non-boolean such a caller could, to prove it is refused rather than passed on.
     expect(() => projectCopyFlags({ closeOrphans: "yes" as unknown as boolean })).toThrow(
       "projectCopy: closeOrphans must be a boolean",
     );
