@@ -2079,6 +2079,34 @@ fn dropped_cost(scenario: &Scenario, closed: &[String]) -> (u64, Value) {
     )
 }
 
+#[test]
+fn the_dropped_points_budget_states_the_configurations_it_is_measured_in() {
+    // What `github-plan-copy-points-dropped`'s description says is measured is what
+    // `a_recopy_after_a_task_was_deleted_closes_its_one_orphan_whatever_the_boards_size`
+    // measures: the host's configuration out of a source declaring no visibility, and why not
+    // a private one.
+    let budget = "github-plan-copy-points-dropped";
+    let budgets = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("budgets.yaml"),
+    )
+    .unwrap();
+    let described = budgets
+        .split("\n  - id: ")
+        .find(|entry| entry.starts_with(budget))
+        .expect("the budget is registered");
+    for stated in [
+        "with no write policy, screened, and in the host's configuration out of a source \
+         declaring no visibility",
+        "a copy out of a source declared private records no origin on the board, so its \
+         re-copy finds no orphan and writes nothing",
+    ] {
+        assert!(
+            described.contains(stated),
+            "{budget} does not state {stated:?}"
+        );
+    }
+}
+
 /// One configuration a plan copy is measured in: how a recording names it, and its plan on a
 /// board of so many items.
 type Configured = (&'static str, fn(usize) -> Plan);
@@ -2121,27 +2149,6 @@ fn a_recopy_after_a_task_was_deleted_closes_its_one_orphan_whatever_the_boards_s
         );
     }
     let budget = "github-plan-copy-points-dropped";
-    // What the budget's description says is measured is what this measures: the host's
-    // configuration out of a source declaring no visibility, and why not a private one.
-    let budgets = std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("budgets.yaml"),
-    )
-    .unwrap();
-    let described = budgets
-        .split("\n  - id: ")
-        .find(|entry| entry.starts_with(budget))
-        .expect("the budget is registered");
-    for stated in [
-        "with no write policy, screened, and in the host's configuration out of a source \
-         declaring no visibility",
-        "a copy out of a source declared private records no origin on the board, so its \
-         re-copy finds no orphan and writes nothing",
-    ] {
-        assert!(
-            described.contains(stated),
-            "{budget} does not state {stated:?}"
-        );
-    }
     let directory = super::budget_runner::directory();
     std::fs::create_dir_all(&directory).unwrap();
     std::fs::write(
