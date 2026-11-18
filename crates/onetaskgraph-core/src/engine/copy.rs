@@ -1642,13 +1642,9 @@ impl Recorded {
 
     /// The deleted task `counterpart` was a copy of, when the record names it, noting how it was
     /// found.
-    fn found(&mut self, counterpart: &NativeId, open: bool) -> Option<GlobalId> {
+    fn found(&mut self, counterpart: &NativeId, seen: Sighting) -> Option<GlobalId> {
         let (task, sighting) = self.entries.get_mut(counterpart)?;
-        *sighting = if open {
-            Sighting::Open
-        } else {
-            Sighting::Finished
-        };
+        *sighting = seen;
         Some(task.clone())
     }
 
@@ -4528,9 +4524,7 @@ impl Engine {
             // A routed plan's tasks are filed under its members too, so each member is walked
             // in its own source for what the source plan no longer holds.
             if self.routes.routes(&request.destination) {
-                // The same walk, reading the same record for the member's source: the routed
-                // journey in tests/e2e/task_delete.rs drives this loop by origin, and the
-                // record's matching is driven by the unrouted private journeys beside it.
+                // The same walk, with the record's entries for the member's source.
                 for member in self.members_named(&filed, running).await? {
                     let there = self.writable(&member.source)?;
                     let walked = self
@@ -5617,7 +5611,14 @@ impl Engine {
                     task.status.category,
                     StatusCategory::Done | StatusCategory::Cancelled
                 );
-                let deleted = recorded.found(&task.id, open);
+                let deleted = recorded.found(
+                    &task.id,
+                    if open {
+                        Sighting::Open
+                    } else {
+                        Sighting::Finished
+                    },
+                );
                 let Some(origin) = origin_of(&task.metadata).or(deleted) else {
                     continue;
                 };

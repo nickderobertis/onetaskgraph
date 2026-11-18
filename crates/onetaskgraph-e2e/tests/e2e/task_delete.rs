@@ -583,7 +583,14 @@ fn closing_an_orphan_keeps_the_tasks_it_delivers_in_step() {
 fn close_orphans_closes_a_dropped_tasks_copy_in_the_member_a_route_filed_it_under() {
     // `notes` routes widgetco work to `team`: the plan's home lands in `notes` beside its
     // library task, and its two widgetco tasks in a member project in `team`. Dropping one of
-    // those, the re-copy walks the member too and closes the copy there.
+    // those, the re-copy walks the member too and closes the copy there — found by its origin,
+    // and again with the plan declared private, by the record the delete left on the plan.
+    for private in [false, true] {
+        routed_dropped_task_closes(private);
+    }
+}
+
+fn routed_dropped_task_closes(private: bool) {
     let sandbox = Sandbox::new();
     let plan = sandbox.subdirectory("plan");
     let notes = sandbox.subdirectory("notes");
@@ -613,7 +620,7 @@ fn close_orphans_closes_a_dropped_tasks_copy_in_the_member_a_route_filed_it_unde
         )
         .expect("a record");
     }
-    sandbox.project_document(&document(&json!({
+    let mut configuration: Value = serde_json::from_str(&document(&json!({
         "plan": {"plugin": "local-md", "config": {"root": plan}},
         "notes": {
             "plugin": "local-md",
@@ -621,7 +628,13 @@ fn close_orphans_closes_a_dropped_tasks_copy_in_the_member_a_route_filed_it_unde
             "routes": [{"repositories": ["github.com/widgetco/*"], "to": "team"}],
         },
         "team": {"plugin": "local-md", "config": {"root": team}},
-    })));
+    })))
+    .expect("a document");
+    if private {
+        configuration["sources"]["plan"]["visibility"] = json!("private");
+        configuration["write_policy"] = passing_write_policy();
+    }
+    sandbox.project_document(&serde_json::to_string_pretty(&configuration).expect("renders"));
     let first = parsed(
         &sandbox,
         &["project", "copy", "plan:goal", "--to", "notes", "--json"],
@@ -636,6 +649,11 @@ fn close_orphans_closes_a_dropped_tasks_copy_in_the_member_a_route_filed_it_unde
         .expect("where it landed")
         .to_owned();
     assert!(site.starts_with("team:"), "{first:#}");
+    let origin =
+        parsed(&sandbox, &["task", "show", &site, "--json"])["items"][0]["item"]["metadata"]
+            .get("onetaskgraph.origin")
+            .cloned();
+    assert_eq!(origin.is_none(), private, "{origin:?}");
     printed(&sandbox, &["task", "delete", "plan:site"]);
     let notes_before = tree(&notes);
 
@@ -669,6 +687,22 @@ fn close_orphans_closes_a_dropped_tasks_copy_in_the_member_a_route_filed_it_unde
     );
 }
 
+/// A `write_policy` whose check passes every write and which answers every repository public: a
+/// store declaring a visibility is held to the public boundary, and what is under test beside it
+/// is the record a delete leaves.
+fn passing_write_policy() -> Value {
+    json!({
+        "check_command": [
+            interpreter(), "-c",
+            "import sys; sys.stdin.read(); print('{\"verdict\": \"pass\"}')"
+        ],
+        "visibility_command": [
+            interpreter(), "-c",
+            "import sys; sys.stdin.read(); print('{\"visibility\": \"public\"}')"
+        ],
+    })
+}
+
 /// A folder declared private, `drafts`, holding project `P` and these tasks, copied once into a
 /// folder that is not, `public`: a copy that withholds provenance, so no copy it lands names an
 /// origin, and a dropped task's copy is found by what `task delete` records on `P`.
@@ -687,24 +721,12 @@ impl PrivatePlan {
         let sandbox = Sandbox::new();
         let drafts = folder(&sandbox, "drafts", tasks);
         let public = sandbox.subdirectory("public");
-        // A store declaring a visibility is held to the public boundary, so its write policy
-        // passes every write and answers every repository public: what is under test is the
-        // record.
         let mut configuration: Value = serde_json::from_str(&document(&json!({
             "drafts": {"plugin": "local-md", "config": {"root": drafts}, "visibility": "private"},
             "public": {"plugin": "local-md", "config": {"root": public}}
         })))
         .expect("a document");
-        configuration["write_policy"] = json!({
-            "check_command": [
-                interpreter(), "-c",
-                "import sys; sys.stdin.read(); print('{\"verdict\": \"pass\"}')"
-            ],
-            "visibility_command": [
-                interpreter(), "-c",
-                "import sys; sys.stdin.read(); print('{\"visibility\": \"public\"}')"
-            ],
-        });
+        configuration["write_policy"] = passing_write_policy();
         sandbox.project_document(&serde_json::to_string_pretty(&configuration).expect("renders"));
         let first = parsed(&sandbox, &Self::COPY);
         let project = actions(&first)
@@ -1021,4 +1043,69 @@ fn a_task_filed_under_a_project_its_source_does_not_hold_is_deleted_recording_no
     assert!(!listed(&plan.sandbox, "drafts").contains(&"drafts:lost".to_owned()));
     assert!(plan.record().is_null(), "{}", plan.record());
     assert_eq!(tree(&plan.public), published);
+}
+
+#[test]
+fn a_recorded_copy_moved_to_another_project_is_left_as_it_is_and_taken_off_the_record() {
+    // A person refiled the dropped task's copy under another project of the public folder: the
+    // closing copy reads the project's copy alone, so it neither reports nor closes the moved
+    // copy, which stays byte for byte, and the entry goes.
+    let plan = PrivatePlan::new(&[("stay", "Stay", &[]), ("open", "Open", &[])]);
+    let copied = plan.landed["drafts:open"].clone();
+    printed(&plan.sandbox, &["task", "delete", "drafts:open"]);
+    std::fs::write(
+        plan.public.join("projects/elsewhere.md"),
+        "---\ntitle: Elsewhere\n---\n",
+    )
+    .expect("another project");
+    let file = plan.public.join(format!(
+        "tasks/{}.md",
+        copied.split_once(':').expect("an id").1
+    ));
+    let (_, project) = plan.project.split_once(':').expect("an id");
+    let text = std::fs::read_to_string(&file).expect("the copy's file");
+    let moved_text = text.replacen(&format!("project: {project}\n"), "project: elsewhere\n", 1);
+    assert_ne!(moved_text, text, "the copy's file names its project");
+    std::fs::write(&file, &moved_text).expect("the copy refiled");
+
+    let report = plan.copy(&["--close-orphans"]);
+    assert_eq!(moved(&report), vec![], "{report:#}");
+    assert_eq!(
+        std::fs::read_to_string(&file).expect("the copy"),
+        moved_text
+    );
+    assert_eq!(plan.record(), json!({}));
+}
+
+#[test]
+fn a_hand_edited_record_keeps_its_well_formed_entries_through_the_next_delete() {
+    // The record is the engine's, so an entry a person mangled is left out of what is read and
+    // of what the next delete writes back, beside every well-formed entry: the mangled one is
+    // never closed, and the well-formed one still is.
+    let plan = PrivatePlan::new(&[("stay", "Stay", &[]), ("open", "Open", &[])]);
+    let project = plan.drafts.join("projects/P.md");
+    let held = std::fs::read_to_string(&project).expect("P's file");
+    let edited = held.replacen(
+        "\nmetadata:\n",
+        "\nmetadata:\n  onetaskgraph.deleted_copies:\n    public:\n      stay: 7\n      also: not \
+         a qualified id\n    listed: [drafts:x]\n",
+        1,
+    );
+    assert_ne!(edited, held, "P records its copy's link under `metadata`");
+    std::fs::write(&project, edited).expect("a hand-edited record");
+    printed(&plan.sandbox, &["task", "delete", "drafts:open"]);
+    assert_eq!(plan.record(), plan.recording(&["drafts:open"]));
+    let report = plan.copy(&["--close-orphans"]);
+    assert_eq!(
+        moved(&report),
+        vec![(
+            "drafts:open".to_owned(),
+            "closed".to_owned(),
+            Some(plan.landed["drafts:open"].clone())
+        )]
+    );
+    assert_ne!(
+        category(&plan.sandbox, &plan.landed["drafts:stay"]),
+        "cancelled"
+    );
 }
