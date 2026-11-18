@@ -4524,7 +4524,6 @@ impl Engine {
             // A routed plan's tasks are filed under its members too, so each member is walked
             // in its own source for what the source plan no longer holds.
             if self.routes.routes(&request.destination) {
-                // The same walk, with the record's entries for the member's source.
                 for member in self.members_named(&filed, running).await? {
                     let there = self.writable(&member.source)?;
                     let walked = self
