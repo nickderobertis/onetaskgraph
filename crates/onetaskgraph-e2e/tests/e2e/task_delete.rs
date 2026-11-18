@@ -931,24 +931,29 @@ fn a_recorded_copy_already_finished_or_landed_again_is_taken_off_the_record_and_
 }
 
 #[cfg(unix)]
-fn permit(folder: &Path, mode: u32) {
+fn permit(path: &Path, mode: u32) {
     use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(folder, std::fs::Permissions::from_mode(mode))
-        .expect("the folder's permissions");
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
+        .expect("the path's permissions");
 }
 
 #[cfg(unix)]
 #[test]
 fn a_delete_that_cannot_record_or_cannot_remove_leaves_the_task_and_the_record_as_they_were() {
-    // A project folder the record cannot be written into refuses the delete before anything is
-    // removed; a task folder the file cannot be removed from refuses it after the record was
-    // written, which puts the record back. Then the delete goes through.
+    // A project file that cannot be read, and a project folder the record cannot be written
+    // into, each refuse the delete before anything is removed; a task folder the file cannot be
+    // removed from refuses it after the record was written, which puts the record back. Then the
+    // delete goes through.
     let plan = PrivatePlan::new(&[("stay", "Stay", &[]), ("open", "Open", &[])]);
-    for (folder, what) in [("projects", "the record"), ("tasks", "the removal")] {
+    for (path, mode, restore, what) in [
+        ("projects/P.md", 0o000, 0o644, "the project's read"),
+        ("projects", 0o555, 0o755, "the record"),
+        ("tasks", 0o555, 0o755, "the removal"),
+    ] {
         let before = tree(&plan.drafts);
-        permit(&plan.drafts.join(folder), 0o555);
+        permit(&plan.drafts.join(path), mode);
         let refused = run(&plan.sandbox, &["task", "delete", "drafts:open"]);
-        permit(&plan.drafts.join(folder), 0o755);
+        permit(&plan.drafts.join(path), restore);
         assert_ne!(
             refused.status.code(),
             Some(0),
@@ -970,7 +975,7 @@ fn a_delete_that_cannot_record_or_cannot_remove_leaves_the_task_and_the_record_a
             record.is_null() || record == json!({}),
             "{what}: the record names nothing: {record}"
         );
-        if folder == "projects" {
+        if path != "tasks" {
             assert_eq!(tree(&plan.drafts), before, "{what}: nothing moved");
         }
     }
