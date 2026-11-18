@@ -257,6 +257,11 @@ fn cause(error: &EngineError) -> (String, Option<SourceName>, Option<&SourceErro
         ),
         EngineError::QueryNotTasks => ("query-not-tasks".to_owned(), None, None),
         EngineError::StatusesNotTasks => ("statuses-not-tasks".to_owned(), None, None),
+        EngineError::CloseOrphansNarrowed => ("close-orphans-narrowed".to_owned(), None, None),
+        EngineError::TaskHasDependents { .. } => ("task-has-dependents".to_owned(), None, None),
+        EngineError::DeleteNotWritable { name, .. } => {
+            ("not-writable".to_owned(), configured(name), None)
+        }
         EngineError::ConditionsNotTasks => ("conditions-not-tasks".to_owned(), None, None),
         EngineError::CreateInProgress { .. } => ("create-in-progress".to_owned(), None, None),
         EngineError::CreateDuplicated { destination, .. } => (

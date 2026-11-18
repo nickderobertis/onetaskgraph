@@ -458,6 +458,7 @@ async fn disposable_task_and_document_asset_copies() {
                 status_policy: onetaskgraph_core::StatusPolicy::Source,
                 statuses: Vec::new(),
                 conditions: Default::default(),
+                close_orphans: false,
             };
             let report = engine
                 .copy(&request)
@@ -854,6 +855,7 @@ async fn a_reconcile_dry_run_reads_the_live_board_through_its_closed_filter_alon
             status_policy: onetaskgraph_core::StatusPolicy::Source,
             statuses: Vec::new(),
             conditions: Default::default(),
+            close_orphans: false,
         };
         let report = engine
             .copy(&request)

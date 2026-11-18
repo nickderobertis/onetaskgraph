@@ -190,6 +190,7 @@ async fn copies_on_a_source_keeping_the_marker_read_back_as_copies_and_stay_so_t
         status_policy: onetaskgraph_core::StatusPolicy::Source,
         statuses: Vec::new(),
         conditions: Default::default(),
+        close_orphans: false,
     };
     let counts = |report: &CopyReport| report.items[0].comments().copied();
     let first = engine.copy(&copy).await.expect("the copy lands");

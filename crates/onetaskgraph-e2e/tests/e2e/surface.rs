@@ -302,7 +302,16 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
     let bundle: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("schema output is valid JSON");
 
-    assert_eq!(bundle["version"], 64);
+    assert_eq!(bundle["version"], 65);
+    // Version 65: what `task delete` answers with, and the `closed` copy action.
+    assert!(bundle["roots"]["TaskDeleted"]["properties"]["deleted"].is_object());
+    assert!(
+        bundle["roots"]["CopyAction"]["oneOf"]
+            .as_array()
+            .expect("the actions are a oneOf")
+            .iter()
+            .any(|variant| variant["properties"]["action"]["const"] == "closed")
+    );
     // Version 64: a Linear configuration's `metadata_fields`.
     assert!(
         bundle["roots"]["LinearConfig"]["properties"]["metadata_fields"].is_object(),
@@ -464,6 +473,7 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
             "task attestation check",
             "task update",
             "task create",
+            "task delete",
             "task render",
             "task answers",
             "task assets",
@@ -1223,6 +1233,7 @@ fn the_reserved_key_inventory_names_exactly_the_keys_the_code_spells() {
         MetadataKey::ATTESTATIONS_KEY,
         MetadataKey::CREATING_KEY,
         MetadataKey::CREATE_KEY,
+        MetadataKey::DELETED_COPIES_KEY,
         onetaskgraph_core::GlobalId::ORIGIN_KEY,
         onetaskgraph_core::GlobalId::LINEAGE_KEY,
         onetaskgraph_plugin_api::TaskLink::METADATA_KEY,
@@ -1269,6 +1280,7 @@ fn the_reserved_key_inventory_names_exactly_the_keys_the_code_spells() {
         "eighteen",
         "nineteen",
         "twenty",
+        "twenty-one",
     ];
     assert!(
         bullet.contains(&format!("defines exactly {} keys", words[spelled.len()])),

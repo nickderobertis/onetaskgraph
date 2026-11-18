@@ -1040,6 +1040,20 @@ async fn run_inner(
             command: TaskCommand::Locate(args),
         } => locate(out, loaded, args).await,
 
+        Command::Task {
+            command: TaskCommand::Delete(args),
+        } => {
+            let id = qualified(&args.id)?;
+            let engine = engine(loaded);
+            let deleted = engine
+                .delete_task(&id)
+                .await
+                .map_err(|error| write_failed(&engine, &error))?;
+            let rendered = rendering(loaded, &deleted, render::task_deleted, "the deletion")?;
+            emit(out, rendered.trim_end(), "the deletion")?;
+            Ok(EXIT_OK)
+        }
+
         Command::Project {
             command: ProjectCommand::Copy(args),
         } => {
@@ -1060,6 +1074,7 @@ async fn run_inner(
                 copy_request(named(std::iter::once(args.id.as_str()))?, scope, &args.copy)?;
             request.comments = args.comments;
             request.status_policy = args.status_policy.into();
+            request.close_orphans = args.close_orphans;
             copy(out, loaded, &request, None).await
         }
 
@@ -2440,6 +2455,7 @@ fn copy_request(
         status_policy: onetaskgraph_core::StatusPolicy::Source,
         statuses: Vec::new(),
         conditions: Default::default(),
+        close_orphans: false,
     })
 }
 
@@ -2992,6 +3008,7 @@ mod tests {
                 "task attestation check",
                 "task update",
                 "task create",
+                "task delete",
                 "task render",
                 "task answers",
                 "task assets",

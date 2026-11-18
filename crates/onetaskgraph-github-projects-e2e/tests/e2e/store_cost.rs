@@ -43,6 +43,8 @@ pub(crate) const STATUS_WORKLOAD: &str =
     "one status change of one issue item, fresh process, cache off, 1,100 and 11,000 items";
 pub(crate) const SETTLEMENT_WORKLOAD: &str = "one status change and one metadata key on one \
     issue item, fresh process, cache off, 1,100 and 11,000 items";
+pub(crate) const DELETE_WORKLOAD: &str = "one task delete of one issue item no task depends on, \
+    fresh process, cache off, 1,100 and 11,000 items";
 
 /// Extra issues, `X-0` onwards, until the board holds `total` items; and `more` beside them.
 fn board_of(sandbox: &Sandbox, total: usize, more: Vec<Value>) -> (Value, GitHubBoardFields) {
@@ -695,6 +697,71 @@ fn measure_github_requests_per_status_write_and_settlement() {
             .map(|(scale, _, settlement, _, settled)| (*scale, *settlement, settled.clone()))
             .collect::<Vec<_>>(),
     );
+}
+// llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
+
+/// One `task delete` of an issue item nothing depends on, on a fresh process over a board of
+/// `total` items: how many requests it sent, and those requests split into reads and mutations,
+/// the item checked to be gone and nothing else moved.
+fn task_delete(total: usize) -> (usize, String) {
+    let sandbox = Sandbox::new();
+    let (block, board) = board_of(&sandbox, total, Vec::new());
+    configured(
+        &sandbox,
+        &json!({"board": {"plugin": "github-projects", "config": block}}),
+    );
+    let (gone, kept) = (github_extra_task(2), github_extra_task(3));
+    let before = board.item(&kept).expect("held");
+
+    let from = board.served().len();
+    let answer = answered(
+        &sandbox,
+        &["task", "delete", &format!("board:{gone}"), "--json"],
+        0,
+    );
+    let sent = since(&board, from);
+    assert_eq!(answer, json!({"deleted": format!("board:{gone}")}));
+    assert_eq!(board.item(&gone), None, "the issue is gone from the board");
+    assert_eq!(board.item(&kept), Some(before), "nothing else moved");
+
+    let named = |sent: &[&String]| {
+        sent.iter()
+            .map(|query| {
+                graphql::DOCUMENTS
+                    .iter()
+                    .find(|(document, _)| document == *query)
+                    .map_or("another", |(_, said)| said)
+                    .to_owned()
+            })
+            .collect::<Vec<_>>()
+    };
+    let (mutations, reads): (Vec<&String>, Vec<&String>) = sent
+        .iter()
+        .partition(|query| query.trim_start().starts_with("mutation"));
+    (
+        sent.len(),
+        format!(
+            "{total} items: {} reads {:?}, {} mutations {:?}, {} points",
+            reads.len(),
+            named(&reads),
+            mutations.len(),
+            named(&mutations),
+            points(&sent)
+        ),
+    )
+}
+
+// llmlint: ignore-block[expensive_tests_stay_behind_their_own_edge] The task places this budget journey in this crate's `test` target, beside the status-write recording, whose telemetry its budget reads; it runs in about a second on a warm build.
+#[test]
+fn measure_github_requests_per_task_delete() {
+    let scales: Vec<(&str, usize, String)> = SCALES
+        .iter()
+        .map(|(scale, total)| {
+            let (sent, detail) = task_delete(*total);
+            (*scale, sent, detail)
+        })
+        .collect();
+    record("github-requests-per-task-delete", DELETE_WORKLOAD, &scales);
 }
 // llmlint: ignore-end[expensive_tests_stay_behind_their_own_edge]
 

@@ -16,8 +16,14 @@ yanked = "deny"
 # every `yrs` release from 0.18.8 to 0.28.0 depends on it. The advisory is that the crate is
 # unmaintained, not a vulnerability, and it names no upgrade. Retired by: a `yrs` release
 # that no longer depends on `smallstr`.
+# A second, by the manager's ruling `a2` on node `otg-drop-task`: `chrono` is unmaintained
+# (RUSTSEC-2026-0543, every version, no safe upgrade). It is in the plugin-api contract
+# types and nine workspace crates, and also comes in through `schemars`' `chrono04` feature
+# and `onebudgetspec-core`. Retired by: the workspace's migration to `jiff` or `time`, once
+# those dependencies drop `chrono`.
 ignore = [
   { id = "RUSTSEC-2026-0215", reason = "smallstr is unmaintained, reached only through yrs, whose every release depends on it; remove when a yrs release drops smallstr" },
+  { id = "RUSTSEC-2026-0543", reason = "chrono is unmaintained, no safe upgrade; reached through the plugin-api contract types, schemars and onebudgetspec-core; remove once the workspace migrates to jiff/time" },
 ]
 
 [licenses]

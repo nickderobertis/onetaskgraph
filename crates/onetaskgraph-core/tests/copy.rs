@@ -95,6 +95,7 @@ fn many(items: &[&str], scope: CopyScope) -> CopyRequest {
         status_policy: onetaskgraph_core::StatusPolicy::Source,
         statuses: Vec::new(),
         conditions: Default::default(),
+        close_orphans: false,
     }
 }
 
@@ -994,6 +995,143 @@ async fn a_destination_item_the_source_no_longer_holds_is_left_alone_and_reporte
         .await
         .expect("the show verb answers");
     assert_eq!(held.items[0].item.title, "T-2");
+}
+
+#[tokio::test]
+async fn a_copy_asked_to_close_its_orphans_closes_each_open_one_and_leaves_the_rest() {
+    // Three orphans: one still open, one done and one cancelled. `close_orphans` closes the
+    // open one alone, with the write `task status set … cancelled` makes, and reports it
+    // `closed`; a dry run reports the same and writes nothing.
+    let orphan = |native: &str, category: &str| {
+        json!({"id": native, "title": native,
+               "status": {"category": category, "name": category}, "labels": [],
+               "project": "P-1", "metadata": {GlobalId::ORIGIN_KEY: format!("from:{native}")}})
+    };
+    let engine = engine_over(json!({
+        "from": {"plugin": "in-memory", "config": {
+            "projects": [{"id": "P-1", "title": "Engine",
+                          "status": {"category": "todo", "name": "Todo"}, "labels": []}],
+            "tasks": [{"id": "T-1", "title": "T-1",
+                       "status": {"category": "todo", "name": "Todo"}, "labels": [],
+                       "project": "P-1"}],
+        }},
+        "into": {"plugin": "in-memory", "config": {
+            "projects": [{"id": "P-1", "title": "Engine",
+                          "status": {"category": "todo", "name": "Todo"}, "labels": [],
+                          "metadata": {GlobalId::ORIGIN_KEY: "from:P-1"}}],
+            "tasks": [orphan("T-1", "todo"), orphan("T-2", "in-progress"),
+                      orphan("T-3", "done"), orphan("T-4", "cancelled")],
+        }},
+    }));
+    let closing = |dry_run: bool| CopyRequest {
+        close_orphans: true,
+        dry_run,
+        ..many(
+            &["from:P-1"],
+            CopyScope::Projects {
+                tasks: true,
+                documents: false,
+            },
+        )
+    };
+    let category = |native: &'static str| {
+        let engine = &engine;
+        async move {
+            engine
+                .task(&id(native))
+                .await
+                .expect("the show verb answers")
+                .items[0]
+                .item
+                .status
+                .category
+        }
+    };
+    let said = |report: &CopyReport| -> Vec<(String, String)> {
+        report
+            .items
+            .iter()
+            .filter(|outcome| outcome.source != id("from:P-1") && outcome.source != id("from:T-1"))
+            .map(|outcome| (outcome.source.to_string(), outcome.action.name()))
+            .collect()
+    };
+    let expected = vec![
+        ("from:T-2".to_owned(), "closed".to_owned()),
+        ("from:T-3".to_owned(), "orphaned".to_owned()),
+        ("from:T-4".to_owned(), "orphaned".to_owned()),
+    ];
+
+    let dry = engine.copy(&closing(true)).await.expect("the dry run runs");
+    assert_eq!(said(&dry), expected);
+    assert_eq!(category("into:T-2").await, StatusCategory::InProgress);
+
+    let report = engine.copy(&closing(false)).await.expect("the copy runs");
+    assert_eq!(said(&report), expected);
+    let closed = report
+        .items
+        .iter()
+        .find(|outcome| outcome.source == id("from:T-2"))
+        .expect("the open orphan");
+    assert_eq!(
+        closed.action,
+        CopyAction::Closed {
+            destination: id("into:T-2")
+        }
+    );
+    assert_eq!(
+        serde_json::to_value(closed).expect("an outcome serialises"),
+        json!({"source": "from:T-2", "action": "closed", "destination": "into:T-2"})
+    );
+    assert_eq!(category("into:T-2").await, StatusCategory::Cancelled);
+    assert_eq!(category("into:T-3").await, StatusCategory::Done);
+    assert_eq!(category("into:T-4").await, StatusCategory::Cancelled);
+
+    // Without the flag, the same orphans are reported `orphaned` and nothing is written.
+    let flagless = engine
+        .copy(&many(
+            &["from:P-1"],
+            CopyScope::Projects {
+                tasks: true,
+                documents: false,
+            },
+        ))
+        .await
+        .expect("the copy runs");
+    assert!(
+        said(&flagless)
+            .iter()
+            .all(|(_, action)| action == "orphaned"),
+        "{flagless:?}"
+    );
+}
+
+#[tokio::test]
+async fn close_orphans_beside_a_narrowed_copy_is_refused_before_anything_is_read() {
+    // `nowhere` is no configured source, so a copy that read anything first would be refused
+    // as an unknown source instead.
+    let engine = pair();
+    let members = || CopyItems::new(vec![id("nowhere:T-1")]).expect("a member");
+    for scope in [
+        CopyScope::Tasks,
+        CopyScope::Documents,
+        CopyScope::Members(members()),
+        CopyScope::MembersOnly(members()),
+        CopyScope::Projects {
+            tasks: false,
+            documents: false,
+        },
+    ] {
+        let refused = engine
+            .copy(&CopyRequest {
+                close_orphans: true,
+                ..many(&["nowhere:P-1"], scope.clone())
+            })
+            .await;
+        assert!(
+            matches!(refused, Err(EngineError::CloseOrphansNarrowed)),
+            "{scope:?}: {refused:?}"
+        );
+    }
 }
 
 #[tokio::test]

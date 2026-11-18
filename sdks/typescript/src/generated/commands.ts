@@ -37,6 +37,7 @@ export const binaryCommands = [
   "task attestation check",
   "task update",
   "task create",
+  "task delete",
   "task render",
   "task answers",
   "task assets",

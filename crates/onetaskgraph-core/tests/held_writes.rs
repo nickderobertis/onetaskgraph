@@ -96,6 +96,7 @@ fn copy(item: &str, to: &str) -> CopyRequest {
         status_policy: onetaskgraph_core::StatusPolicy::Source,
         statuses: Vec::new(),
         conditions: Default::default(),
+        close_orphans: false,
     }
 }
 

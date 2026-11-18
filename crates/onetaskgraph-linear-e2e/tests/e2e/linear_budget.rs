@@ -615,6 +615,7 @@ fn status_write_warm(total: usize) -> (usize, String) {
                     status_policy: onetaskgraph_core::StatusPolicy::Source,
                     statuses: Vec::new(),
                     conditions: Default::default(),
+                    close_orphans: false,
                 })
                 .await
                 .expect("the copy lands");
@@ -1092,6 +1093,7 @@ fn task_and_project_reads_status_listings_and_copy_discovery_cost_no_more_than_o
                     status_policy: onetaskgraph_core::StatusPolicy::Source,
                     statuses: Vec::new(),
                     conditions: Default::default(),
+                    close_orphans: false,
                 })
                 .await
                 .expect("the copy lands");

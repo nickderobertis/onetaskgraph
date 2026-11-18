@@ -249,6 +249,22 @@ pub struct CopyRequest {
     /// task copy takes them: beside a project or a document copy any condition is refused, as
     /// [`EngineError::ConditionsNotTasks`], before anything is read.
     pub conditions: CopyConditions,
+    /// Whether a project copy closes each orphan it finds open — `--close-orphans`.
+    ///
+    /// Without it an orphan is left exactly as it is and reported [`CopyAction::Orphaned`]. With
+    /// it, each orphan the walk finds at a category other than `done` or `cancelled` is given
+    /// the write `task status set <orphan> cancelled` makes, every effect of that write
+    /// included, once the rest of the copy has landed, and reported [`CopyAction::Closed`]; a
+    /// dry run reports it so and writes nothing. One already `done` or `cancelled` is reported
+    /// `orphaned` as before. A close the destination refuses is reported
+    /// [`CopyAction::Failed`].
+    ///
+    /// Only a copy that walks every member of its projects finds orphans, so beside any other
+    /// scope — a task or document copy, [`CopyScope::Members`], [`CopyScope::MembersOnly`], or
+    /// a project copy without its tasks — it is refused, as
+    /// [`EngineError::CloseOrphansNarrowed`], before anything is read.
+    // llmlint: ignore[invalid_states_unrepresentable] Folding this into `CopyScope::Projects` would make it unrepresentable beside the narrowed scopes, but `CopyScope` is matched and built by name by every Rust caller of this request and shared with the report; one more flag beside `create`, `comments` and `statuses` keeps their shape, and the combinations it allows that mean nothing are refused by `Engine::copy` before anything is read, which `close_orphans_beside_a_narrowed_copy_is_refused_before_anything_is_read` in tests/copy.rs holds.
+    pub close_orphans: bool,
 }
 
 /// A copy selection option, named as the command line spells it in a conflict refusal.
@@ -843,6 +859,14 @@ pub enum CopyAction {
         /// The item that was left alone.
         destination: GlobalId,
     },
+    /// The destination held a counterpart the source no longer does, open, and a copy asked to
+    /// close its orphans — [`CopyRequest::close_orphans`] — gave it the write `task status set
+    /// <orphan> cancelled` makes: on a GitHub board, its issue closed as not planned. A dry run
+    /// reports it and writes nothing. Nothing else of it was written and no link was touched.
+    Closed {
+        /// The item that was closed.
+        destination: GlobalId,
+    },
     /// The item changed while the copy read it, and changed again while the copy read it a
     /// second time, so nothing was written for it — never a mix of two of its revisions.
     ///
@@ -878,7 +902,8 @@ impl CopyAction {
             Self::Created { destination, .. } => destination.as_ref(),
             Self::Updated { destination, .. }
             | Self::Unchanged { destination, .. }
-            | Self::Orphaned { destination } => Some(destination),
+            | Self::Orphaned { destination }
+            | Self::Closed { destination } => Some(destination),
             Self::Failed { .. } | Self::Skipped { .. } | Self::Oversize { .. } => None,
         }
     }
@@ -891,6 +916,7 @@ impl CopyAction {
             Self::Updated { via, .. } | Self::Unchanged { via, .. } => Some(*via),
             Self::Created { .. }
             | Self::Orphaned { .. }
+            | Self::Closed { .. }
             | Self::Failed { .. }
             | Self::Skipped { .. }
             | Self::Oversize { .. } => None,
@@ -906,6 +932,7 @@ impl CopyAction {
             | Self::Updated { link, .. }
             | Self::Unchanged { link, .. } => *link,
             Self::Orphaned { .. }
+            | Self::Closed { .. }
             | Self::Failed { .. }
             | Self::Skipped { .. }
             | Self::Oversize { .. } => None,
@@ -921,6 +948,7 @@ impl CopyAction {
             | Self::Updated { comments, .. }
             | Self::Unchanged { comments, .. } => comments.as_ref(),
             Self::Orphaned { .. }
+            | Self::Closed { .. }
             | Self::Failed { .. }
             | Self::Skipped { .. }
             | Self::Oversize { .. } => None,
@@ -940,6 +968,7 @@ impl CopyAction {
         !matches!(
             self,
             Self::Orphaned { .. }
+                | Self::Closed { .. }
                 | Self::Failed { .. }
                 | Self::Skipped { .. }
                 | Self::Oversize { .. }
@@ -953,6 +982,7 @@ impl CopyAction {
             | Self::Updated { link, .. }
             | Self::Unchanged { link, .. } => Some(link),
             Self::Orphaned { .. }
+            | Self::Closed { .. }
             | Self::Failed { .. }
             | Self::Skipped { .. }
             | Self::Oversize { .. } => None,
@@ -1539,6 +1569,128 @@ impl Journal {
     }
 }
 
+/// One entry of a source project's `onetaskgraph.deleted_copies` a copy has settled.
+struct SettledDeletedCopy {
+    /// The source project holding the record.
+    project: GlobalId,
+    /// The counterpart the entry names.
+    destination: GlobalId,
+    /// When the entry goes.
+    settle: Settle,
+}
+
+/// When a settled entry of a project's `onetaskgraph.deleted_copies` is taken out.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Settle {
+    /// At once: its counterpart is already done or cancelled, no longer filed under the
+    /// project's copy, or landed by this copy for a task the source still holds.
+    Now,
+    /// Only once the copy's close of its counterpart has been made, so a close the destination
+    /// refused is tried again by the next closing copy.
+    OnceClosed,
+}
+
+/// How an orphan walk found one recorded counterpart.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Sighting {
+    /// Not filed under the project's copy, as far as the walk has read.
+    Unseen,
+    /// Filed there and still open.
+    Open,
+    /// Filed there and already done or cancelled.
+    Finished,
+}
+
+/// The entries of a source project's `onetaskgraph.deleted_copies` naming one destination an
+/// orphan walk reads, and how it found each.
+struct Recorded {
+    /// Each counterpart's native id there, with the deleted task it was a copy of.
+    entries: BTreeMap<NativeId, (GlobalId, Sighting)>,
+    /// The record's counterparts this copy itself landed, for tasks the source still holds:
+    /// never orphans, and settled at once.
+    landed: Vec<NativeId>,
+}
+
+impl Recorded {
+    /// The entries of `record` for `destination`, a counterpart this copy itself landed set
+    /// apart from the rest.
+    fn of(
+        record: &super::delete::DeletedCopies,
+        destination: &SourceName,
+        landed: &[GlobalId],
+    ) -> Self {
+        let (landed, entries): (Vec<_>, Vec<_>) = record
+            .get(destination)
+            .into_iter()
+            .flatten()
+            .partition(|(native, _)| {
+                landed
+                    .iter()
+                    .any(|id| &id.source == destination && &id.native == *native)
+            });
+        Self {
+            entries: entries
+                .into_iter()
+                .map(|(native, task)| (native.clone(), (task.clone(), Sighting::Unseen)))
+                .collect(),
+            landed: landed
+                .into_iter()
+                .map(|(native, _)| native.clone())
+                .collect(),
+        }
+    }
+
+    /// The deleted task `counterpart` was a copy of, when the record names it, noting how it was
+    /// found.
+    fn found(&mut self, counterpart: &NativeId, seen: Sighting) -> Option<GlobalId> {
+        let (task, sighting) = self.entries.get_mut(counterpart)?;
+        *sighting = seen;
+        Some(task.clone())
+    }
+
+    /// Every entry the walk settled, under `destination`: one found still open goes once it is
+    /// closed, and every other goes now.
+    fn settled(self, destination: &SourceName) -> Vec<(GlobalId, Settle)> {
+        let at = |native: NativeId| GlobalId::new(destination.clone(), native);
+        self.entries
+            .into_iter()
+            .map(|(native, (_, sighting))| {
+                let settle = if sighting == Sighting::Open {
+                    Settle::OnceClosed
+                } else {
+                    Settle::Now
+                };
+                (at(native), settle)
+            })
+            .chain(
+                self.landed
+                    .into_iter()
+                    .map(|native| (at(native), Settle::Now)),
+            )
+            .collect()
+    }
+}
+
+/// What one orphan walk answers: its orphans, and the recorded entries it settled.
+struct Walked {
+    orphans: Vec<CopyOutcome>,
+    settled: Vec<(GlobalId, Settle)>,
+}
+
+impl Walked {
+    /// The settled entries, as entries of `project`'s record.
+    fn settled(&self, project: &GlobalId) -> Vec<SettledDeletedCopy> {
+        self.settled
+            .iter()
+            .map(|(destination, settle)| SettledDeletedCopy {
+                project: project.clone(),
+                destination: destination.clone(),
+                settle: *settle,
+            })
+            .collect()
+    }
+}
+
 /// What one copy invocation carries from the item it lands to the next.
 ///
 /// Like the [`Journal`] beside it, this lives for the length of one `copy` call and is
@@ -1546,6 +1698,10 @@ impl Journal {
 /// to answer a later query.
 #[derive(Default)]
 struct Running {
+    /// Each entry of a source project's `onetaskgraph.deleted_copies` an unnarrowed
+    /// `--close-orphans` copy settled, to take out of that record once the copy's closes have
+    /// been made — see [`Engine::forget_deleted_copies`].
+    deleted_copies: Vec<SettledDeletedCopy>,
     /// The private addresses checked by this invocation, never persisted.
     private_locations: Option<Vec<String>>,
     /// Every item an edge of this command resolves to a destination id rather than writing as
@@ -2291,6 +2447,12 @@ impl Engine {
         if !request.statuses.is_empty() && request.scope != CopyScope::Tasks {
             return Err(EngineError::StatusesNotTasks);
         }
+        // Only a copy that walks every member of its projects finds what the source dropped.
+        if request.close_orphans
+            && !matches!(request.scope, CopyScope::Projects { tasks: true, .. })
+        {
+            return Err(EngineError::CloseOrphansNarrowed);
+        }
         let conditions = &request.conditions;
         if (!conditions.status.is_empty()
             || conditions.otherwise.is_some()
@@ -2340,7 +2502,7 @@ impl Engine {
         let mut journal = Journal::default();
         let holding = self.hold_back(request);
         match self.copy_all(request, &mut journal).await {
-            Ok((mut report, deliverers)) => {
+            Ok((mut report, deliverers, deleted_copies)) => {
                 // After the whole copy is complete and outside the journal: what the relation
                 // rule writes is the delivered tasks' own, and a failure there is reported
                 // against that task rather than undoing a copy that landed.
@@ -2355,6 +2517,10 @@ impl Engine {
                         )
                         .await,
                     );
+                }
+                if !request.dry_run {
+                    self.close_orphans(&mut report).await;
+                    self.forget_deleted_copies(&report, deleted_copies).await;
                 }
                 report.spent = spent_between(&before, &readings(&metered).await);
                 Ok(report)
@@ -2471,7 +2637,7 @@ impl Engine {
         &self,
         request: &CopyRequest,
         journal: &mut Journal,
-    ) -> Result<(CopyReport, Vec<Deliverer>), EngineError> {
+    ) -> Result<(CopyReport, Vec<Deliverer>, Vec<SettledDeletedCopy>), EngineError> {
         let mut running = Running {
             carries_work: request.scope != CopyScope::Documents,
             ..Running::default()
@@ -2645,6 +2811,7 @@ impl Engine {
             .collect();
         let homes = std::mem::take(&mut running.homes);
         let sizes = std::mem::take(&mut running.sizes);
+        let deleted_copies = std::mem::take(&mut running.deleted_copies);
         let recordings = self.recordings(&running);
         // The repair writes an item's content again, so what the destination stores after it is
         // read off its answer exactly as the first write's was.
@@ -2716,6 +2883,7 @@ impl Engine {
                 spent: None,
             },
             deliverers,
+            deleted_copies,
         ))
     }
 
@@ -4321,17 +4489,55 @@ impl Engine {
             && !created
             && let Some(filed) = filed
         {
+            // A deleted task's copies a provenance-withholding copy landed carry no origin, so
+            // the source project's record of them is what finds them — read only by a copy
+            // asked to close them, so every other copy reads and reports what it always did.
+            let recorded = if request.close_orphans {
+                self.source_project(&id, running)
+                    .await?
+                    .map(|project| {
+                        super::delete::deleted_copies(
+                            project.metadata.get(MetadataKey::DELETED_COPIES_KEY),
+                        )
+                    })
+                    .unwrap_or_default()
+            } else {
+                super::delete::DeletedCopies::new()
+            };
+            let landed: Vec<GlobalId> = outcomes
+                .iter()
+                .filter_map(|outcome| outcome.action.destination().cloned())
+                .collect();
             let destination = self.writable(&filed.source)?;
-            outcomes.extend(
-                self.orphans(destination, &id, &filed.native, &members)
-                    .await?,
-            );
+            let walked = self
+                .orphans(
+                    destination,
+                    &id,
+                    &filed.native,
+                    &members,
+                    request.close_orphans,
+                    Recorded::of(&recorded, destination.name(), &landed),
+                )
+                .await?;
+            running.deleted_copies.extend(walked.settled(&id));
+            outcomes.extend(walked.orphans);
             // A routed plan's tasks are filed under its members too, so each member is walked
             // in its own source for what the source plan no longer holds.
             if self.routes.routes(&request.destination) {
                 for member in self.members_named(&filed, running).await? {
                     let there = self.writable(&member.source)?;
-                    outcomes.extend(self.orphans(there, &id, &member.native, &members).await?);
+                    let walked = self
+                        .orphans(
+                            there,
+                            &id,
+                            &member.native,
+                            &members,
+                            request.close_orphans,
+                            Recorded::of(&recorded, there.name(), &landed),
+                        )
+                        .await?;
+                    running.deleted_copies.extend(walked.settled(&id));
+                    outcomes.extend(walked.orphans);
                 }
             }
         }
@@ -5364,14 +5570,23 @@ impl Engine {
     /// Asked of the destination project's own members — a query narrowed to that one project
     /// — so what it costs is that project's tasks and never the rest of the store; each answer
     /// is still held to its filing here, so a source that answers the wider set is read
-    /// exactly as before. A copy never deletes, so each is left exactly as it is and reported.
+    /// exactly as before. A copy never deletes, so each is left exactly as it is and reported
+    /// `orphaned` — or, when the copy was asked to `close` them, one still open is reported
+    /// `closed`, for [`Self::close_orphans`] to close once the copy has landed.
+    ///
+    /// The counterparts `recorded` names — a deleted task's copies, which a copy withholding
+    /// provenance landed with no origin — are orphans by that record rather than by an origin:
+    /// each one the walk finds is reported as above under the deleted task's id, and the walk
+    /// answers which of the record's entries it settled.
     async fn orphans(
         &self,
         destination: &ResolvedSource,
         project: &GlobalId,
         at_destination: &NativeId,
         copied: &[GlobalId],
-    ) -> Result<Vec<CopyOutcome>, EngineError> {
+        close: bool,
+        mut recorded: Recorded,
+    ) -> Result<Walked, EngineError> {
         let mut orphans = Vec::new();
         let mut cursor: Option<Cursor> = None;
         let members = TaskQuery {
@@ -5391,7 +5606,19 @@ impl Engine {
                 if task.project.as_ref() != Some(at_destination) {
                     continue;
                 }
-                let Some(origin) = origin_of(&task.metadata) else {
+                let open = !matches!(
+                    task.status.category,
+                    StatusCategory::Done | StatusCategory::Cancelled
+                );
+                let deleted = recorded.found(
+                    &task.id,
+                    if open {
+                        Sighting::Open
+                    } else {
+                        Sighting::Finished
+                    },
+                );
+                let Some(origin) = origin_of(&task.metadata).or(deleted) else {
                     continue;
                 };
                 if origin.source != project.source || copied.contains(&origin) {
@@ -5406,8 +5633,14 @@ impl Engine {
                     held: None,
                     expected: ExpectedWrite::default(),
                     source: origin,
-                    action: CopyAction::Orphaned {
-                        destination: GlobalId::new(destination.name().clone(), task.id.clone()),
+                    action: {
+                        let destination =
+                            GlobalId::new(destination.name().clone(), task.id.clone());
+                        if close && open {
+                            CopyAction::Closed { destination }
+                        } else {
+                            CopyAction::Orphaned { destination }
+                        }
                     },
                     placed: None,
                 });
@@ -5420,7 +5653,90 @@ impl Engine {
             .map_err(|error| refused(destination, error))?;
             match page.next {
                 Some(next) => cursor = Some(next),
-                None => return Ok(orphans),
+                None => {
+                    return Ok(Walked {
+                        orphans,
+                        settled: recorded.settled(destination.name()),
+                    });
+                }
+            }
+        }
+    }
+
+    /// Take each entry `settled` names out of its source project's
+    /// `onetaskgraph.deleted_copies`, once the copy's closes have been made: one whose
+    /// counterpart was to be closed only when the report still says `closed` of it, so a close
+    /// the destination refused is tried again by the next such copy.
+    ///
+    /// A record that cannot be read or written is left as it is: the entries it keeps name
+    /// counterparts a later closing copy finds already cancelled and settles at once, the path
+    /// `a_recorded_copy_already_finished_or_landed_again_is_taken_off_the_record_and_not_closed`
+    /// drives. Failing this write on purpose would mean failing a source write between two that
+    /// must succeed in one process, which no fixture here can time.
+    async fn forget_deleted_copies(&self, report: &CopyReport, settled: Vec<SettledDeletedCopy>) {
+        let mut by_project: Vec<(GlobalId, Vec<GlobalId>)> = Vec::new();
+        for entry in settled {
+            let closed = report.items.iter().any(|outcome| {
+                matches!(&outcome.action, CopyAction::Closed { destination } if *destination == entry.destination)
+            });
+            if entry.settle == Settle::OnceClosed && !closed {
+                continue;
+            }
+            match by_project
+                .iter_mut()
+                .find(|(project, _)| *project == entry.project)
+            {
+                Some((_, forgotten)) => forgotten.push(entry.destination),
+                None => by_project.push((entry.project, vec![entry.destination])),
+            }
+        }
+        for (project, forgotten) in by_project {
+            let Ok(source) = self.writable(&project.source) else {
+                continue;
+            };
+            let Ok(Some(held)) = source.source().get_project(&project.native).await else {
+                continue;
+            };
+            let mut record =
+                super::delete::deleted_copies(held.metadata.get(MetadataKey::DELETED_COPIES_KEY));
+            for counterpart in &forgotten {
+                if let Some(entries) = record.get_mut(&counterpart.source) {
+                    entries.remove(&counterpart.native);
+                }
+            }
+            let _ = source
+                .source()
+                .set_project_metadata(
+                    &project.native,
+                    &MetadataKey::deleted_copies(),
+                    &super::delete::deleted_copies_value(&record),
+                )
+                .await;
+        }
+    }
+
+    /// Close each orphan the walk reported `closed`, with the write `task status set <orphan>
+    /// cancelled` makes, every effect of it included — once the whole copy has landed, and
+    /// outside its journal, so a close is never what undoes a copy that landed.
+    ///
+    /// A close the destination refuses is reported against that orphan as
+    /// [`CopyAction::Failed`], as an item the copy could not write is, and the others still
+    /// close. What a close keeps in step joins the report's `delivered`.
+    async fn close_orphans(&self, report: &mut CopyReport) {
+        for outcome in &mut report.items {
+            let CopyAction::Closed { destination } = &outcome.action else {
+                continue;
+            };
+            match self
+                .set_task_status(destination, StatusCategory::Cancelled)
+                .await
+            {
+                Ok(closed) => report.delivered.extend(closed.delivered),
+                Err(error) => {
+                    outcome.action = CopyAction::Failed {
+                        error: Failure::from(&error),
+                    };
+                }
             }
         }
     }
@@ -7638,7 +7954,7 @@ impl Engine {
 
     /// Whether an item of `source` landing in `to` leaves its provenance behind: provenance
     /// naming a private source stays out of anywhere not declared private.
-    fn withholds_provenance(&self, source: &SourceName, to: &SourceName) -> bool {
+    pub(super) fn withholds_provenance(&self, source: &SourceName, to: &SourceName) -> bool {
         self.declared(source) == crate::config::SourceVisibility::Private
             && self.declared(to) != crate::config::SourceVisibility::Private
     }
@@ -11167,7 +11483,7 @@ pub(crate) fn malformed_locations(value: &Value) -> Option<String> {
 
 /// The counterpart each well-formed entry of a `onetaskgraph.copies` value names, by the
 /// destination it names it at.
-fn counterparts_linked(value: Option<&Value>) -> BTreeMap<SourceName, NativeId> {
+pub(super) fn counterparts_linked(value: Option<&Value>) -> BTreeMap<SourceName, NativeId> {
     well_formed(value)
         .values()
         .filter_map(|linked| linked.as_str()?.parse::<GlobalId>().ok())
@@ -11710,6 +12026,7 @@ fn carried(
         MetadataKey::CREATE_KEY,
         MetadataKey::COPIES_KEY,
         MetadataKey::COPY_LOCATIONS_KEY,
+        MetadataKey::DELETED_COPIES_KEY,
         MetadataKey::MEMBERS_KEY,
         MetadataKey::MEMBER_OF_KEY,
         MetadataKey::ASSETS_KEY,

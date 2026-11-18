@@ -974,6 +974,11 @@ pub fn deleted(deleted: &DeletedComment) -> String {
     rendered
 }
 
+/// What `task delete` removed.
+pub fn task_deleted(deleted: &onetaskgraph_core::TaskDeleted) -> String {
+    format!("deleted task {}\n", deleted.deleted)
+}
+
 /// A comment a verb wrote, and whether its write had to read first.
 pub fn comment_written(written: &onetaskgraph_core::CommentWritten) -> String {
     let mut rendered = comment(&written.comment);

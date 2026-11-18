@@ -211,7 +211,9 @@ each `failed`; what follows holds of the tasks it then writes, and of every proj
 **A copy is either complete or it never happened, and undoing one is not a delete verb.**
 A copy that cannot finish removes the items *it created in that run* and writes back the
 items it overwrote, through `TaskSource::delete_task` and `TaskSource::delete_project`.
-Nothing a user types deletes anything, and no item this run did not write is ever touched:
+A copy deletes nothing a user named — `task delete` is the one verb that removes, and only the
+task it names, refused while a task of its source depends on it — and no item this run did not
+write is ever touched:
 what is undone is this engine's own writes, from a journal that lives for the length of one
 `copy` call and is dropped with it. The reason is not tidiness — a half-written project has
 to be run again, and the re-run is the mutation burst that trips a hosted destination's

@@ -204,6 +204,7 @@ impl Engine {
             expect: None,
             statuses: Vec::new(),
             conditions: Default::default(),
+            close_orphans: false,
         };
         let destination = self.writable(&copy.destination)?;
         let metered = self.metered(&copy, destination)?;

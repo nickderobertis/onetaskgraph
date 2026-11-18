@@ -159,6 +159,7 @@ export type RuntimeSchemaRoot =
   | "TaskAssetNames"
   | "TaskAssigneeSet"
   | "TaskContentSet"
+  | "TaskDeleted"
   | "TaskDetail"
   | "TaskDetails"
   | "TaskLink"
@@ -3546,6 +3547,24 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
         ]
       },
       {
+        "description": "The destination held a counterpart the source no longer does, open, and a copy asked to\nclose its orphans — [`CopyRequest::close_orphans`] — gave it the write `task status set\n<orphan> cancelled` makes: on a GitHub board, its issue closed as not planned. A dry run\nreports it and writes nothing. Nothing else of it was written and no link was touched.",
+        "type": "object",
+        "properties": {
+          "destination": {
+            "description": "The item that was closed.",
+            "$ref": "#/$defs/GlobalId"
+          },
+          "action": {
+            "type": "string",
+            "const": "closed"
+          }
+        },
+        "required": [
+          "action",
+          "destination"
+        ]
+      },
+      {
         "description": "The item changed while the copy read it, and changed again while the copy read it a\nsecond time, so nothing was written for it — never a mix of two of its revisions.\n\nEvery other item of the copy landed as it would have and is not undone, and the command\nexits `4`. Copying the item again once it has settled lands it.",
         "type": "object",
         "properties": {
@@ -4104,6 +4123,24 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
           "action": {
             "type": "string",
             "const": "orphaned"
+          }
+        },
+        "required": [
+          "action",
+          "destination"
+        ]
+      },
+      {
+        "description": "The destination held a counterpart the source no longer does, open, and a copy asked to\nclose its orphans — [`CopyRequest::close_orphans`] — gave it the write `task status set\n<orphan> cancelled` makes: on a GitHub board, its issue closed as not planned. A dry run\nreports it and writes nothing. Nothing else of it was written and no link was touched.",
+        "type": "object",
+        "properties": {
+          "destination": {
+            "description": "The item that was closed.",
+            "$ref": "#/$defs/GlobalId"
+          },
+          "action": {
+            "type": "string",
+            "const": "closed"
           }
         },
         "required": [
@@ -5081,6 +5118,24 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
               "action": {
                 "type": "string",
                 "const": "orphaned"
+              }
+            },
+            "required": [
+              "action",
+              "destination"
+            ]
+          },
+          {
+            "description": "The destination held a counterpart the source no longer does, open, and a copy asked to\nclose its orphans — [`CopyRequest::close_orphans`] — gave it the write `task status set\n<orphan> cancelled` makes: on a GitHub board, its issue closed as not planned. A dry run\nreports it and writes nothing. Nothing else of it was written and no link was touched.",
+            "type": "object",
+            "properties": {
+              "destination": {
+                "description": "The item that was closed.",
+                "$ref": "#/$defs/GlobalId"
+              },
+              "action": {
+                "type": "string",
+                "const": "closed"
               }
             },
             "required": [
@@ -27043,6 +27098,152 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
           "amount",
           "lower_bound"
         ]
+      },
+      "Sanitization": {
+        "description": "What the screened writes of one command replaced, and what sanitise-on-refusal changed:\nthe `sanitization` member a write's answer carries when it is not empty.",
+        "type": "object",
+        "properties": {
+          "replaced": {
+            "description": "Spans the writes' own sanitisations rewrote.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "side_effect": {
+            "description": "Each field or comment of an item sanitisation changed beyond the write itself.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/SideEffect"
+            }
+          },
+          "dry_run": {
+            "description": "Whether nothing was written, the changes only reported.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "replaced",
+          "side_effect",
+          "dry_run"
+        ]
+      },
+      "SideEffect": {
+        "description": "One field or comment of an item a sanitisation changed, named by screened locators.",
+        "type": "object",
+        "properties": {
+          "item": {
+            "description": "The item, by its qualified id as screened.",
+            "$ref": "#/$defs/Locator"
+          },
+          "field": {
+            "description": "The field — `content`, `title`, `label`, `metadata:<key>` — or `comment:<id>`.",
+            "$ref": "#/$defs/Locator"
+          }
+        },
+        "required": [
+          "item",
+          "field"
+        ]
+      },
+      "Locator": {
+        "description": "A screened locator: the string verbatim, or its redacted form.",
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "redacted": {
+                "const": true
+              },
+              "kind": {
+                "$ref": "#/$defs/LocatorKind"
+              },
+              "ordinal": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "redacted",
+              "kind",
+              "ordinal"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "LocatorKind": {
+        "description": "What a locator names.",
+        "oneOf": [
+          {
+            "description": "A source name.",
+            "type": "string",
+            "const": "source"
+          },
+          {
+            "description": "An item id.",
+            "type": "string",
+            "const": "item"
+          },
+          {
+            "description": "A user-defined field name.",
+            "type": "string",
+            "const": "field"
+          },
+          {
+            "description": "A metadata key.",
+            "type": "string",
+            "const": "metadata-key"
+          },
+          {
+            "description": "A comment id.",
+            "type": "string",
+            "const": "comment"
+          },
+          {
+            "description": "A file path.",
+            "type": "string",
+            "const": "path"
+          },
+          {
+            "description": "A repository identity.",
+            "type": "string",
+            "const": "identity"
+          }
+        ]
+      }
+    }
+  },
+  "TaskDeleted": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "TaskDeleted",
+    "description": "What `task delete` answers with: the qualified id of the task it removed.",
+    "type": "object",
+    "properties": {
+      "deleted": {
+        "description": "The task that was removed, as `<source>:<native-id>`.",
+        "$ref": "#/$defs/GlobalId"
+      },
+      "sanitization": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Sanitization"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "required": [
+      "deleted"
+    ],
+    "$defs": {
+      "GlobalId": {
+        "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
+        "type": "string"
       },
       "Sanitization": {
         "description": "What the screened writes of one command replaced, and what sanitise-on-refusal changed:\nthe `sanitization` member a write's answer carries when it is not empty.",

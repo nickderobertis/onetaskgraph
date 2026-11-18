@@ -161,6 +161,11 @@ class CopyActionOrphaned(BaseModel):
     action: Literal["orphaned"]
 
 
+class CopyActionClosed(BaseModel):
+    destination: Annotated[GlobalId, Field(description="The item that was closed.")]
+    action: Literal["closed"]
+
+
 class Failure(BaseModel):
     class_: Annotated[
         FailureClass,
@@ -208,6 +213,7 @@ class CopyAction(
         | CopyActionUpdated
         | CopyActionUnchanged
         | CopyActionOrphaned
+        | CopyActionClosed
         | CopyActionFailed
         | CopyActionSkipped
         | CopyActionOversize
@@ -218,6 +224,7 @@ class CopyAction(
         | CopyActionUpdated
         | CopyActionUnchanged
         | CopyActionOrphaned
+        | CopyActionClosed
         | CopyActionFailed
         | CopyActionSkipped
         | CopyActionOversize,

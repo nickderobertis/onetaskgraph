@@ -5,11 +5,12 @@ import { createHash } from "node:crypto";
 import {
   chmodSync,
   copyFileSync,
-  cpSync,
   existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -323,6 +324,7 @@ function cacheProblems(ci, release) {
     const stop = steps.find((step) => step.cancel === "nx-cache");
     if (JSON.stringify(stop) !== JSON.stringify({ cancel: "nx-cache" }))
       problems.push(`${name}: teardown must be a bare cancel step`);
+    problems.push(...sidecarStopProblems(name, steps));
   }
   if (
     release.on.workflow_dispatch ||
@@ -340,6 +342,7 @@ function cacheProblems(ci, release) {
     JSON.stringify({ cancel: "nx-cache" })
   )
     problems.push("promotion teardown must be a bare cancel step");
+  problems.push(...sidecarStopProblems("release-plz", steps));
   const promote = steps.findIndex((step) => step.run?.includes("nx-remote-cache.mjs promote"));
   if (promote < 0) problems.push("release-plz must promote first");
   for (const [index, step] of steps.entries()) {
@@ -355,6 +358,28 @@ function cacheProblems(ci, release) {
         problems.push("every release-plz operation requires a main push after promotion");
     }
   }
+  return problems;
+}
+// The runner's `cancel:` of a background step can report it Failed ("timed out after 0
+// minutes") when its process exits before the runner marks it cancelled, which failed a
+// test-windows job whose every test passed. So the sidecar ends itself first: it carries the
+// stop preload, an always-run step asks it to stop, `wait:` takes its own result, and the
+// bare `cancel:` after them finds nothing left to cancel.
+const SIDECAR_PRELOAD = "--require ./scripts/nx-cache-sidecar.cjs";
+const SIDECAR_STOP = "node scripts/nx-cache-sidecar.cjs stop";
+function sidecarStopProblems(name, steps) {
+  const sidecar = steps.find((step) => step.id === "nx-cache");
+  const cancel = steps.findIndex((step) => step.cancel === "nx-cache");
+  const problems = [];
+  if (sidecar?.env?.NODE_OPTIONS !== SIDECAR_PRELOAD)
+    problems.push(`${name}: sidecar must load the stop preload`);
+  if (
+    cancel < 2 ||
+    JSON.stringify(steps[cancel - 1]) !== JSON.stringify({ wait: "nx-cache" }) ||
+    steps[cancel - 2].run !== SIDECAR_STOP ||
+    steps[cancel - 2].if !== "always()"
+  )
+    problems.push(`${name}: the sidecar must be stopped, always, and waited on before its cancel`);
   return problems;
 }
 test("the four existing CI jobs share the pinned cache and promotion precedes release-plz", () => {
@@ -408,12 +433,273 @@ test("cache shape refuses an untrusted writer, duplicate local store, invalid ca
     (_ci, release) => {
       release.on.workflow_dispatch = {};
     },
+    (ci) => {
+      delete ci.jobs["test-windows"].steps.find((step) => step.id === "nx-cache").env.NODE_OPTIONS;
+    },
+    (ci) => {
+      const steps = ci.jobs["test-macos"].steps;
+      steps.splice(
+        steps.findIndex((step) => step.wait === "nx-cache"),
+        1,
+      );
+    },
+    (ci) => {
+      delete ci.jobs["test-linux"].steps.find((step) => step.run === SIDECAR_STOP).if;
+    },
+    (_ci, release) => {
+      const steps = release.jobs["release-plz"].steps;
+      steps.splice(
+        steps.findIndex((step) => step.run === SIDECAR_STOP),
+        1,
+      );
+    },
   ]) {
     const ci = workflow("ci");
     const release = workflow("release-plz");
     mutate(ci, release);
     assert.ok(cacheProblems(ci, release).length);
   }
+});
+
+// Spawns a sidecar the way its workflow step runs it — the step's NODE_OPTIONS, from the
+// workspace — and resolves with how it ended. Nothing here ever signals it.
+function workflowSidecar(args, env) {
+  const sidecar = workflow("ci").jobs["test-windows"].steps.find((step) => step.id === "nx-cache");
+  const child = spawn(process.execPath, args, {
+    cwd: root,
+    env: { ...fixtureEnvironment(), ...env, NODE_OPTIONS: sidecar.env.NODE_OPTIONS },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let logs = "";
+  child.stdout.on("data", (chunk) => {
+    logs += chunk;
+  });
+  child.stderr.on("data", (chunk) => {
+    logs += chunk;
+  });
+  const ended = new Promise((resolve) =>
+    child.once("exit", (code, signal) => resolve({ code, signal, logs })),
+  );
+  return { child, ended, logs: () => logs };
+}
+function workflowStopStep(env) {
+  const steps = workflow("ci").jobs["test-windows"].steps;
+  const stop = steps[steps.findIndex((step) => step.cancel === "nx-cache") - 2];
+  return spawnSync("bash", ["-eo", "pipefail", "-c", stop.run], {
+    cwd: root,
+    env: { ...fixtureEnvironment(), NODE_TEST_CONTEXT: undefined, ...env },
+    encoding: "utf8",
+    timeout: 60_000,
+  });
+}
+
+test("the workflow's stop step ends the real pinned sidecar by its own drain, exit 0, with no signal", {
+  timeout: 120_000,
+}, async () => {
+  const dir = tree();
+  const action = join(dir, "action");
+  command("git", ["init", "--quiet", action], dir);
+  command(
+    "git",
+    ["fetch", "--quiet", "--depth=1", "https://github.com/op-nx/github-cache.git", OP_NX_COMMIT],
+    action,
+  );
+  command("git", ["checkout", "--quiet", "--detach", OP_NX_COMMIT], action);
+  const port = await unusedPort();
+  const env = {
+    RUNNER_TEMP: dir,
+    INPUT_PORT: String(port),
+    NX_SELF_HOSTED_REMOTE_CACHE_SERVER: `http://127.0.0.1:${port}`,
+    NX_SELF_HOSTED_REMOTE_CACHE_ACCESS_TOKEN: "a".repeat(64),
+    CACHE_READ_ONLY: "1",
+  };
+  const sidecar = workflowSidecar([join(action, "start-cache-server/index.js")], env);
+  try {
+    await until(() => sidecar.logs().includes("listening") || sidecar.child.exitCode !== null);
+    assert.match(sidecar.logs(), /listening/);
+    const stop = workflowStopStep(env);
+    assert.equal(stop.status, 0, stop.stdout + stop.stderr);
+    assert.equal(stop.stderr, "");
+    const ended = await sidecar.ended;
+    assert.deepEqual([ended.code, ended.signal], [0, null], ended.logs);
+  } finally {
+    if (sidecar.child.exitCode === null) sidecar.child.kill("SIGKILL");
+  }
+});
+
+test("the stop step names a sidecar whose drain fails, and has nothing to do when none started", async () => {
+  const dir = tree();
+  const env = { RUNNER_TEMP: dir };
+  const idle = workflowStopStep(env);
+  assert.deepEqual([idle.status, idle.stderr], [0, ""]);
+  const sidecar = workflowSidecar(
+    ["-e", "process.once('SIGTERM', () => process.exit(3)); setInterval(() => {}, 1000);"],
+    env,
+  );
+  try {
+    await until(() => existsSync(join(dir, "nx-cache-sidecar", "started")));
+    const stop = workflowStopStep(env);
+    assert.equal(stop.status, 1);
+    assert.match(stop.stderr, /exited with code 3 while draining/);
+    assert.deepEqual([(await sidecar.ended).code, (await sidecar.ended).signal], [3, null]);
+  } finally {
+    if (sidecar.child.exitCode === null) sidecar.child.kill("SIGKILL");
+  }
+});
+
+// A sidecar stand-in under the workflow's preload: `body` is its node source.
+async function standInSidecar(t, dir, body) {
+  const sidecar = workflowSidecar(["-e", `${body}; setInterval(() => {}, 1000);`], {
+    RUNNER_TEMP: dir,
+  });
+  t.after(() => {
+    if (sidecar.child.exitCode === null && sidecar.child.signalCode === null)
+      sidecar.child.kill("SIGKILL");
+  });
+  await until(() => existsSync(join(dir, "nx-cache-sidecar", "started")));
+  return sidecar;
+}
+const handshake = (dir, name) => join(dir, "nx-cache-sidecar", name);
+
+test("a sidecar with no drain registered still stops at once, exit 0", {
+  timeout: 20_000,
+}, async (t) => {
+  const dir = tree();
+  const sidecar = await standInSidecar(t, dir, "");
+  const stop = workflowStopStep({ RUNNER_TEMP: dir, NX_CACHE_SIDECAR_STOP_WAIT_MS: "5000" });
+  assert.deepEqual([stop.status, stop.stderr], [0, ""]);
+  const ended = await sidecar.ended;
+  assert.deepEqual([ended.code, ended.signal], [0, null]);
+});
+
+test("a stop and an exit left from an earlier sidecar neither stop the next one nor pass for it", {
+  timeout: 20_000,
+}, async (t) => {
+  const dir = tree();
+  mkdirSync(join(dir, "nx-cache-sidecar"));
+  writeFileSync(handshake(dir, "stop"), "");
+  writeFileSync(handshake(dir, "exited"), "0\n");
+  const sidecar = await standInSidecar(t, dir, "process.once('SIGTERM', () => process.exit(0))");
+  // The preload clears both before it records the start the stop step waits on.
+  assert.equal(existsSync(handshake(dir, "stop")), false, "a stale stop file survived the start");
+  assert.equal(existsSync(handshake(dir, "exited")), false, "a stale exit passed for the new one");
+  assert.equal(sidecar.child.exitCode, null);
+  const stop = workflowStopStep({ RUNNER_TEMP: dir, NX_CACHE_SIDECAR_STOP_WAIT_MS: "5000" });
+  assert.deepEqual([stop.status, stop.stderr], [0, ""]);
+  assert.deepEqual([(await sidecar.ended).code, (await sidecar.ended).signal], [0, null]);
+});
+
+test("a node child of the sidecar does not take over its handshake", {
+  timeout: 20_000,
+}, async (t) => {
+  const dir = tree();
+  const sidecar = await standInSidecar(
+    t,
+    dir,
+    "process.once('SIGTERM', () => process.exit(0)); require('node:child_process').spawnSync(process.execPath, ['-e', ''], { stdio: 'ignore' }); require('node:fs').writeFileSync(require('node:path').join(process.env.RUNNER_TEMP, 'child-ran'), '')",
+  );
+  await until(() => existsSync(join(dir, "child-ran")));
+  assert.equal(readFileSync(handshake(dir, "started"), "utf8"), `${sidecar.child.pid}\n`);
+  assert.equal(existsSync(handshake(dir, "exited")), false, "the child's exit was recorded");
+  const stop = workflowStopStep({ RUNNER_TEMP: dir, NX_CACHE_SIDECAR_STOP_WAIT_MS: "5000" });
+  assert.deepEqual([stop.status, stop.stderr], [0, ""]);
+});
+
+test("a drain that hangs past the bound is killed and named", { timeout: 20_000 }, async (t) => {
+  const dir = tree();
+  const sidecar = await standInSidecar(t, dir, "process.on('SIGTERM', () => {})");
+  try {
+    const stop = workflowStopStep({ RUNNER_TEMP: dir, NX_CACHE_SIDECAR_STOP_WAIT_MS: "500" });
+    assert.equal(stop.status, 1);
+    assert.match(
+      stop.stderr,
+      /did not finish its drain within 500 ms of being asked to stop, so it was killed/,
+    );
+    assert.equal((await sidecar.ended).signal, "SIGKILL");
+  } finally {
+    if (sidecar.child.exitCode === null) sidecar.child.kill("SIGKILL");
+  }
+});
+
+test("a started file that is not a process id is refused, signalling nothing", () => {
+  const dir = tree();
+  mkdirSync(join(dir, "nx-cache-sidecar"));
+  writeFileSync(handshake(dir, "started"), "-1\n");
+  const stop = workflowStopStep({ RUNNER_TEMP: dir, NX_CACHE_SIDECAR_STOP_WAIT_MS: "5000" });
+  assert.equal(stop.status, 1);
+  assert.match(stop.stderr, /the started file is "-1", not an integer from 1 to 2147483647/);
+  assert.match(stop.stderr, /could not be read or written/);
+});
+
+test("the stop command refuses what it cannot act on, naming it, and ends a usage error 2", () => {
+  const refused = (env, pattern) => {
+    const stop = workflowStopStep(env);
+    assert.equal(stop.status, 1, stop.stderr);
+    assert.match(stop.stderr, pattern);
+  };
+  const dir = tree();
+  const handshakeDir = join(dir, "nx-cache-sidecar");
+  mkdirSync(handshakeDir);
+  writeFileSync(handshake(dir, "started"), `${process.pid}\n`);
+  refused(
+    { RUNNER_TEMP: dir, NX_CACHE_SIDECAR_STOP_WAIT_MS: "99999999999" },
+    /NX_CACHE_SIDECAR_STOP_WAIT_MS is "99999999999", not an integer from 1 to 600000/,
+  );
+  refused({ RUNNER_TEMP: "" }, /RUNNER_TEMP is not set/);
+  // A pid no process holds: the kill fails, and the step says so rather than claiming it.
+  writeFileSync(handshake(dir, "started"), "2147483646\n");
+  refused(
+    { RUNNER_TEMP: dir, NX_CACHE_SIDECAR_STOP_WAIT_MS: "300" },
+    /within 300 ms of being asked to stop, and killing it failed \(ESRCH\)/,
+  );
+  rmSync(handshake(dir, "stop"));
+  mkdirSync(handshake(dir, "exited"));
+  refused({ RUNNER_TEMP: dir }, /EISDIR[\s\S]*could not be read or written/);
+  rmSync(handshakeDir, { recursive: true });
+  mkdirSync(handshake(dir, "started"), { recursive: true });
+  refused({ RUNNER_TEMP: dir }, /EISDIR[\s\S]*could not be read or written/);
+  const usage = spawnSync(process.execPath, [join(root, "scripts/nx-cache-sidecar.cjs")], {
+    encoding: "utf8",
+  });
+  assert.equal(usage.status, 2);
+  assert.match(usage.stderr, /usage: .* 2 on a usage error/);
+});
+
+test("a sidecar whose handshake directory cannot be made fails at start, naming it", async (t) => {
+  const dir = tree();
+  writeFileSync(join(dir, "nx-cache-sidecar"), "a file where the directory goes");
+  const sidecar = workflowSidecar(["-e", "setInterval(() => {}, 1000)"], { RUNNER_TEMP: dir });
+  t.after(() => {
+    if (sidecar.child.exitCode === null) sidecar.child.kill("SIGKILL");
+  });
+  const ended = await sidecar.ended;
+  assert.equal(ended.code, 1);
+  assert.match(
+    ended.logs,
+    /could not set up the stop handshake in .*(EEXIST|ENOTDIR).*re-run the job/,
+  );
+});
+
+test("a sidecar started with no RUNNER_TEMP fails at start, naming it", async () => {
+  const sidecar = workflowSidecar(["-e", "setInterval(() => {}, 1000)"], { RUNNER_TEMP: "" });
+  const ended = await sidecar.ended;
+  assert.equal(ended.code, 1);
+  assert.match(ended.logs, /RUNNER_TEMP is not set/);
+});
+
+test("a sidecar that cannot record its exit says so, and the stop step reports it unstopped", async (t) => {
+  const dir = tree();
+  const sidecar = await standInSidecar(t, dir, "process.once('SIGTERM', () => process.exit(0))");
+  const handshakeDir = join(dir, "nx-cache-sidecar");
+  writeFileSync(handshake(dir, "stop"), "");
+  chmodSync(handshakeDir, 0o555);
+  t.after(() => chmodSync(handshakeDir, 0o755));
+  const ended = await sidecar.ended;
+  assert.equal(ended.code, 0);
+  assert.match(ended.logs, /could not record exit code 0 in .*EACCES.*re-run the job/);
+  const stop = workflowStopStep({ RUNNER_TEMP: dir, NX_CACHE_SIDECAR_STOP_WAIT_MS: "300" });
+  assert.equal(stop.status, 1);
+  assert.match(stop.stderr, /did not finish its drain within 300 ms/);
 });
 
 test("trust refuses writes for fork and Dependabot PRs, and permits a repository contributor", () => {
@@ -746,9 +1032,93 @@ function selectionRoutes(answers, repository, pr, execution, run) {
     };
 }
 
+// The cacheable task each session runs through real Nx. The journey proves the sidecar, trust,
+// promotion and the cache-use figure, not the task, so it is the cheapest task still hashed
+// from the workspace's real inputs: a test suite executed here four times took most of the
+// time limit on a contended runner.
+const PROBE_TASK = "github-cache-policy:cache-journey-probe";
+const PROBE_OUTPUT = "cache journey probe: executed";
+function addProbeTask(workspace) {
+  const file = join(workspace, ".github/cache-policy/project.json");
+  const project = JSON.parse(readFileSync(file, "utf8"));
+  project.targets["cache-journey-probe"] = {
+    executor: "nx:run-commands",
+    options: { command: `node -e "console.log('${PROBE_OUTPUT}')"` },
+    cache: true,
+    outputs: [],
+    inputs: project.targets["cache-journeys"].inputs,
+  };
+  writeFileSync(file, JSON.stringify(project));
+}
+// How many budget scenarios run at once: enough that a contended runner gives the journey its
+// share, few enough that no one CLI nears its own timeout on a three-core macOS runner.
+const BUDGET_SCENARIOS_AT_ONCE = 6;
+async function pooled(items, width, work) {
+  const results = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const index = next++;
+      results[index] = await work(items[index]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(width, items.length) }, worker));
+  return results;
+}
+// spawnSync's answer, without holding the event loop while the child runs.
+function spawnAsync(program, args, options) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(program, args, { ...options, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8").on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.setEncoding("utf8").on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.once("error", reject);
+    child.once("close", (status, signal) => resolve({ status, signal, stdout, stderr }));
+  });
+}
+// A GitHub HTTP double serving one directory's routes.json and fixture files.
+async function githubDouble(directory) {
+  const server = spawn(
+    "python3",
+    [join(root, ".github/cache-policy/tests/fixtures/nx-cache-http.py"), directory],
+    { stdio: ["pipe", "ignore", "inherit"] },
+  );
+  await until(() => existsSync(join(directory, "url")) || server.exitCode !== null);
+  assert.equal(server.exitCode, null, `the GitHub double for ${directory} exited`);
+  const url = readFileSync(join(directory, "url"), "utf8");
+  assert.ok(loopback(url), "fixture server must use loopback HTTP");
+  return {
+    url,
+    close: async () => {
+      if (server.exitCode !== null) return;
+      const exited = new Promise((resolve) => server.once("exit", resolve));
+      server.stdin.end();
+      await exited;
+    },
+  };
+}
+// A report folder whose files are hard links to the source report's, so a scenario can rewrite
+// its two documents without copying the payload archives beside them.
+function linkReport(source, folder) {
+  mkdirSync(folder, { recursive: true });
+  for (const entry of readdirSync(source, { recursive: true, withFileTypes: true })) {
+    const from = join(entry.parentPath, entry.name);
+    const to = join(folder, from.slice(source.length + 1));
+    if (entry.isDirectory()) mkdirSync(to, { recursive: true });
+    else if (!["executions.json", "manifest.json"].includes(entry.name)) {
+      mkdirSync(dirname(to), { recursive: true });
+      linkSync(from, to);
+    }
+  }
+}
 // Release selection is simulated; executions, task hashes, cache payloads and the
 // promotion receipt below are produced by this journey's real Nx/sidecar/CLI runs.
-function proveCacheBudget({ dir, workspace, env, pr, laterPr, routes, stage }) {
+async function proveCacheBudget({ dir, workspace, env, pr, laterPr, routes, stage }) {
   const repository = env.GITHUB_REPOSITORY;
   const prefix = `/repos/${repository}`;
   const end = new Date(Date.now() + 60_000).toISOString();
@@ -898,17 +1268,12 @@ function proveCacheBudget({ dir, workspace, env, pr, laterPr, routes, stage }) {
     specification,
     JSON.stringify({ schema_version: document.schema_version, budgets: [budget] }),
   );
-  // Each scenario rewrites every document before the CLI reads it. The unchanged
-  // payload archives are copied once; all four ZIPs share one Python invocation.
-  const budgetFolders = reports.map((record, index) => {
-    const folder = join(dir, `budget-report-${index}`);
-    cpSync(record.path, folder, { recursive: true });
-    return folder;
-  });
-  const receiptFolder = join(dir, "budget-receipt");
-  mkdirSync(receiptFolder);
-  stage("budget fixture prepared");
-  for (const scenario of [
+  // Each scenario has a directory and a GitHub double of its own, so their CLIs run side by
+  // side: each is a chain of short processes, a real gh among them for every request, and run
+  // one chain at a time on a contended runner they left the journey no room in its time limit.
+  // A report's payload archives are linked rather than copied, and every scenario's ZIPs are
+  // written by one Python invocation.
+  const scenarios = [
     "replayed",
     "evicted",
     "failed-store",
@@ -927,7 +1292,9 @@ function proveCacheBudget({ dir, workspace, env, pr, laterPr, routes, stage }) {
     "untrusted-receipt",
     "invalid-receipt",
     "zero-eligible",
-  ]) {
+  ];
+  const archives = [];
+  const prepared = scenarios.map((scenario) => {
     const answers = structuredClone(baseline);
     const documents = reports.map(({ execution, manifest }) => ({
       execution: structuredClone(execution),
@@ -1047,35 +1414,57 @@ function proveCacheBudget({ dir, workspace, env, pr, laterPr, routes, stage }) {
         for (const task of doc.execution.tasks) task.result = "local_hit";
       }
     }
-    for (const [index, folder] of budgetFolders.entries()) {
+    const scenarioDir = join(dir, `budget-${scenario}`);
+    for (const [index, record] of reports.entries()) {
+      const folder = join(scenarioDir, `report-${index}`);
+      linkReport(record.path, folder);
       writeFileSync(join(folder, "executions.json"), JSON.stringify(documents[index].execution));
       writeFileSync(join(folder, "manifest.json"), JSON.stringify(documents[index].manifest));
+      archives.push([folder, join(scenarioDir, `budget-report-${index}.zip`)]);
     }
+    const receiptFolder = join(scenarioDir, "budget-receipt");
+    mkdirSync(receiptFolder);
     writeFileSync(join(receiptFolder, "receipt.json"), JSON.stringify(currentReceipt));
-    zip([
-      ...budgetFolders.map((folder, index) => [folder, join(dir, `budget-report-${index}.zip`)]),
-      [receiptFolder, join(dir, "budget-receipt.zip")],
-    ]);
-    writeFileSync(join(dir, "routes.json"), JSON.stringify(answers));
-    stage(`budget ${scenario} archives`);
-    const result = spawnSync(
-      process.execPath,
-      [join(root, "node_modules/@onebudgetspec/cli/bin/onebudgetspec.js"), "check", specification],
-      {
-        cwd: workspace,
-        encoding: "utf8",
-        timeout: 120_000,
-        env: {
-          ...fixtureEnvironment(),
-          ...env,
-          GITHUB_REF_NAME: "v-cache-journey-simulated",
-          RUNNER_TEMP: join(dir, `budget-${scenario}-temp`),
-          NODE_TEST_CONTEXT: undefined,
-        },
-      },
-    );
-    const output = result.stdout + result.stderr;
-    stage(`budget ${scenario} CLI`);
+    archives.push([receiptFolder, join(scenarioDir, "budget-receipt.zip")]);
+    writeFileSync(join(scenarioDir, "routes.json"), JSON.stringify(answers));
+    return { scenario, scenarioDir };
+  });
+  zip(archives);
+  stage("budget archives");
+  const results = await pooled(
+    prepared,
+    BUDGET_SCENARIOS_AT_ONCE,
+    async ({ scenario, scenarioDir }) => {
+      const double = await githubDouble(scenarioDir);
+      try {
+        const result = await spawnAsync(
+          process.execPath,
+          [
+            join(root, "node_modules/@onebudgetspec/cli/bin/onebudgetspec.js"),
+            "check",
+            specification,
+          ],
+          {
+            cwd: workspace,
+            timeout: 120_000,
+            env: {
+              ...fixtureEnvironment(),
+              ...env,
+              GITHUB_API_URL: double.url.replace(/\/$/, ""),
+              GITHUB_REF_NAME: "v-cache-journey-simulated",
+              RUNNER_TEMP: join(dir, `budget-${scenario}-temp`),
+              NODE_TEST_CONTEXT: undefined,
+            },
+          },
+        );
+        return { scenario, status: result.status, output: result.stdout + result.stderr };
+      } finally {
+        await double.close();
+      }
+    },
+  );
+  stage("budget CLIs");
+  for (const { scenario, status, output } of results) {
     if (
       [
         "missing-job",
@@ -1086,7 +1475,7 @@ function proveCacheBudget({ dir, workspace, env, pr, laterPr, routes, stage }) {
         "zero-eligible",
       ].includes(scenario)
     ) {
-      assert.notEqual(result.status, 0, `${scenario}: ${output}`);
+      assert.notEqual(status, 0, `${scenario}: ${output}`);
       assert.doesNotMatch(output, /aggregate: \d+\/\d+ remote hits/, `${scenario}: ${output}`);
     } else {
       const expected = [
@@ -1372,7 +1761,7 @@ async function provePromotion({ dir, workspace, action, sourceEnv, stage }) {
         [
           "node_modules/nx/dist/bin/nx.js",
           "run",
-          "github-workflows:ci-jobs",
+          PROBE_TASK,
           "--excludeTaskDependencies",
           "--outputStyle=static",
         ],
@@ -1390,7 +1779,7 @@ async function provePromotion({ dir, workspace, action, sourceEnv, stage }) {
     },
   );
   stage("later PR replay");
-  proveCacheBudget({ dir, workspace, env: sourceEnv, pr, laterPr, routes, stage });
+  await proveCacheBudget({ dir, workspace, env: sourceEnv, pr, laterPr, routes, stage });
 }
 
 test("CI and release-plz promote a replay-only run, share it with a later PR, and report cache-use with simulated release selection", {
@@ -1415,6 +1804,7 @@ test("CI and release-plz promote a replay-only run, share it with a later PR, an
   }
   symlinkSync(join(root, "node_modules"), join(workspace, "node_modules"), "dir");
   symlinkSync(join(root, ".github/node_modules"), join(workspace, ".github/node_modules"), "dir");
+  addProbeTask(workspace);
   stage("workspace prepared");
   const action = join(dir, "action");
   command("git", ["init", "--quiet", action], dir);
@@ -1538,14 +1928,14 @@ test("CI and release-plz promote a replay-only run, share it with a later PR, an
           [
             "node_modules/nx/dist/bin/nx.js",
             "run",
-            "github-workflows:ci-jobs",
+            PROBE_TASK,
             "--excludeTaskDependencies",
             "--outputStyle=static",
           ],
           workspace,
           env,
         );
-        assert.match(result, /the finished workflows hold the four jobs/);
+        assert.ok(result.includes(PROBE_OUTPUT), result);
         stage(`${identity} real Nx`);
         command("bash", ["-eo", "pipefail", "-c", report.run], workspace, env);
         const manifest = manifestFile(join(runDir, "nx-cache-report/manifest.json"));
@@ -1576,7 +1966,7 @@ test("CI and release-plz promote a replay-only run, share it with a later PR, an
         assert.ok(
           executions.tasks.some(
             (task) =>
-              task.task === "github-workflows:ci-jobs" &&
+              task.task === PROBE_TASK &&
               task.result === (identity === "replay" ? "remote_hit" : "executed"),
           ),
         );

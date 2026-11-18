@@ -52,6 +52,8 @@ RESPONSE_ROOTS = {
     # One kind of attestation on one item: valid, void with a reason, or absent.
     "task_attestation_check": "AttestationCheck",
     "task_update": "TaskUpdated",
+    # The qualified id of the task `task delete` removed.
+    "task_delete": "TaskDeleted",
     # Many narrowed searches of one source, each answered under its own key across every page.
     "task_find": "FoundTasks",
     # Many held updates and many comments of one source, each answered on its own.
@@ -240,6 +242,7 @@ OPTION_TYPES = {
     "complete": "bool",
     "no_comments": "bool",
     "comments": "bool",
+    "close_orphans": "bool",
     "documents": "bool",
     "no_link": "bool",
     "no_counterpart": "bool",
@@ -356,6 +359,7 @@ OPTION_PLACEHOLDERS = {
     "complete": None,
     "no_comments": None,
     "comments": None,
+    "close_orphans": None,
     "documents": None,
     "no_link": None,
     "no_counterpart": None,
@@ -1010,7 +1014,7 @@ def operands(command: tuple[str, ...]) -> tuple[str, ...]:
             return ("source",)
         case ("task" | "project" | "document", "render" | "answers"):
             return ("id",)
-        case ("task", "assets"):
+        case ("task", "assets") | ("task", "delete"):
             return ("id",)
         case _:
             return ()

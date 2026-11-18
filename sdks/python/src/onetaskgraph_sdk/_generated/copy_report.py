@@ -799,6 +799,88 @@ class CopyOutcomeOrphaned(BaseModel):
     action: Literal["orphaned"]
 
 
+class CopyOutcomeClosed(BaseModel):
+    source: Annotated[GlobalId, Field(description="The qualified id the item was read from.")]
+    placed: Annotated[
+        Placement | None,
+        Field(
+            description="Which source a routed copy placed it in, and the index of the route entry that\nmatched — `null` there when none did.\n\nPresent for every item a copy into a source declaring `routes` landed, a dry run's\nincluded, so a would-be create still says where it would go; absent for a copy into\na source with none, whose output is what it always was, and for an orphan, which was\nnot placed at all."
+        ),
+    ] = None
+    result: Annotated[
+        WriteResult | None,
+        Field(
+            description="What the item holds once the write is done — its version, status and priority — and,\nfor a write made with `--expect` on a source that reports its writes' parts, what each\nmutation it sent came to. Absent for a dry run and for an item nothing was written to\nor read of."
+        ),
+    ] = None
+    fallback: Annotated[
+        WriteFallback | None,
+        Field(
+            description="That the write had to read its target first, and why — absent when it sent only its\nmutations."
+        ),
+    ] = None
+    spent: Annotated[
+        Spent | None,
+        Field(
+            description="What the write spent at the sources that meter their own requests — the fallback's\nread included."
+        ),
+    ] = None
+    status_condition: Annotated[
+        StatusCondition | None,
+        Field(
+            description="What `--when-destination-status` found the counterpart's status at, and whether that\nmet it — present only when the copy was given the condition and this item was an update\nof a task, a refused one included."
+        ),
+    ] = None
+    priority_condition: Annotated[
+        PriorityCondition | None,
+        Field(
+            description="What `--when-destination-priority` found the counterpart's priority at, and whether\nthat met it — present only when the copy was given the condition and this item was an\nupdate of a task."
+        ),
+    ] = None
+    assignee_condition: Annotated[
+        AssigneeCondition | None,
+        Field(
+            description="What `--when-destination-assignees` found the counterpart's assignees at, and whether\nthat met it — present only when the copy was given the condition and this item was an\nupdate of a task."
+        ),
+    ] = None
+    held: Annotated[
+        WriteResult | None,
+        Field(
+            description="What the counterpart held, as the copy's read of it before writing found it — present\nonly on an item the copy refused after that read, such as `destination-status`."
+        ),
+    ] = None
+    section_links_unresolved: Annotated[
+        int,
+        Field(
+            description="Section links whose fragment names no heading of the record they point at, carried\nbyte for byte rather than guessed at.",
+            ge=0,
+        ),
+    ] = 0
+    section_links_unaddressable: Annotated[
+        int,
+        Field(
+            description="Section links to a heading the destination's native form cannot address — a Linear\nrecord with no stored id for that heading. Cross-record links fall back to the\nrecord's URL alone; same-record links retain their authored fragment.",
+            ge=0,
+        ),
+    ] = 0
+    section_link_updates: Annotated[
+        int,
+        Field(
+            description="Writes the copy added to this record to finish its section links, once the records they\nname — or the record itself — had landed and their headings could be addressed.",
+            ge=0,
+        ),
+    ] = 0
+    body_size: Annotated[
+        int | None,
+        Field(
+            description="The size of the body the destination would store for the item, in the unit its plugin\nstates its limit in — the metadata slot the destination keeps and every asset reference\nrewritten to where it is served included. Present on a dry run's item whose destination\ncan say, and absent on every other outcome.",
+            ge=0,
+        ),
+    ] = None
+    destination: Annotated[GlobalId, Field(description="The item that was closed.")]
+    action: Literal["closed"]
+
+
 class CopyOutcomeFailed(BaseModel):
     source: Annotated[GlobalId, Field(description="The qualified id the item was read from.")]
     placed: Annotated[
@@ -1070,6 +1152,7 @@ class CopyOutcome(
         | CopyOutcomeUpdated
         | CopyOutcomeUnchanged
         | CopyOutcomeOrphaned
+        | CopyOutcomeClosed
         | CopyOutcomeFailed
         | CopyOutcomeSkipped
         | CopyOutcomeOversize
@@ -1080,6 +1163,7 @@ class CopyOutcome(
         | CopyOutcomeUpdated
         | CopyOutcomeUnchanged
         | CopyOutcomeOrphaned
+        | CopyOutcomeClosed
         | CopyOutcomeFailed
         | CopyOutcomeSkipped
         | CopyOutcomeOversize,

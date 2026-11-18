@@ -54,6 +54,7 @@ import type {
   TaskAssetNames,
   TaskAssigneeSet,
   TaskContentSet,
+  TaskDeleted,
   TaskDetail,
   TaskDetails,
   TaskPrioritySet,
@@ -350,6 +351,8 @@ export const commandResponseRoots: Readonly<Record<string, keyof typeof runtimeS
   "task attest": "Attested",
   "task attestation check": "AttestationCheck",
   "task update": "TaskUpdated",
+  // The qualified id of the task `task delete` removed.
+  "task delete": "TaskDeleted",
   // Many narrowed searches of one source, each answered under its own key across every page.
   "task find": "FoundTasks",
   // Many held updates and many comments of one source, each answered on its own.
@@ -1150,6 +1153,7 @@ export function projectCopyFlags(
       documents?: boolean;
       members?: string[];
       membersOnly?: boolean;
+      closeOrphans?: boolean;
     },
 ): string[] {
   const args = copyFlags("projectCopy", options);
@@ -1163,6 +1167,10 @@ export function projectCopyFlags(
     throw new TypeError("projectCopy: membersOnly must be a boolean");
   }
   if (options.membersOnly === true) args.push("--members-only");
+  if (options.closeOrphans !== undefined && typeof options.closeOrphans !== "boolean") {
+    throw new TypeError("projectCopy: closeOrphans must be a boolean");
+  }
+  if (options.closeOrphans === true) args.push("--close-orphans");
   return args;
 }
 
@@ -1433,6 +1441,11 @@ export class OnetaskgraphClient {
       input,
       options.sanitizeDryRun === true,
     );
+  }
+  // Remove one task and what its source stores for it alone; refused, removing nothing, while
+  // a task of its source depends on it. A copy of it elsewhere is not touched.
+  taskDelete(id: string): Promise<TaskDeleted> {
+    return this.run("task delete", [id]);
   }
   taskCommentDelete(
     id: string,
@@ -1758,6 +1771,7 @@ export class OnetaskgraphClient {
         documents?: boolean;
         members?: string[];
         membersOnly?: boolean;
+        closeOrphans?: boolean;
       }) & {
       sanitizeDryRun?: false;
     },
@@ -1771,6 +1785,7 @@ export class OnetaskgraphClient {
         documents?: boolean;
         members?: string[];
         membersOnly?: boolean;
+        closeOrphans?: boolean;
       },
   ): Promise<CopyReport | SanitizeDryRun>;
   projectCopy(
@@ -1778,13 +1793,16 @@ export class OnetaskgraphClient {
     to: string,
     // `membersOnly` copies the named `members` into the project the destination already holds,
     // leaving that project unread and unwritten; it is refused without a member. `documents`
-    // copies the documents filed under the project too, in the same copy.
+    // copies the documents filed under the project too, in the same copy. `closeOrphans` closes
+    // each open destination task whose source task is gone, reporting it `closed`; the binary
+    // refuses it beside `members` and `noTasks`.
     options: CopyOptions &
       StatusCopyOptions & {
         noTasks?: boolean;
         documents?: boolean;
         members?: string[];
         membersOnly?: boolean;
+        closeOrphans?: boolean;
       } = {},
   ): Promise<CopyReport | SanitizeDryRun> {
     const args = [id, "--to", to, ...projectCopyFlags(options)];

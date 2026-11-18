@@ -293,7 +293,9 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     # read from the raw document and the roots from the validated one.
     bundle = generate.validate_schema_bundle(emitted_bundle)
 
-    assert emitted_bundle["version"] == 64
+    assert emitted_bundle["version"] == 65
+    # Version 65: what `task delete` answers, and the `closed` action a copy reports.
+    assert "TaskDeleted" in bundle["roots"]
     # Version 64: a Linear configuration's `metadata_fields`, and the entries `sources fields`
     # reports for them.
     linear = bundle["roots"]["LinearConfig"]

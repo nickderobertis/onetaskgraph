@@ -1306,15 +1306,16 @@ pub trait TaskSource: Send + Sync {
         Err(unwritable_metadata(self.kind(), MetadataRecord::Document))
     }
 
-    /// Remove one task this destination holds, so a copy that could not finish can put
-    /// the destination back the way it found it.
+    /// Remove one task this source holds, with everything it stores for that task alone —
+    /// its stored template answers and its image assets included.
     ///
-    /// This is not a verb of the product: nothing a user types deletes anything, and a
-    /// copy never deletes an item it did not itself create in the run that is failing.
-    /// It exists because a copy is either complete or it never happened — a half-written
-    /// project has to be run again, and the re-run is the mutation burst that trips a
-    /// hosted destination's rate limiter. Undoing this run's own creates is what removes
-    /// that retry at source.
+    /// Two callers ask for it. `task delete` removes the one task a user names, once the
+    /// engine has found it there and found no item of this source depending on it. And a copy
+    /// that could not finish puts the destination back the way it found it: a copy never
+    /// deletes an item it did not itself create in the run that is failing, and it does this
+    /// because a copy is either complete or it never happened — a half-written project has to
+    /// be run again, and the re-run is the mutation burst that trips a hosted destination's
+    /// rate limiter. Undoing this run's own creates is what removes that retry at source.
     ///
     /// A source declaring [`WriteSupport::Supported`] owes a real implementation, for the
     /// reason it owes [`write_task`](Self::write_task) one: the engine will create items

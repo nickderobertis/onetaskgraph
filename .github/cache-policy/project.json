@@ -12,6 +12,7 @@
       "{workspaceRoot}/.github/package.json",
       "{workspaceRoot}/.github/bun.lock",
       "{workspaceRoot}/scripts/nx-remote-cache.mjs",
+      "{workspaceRoot}/scripts/nx-cache-sidecar.cjs",
       "{workspaceRoot}/scripts/actions-budget-figures.sh",
       "{workspaceRoot}/scripts/nx-version-free-inputs.mjs",
       "{workspaceRoot}/rust-toolchain.toml",

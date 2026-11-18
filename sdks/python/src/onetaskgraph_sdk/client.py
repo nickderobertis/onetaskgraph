@@ -167,6 +167,9 @@ NOT_PARTIAL_WRITE_COMMANDS: frozenset[tuple[str, ...]] = frozenset(
         ("cache", "clear"),
         ("template", "variables"),
         ("template", "render"),
+        # Removes one task whole or refuses with exit 1, removing nothing: it never exits 4, so
+        # it never lands in part.
+        ("task", "delete"),
     }
 )
 

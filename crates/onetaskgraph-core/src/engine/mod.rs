@@ -26,6 +26,7 @@ mod closure;
 mod comment;
 mod comments_since;
 mod copy;
+mod delete;
 mod delivery;
 mod dependents;
 mod designators;
@@ -108,6 +109,7 @@ pub use copy::{
     StatusCondition, StatusPolicy,
 };
 pub(crate) use copy::{malformed_links, malformed_locations};
+pub use delete::TaskDeleted;
 pub use delivery::{Delivered, DeliveryOutcome, ProjectStatusSet, TaskStatusSet, settled};
 pub use graph::{
     GraphDirection, GraphEdge, GraphNode, GroupKey, PROJECT_GRAPH_SCHEMA_VERSION, ProjectGraph,
@@ -1027,6 +1029,48 @@ pub enum EngineError {
         /// The plugin behind it.
         kind: String,
     },
+
+    /// `task delete` named a source whose plugin has no write side.
+    #[error(
+        "source {name} cannot delete a task: its plugin is {kind}, which has no write side\n\
+         next: remove the task in that source itself, or name a task of a source whose plugin \
+         can be written — `onetaskgraph sources list` reports each one's plugin."
+    )]
+    DeleteNotWritable {
+        /// The configured name of the source.
+        name: String,
+        /// The plugin behind it.
+        kind: String,
+    },
+
+    /// `task delete` named a task other items of its source depend on, so removing it would
+    /// leave each of their edges naming nothing. Nothing was removed.
+    #[error(
+        "task {id} was not deleted: {} of its source depend{} on it:\n{}\n\
+         next: rewire each dependent with `onetaskgraph task update <ID> --depends-on …` or \
+         `--no-depends-on`, then delete {id} again.",
+        if .dependents.len() == 1 { "1 item".to_owned() } else { format!("{} items", .dependents.len()) },
+        if .dependents.len() == 1 { "s" } else { "" },
+        .dependents.iter().map(|dependent| format!("  {dependent}")).collect::<Vec<_>>().join("\n")
+    )]
+    TaskHasDependents {
+        /// The task that was not deleted.
+        id: GlobalId,
+        /// Each item of its source that depends on it, in the order its source answered them.
+        dependents: Vec<GlobalId>,
+    },
+
+    /// `--close-orphans` was given to a copy that does not walk every member of the projects it
+    /// copies — a task or document copy, a member copy, or a project copy without its tasks —
+    /// so it cannot tell a task the source dropped from one it left out.
+    #[error(
+        "--close-orphans closes what a whole project copy leaves behind, and this copy does not \
+         read every task of the project: it is refused beside --member, --members-only and \
+         --no-tasks\n\
+         next: copy the whole project with its tasks to close its orphans, or drop \
+         --close-orphans."
+    )]
+    CloseOrphansNarrowed,
 
     /// `task status set` named a source whose plugin has no write side.
     #[error(
