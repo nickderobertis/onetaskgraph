@@ -6,9 +6,10 @@
 //! here touches a copy of the task in another source: a copy that finds its source gone reports
 //! the counterpart as an orphan, and `project copy --close-orphans` is what closes it.
 //!
-//! A copy that withholds provenance writes no origin on its counterpart, so the deleted task's
-//! own `onetaskgraph.copies` link is the only record of where it landed. Before removing a task
-//! filed under a project, the delete therefore writes those links onto that project at
+//! A copy that withholds provenance — out of a source declared private into one that is not —
+//! writes no origin on its counterpart, so the deleted task's own `onetaskgraph.copies` link is
+//! the only record of where it landed. Before removing a task filed under a project, the delete
+//! therefore writes those of its links onto that project at
 //! [`MetadataKey::DELETED_COPIES_KEY`] — ids only — for the next `project copy
 //! --close-orphans` to close and take out. A source that cannot hold the record refuses the
 //! delete, and a delete the source then refuses puts the record back as it was.
@@ -151,7 +152,10 @@ impl Engine {
                 dependents,
             });
         }
-        let recorded = record_copies(source, id, &task).await?;
+        let recorded = record_copies(source, id, &task, |to| {
+            self.withholds_provenance(&id.source, to)
+        })
+        .await?;
         if let Err(error) = source.source().delete_task(&id.native).await {
             // The record would name the copies of a task that is still there, for a later copy
             // to close: it goes back to what it was. Should that write fail too, the entries
@@ -175,8 +179,11 @@ impl Engine {
 }
 
 /// Write where `task`'s copies landed onto the project it is filed under, at
-/// [`MetadataKey::DELETED_COPIES_KEY`], answering that project and what it held there before;
-/// nothing for a task filed under no project, linking no copy, or whose project is gone.
+/// [`MetadataKey::DELETED_COPIES_KEY`], answering that project and what it held there before —
+/// only the copies `withheld` says carry no origin, because the orphan walk finds every other
+/// copy by its origin. Nothing for a task filed under no project, linking no such copy, or whose
+/// project is gone, so a delete in a source not declared private writes nothing more than it
+/// ever did.
 ///
 /// # Errors
 ///
@@ -186,6 +193,7 @@ async fn record_copies(
     source: &ResolvedSource,
     id: &GlobalId,
     task: &Task,
+    withheld: impl Fn(&SourceName) -> bool,
 ) -> Result<Option<(NativeId, Value)>, EngineError> {
     let Some(project) = &task.project else {
         return Ok(None);
@@ -193,7 +201,7 @@ async fn record_copies(
     let links = super::copy::counterparts_linked(task.metadata.get(MetadataKey::COPIES_KEY));
     let links: Vec<_> = links
         .into_iter()
-        .filter(|(destination, _)| *destination != id.source)
+        .filter(|(destination, _)| *destination != id.source && withheld(destination))
         .collect();
     if links.is_empty() {
         return Ok(None);

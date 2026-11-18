@@ -566,9 +566,10 @@ pub enum TaskCommand {
     /// by its qualified id, to rewire with `task update --depends-on` or `--no-depends-on`
     /// first. It only removes: a copy of the task in another source is not touched, and the
     /// next `project copy --close-orphans` of its project closes that copy. So that copy can
-    /// still be found where it carries no origin, a task filed under a project leaves the ids
-    /// of its copies on that project, at `onetaskgraph.deleted_copies`, and a source that
-    /// cannot hold them refuses the delete.
+    /// still be found where it carries no origin — a copy out of a source declared private
+    /// into one that is not — a task filed under a project leaves the ids of such copies on
+    /// that project, at `onetaskgraph.deleted_copies`, and a source that cannot hold them
+    /// refuses the delete.
     Delete(TaskDeleteArgs),
     /// Regenerate one task's content from its template in place, and nothing else about it.
     ///

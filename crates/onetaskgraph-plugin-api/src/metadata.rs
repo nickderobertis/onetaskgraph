@@ -178,9 +178,10 @@ impl MetadataKey {
     /// task deleted from it landed: a JSON object mapping a destination source name to an
     /// object mapping each counterpart's native id there to the deleted task's qualified id.
     ///
-    /// It exists because a copy that withholds provenance writes no origin on its counterpart,
-    /// so once the task and its [`Self::COPIES_KEY`] link are gone nothing else says which
-    /// destination item it had. Ids only. Read only by an unnarrowed `project copy
+    /// It exists because a copy that withholds provenance — out of a source declared private
+    /// into one that is not — writes no origin on its counterpart, so once the task and its
+    /// [`Self::COPIES_KEY`] link are gone nothing else says which destination item it had. Only
+    /// such copies are recorded, every other one being found by its origin. Ids only. Read only by an unnarrowed `project copy
     /// --close-orphans` into that destination, which closes each counterpart still open and
     /// takes its entry out; no copy carries it.
     // llmlint: ignore[code_lands_in_the_domain_that_owns_it] Recording and settling the entries is the engine's (`engine/delete.rs` and `engine/copy.rs`), and none of that is here: this crate is where every reserved key is spelled once (`docs/metadata.md` is held to these constants), and `MetadataKey`'s field is private to this crate, so a constructor here is the only way the engine names a reserved key on the narrow write, as `attestations` and `creating` do. No trait or type changes.

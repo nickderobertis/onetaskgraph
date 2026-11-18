@@ -41,7 +41,7 @@ Keys are free-form, with two prefixes reserved:
   (`TaskLink::METADATA_KEY`; README, "Relations: a parent, and typed links"), which every
   endpoint of a link holds and no copy carries, and `onetaskgraph.deleted_copies`
   (`MetadataKey::DELETED_COPIES_KEY`), which a source project holds of a deleted task's copies
-  until `project copy --close-orphans` closes them —
+  that carry no origin until `project copy --close-orphans` closes them —
   in the contract crate, and
   `onetaskgraph.origin` (`GlobalId::ORIGIN_KEY`) and `onetaskgraph.lineage`
   (`GlobalId::LINEAGE_KEY`) in the engine —

@@ -7954,7 +7954,7 @@ impl Engine {
 
     /// Whether an item of `source` landing in `to` leaves its provenance behind: provenance
     /// naming a private source stays out of anywhere not declared private.
-    fn withholds_provenance(&self, source: &SourceName, to: &SourceName) -> bool {
+    pub(super) fn withholds_provenance(&self, source: &SourceName, to: &SourceName) -> bool {
         self.declared(source) == crate::config::SourceVisibility::Private
             && self.declared(to) != crate::config::SourceVisibility::Private
     }

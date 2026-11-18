@@ -14,7 +14,7 @@ use std::process::Output;
 
 use serde_json::{Value, json};
 
-use crate::common::{Sandbox, stderr, stdout};
+use crate::common::{Sandbox, SourceBoundary, stderr, stdout};
 use crate::document_store::interpreter;
 use crate::fixtures::document;
 use crate::machine::{bundle, validates};
@@ -1177,4 +1177,69 @@ fn a_closing_copy_into_one_destination_leaves_another_destinations_entry_for_its
     );
     assert_eq!(category(&plan.sandbox, &in_mirror), "cancelled");
     assert_eq!(plan.record(), json!({}));
+}
+
+#[test]
+fn a_stdio_hosted_sources_delete_records_nothing_and_its_copy_is_closed_by_its_origin() {
+    // A plugin over the stdio protocol is never handed a key of the reserved namespace, and a
+    // source hosted that way cannot be declared private, so every copy out of it carries its
+    // origin: the delete writes no record, and the next closing copy finds the copy by that
+    // origin and closes it.
+    let sandbox = Sandbox::new();
+    let drafts = folder(
+        &sandbox,
+        "drafts",
+        &[("stay", "Stay", &[]), ("open", "Open", &[])],
+    );
+    let public = sandbox.subdirectory("public");
+    sandbox.project_document(&document(&json!({
+        "drafts": SourceBoundary::Subprocess.source("local-md", json!({"root": drafts})),
+        "public": {"plugin": "local-md", "config": {"root": public}}
+    })));
+    let first = parsed(
+        &sandbox,
+        &["project", "copy", "drafts:P", "--to", "public", "--json"],
+    );
+    let copied = actions(&first)
+        .into_iter()
+        .find(|(source, _, _)| source == "drafts:open")
+        .and_then(|(_, _, destination)| destination)
+        .expect("open's copy");
+    let project = drafts.join("projects/P.md");
+    let project_before = std::fs::read(&project).expect("P's file");
+    let public_before = tree(&public);
+
+    assert_eq!(
+        printed(&sandbox, &["task", "delete", "drafts:open"]),
+        "deleted task drafts:open\n"
+    );
+    assert!(!listed(&sandbox, "drafts").contains(&"drafts:open".to_owned()));
+    assert_eq!(
+        std::fs::read(&project).expect("P's file"),
+        project_before,
+        "the delete wrote nothing on the project"
+    );
+    assert_eq!(tree(&public), public_before);
+
+    let report = parsed(
+        &sandbox,
+        &[
+            "project",
+            "copy",
+            "drafts:P",
+            "--to",
+            "public",
+            "--close-orphans",
+            "--json",
+        ],
+    );
+    assert_eq!(
+        moved(&report),
+        vec![(
+            "drafts:open".to_owned(),
+            "closed".to_owned(),
+            Some(copied.clone())
+        )]
+    );
+    assert_eq!(category(&sandbox, &copied), "cancelled");
 }
