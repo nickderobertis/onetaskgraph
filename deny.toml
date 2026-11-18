@@ -16,8 +16,13 @@ yanked = "deny"
 # every `yrs` release from 0.18.8 to 0.28.0 depends on it. The advisory is that the crate is
 # unmaintained, not a vulnerability, and it names no upgrade. Retired by: a `yrs` release
 # that no longer depends on `smallstr`.
+# A second, by the user's ruling for node `otg-graph-location`. `chrono` is a direct
+# dependency of most workspace crates, and RUSTSEC-2026-0543 reports it unmaintained: an
+# informational advisory, no vulnerability, and no patched version. Retired by: the
+# workspace migrating off chrono (to `jiff` or `time`, say), or the advisory being withdrawn.
 ignore = [
   { id = "RUSTSEC-2026-0215", reason = "smallstr is unmaintained, reached only through yrs, whose every release depends on it; remove when a yrs release drops smallstr" },
+  { id = "RUSTSEC-2026-0543", reason = "chrono is unmaintained (informational, no vulnerability, no patched version) and a direct dependency of most workspace crates; by the user's ruling for otg-graph-location, remove when the workspace migrates off chrono (e.g. to jiff or time) or the advisory is withdrawn" },
 ]
 
 [licenses]

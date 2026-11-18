@@ -132,16 +132,35 @@ fn task(id: &str, title: &str, extra: Value) -> Value {
     task
 }
 
-/// A task of `vault` recording `site:<dependent>` as depending on it.
+/// A task of `vault` recording `site:<dependent>` as depending on it, at [`vault_location`].
 fn recorder(id: &str, dependent: &str) -> Value {
     let dependent = format!("site:{dependent}");
     task(
         id,
         id,
-        json!({"metadata": {"onetaskgraph.depended_on_by": {
+        json!({"location": vault_location(id), "metadata": {"onetaskgraph.depended_on_by": {
             dependent.clone(): {"id": dependent, "kind": "task"},
         }}}),
     )
+}
+
+/// Where `vault` reports its task `id` is.
+fn vault_location(id: &str) -> Value {
+    json!({"url": format!("https://vault.example/{id}")})
+}
+
+/// Each node's `(id, location)`, from the graph's JSON form.
+fn locations(graph: &onetaskgraph_core::ProjectGraph) -> Vec<(String, Value)> {
+    let document = serde_json::to_value(graph).expect("a graph renders as JSON");
+    document["nodes"]
+        .as_array()
+        .expect("the nodes")
+        .iter()
+        .map(|node| {
+            let id = node["id"].as_str().expect("an id").to_owned();
+            (id, node["location"].clone())
+        })
+        .collect()
 }
 
 /// The public `site`, holding project `P-1` and its tasks `T-1`, `T-2` and `T-3` — each landed
@@ -240,6 +259,20 @@ async fn a_private_source_that_answers_every_read_draws_every_edge_it_records() 
         .map(|(from, to)| (from.to_owned(), to.to_owned()))
     );
     assert_eq!(asked.load(Ordering::Relaxed), 3, "one read per task");
+    // Each external node carries where `vault` reports its task is, read by the one read that
+    // gave it its title; `site`'s own tasks report none.
+    assert_eq!(
+        locations(&graph),
+        [
+            ("site:T-1", Value::Null),
+            ("site:T-2", Value::Null),
+            ("site:T-3", Value::Null),
+            ("vault:V-1", vault_location("V-1")),
+            ("vault:V-2", vault_location("V-2")),
+            ("vault:V-3", vault_location("V-3")),
+        ]
+        .map(|(id, location)| (id.to_owned(), location))
+    );
 }
 
 #[tokio::test]
@@ -273,6 +306,12 @@ async fn a_private_source_that_stops_answering_keeps_what_it_answered_and_is_not
         edges(&graph),
         [("vault:V-1".to_owned(), "site:T-1".to_owned())],
         "the edge it answered before it stopped is drawn"
+    );
+    // That edge's prerequisite is drawn under its qualified id, nothing having been read of
+    // it, so it names no location although `vault` holds one for it.
+    assert_eq!(
+        locations(&graph).last(),
+        Some(&("vault:V-1".to_owned(), Value::Null))
     );
     assert_eq!(
         asked.load(Ordering::Relaxed),

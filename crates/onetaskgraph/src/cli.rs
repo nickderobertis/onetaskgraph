@@ -2283,7 +2283,8 @@ Mermaid form draws, and the form to read when a program has to know which task a
     \"group_by\": \"<the --group-by key>\" | null,
     \"nodes\": [
       {\"key\": \"n1\", \"id\": \"<qualified task id>\", \"title\": \"<the title, unescaped>\",
-       \"external\": false, \"group\": \"<the task's group>\" | null}
+       \"external\": false, \"group\": \"<the task's group>\" | null,
+       \"location\": {\"path\": \"<absolute path>\"} | {\"url\": \"<web address>\"} | null}
     ],
     \"edges\": [
       {\"from\": \"<qualified id of the prerequisite>\", \"to\": \"<qualified id of the dependent>\"}
@@ -2293,7 +2294,9 @@ Mermaid form draws, and the form to read when a program has to know which task a
   direction is the resolved direction, never auto. nodes holds every n node and then every
   x node, in the Mermaid form's order; key is the Mermaid node id, external is true exactly
   for the x nodes, and group is null for a task with no group, for every external task, and
-  for every task without --group-by. edges follows the Mermaid form's edge order.
+  for every task without --group-by. location is where the task is, exactly as task show
+  --json reports it, on every node: null when its source reports none, and for an external
+  task whose source could not be asked. edges follows the Mermaid form's edge order.
   unanswered is present only when the graph is incomplete, as below; each entry has the
   shape of an `errors` entry of any other --json answer.
 

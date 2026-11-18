@@ -14,7 +14,7 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-use onetaskgraph_plugin_api::{ItemKind, Task};
+use onetaskgraph_plugin_api::{ItemKind, Location, Task};
 use schemars::JsonSchema;
 use serde::Serialize;
 use serde_json::Value;
@@ -165,15 +165,18 @@ pub struct ProjectGraph {
 
 /// One node of a [`ProjectGraph`]: one task, of the project or outside it.
 ///
-/// Its JSON is [`GraphNodeWire`]'s — `key`, `id`, `title`, `external`, `group` — derived from
-/// where it sits, so a node outside the project can have no group and every key is a number
-/// of its kind.
+/// Its JSON is [`GraphNodeWire`]'s — `key`, `id`, `title`, `external`, `group`, `location` —
+/// with `key`, `external` and `group` derived from where it sits, so a node outside the
+/// project can have no group and every key is a number of its kind.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GraphNode {
     /// The task's qualified id.
     id: GlobalId,
     /// The task's title, exactly as its source reports it.
     title: String,
+    /// Where the task is, exactly as its source reports it, or `None` when it reports none
+    /// or was not asked.
+    location: Option<Location>,
     /// Where the task sits, and what that gives it.
     place: Place,
 }
@@ -225,6 +228,7 @@ impl Serialize for GraphNode {
             title: self.title.clone(),
             external: self.external(),
             group: self.group().map(str::to_owned),
+            location: self.location.clone(),
         }
         .serialize(serializer)
     }
@@ -255,6 +259,10 @@ struct GraphNodeWire {
     /// The task's group under `group_by`, or `null` — for a task with none, for every
     /// external task, and for every task when no key was given.
     group: Option<String>,
+    /// Where the task is, exactly as `task show` reports it: `{"path": …}`, `{"url": …}`,
+    /// or `null` when its source reports none — and for an external task whose source could
+    /// not be asked, of which nothing was read.
+    location: Option<Location>,
 }
 
 /// One edge of a [`ProjectGraph`], pointing from the task depended on to the task that
@@ -536,7 +544,7 @@ impl Engine {
             .direction
             .unwrap_or_else(|| GraphDirection::auto(ranks, widest));
 
-        let mut externals: Vec<(String, GlobalId)> = Vec::new();
+        let mut externals: Vec<(String, Option<Location>, GlobalId)> = Vec::new();
         let outside: HashSet<&GlobalId> = edges
             .iter()
             .map(|(prerequisite, _)| prerequisite)
@@ -553,14 +561,14 @@ impl Engine {
             })
             .collect();
         for id in outside {
-            let title = if unasked.contains(id.source.as_str()) {
-                id.to_string()
+            let (title, location) = if unasked.contains(id.source.as_str()) {
+                (id.to_string(), None)
             } else {
-                self.graph_title(id).await?
+                self.external_task(id).await?
             };
-            externals.push((title, id.clone()));
+            externals.push((title, location, id.clone()));
         }
-        externals.sort_by_key(|(title, id)| tie(title, id));
+        externals.sort_by_key(|(title, _, id)| tie(title, id));
 
         let mut nodes: Vec<GraphNode> = order
             .iter()
@@ -568,6 +576,7 @@ impl Engine {
             .map(|(position, &index)| GraphNode {
                 id: tasks[index].id.clone(),
                 title: tasks[index].item.title.clone(),
+                location: tasks[index].item.location.clone(),
                 place: Place::Own {
                     number: position + 1,
                     group: groups[index].clone(),
@@ -578,9 +587,10 @@ impl Engine {
             externals
                 .into_iter()
                 .enumerate()
-                .map(|(position, (title, id))| GraphNode {
+                .map(|(position, (title, location, id))| GraphNode {
                     id,
                     title,
+                    location,
                     place: Place::External {
                         number: position + 1,
                     },
@@ -619,8 +629,12 @@ impl Engine {
         })
     }
 
-    /// The title of one task outside the project, read from its own source.
-    async fn graph_title(&self, id: &GlobalId) -> Result<String, EngineError> {
+    /// The title and location of one task outside the project, from one read of it in its
+    /// own source.
+    async fn external_task(
+        &self,
+        id: &GlobalId,
+    ) -> Result<(String, Option<Location>), EngineError> {
         let response = self.task(id).await?;
         if let Some(failure) = response.errors.into_iter().next() {
             return Err(EngineError::SourceFailed {
@@ -632,7 +646,7 @@ impl Engine {
             .items
             .into_iter()
             .next()
-            .map(|task| task.item.title)
+            .map(|task| (task.item.title, task.item.location))
             .ok_or_else(|| EngineError::NoSuchTask { id: id.to_string() })
     }
 }

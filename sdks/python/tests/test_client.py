@@ -52,6 +52,7 @@ from onetaskgraph_sdk._generated.copy_report import (
 )
 from onetaskgraph_sdk._generated.copy_report import GlobalId as LandedAt
 from onetaskgraph_sdk._generated.models import QueryResponseOfQualifiedTask
+from onetaskgraph_sdk._generated.project_graph import Location2 as PathLocation
 from onetaskgraph_sdk._generated.query_response_of_search_hit import SearchHitTask
 from onetaskgraph_sdk._generated.task_status_set import DeliveredFailed
 
@@ -875,6 +876,14 @@ def test_project_graph_drives_the_binary(binary: Path, tmp_path: Path) -> None:
         ("n2", "from:T-2", "Build", "core"),
         ("n3", "from:T-3", "Ship", None),
     ]
+    # Each node names where its task is, as the store reports it: the task's own file.
+    for node in graph.nodes:
+        assert node.location is not None
+        place = node.location.root
+        assert isinstance(place, PathLocation)
+        name = node.id.root.removeprefix("from:")
+        # By the file it names, not its spelling: Windows answers an extended-length `\\?\` path.
+        assert Path(place.path).samefile(root / "from" / "tasks" / f"{name}.md")
     assert [(edge.from_.root, edge.to.root) for edge in graph.edges] == [
         ("from:T-1", "from:T-2"),
         ("from:T-2", "from:T-3"),
