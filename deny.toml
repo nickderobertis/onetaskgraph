@@ -16,8 +16,15 @@ yanked = "deny"
 # every `yrs` release from 0.18.8 to 0.28.0 depends on it. The advisory is that the crate is
 # unmaintained, not a vulnerability, and it names no upgrade. Retired by: a `yrs` release
 # that no longer depends on `smallstr`.
+#
+# A second, for `chrono`: RUSTSEC-2026-0543 is informational ("unmaintained"), names no
+# patched version, and arrived after every crate here had come to depend on `chrono`
+# directly, so it refused `main` and every pull request at once. Replacing it is a
+# cross-crate migration of its own, not a repair any one change can carry. Retired by:
+# moving the workspace to `jiff` or `time`, the alternatives the advisory names.
 ignore = [
   { id = "RUSTSEC-2026-0215", reason = "smallstr is unmaintained, reached only through yrs, whose every release depends on it; remove when a yrs release drops smallstr" },
+  { id = "RUSTSEC-2026-0543", reason = "chrono is unmaintained (informational, no patched version) and a direct dependency of most workspace crates; remove when the workspace moves to jiff or time" },
 ]
 
 [licenses]
