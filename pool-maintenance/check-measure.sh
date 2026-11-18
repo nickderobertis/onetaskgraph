@@ -44,16 +44,20 @@ scratch="$(mktemp -d)" || fatal \
   "could not create a scratch directory" \
   "check the permissions of \$TMPDIR and 'df -h' for free space, then rerun"
 trap 'rm -rf "$scratch"' EXIT
-# A configuration above every fixture that moves cargo's build directory out of it, as one on
-# a CI runner did: each case then proves the fixture's own build-dir keeps its units where the
-# pruner walks, rather than relying on a host that sets none.
+# A configuration above every fixture that moves cargo's build directory out of it: each case
+# then proves the fixture's own build-dir keeps its units where the pruner walks, rather than
+# relying on a host that sets none.
 mkdir -p "$scratch/.cargo"
 printf '[build]\nbuild-dir = "%s/outside-build-dir"\n' "$scratch" >"$scratch/.cargo/config.toml"
 
 # Every build the fixture makes goes into its own target directory, whatever the caller set —
 # its intermediates (.fingerprint, deps, build, incremental) included, which cargo writes to
 # its build directory: the pruner and measure.sh find units only under the target directory.
-unset CARGO_TARGET_DIR CARGO_BUILD_TARGET_DIR CARGO_BUILD_BUILD_DIR ONEBUDGETSPEC_RESULT
+# And it builds with this repository's pinned toolchain, as measure.sh's real target is built,
+# never a host's default: a cargo whose build directory has a newer layout (1.100's keeps a
+# unit under build/<package>/<hash>/) leaves the pinned pruner no profile to find, which failed
+# this check on a CI runner whose default was 1.100.0 while this repository pinned 1.97.1.
+unset CARGO_TARGET_DIR CARGO_BUILD_TARGET_DIR CARGO_BUILD_BUILD_DIR RUSTUP_TOOLCHAIN ONEBUDGETSPEC_RESULT
 
 # Older than the pruner's 2-day window, and newer than the date measure.sh backdates the
 # alternative build to, as a cache restored from an earlier run is.
@@ -66,7 +70,7 @@ make_fixture() {
   local fx="$1"
   mkdir -p "$fx/.cargo" "$fx/pool-maintenance" "$fx/crates/a/src" "$fx/crates/b/src" \
     "$fx/vendor/c/src"
-  cp "$ROOT/justfile" "$fx/justfile"
+  cp "$ROOT/justfile" "$ROOT/rust-toolchain.toml" "$fx/"
   cp "$ROOT/pool-maintenance/measure.sh" "$ROOT/pool-maintenance/budgets.yaml" \
     "$fx/pool-maintenance/"
   # build-dir beside target-dir, so no configuration above the fixture (a CARGO_HOME or a
@@ -188,8 +192,8 @@ measure() {
 # repository's own target/ when it does not, because the scratch tree goes with the trap.
 readonly KEPT="$ROOT/target/pool-maintenance-check-evidence"
 # What the fixture's cargo was and where it built, printed rather than only kept, because a
-# CI runner's target/ is not uploaded: a configuration that moves the fixture's builds out of
-# its target otherwise fails here naming only the symptom, which is how one on a runner did.
+# CI runner's target/ is not uploaded: a toolchain or configuration that moves the fixture's
+# builds out of where the pruner looks otherwise fails here naming only the symptom.
 warm_environment() {
   local fx="$scratch/warm" dir
   echo "check-measure: the fixture's environment, at $fx:"
