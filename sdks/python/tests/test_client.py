@@ -882,7 +882,8 @@ def test_project_graph_drives_the_binary(binary: Path, tmp_path: Path) -> None:
         place = node.location.root
         assert isinstance(place, PathLocation)
         name = node.id.root.removeprefix("from:")
-        assert Path(place.path).resolve() == (root / "from" / "tasks" / f"{name}.md").resolve()
+        # By the file it names, not its spelling: Windows answers an extended-length `\\?\` path.
+        assert Path(place.path).samefile(root / "from" / "tasks" / f"{name}.md")
     assert [(edge.from_.root, edge.to.root) for edge in graph.edges] == [
         ("from:T-1", "from:T-2"),
         ("from:T-2", "from:T-3"),
