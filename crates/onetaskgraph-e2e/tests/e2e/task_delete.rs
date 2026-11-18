@@ -705,7 +705,9 @@ fn passing_write_policy() -> Value {
 
 /// A folder declared private, `drafts`, holding project `P` and these tasks, copied once into a
 /// folder that is not, `public`: a copy that withholds provenance, so no copy it lands names an
-/// origin, and a dropped task's copy is found by what `task delete` records on `P`.
+/// origin, and a dropped task's copy is found by what `task delete` records on `P`. A second
+/// folder that is not, `mirror`, is configured beside it and copied into only when a journey
+/// asks.
 struct PrivatePlan {
     sandbox: Sandbox,
     drafts: PathBuf,
@@ -721,9 +723,11 @@ impl PrivatePlan {
         let sandbox = Sandbox::new();
         let drafts = folder(&sandbox, "drafts", tasks);
         let public = sandbox.subdirectory("public");
+        let mirror = sandbox.subdirectory("mirror");
         let mut configuration: Value = serde_json::from_str(&document(&json!({
             "drafts": {"plugin": "local-md", "config": {"root": drafts}, "visibility": "private"},
-            "public": {"plugin": "local-md", "config": {"root": public}}
+            "public": {"plugin": "local-md", "config": {"root": public}},
+            "mirror": {"plugin": "local-md", "config": {"root": mirror}}
         })))
         .expect("a document");
         configuration["write_policy"] = passing_write_policy();
@@ -1113,4 +1117,64 @@ fn a_hand_edited_record_keeps_its_well_formed_entries_through_the_next_delete() 
         category(&plan.sandbox, &plan.landed["drafts:stay"]),
         "cancelled"
     );
+}
+
+#[test]
+fn a_closing_copy_into_one_destination_leaves_another_destinations_entry_for_its_own() {
+    // The plan is copied into two public folders, so the dropped task's delete records a copy in
+    // each. The closing copy into `public` closes that copy and takes out that entry alone; the
+    // copy in `mirror` stays open and its entry stays, until the closing copy into `mirror`.
+    let plan = PrivatePlan::new(&[("stay", "Stay", &[]), ("open", "Open", &[])]);
+    let mirrored = parsed(
+        &plan.sandbox,
+        &["project", "copy", "drafts:P", "--to", "mirror", "--json"],
+    );
+    let in_mirror = actions(&mirrored)
+        .into_iter()
+        .find(|(source, _, _)| source == "drafts:open")
+        .and_then(|(_, _, destination)| destination)
+        .expect("open's copy in the mirror");
+    printed(&plan.sandbox, &["task", "delete", "drafts:open"]);
+    let (_, in_public) = plan.landed["drafts:open"].split_once(':').expect("an id");
+    let (_, mirrored_native) = in_mirror.split_once(':').expect("an id");
+    assert_eq!(
+        plan.record(),
+        json!({"mirror": {mirrored_native: "drafts:open"}, "public": {in_public: "drafts:open"}})
+    );
+    let mirror_before = tree(&plan.sandbox.subdirectory("mirror"));
+
+    plan.copy(&["--close-orphans"]);
+    assert_eq!(
+        category(&plan.sandbox, &plan.landed["drafts:open"]),
+        "cancelled"
+    );
+    assert_eq!(
+        plan.record(),
+        json!({"mirror": {mirrored_native: "drafts:open"}})
+    );
+    assert_eq!(tree(&plan.sandbox.subdirectory("mirror")), mirror_before);
+    assert_ne!(category(&plan.sandbox, &in_mirror), "cancelled");
+
+    let closing = parsed(
+        &plan.sandbox,
+        &[
+            "project",
+            "copy",
+            "drafts:P",
+            "--to",
+            "mirror",
+            "--close-orphans",
+            "--json",
+        ],
+    );
+    assert_eq!(
+        moved(&closing),
+        vec![(
+            "drafts:open".to_owned(),
+            "closed".to_owned(),
+            Some(in_mirror.clone())
+        )]
+    );
+    assert_eq!(category(&plan.sandbox, &in_mirror), "cancelled");
+    assert_eq!(plan.record(), json!({}));
 }
