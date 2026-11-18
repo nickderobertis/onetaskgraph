@@ -7,7 +7,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, RootModel
+from pydantic import BaseModel, ConfigDict, Field, RootModel
 
 
 class GlobalId(RootModel[str]):
@@ -34,32 +34,27 @@ class GroupKey(RootModel[str]):
     ]
 
 
-class GraphNode(BaseModel):
-    key: Annotated[
-        str,
+class Location1(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    url: str
+
+
+class Location2(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    path: str
+
+
+class Location(RootModel[Location1 | Location2]):
+    root: Annotated[
+        Location1 | Location2,
         Field(
-            description="The Mermaid form's node id: `n<k>` for the project's own tasks and `x<k>` for a task\noutside it, each counted from 1."
+            description='Where an entity is, in the one form a consumer can act on without knowing the backend.\n\nExternally tagged with exactly two variants, so the JSON is `{"url": "https://…"}` or\n`{"path": "/home/…"}` and a consumer tells them apart by which key is present. A reader\nhanded one of these knows what to *do* with it — open a link, or print a path and read\nthe file out — which is what a bare string could not have said.\n\nIt carries no third case on purpose. `None` on the field is the third case, and it\nmeans the source did not say where the entity is, which is not the same as saying it is\nnowhere.\n\nThis does **not** redefine, replace or derive from the `url` field of [`Task`],\n[`Project`] or [`Document`]: a source that reports a web URL there goes on reporting\nit, and every existing consumer sees exactly what it saw.'
         ),
     ]
-    id: Annotated[GlobalId, Field(description="The task's qualified id.")]
-    title: Annotated[
-        str,
-        Field(
-            description="The task's title, exactly as its source reports it — unescaped and unaltered."
-        ),
-    ]
-    external: Annotated[
-        bool,
-        Field(
-            description="Whether the task is outside the project: `true` exactly for the `x<k>` nodes."
-        ),
-    ]
-    group: Annotated[
-        str | None,
-        Field(
-            description="The task's group under `group_by`, or `null` — for a task with none, for every\nexternal task, and for every task when no key was given."
-        ),
-    ] = None
 
 
 class GraphEdge(BaseModel):
@@ -162,6 +157,40 @@ class Designator(RootModel[str]):
 
 class UnresolvedReason(StrEnum):
     UnresolvedReasonNot_Configured_On_This_Host = "not configured on this host"
+
+
+class GraphNode(BaseModel):
+    key: Annotated[
+        str,
+        Field(
+            description="The Mermaid form's node id: `n<k>` for the project's own tasks and `x<k>` for a task\noutside it, each counted from 1."
+        ),
+    ]
+    id: Annotated[GlobalId, Field(description="The task's qualified id.")]
+    title: Annotated[
+        str,
+        Field(
+            description="The task's title, exactly as its source reports it — unescaped and unaltered."
+        ),
+    ]
+    external: Annotated[
+        bool,
+        Field(
+            description="Whether the task is outside the project: `true` exactly for the `x<k>` nodes."
+        ),
+    ]
+    group: Annotated[
+        str | None,
+        Field(
+            description="The task's group under `group_by`, or `null` — for a task with none, for every\nexternal task, and for every task when no key was given."
+        ),
+    ] = None
+    location: Annotated[
+        Location | None,
+        Field(
+            description='Where the task is, exactly as `task show` reports it: `{"path": …}`, `{"url": …}`,\nor `null` when its source reports none — and for an external task whose source could\nnot be asked, of which nothing was read.'
+        ),
+    ] = None
 
 
 class SourceFailure(BaseModel):

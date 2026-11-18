@@ -126,6 +126,13 @@ fn parsed(sandbox: &Sandbox, arguments: &[&str]) -> Value {
     serde_json::from_str(&text).unwrap_or_else(|error| panic!("{arguments:?}: {error}\n{text}"))
 }
 
+/// The `location` `task show --json` reports for task `id`, which every graph node names its
+/// task by.
+fn shown_location(sandbox: &Sandbox, id: &str) -> Value {
+    let shown = parsed(sandbox, &["task", "show", id, "--json"]);
+    shown["items"][0]["item"]["location"].clone()
+}
+
 /// The title the contract fixture gives its wiring task: every character a label escapes, and
 /// a line break.
 const WIRING: &str = "Wire \"main\" #2 <panel>\nand >sockets";
@@ -333,7 +340,13 @@ fn the_json_form_describes_the_graph_the_mermaid_form_draws() {
         &graph,
         "project graph --format json",
     );
-    let node = |key: &str, id: &str, title: &str, external: bool| json!({"key": key, "id": id, "title": title, "external": external, "group": null});
+    // Each node's `location` is the task's own, as `task show` reports it — the store's path
+    // to its file, for a task of the project and for `permit`, of project `Q`, alike.
+    let node = |key: &str, id: &str, title: &str, external: bool| {
+        let location = shown_location(&sandbox, id);
+        assert!(location["path"].is_string(), "{id}: {location}");
+        json!({"key": key, "id": id, "title": title, "external": external, "group": null, "location": location})
+    };
     let edge = |from: &str, to: &str| json!({"from": from, "to": to});
     assert_eq!(
         graph,
@@ -665,7 +678,10 @@ fn group_by_draws_each_group_in_its_own_block_and_changes_nothing_else() {
         GROUPED
     );
 
-    let node = |key: &str, id: &str, title: &str, external: bool, group: Value| json!({"key": key, "id": id, "title": title, "external": external, "group": group});
+    let node = |key: &str, id: &str, title: &str, external: bool, group: Value| {
+        let location = shown_location(&sandbox, id);
+        json!({"key": key, "id": id, "title": title, "external": external, "group": group, "location": location})
+    };
     let core = json!("core \"v2\" #1");
     let expected = |group_by: Value, grouped: bool| {
         let group = |value: &Value| if grouped { value.clone() } else { Value::Null };
@@ -808,14 +824,32 @@ fn the_same_project_prints_the_same_bytes_every_time_and_from_any_store() {
     assert_eq!(mermaid("first:a-P"), mermaid("second:zz-P"));
     assert!(mermaid("first:a-P").starts_with("flowchart TD\n  n1[\"Lay the foundation\"]\n"));
 
-    // The JSON documents differ in the qualified ids and in nothing else.
+    // The JSON documents differ in the qualified ids and in each node's `location` — where
+    // that store keeps the task, which is per store by nature — and in nothing else.
     let (one, two): (Value, Value) = (
         serde_json::from_str(&json("first:a-P")).unwrap(),
         serde_json::from_str(&json("second:zz-P")).unwrap(),
     );
     assert_ne!(one, two);
-    let renamed = json("first:a-P").replace("first:a-", "second:zz-");
-    assert_eq!(serde_json::from_str::<Value>(&renamed).unwrap(), two);
+    let placeless = |graph: &Value| {
+        let mut graph = graph.clone();
+        for node in graph["nodes"].as_array_mut().unwrap() {
+            let location = node
+                .as_object_mut()
+                .unwrap()
+                .remove("location")
+                .expect("every node names its location");
+            assert!(location["path"].is_string(), "{location}");
+        }
+        graph
+    };
+    let renamed = serde_json::to_string(&placeless(&one))
+        .unwrap()
+        .replace("first:a-", "second:zz-");
+    assert_eq!(
+        serde_json::from_str::<Value>(&renamed).unwrap(),
+        placeless(&two)
+    );
     for field in ["schema_version", "direction", "group_by"] {
         assert_eq!(one[field], two[field], "{field}");
     }
@@ -1198,6 +1232,77 @@ fn a_task_of_another_source_is_drawn_by_its_own_title_and_a_source_that_cannot_a
             stderr(&output)
         );
     }
+}
+
+#[test]
+fn an_external_task_of_a_private_source_that_could_not_be_asked_names_no_location() {
+    let sandbox = Sandbox::new();
+    let plans = Store::new(&sandbox, "plans");
+    plans.project("P", "The plan").project("Q", "Paperwork");
+    plans.task(&Task {
+        id: "permit",
+        title: "Get the permit",
+        project: "Q",
+        depends_on: &[],
+        extra: "",
+    });
+    // A task a copy landed, so the graph asks the private `ledger` what it records of it, and
+    // whose own record names a task of `ledger` too.
+    plans.task(&Task {
+        id: "near",
+        title: "Ours",
+        project: "P",
+        depends_on: &["permit", "{id: \"ledger:L-1\"}"],
+        extra: "metadata:\n  onetaskgraph.copied_destination_version: \"sha256:00\"\n",
+    });
+    // `ledger` is a Linear source declared private whose credential nothing sets, so it cannot
+    // be asked anything.
+    let mut sources = serde_json::Map::new();
+    sources.insert("plans".to_owned(), plans.source());
+    sources.insert(
+        "ledger".to_owned(),
+        json!({"plugin": "linear", "visibility": "private",
+               "config": {"api_key_env": "ONETASKGRAPH_E2E_ABSENT_KEY", "team": "LED"}}),
+    );
+    sandbox.project_document(&document(&Value::Object(sources)));
+
+    let output = run(
+        &sandbox,
+        &["project", "graph", "plans:P", "--format", "json"],
+    );
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let graph: Value = serde_json::from_str(&stdout(&output)).expect("a graph");
+    assert_eq!(graph["unanswered"][0]["source"], "ledger", "{graph:#}");
+    // `ledger:L-1` is drawn under its qualified id, nothing having been read of it, and names
+    // no location; `permit`, read for its title, names the one `task show` reports.
+    let node = |key: &str, id: &str, title: &str, external: bool, location: Value| {
+        json!({"key": key, "id": id, "title": title, "external": external, "group": null,
+               "location": location})
+    };
+    assert_eq!(
+        graph["nodes"],
+        json!([
+            node(
+                "n1",
+                "plans:near",
+                "Ours",
+                false,
+                shown_location(&sandbox, "plans:near")
+            ),
+            node(
+                "x1",
+                "plans:permit",
+                "Get the permit",
+                true,
+                shown_location(&sandbox, "plans:permit")
+            ),
+            node("x2", "ledger:L-1", "ledger:L-1", true, Value::Null),
+        ])
+    );
+    assert!(
+        graph["nodes"][1]["location"]["path"].is_string(),
+        "{graph:#}"
+    );
 }
 
 #[test]

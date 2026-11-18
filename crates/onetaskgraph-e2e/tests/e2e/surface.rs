@@ -302,7 +302,12 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
     let bundle: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("schema output is valid JSON");
 
-    assert_eq!(bundle["version"], 64);
+    assert_eq!(bundle["version"], 65);
+    // Version 65: a `project graph` node's `location`.
+    assert!(
+        bundle["roots"]["ProjectGraph"]["$defs"]["GraphNode"]["properties"]["location"].is_object(),
+        "a ProjectGraph node names its location"
+    );
     // Version 64: a Linear configuration's `metadata_fields`.
     assert!(
         bundle["roots"]["LinearConfig"]["properties"]["metadata_fields"].is_object(),

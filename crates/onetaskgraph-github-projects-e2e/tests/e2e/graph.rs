@@ -279,3 +279,56 @@ fn a_board_refusing_the_read_of_the_project_itself_prints_nothing() {
         );
     }
 }
+
+#[test]
+fn every_node_names_its_issues_web_address_from_the_reads_the_graph_already_makes() {
+    // A plan of three tasks, the last also blocked by `X-009`, an issue of the board outside
+    // the plan, so the graph holds own nodes and an external one.
+    let (sandbox, board) = hosted(&tasks(3));
+    board.use_canonical_issue_urls();
+    board.add_items(vec![
+        json!({"item": "ITEM-X-009", "id": "X-009", "type": "Issue",
+        "title": "Outside", "body": "Outside.", "state": "OPEN", "reason": null, "parent": null,
+        "repo": "nickderobertis/onetaskgraph", "status": "Todo", "origin": "", "labels": []}),
+    ]);
+    board.block("S-002", &["X-009".to_owned()]);
+
+    let (output, served) = graph(&sandbox, &board, &["--format", "json"]);
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    let printed: Value = serde_json::from_str(&stdout(&output)).expect("one JSON document");
+    // The project's own issue, the one listing page — which carries every own task's location
+    // beside its edges — and the one read of the external issue its title already cost: the
+    // location adds no request.
+    assert_eq!(
+        named(&served),
+        ["issue read", "subIssues page", "issue read"],
+        "{served:#?}"
+    );
+    let address = |id: &str| {
+        format!(
+            "https://github.com/nickderobertis/onetaskgraph/issues/{}",
+            crate::fixtures::github_number(id)
+        )
+    };
+    let located: Vec<(&str, &str, &Value)> = printed["nodes"]
+        .as_array()
+        .expect("the nodes")
+        .iter()
+        .map(|node| {
+            (
+                node["key"].as_str().expect("a key"),
+                node["id"].as_str().expect("an id"),
+                &node["location"],
+            )
+        })
+        .collect();
+    assert_eq!(
+        located,
+        [
+            ("n1", "board:S-000", &json!({"url": address("S-000")})),
+            ("n2", "board:S-001", &json!({"url": address("S-001")})),
+            ("n3", "board:S-002", &json!({"url": address("S-002")})),
+            ("x1", "board:X-009", &json!({"url": address("X-009")})),
+        ]
+    );
+}
