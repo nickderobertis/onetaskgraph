@@ -110,8 +110,8 @@ test("a board's copy of a private plan copies back in place, its status and keys
     const made = await client.taskCreate("authoring", "plan-1", "Build", { body: "Build it.\n" });
     const authored = made.items[0]?.id ?? "";
     const onto = await client.projectCopy("authoring:plan-1", "board");
-    const boardProject = created(onto as CopyReport, "authoring:plan-1");
-    const boardTask = created(onto as CopyReport, authored);
+    const boardProject = created(onto, "authoring:plan-1");
+    const boardTask = created(onto, authored);
     await client.taskStatusSet(boardTask, "done");
 
     const back = await client.projectCopy(boardProject, "authoring", {

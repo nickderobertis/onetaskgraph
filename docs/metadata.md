@@ -574,7 +574,7 @@ store the item was authored in matching nothing and creating a second item besid
 ### What a copy writes over an item the destination already holds
 
 **A copy never deletes a key the destination holds** — the two source-owned reserved keys at
-the foot of the table below aside. A copy that creates an item writes the source's metadata,
+the foot of the table below, and a key `project copy --metadata` names, aside. A copy that creates an item writes the source's metadata,
 as it always has. A copy that updates an item the destination already
 holds — a task, a project or a document alike — writes the destination's metadata with the
 source's laid over it: a key only the destination holds stays as it is, and a key both hold
@@ -584,6 +584,15 @@ is reported `unchanged` and writes nothing. Removing a key from an existing copy
 the destination — `task update --remove-metadata` for a task, the destination's own store for
 a project or a document — or by deleting the copy there and copying again, with `--recreate` when
 the source's link still names the item deleted.
+
+`project copy --metadata KEY=JSON` is the one caller-named override, written last: on every item
+the copy writes — each it creates or updates, the project included — `KEY` holds that JSON value,
+whatever either end held, and a JSON `null` removes `KEY`, one only the destination held
+included. It applies whatever `--update-fields` says. `--update-fields status` narrows what an
+update writes to the status alone, by the destination's narrow status write, plus those keys:
+every other field and key stays as the destination holds it and no record of the copy (below) is
+stamped there. An item the copy creates is written whole either way. A key in the `onetaskgraph.`
+namespace is refused, as `metadata set` refuses it, before anything is read.
 
 The reserved keys keep the owners they had:
 
@@ -704,6 +713,18 @@ correspondence is already written down, on the destination item. The next copy o
 reads the entry first: when the item it names still records this item as its origin, it is
 the counterpart, found by one read by id and no search — see the copy section of the README
 for the order the rules are tried in and the `stale-link` refusal.
+
+The link is also what a copy **back** finds its counterpart by where the copy the other way
+withheld its origin. A copy out of a source declared private into one that is not records no
+`onetaskgraph.origin` on the public item, so nothing there names the private one. Copying that
+public item back into the private source — a board's copy of a plan returning its statuses to
+the authoring plan, say — asks the destination for the item whose own `onetaskgraph.copies`
+entry for the public item's source names the public item: the original it was copied from. That
+is its counterpart, updated in place and reported `via: scan`, for the project and every task
+alike; and a task the copy back creates, one added on the public side, has each edge to such a
+task written to the original found, never to the public item's id. It is asked only where a copy
+the other way would have withheld the origin, so no other copy reads anything more; the README's
+copy section gives the order it is tried in among the other rules.
 
 To select a survivor and replace a stale link, use `task copy --target-task`.
 
