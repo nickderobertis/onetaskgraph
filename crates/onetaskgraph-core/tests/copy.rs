@@ -6067,6 +6067,31 @@ impl TaskSource for Misanswering {
         }
     }
 
+    async fn set_document_metadata(
+        &self,
+        id: &NativeId,
+        key: &MetadataKey,
+        value: &Value,
+    ) -> Result<Option<Document>, SourceError> {
+        match self.how {
+            Misanswer::MetadataFails => Err(SourceError::Unavailable {
+                message: "the metadata write did not reach the store".to_owned(),
+            }),
+            Misanswer::Metadata => {
+                let answered = self.document_metadata(id, key, Some(value)).await?;
+                Ok(answered.map(|mut document| {
+                    document.metadata.remove(key.as_str());
+                    document
+                }))
+            }
+            Misanswer::MetadataGone => {
+                self.document_metadata(id, key, Some(value)).await?;
+                Ok(None)
+            }
+            _ => self.document_metadata(id, key, Some(value)).await,
+        }
+    }
+
     async fn set_task_metadata(
         &self,
         id: &NativeId,
@@ -6103,12 +6128,47 @@ impl TaskSource for Misanswering {
                 message: "the removal did not reach the store".to_owned(),
             }),
             Misanswer::RemovalGone => Ok(None),
+            _ if record == onetaskgraph_plugin_api::MetadataRecord::Document => {
+                Ok(self.document_metadata(id, key, None).await?.map(|_| None))
+            }
             _ => self.inner.remove_record_metadata(record, id, key).await,
         }
     }
 }
 
 impl Misanswering {
+    /// One document's key set to `value`, or removed, as a plugin writing a document's metadata
+    /// on its own would: the wrapped source, which cannot, reads the document and writes it
+    /// back whole. Answers the document as it then holds it.
+    async fn document_metadata(
+        &self,
+        id: &NativeId,
+        key: &MetadataKey,
+        value: Option<&Value>,
+    ) -> Result<Option<Document>, SourceError> {
+        let Some(mut document) = self.inner.get_document(id).await? else {
+            return Ok(None);
+        };
+        match value {
+            Some(value) => {
+                document
+                    .metadata
+                    .insert(key.as_str().to_owned(), value.clone());
+            }
+            None => {
+                document.metadata.remove(key.as_str());
+            }
+        }
+        self.inner
+            .write_document(&ItemWrite {
+                target: Some(id.clone()),
+                item: document,
+                depends_on: Vec::new(),
+            })
+            .await?;
+        self.inner.get_document(id).await
+    }
+
     /// A status write's answer, as this source gives it.
     fn status_answer(&self, answered: Option<Status>) -> Option<Status> {
         match self.how {
@@ -6260,6 +6320,80 @@ async fn a_status_only_project_copy_refuses_an_answer_it_did_not_write_and_puts_
         let after = shown().await;
         assert_eq!(after.status.category, before.status.category, "{refused}");
         assert_eq!(after.metadata, before.metadata, "{refused}");
+    }
+}
+
+#[tokio::test]
+async fn a_status_only_document_copy_refuses_an_answer_it_did_not_write_and_puts_it_back() {
+    // A document has no status, so its status-only update is its keys alone: `host.k` removed,
+    // then `host.m` set. Whichever narrow write is refused or misanswered, the copy fails
+    // naming it and the document holds its keys as it did.
+    let held = json!({"onetaskgraph.origin": "from:D-1", "host.k": "held"});
+    for (how, says) in [
+        (Misanswer::Metadata, "answered without the value written"),
+        (Misanswer::MetadataGone, "into:D-1"),
+        (Misanswer::MetadataFails, "did not reach the store"),
+        (
+            Misanswer::RemovalFails,
+            "the removal did not reach the store",
+        ),
+        (Misanswer::RemovalGone, "into:D-1"),
+    ] {
+        let built = |source: &str, config: &Value| {
+            onetaskgraph_in_memory::Plugin
+                .build(&name(source), config, &NoSecrets)
+                .expect("the in-memory plugin builds")
+        };
+        let document = |metadata: &Value| {
+            json!({"id": "D-1", "title": "Design", "labels": [], "content": "the design",
+                   "metadata": metadata})
+        };
+        let engine = Engine::new(
+            vec![
+                ConfiguredSource::Ready(ResolvedSource::adopt(
+                    name("from"),
+                    built(
+                        "from",
+                        &json!({"capabilities": {"documents": "native"},
+                                "documents": [document(&json!({}))]}),
+                    ),
+                )),
+                ConfiguredSource::Ready(ResolvedSource::adopt(
+                    name("into"),
+                    Box::new(Misanswering {
+                        inner: built(
+                            "into",
+                            &json!({"capabilities": {"documents": "native"},
+                                    "documents": [document(&held)]}),
+                        ),
+                        how,
+                    }),
+                )),
+            ],
+            vec![name("from"), name("into")],
+        );
+        let writes = onetaskgraph_core::CopyWrites {
+            update_fields: onetaskgraph_core::UpdateFields::Status,
+            metadata: vec![
+                (MetadataKey::new("host.m").expect("a key"), json!(1)),
+                (MetadataKey::new("host.k").expect("a key"), Value::Null),
+            ],
+        };
+        let request = many(&["from:D-1"], CopyScope::Documents);
+        let Err(refused) = engine.copy_with(&request, &writes).await else {
+            panic!("a misanswered narrow write is refused");
+        };
+        assert!(refused.to_string().contains(says), "{refused}");
+        let after = engine.document(&id("into:D-1")).await.expect("held").items[0]
+            .item
+            .clone();
+        assert_eq!(after.metadata.get("host.m"), None, "{refused}");
+        assert_eq!(
+            after.metadata.get("host.k"),
+            Some(&json!("held")),
+            "{refused}"
+        );
+        assert_eq!(after.content.as_deref(), Some("the design"), "{refused}");
     }
 }
 
