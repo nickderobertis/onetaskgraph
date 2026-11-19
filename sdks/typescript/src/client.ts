@@ -5,6 +5,7 @@ import Ajv2020 from "ajv/dist/2020.js";
 import { binaryCommands } from "./generated/commands.ts";
 import type {
   AttestationCheck,
+  AttestationState,
   Attested,
   CacheCleared,
   Classification,
@@ -53,6 +54,7 @@ import type {
   SweepReport,
   TaskAssetNames,
   TaskAssigneeSet,
+  TaskContentDigest,
   TaskContentSet,
   TaskDetail,
   TaskDetails,
@@ -116,6 +118,29 @@ export type AttestOptions = WriteOptions & {
 };
 // The bar a check holds a record to; left out, the bar is not checked.
 export type AttestationCheckOptions = { bar?: string };
+// What `projectAttestationCheck` with `tasks` narrows its tasks by: the status categories to keep
+// (`statuses`) and to leave out (`notStatuses`), and the check states to keep (`states`). Every
+// one must hold. The answer still resolves only when every task listed is `valid`.
+export type ProjectAttestationTaskFilters = {
+  statuses?: StatusCategory[];
+  notStatuses?: StatusCategory[];
+  states?: AttestationState[];
+};
+// The fields a project copy writes on an item it updates; an item it creates is written whole.
+export const updateFieldChoices = ["status"] as const;
+export type UpdateFields = (typeof updateFieldChoices)[number];
+// What a project copy takes beside `CopyOptions`: `updateFields` writes only the status of every
+// item it updates, and each `metadata` entry, `<KEY>=<JSON>`, sets that key on every item it
+// writes — created or updated, the project included — a JSON `null` removing it.
+export type ProjectCopyOptions = CopyOptions &
+  StatusCopyOptions & {
+    noTasks?: boolean;
+    documents?: boolean;
+    members?: string[];
+    membersOnly?: boolean;
+    updateFields?: UpdateFields;
+    metadata?: string[];
+  };
 // The version of the task a write says it knows, as a read of it reported: the write takes the
 // task's ids and current values from the source's local cache instead of reading it. Not a
 // precondition — see `docs/plugin-protocol.md`.
@@ -349,6 +374,8 @@ export const commandResponseRoots: Readonly<Record<string, keyof typeof runtimeS
   // The attestation record written, and one kind of attestation checked.
   "task attest": "Attested",
   "task attestation check": "AttestationCheck",
+  // The digest an attestation records for a task's content, read on its own.
+  "task digest": "TaskContentDigest",
   "task update": "TaskUpdated",
   // Many narrowed searches of one source, each answered under its own key across every page.
   "task find": "FoundTasks",
@@ -455,6 +482,7 @@ const partialResponseCommands = new Set(
       command !== "task project-human" &&
       !command.endsWith(" attest") &&
       !command.endsWith(" attestation check") &&
+      command !== "task digest" &&
       command !== "project create" &&
       command !== "document create",
   ),
@@ -1143,16 +1171,16 @@ export function taskCopyFlags(options: TaskCopyOptions): string[] {
   ];
 }
 
-export function projectCopyFlags(
-  options: CopyOptions &
-    StatusCopyOptions & {
-      noTasks?: boolean;
-      documents?: boolean;
-      members?: string[];
-      membersOnly?: boolean;
-    },
-): string[] {
+export function projectCopyFlags(options: ProjectCopyOptions): string[] {
+  // `copyFlags` sends each `metadata` entry as `--metadata`, which a project copy reads as an
+  // override rather than as the narrowing a task copy reads it as.
   const args = copyFlags("projectCopy", options);
+  if (options.updateFields !== undefined) {
+    if (!updateFieldChoices.some((choice) => choice === options.updateFields)) {
+      throw new TypeError(`projectCopy: updateFields must be ${updateFieldChoices.join(" or ")}`);
+    }
+    args.push("--update-fields", options.updateFields);
+  }
   if (options.noTasks) args.push("--no-tasks");
   if (options.documents !== undefined && typeof options.documents !== "boolean") {
     throw new TypeError("projectCopy: documents must be a boolean");
@@ -1320,6 +1348,8 @@ export class OnetaskgraphClient {
       origin?: string;
       // With a qualified `project`, read every member project it names beside it.
       members?: boolean;
+      // The status categories to leave out, as `statuses` names those to keep.
+      notStatuses?: StatusCategory[];
     } = {},
   ): Promise<QueryResponseOfQualifiedTask> {
     if (options.members !== undefined && typeof options.members !== "boolean") {
@@ -1330,6 +1360,9 @@ export class OnetaskgraphClient {
     if (options.project !== undefined) args.push("--project", options.project);
     if (options.noProject) args.push("--no-project");
     if (options.members) args.push("--members");
+    for (const status of stringList("taskList", "notStatuses", options.notStatuses)) {
+      args.push("--not-status", status);
+    }
     for (const priority of options.priorities ?? []) args.push("--priority", priority);
     if (options.commentedSince !== undefined) {
       args.push("--commented-since", options.commentedSince);
@@ -1752,26 +1785,14 @@ export class OnetaskgraphClient {
   projectCopy(
     id: string,
     to: string,
-    options?: (CopyOptions &
-      StatusCopyOptions & {
-        noTasks?: boolean;
-        documents?: boolean;
-        members?: string[];
-        membersOnly?: boolean;
-      }) & {
+    options?: ProjectCopyOptions & {
       sanitizeDryRun?: false;
     },
   ): Promise<CopyReport>;
   projectCopy(
     id: string,
     to: string,
-    options?: CopyOptions &
-      StatusCopyOptions & {
-        noTasks?: boolean;
-        documents?: boolean;
-        members?: string[];
-        membersOnly?: boolean;
-      },
+    options?: ProjectCopyOptions,
   ): Promise<CopyReport | SanitizeDryRun>;
   projectCopy(
     id: string,
@@ -1779,13 +1800,7 @@ export class OnetaskgraphClient {
     // `membersOnly` copies the named `members` into the project the destination already holds,
     // leaving that project unread and unwritten; it is refused without a member. `documents`
     // copies the documents filed under the project too, in the same copy.
-    options: CopyOptions &
-      StatusCopyOptions & {
-        noTasks?: boolean;
-        documents?: boolean;
-        members?: string[];
-        membersOnly?: boolean;
-      } = {},
+    options: ProjectCopyOptions = {},
   ): Promise<CopyReport | SanitizeDryRun> {
     const args = [id, "--to", to, ...projectCopyFlags(options)];
     return this.run("project copy", args, undefined, options.sanitizeDryRun === true);
@@ -2006,6 +2021,20 @@ export class OnetaskgraphClient {
       ...checkFlags("taskAttestationCheck", kind, options),
     ]);
   }
+  // The digest of one task's authored content: the `content_digest` an attestation records for
+  // the same content and the same `exclude` keys. Reads, writes nothing.
+  taskDigest(id: string, options: { exclude?: string[] } = {}): Promise<TaskContentDigest> {
+    if (!isPlainObject(options)) {
+      throw new TypeError(
+        "taskDigest: options is not an object; next: pass them as a plain object",
+      );
+    }
+    const args = [stringOption("taskDigest", "id", id)];
+    for (const key of stringList("taskDigest", "exclude", options.exclude)) {
+      args.push("--exclude", key);
+    }
+    return this.run("task digest", args);
+  }
   documentAttestationCheck(
     id: string,
     kind: string,
@@ -2020,10 +2049,18 @@ export class OnetaskgraphClient {
   projectAttestationCheck(
     id: string,
     kind: string,
-    options: AttestationCheckOptions & { tasks?: boolean } = {},
+    options: AttestationCheckOptions & ProjectAttestationTaskFilters & { tasks?: boolean } = {},
   ): Promise<AttestationCheck | ProjectAttestationCheck> {
-    const args = [id, ...checkFlags("projectAttestationCheck", kind, options)];
-    if (flagOption("projectAttestationCheck", "tasks", options.tasks)) args.push("--tasks");
+    const method = "projectAttestationCheck";
+    const args = [id, ...checkFlags(method, kind, options)];
+    if (flagOption(method, "tasks", options.tasks)) args.push("--tasks");
+    for (const status of stringList(method, "statuses", options.statuses)) {
+      args.push("--status", status);
+    }
+    for (const status of stringList(method, "notStatuses", options.notStatuses)) {
+      args.push("--not-status", status);
+    }
+    for (const state of stringList(method, "states", options.states)) args.push("--state", state);
     return this.run("project attestation check", args);
   }
   labelList(options: QueryOptions = {}): Promise<QueryResponseOfQualifiedLabel> {

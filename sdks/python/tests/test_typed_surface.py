@@ -113,6 +113,7 @@ from onetaskgraph_sdk import (
     Task,
     TaskAssetNames,
     TaskAssigneeSet,
+    TaskContentDigest,
     TaskContentSet,
     TaskDetail,
     TaskDetails,
@@ -398,6 +399,9 @@ from onetaskgraph_sdk._generated.models import (
     TaskAssigneeSet as ModelsTaskAssigneeSet,
 )
 from onetaskgraph_sdk._generated.models import (
+    TaskContentDigest as ModelsTaskContentDigest,
+)
+from onetaskgraph_sdk._generated.models import (
     TaskContentSet as ModelsTaskContentSet,
 )
 from onetaskgraph_sdk._generated.models import (
@@ -567,6 +571,7 @@ FROM_ROOT: dict[str, object] = {
     "Task": Task,
     "TaskAssetNames": TaskAssetNames,
     "TaskAssigneeSet": TaskAssigneeSet,
+    "TaskContentDigest": TaskContentDigest,
     "TaskContentSet": TaskContentSet,
     "TaskDetail": TaskDetail,
     "TaskDetails": TaskDetails,
@@ -678,6 +683,7 @@ FROM_MODELS: dict[str, object] = {
     "Task": ModelsTask,
     "TaskAssetNames": ModelsTaskAssetNames,
     "TaskAssigneeSet": ModelsTaskAssigneeSet,
+    "TaskContentDigest": ModelsTaskContentDigest,
     "TaskContentSet": ModelsTaskContentSet,
     "TaskDetail": ModelsTaskDetail,
     "TaskDetails": ModelsTaskDetails,
@@ -844,6 +850,7 @@ MODEL_CLASSES: dict[str, type[BaseModel]] = {
     "Task": Task,
     "TaskAssetNames": TaskAssetNames,
     "TaskAssigneeSet": TaskAssigneeSet,
+    "TaskContentDigest": TaskContentDigest,
     "TaskContentSet": TaskContentSet,
     "TaskDetail": TaskDetail,
     "TaskDetails": TaskDetails,
@@ -937,6 +944,7 @@ MODELS_MODEL_CLASSES: dict[str, type[BaseModel]] = {
     "Task": ModelsTask,
     "TaskAssetNames": ModelsTaskAssetNames,
     "TaskAssigneeSet": ModelsTaskAssigneeSet,
+    "TaskContentDigest": ModelsTaskContentDigest,
     "TaskContentSet": ModelsTaskContentSet,
     "TaskDetail": ModelsTaskDetail,
     "TaskDetails": ModelsTaskDetails,

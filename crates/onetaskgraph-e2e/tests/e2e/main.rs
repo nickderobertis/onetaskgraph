@@ -40,6 +40,9 @@ mod assignees;
 // are the engine's, and the copy they survive crosses plugins, so no one plugin crate's edge is
 // narrower.
 mod attestations;
+// `project attestation check --tasks` narrowed by status and check state, and `task list
+// --not-status`, over a folder of Markdown: no credential and no network.
+mod attestation_filters;
 // The batched store calls — `task find`, `task update-many`, `task comment add-many`, a copy
 // held per item and a priority-guarded update — over a folder of Markdown and an in-memory
 // source, with no credential and no network.
@@ -64,6 +67,8 @@ mod clock;
 // sit behind a plugin crate's edge, which AGENTS.md forbids depending on the engine at any
 // depth.
 mod commented_since;
+// `task digest` over a folder of Markdown: no credential and no network.
+mod content_digest;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No credential and no network: the
 // journeys drive the binary against the loopback board and folders of Markdown in seconds. What
 // they prove is a contract member of every plugin read through the engine — a task's change
@@ -92,6 +97,9 @@ mod copy;
 // journeys drive the binary between loopback boards, a loopback Linear workspace and folders of
 // Markdown in seconds. The rule they prove is the engine's copy, which carries comments between
 // every pair of plugins, so no one plugin crate's edge is narrower.
+// A copy back from a public folder into the private one it was copied from, with the status
+// alone and metadata overrides: no credential and no network.
+mod copy_back_status;
 mod copy_comments;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No credential and no network: the
 // journeys drive the binary from a folder of Markdown into the loopback board and the loopback

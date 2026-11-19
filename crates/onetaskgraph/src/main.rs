@@ -20,6 +20,7 @@ use std::str::FromStr as _;
 use std::sync::OnceLock;
 
 use clap::CommandFactory as _;
+use clap::ValueEnum as _;
 use onetaskgraph_core::config::{self, Layer};
 use onetaskgraph_core::{
     CommentWritten, Completeness, CopyAction, CopyItems, CopyReport, CopyRequest, CopyScope,
@@ -31,7 +32,7 @@ use onetaskgraph_core::{
 };
 use onetaskgraph_plugin_api::{
     AssetName, CommentBody, LabelFilter, MetadataKey, MetadataRecord, NativeId, NewComment,
-    SharedClock, SourceName, TextQuery, system_clock,
+    SharedClock, SourceName, StatusCategory, TextQuery, system_clock,
 };
 use onetaskgraph_status_options::{
     FieldsReport, GitHubProjectsConfig, SetupMode, StatusOptionsReport,
@@ -43,8 +44,8 @@ use crate::cli::{
     ContentCommand, CopyArgs, DependencyArgs, DocumentCommand, DocumentFilterArgs, ExpectArgs,
     FilterArgs, GraphFormat, LabelCommand, LinkCommand, MetadataCommand, MetadataSetArgs, PageArgs,
     ParentCommand, PriorityCommand, ProjectAttestationCommand, ProjectCommand,
-    ProjectStatusCommand, SelectionArgs, ShowArgs, SourcesCommand, StatusCommand, TaskAssetsArgs,
-    TaskCommand,
+    ProjectStatusCommand, SelectionArgs, ShowArgs, SourcesCommand, StatusArg, StatusCommand,
+    TaskAssetsArgs, TaskCommand,
 };
 
 /// Everything asked for was answered, by every source asked. Nothing else exits `0`. A
@@ -514,9 +515,11 @@ async fn run_inner(
                     ),
                 ));
             }
+            let mut task_filters = filters(&args.filters)?;
+            task_filters.statuses = without_statuses(task_filters.statuses, &args.not_status)?;
             let request = TaskRequest {
                 sources: selection(&args.selection)?,
-                filters: filters(&args.filters)?,
+                filters: task_filters,
                 project,
                 priorities: args
                     .priority
@@ -879,6 +882,9 @@ async fn run_inner(
                     command: AttestationCommand::Check(args),
                 },
         } => attest::check(out, loaded, MetadataRecord::Task, args).await,
+        Command::Task {
+            command: TaskCommand::Digest(args),
+        } => attest::digest(out, loaded, args).await,
         Command::Document {
             command:
                 DocumentCommand::Attestation {
@@ -1056,11 +1062,24 @@ async fn run_inner(
                     documents: args.documents,
                 },
             };
+            let writes = onetaskgraph_core::CopyWrites {
+                update_fields: match args.update_fields {
+                    Some(crate::cli::UpdateFieldsArg::Status) => {
+                        onetaskgraph_core::UpdateFields::Status
+                    }
+                    None => onetaskgraph_core::UpdateFields::All,
+                },
+                metadata: args
+                    .metadata
+                    .iter()
+                    .map(|entry| rendered::metadata_entry(entry))
+                    .collect::<Result<_, _>>()?,
+            };
             let mut request =
                 copy_request(named(std::iter::once(args.id.as_str()))?, scope, &args.copy)?;
             request.comments = args.comments;
             request.status_policy = args.status_policy.into();
-            copy(out, loaded, &request, None).await
+            copy_writing(out, loaded, &request, &writes).await
         }
 
         Command::Project {
@@ -2088,18 +2107,44 @@ async fn copy(
         None => engine.copy(request).await,
     }
     .map_err(|error| write_failed(&engine, &error))?;
+    report_copy(out, loaded, &engine, &report)
+}
+
+/// [`copy`], writing what `writes` asks beyond what the copy carries — `project copy
+/// --update-fields` and `--metadata`.
+async fn copy_writing(
+    out: &mut impl Write,
+    loaded: &Loaded,
+    request: &CopyRequest,
+    writes: &onetaskgraph_core::CopyWrites,
+) -> Result<u8, Failure> {
+    let engine = engine(loaded);
+    let report = engine
+        .copy_with(request, writes)
+        .await
+        .map_err(|error| write_failed(&engine, &error))?;
+    report_copy(out, loaded, &engine, &report)
+}
+
+/// Write one copy's report and answer its exit code.
+fn report_copy(
+    out: &mut impl Write,
+    loaded: &Loaded,
+    engine: &Engine,
+    report: &CopyReport,
+) -> Result<u8, Failure> {
     // Each dependency the copy left out because it names something private, said where a
     // person reads it and kept out of the machine output, which is unchanged by it.
     for line in engine.take_withheld_edges() {
         eprintln!("onetaskgraph: {line}");
     }
     let rendered = match loaded.config.output() {
-        OutputFormat::Text => render::copied(&report),
-        OutputFormat::Json => json(&report, "the copy")?,
+        OutputFormat::Text => render::copied(report),
+        OutputFormat::Json => json(report, "the copy")?,
     };
     let rendered = sanitized(rendered, loaded.config.output())?;
     emit(out, rendered.trim_end(), "the copy")?;
-    Ok(delivery_exit(&report.delivered).max(failed_exit(&report)))
+    Ok(delivery_exit(&report.delivered).max(failed_exit(report)))
 }
 
 /// Say where a copy of each task named would land, through the engine's own locate — which
@@ -2529,6 +2574,43 @@ fn filters(args: &FilterArgs) -> Result<Filters, Failure> {
         },
         statuses: args.status.iter().map(|status| status.category()).collect(),
     })
+}
+
+/// The status categories a task list keeps once `--not-status` has dropped its own: every
+/// category `--status` named, or every category there is when it named none, less those.
+///
+/// Sent to the source as the categories it keeps, so a source applying `--status` natively
+/// applies this too, and paging is the source's as it always was. A pair leaving no category
+/// at all can match no task, and is refused naming both flags rather than read as no filter.
+fn without_statuses(
+    statuses: Vec<StatusCategory>,
+    not_status: &[StatusArg],
+) -> Result<Vec<StatusCategory>, Failure> {
+    if not_status.is_empty() {
+        return Ok(statuses);
+    }
+    let dropped: Vec<StatusCategory> = not_status.iter().map(|status| status.category()).collect();
+    let base = if statuses.is_empty() {
+        StatusArg::value_variants()
+            .iter()
+            .map(|status| status.category())
+            .collect()
+    } else {
+        statuses
+    };
+    let kept: Vec<StatusCategory> = base
+        .into_iter()
+        .filter(|category| !dropped.contains(category))
+        .collect();
+    if kept.is_empty() {
+        return Err(Failure::decided(
+            "no-status-left",
+            "--status and --not-status leave no status category to keep, so no task could \
+             match\nnext: drop a --not-status naming a category --status names."
+                .to_owned(),
+        ));
+    }
+    Ok(kept)
 }
 
 /// The filters a document list was given.
@@ -2990,6 +3072,7 @@ mod tests {
                 "task metadata set",
                 "task attest",
                 "task attestation check",
+                "task digest",
                 "task update",
                 "task create",
                 "task render",

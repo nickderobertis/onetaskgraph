@@ -93,6 +93,21 @@ use super::{
     TaskRequest,
 };
 
+tokio::task_local! {
+    /// What the [`Engine::copy_with`] whose operation this is writes beyond what it carries.
+    /// Scoped to that one operation rather than held on the engine, so two copies running at
+    /// once on one engine never see each other's.
+    static COPY_WRITES: CopyWrites;
+}
+
+impl Engine {
+    /// What the copy running now writes beyond what it carries: the default outside
+    /// [`copy_with`](Self::copy_with).
+    fn held_copy_writes(&self) -> CopyWrites {
+        COPY_WRITES.try_with(Clone::clone).unwrap_or_default()
+    }
+}
+
 /// Which status a copy writes when its destination already holds the item.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum StatusPolicy {
@@ -101,6 +116,52 @@ pub enum StatusPolicy {
     Source,
     /// Keep an existing destination item's status; creates carry the source status.
     PreserveDestination,
+}
+
+/// Which fields a copy writes on an item it updates — `--update-fields`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum UpdateFields {
+    /// Every field the copy carries: what a copy has always written.
+    #[default]
+    All,
+    /// The status alone, governed by the [`StatusPolicy`] as a whole write's is. Title,
+    /// content, labels, repositories, priority, edges, assets and every metadata key but those
+    /// [`CopyWrites::metadata`] names are left exactly as the destination holds them, and no
+    /// record of the copy is stamped there. An item the copy creates is still written whole.
+    Status,
+}
+
+/// What a copy writes beyond what it carries — `project copy --update-fields` and
+/// `--metadata` — handed to [`Engine::copy_with`].
+///
+/// The default writes exactly what [`Engine::copy`] writes.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CopyWrites {
+    /// Which fields an update writes.
+    pub update_fields: UpdateFields,
+    /// Metadata keys set on every destination item the copy writes, created or updated, the
+    /// project included, whatever [`update_fields`](Self::update_fields) says: a JSON `null`
+    /// removes the key, one the destination alone held included. Applied in order, so a key
+    /// named twice takes its last value.
+    pub metadata: Vec<(MetadataKey, Value)>,
+}
+
+impl CopyWrites {
+    /// `metadata` with these keys set, and removed where the value is `null`.
+    fn apply(&self, metadata: &mut BTreeMap<String, Value>) {
+        for (key, value) in &self.metadata {
+            if value.is_null() {
+                metadata.remove(key.as_str());
+            } else {
+                metadata.insert(key.as_str().to_owned(), value.clone());
+            }
+        }
+    }
+
+    /// Whether an update writes the status alone.
+    fn status_only(&self) -> bool {
+        self.update_fields == UpdateFields::Status
+    }
 }
 
 /// What a status-guarded copy does with an item whose destination status is not one of the
@@ -1012,6 +1073,10 @@ enum Found {
     Origin,
     /// Rule 2: the destination was searched for an item recording this one as its origin.
     Scan,
+    /// The destination was searched for an item whose own `onetaskgraph.copies` link names
+    /// this one: the item this one was copied from, where that copy withheld its origin. A
+    /// copy-back, as [`Found::Origin`] is, so the correspondence is already recorded there.
+    LinkedFrom,
     /// The caller's matching escape.
     Match,
     /// An earlier attempt's create, found by the key its intent recorded.
@@ -1036,7 +1101,7 @@ impl Found {
             Self::TargetTask => CopyVia::TargetTask,
             Self::Link => CopyVia::Link,
             Self::Origin => CopyVia::Origin,
-            Self::Scan | Self::Member { .. } => CopyVia::Scan,
+            Self::Scan | Self::LinkedFrom | Self::Member { .. } => CopyVia::Scan,
             Self::Match => CopyVia::Match,
             Self::Intent => CopyVia::Intent,
         }
@@ -1061,6 +1126,8 @@ enum Wanted {
     Title(String),
     /// An item holding this value at this metadata key.
     Metadata(String, Value),
+    /// An item whose `onetaskgraph.copies` link names this qualified id.
+    LinkedFrom(GlobalId),
 }
 
 impl Wanted {
@@ -1072,6 +1139,7 @@ impl Wanted {
             }
             Self::Title(wanted) => title == wanted,
             Self::Metadata(key, value) => metadata.get(key) == Some(value),
+            Self::LinkedFrom(id) => link_of(metadata, &id.source).as_ref() == Some(id),
         }
     }
 
@@ -1111,6 +1179,18 @@ impl Wanted {
                         ..TaskQuery::default()
                     })
                     .unwrap_or_default()
+            }
+            Self::LinkedFrom(id) if capabilities.filter_by_metadata.is_native() => {
+                MetadataMatch::new(
+                    MetadataKey::COPIES_KEY,
+                    vec![id.source.to_string()],
+                    id.to_string(),
+                )
+                .map(|wanted| TaskQuery {
+                    metadata: vec![wanted],
+                    ..TaskQuery::default()
+                })
+                .unwrap_or_default()
             }
             _ => TaskQuery::default(),
         }
@@ -1851,6 +1931,8 @@ struct Deliverer {
 struct Planned {
     /// The caller's status policy, applied at comparison and write.
     status_policy: StatusPolicy,
+    /// What the caller asked the copy to write beyond what it carries: see [`CopyWrites`].
+    writes: CopyWrites,
     /// Where it came from.
     source: GlobalId,
     /// The item as its source reported it.
@@ -2236,13 +2318,28 @@ impl Engine {
     /// destination refuses the write — including a field or a metadata key it cannot
     /// carry, which it names rather than dropping.
     pub async fn copy(&self, request: &CopyRequest) -> Result<CopyReport, EngineError> {
+        self.copy_with(request, &CopyWrites::default()).await
+    }
+
+    /// [`copy`](Self::copy), writing what `writes` asks beyond what the copy carries: the
+    /// status alone on every item it updates, and the metadata keys it names set or removed on
+    /// every item it writes. With [`CopyWrites::default`] it is exactly [`copy`](Self::copy).
+    ///
+    /// # Errors
+    ///
+    /// As [`copy`](Self::copy).
+    pub async fn copy_with(
+        &self,
+        request: &CopyRequest,
+        writes: &CopyWrites,
+    ) -> Result<CopyReport, EngineError> {
         let mut result = None;
         let mut operation: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> =
             Box::pin(async { result = Some(self.copy_in_scope(request).await) });
         for source in self.ready() {
             operation = source.source().scope_visibility(operation);
         }
-        operation.await;
+        COPY_WRITES.scope(writes.clone(), operation).await;
         result.expect("the scoped operation completed")
     }
 
@@ -3225,7 +3322,7 @@ impl Engine {
     async fn linked(&self, entry: Linking, journal: &mut Journal) -> Result<CopyLink, EngineError> {
         // Keyed by the source the item really landed in, which a routed copy decides per item.
         let landed_in = entry.destination.source.clone();
-        if entry.found == Some(Found::Origin) {
+        if matches!(entry.found, Some(Found::Origin | Found::LinkedFrom)) {
             return Ok(CopyLink::Unchanged);
         }
         let wanted = Value::String(entry.destination.to_string());
@@ -7605,8 +7702,14 @@ impl Engine {
                 reason,
             });
         }
+        let writes = self.held_copy_writes();
+        // Set on the item as planned, so the copy screens the values it sets exactly as it
+        // screens every other value it writes.
+        let mut item = item;
+        writes.apply(metadata_of(&mut item));
         Ok(Planned {
             status_policy: request.status_policy,
+            writes,
             source: id,
             source_status: item.status().cloned(),
             item,
@@ -8002,6 +8105,26 @@ impl Engine {
                 held,
             ));
         }
+        // An item a copy out of the destination withheld its origin from — a public board's
+        // copy of a private plan — names nothing there; the destination item it was copied from
+        // names it instead, by its own link. Asked only where that copy would have withheld it,
+        // so no other copy reads anything more.
+        if self.withholds_provenance(destination.name(), &id.source)
+            && let Some(found) = self
+                .scan(destination, item.level(), &Wanted::LinkedFrom(id.clone()))
+                .await?
+        {
+            let held = self
+                .prior_reading(destination, item.level(), &found, comments)
+                .await?;
+            return Ok((
+                Target::Update {
+                    id: found,
+                    found: Found::LinkedFrom,
+                },
+                held,
+            ));
+        }
         let wanted = match &request.match_by {
             Some(MatchBy::Title) => Some(Wanted::Title(title.to_owned())),
             Some(MatchBy::Metadata(key)) => metadata
@@ -8257,6 +8380,24 @@ impl Engine {
                 prior,
             ));
         }
+        // `--update-fields status`: an item the copy updates has its status written alone, and
+        // the metadata the caller names, each by the destination's own narrow write.
+        if item.writes.status_only()
+            && let (Some(id), Some(held)) = (&target, &prior)
+        {
+            let written = self
+                .update_status_only(destination, item, id, held, request.dry_run, journal)
+                .await?;
+            let changed = written.is_some();
+            let landed = outcome(reached(Some(qualified(id.clone())), changed));
+            return Ok((
+                match written {
+                    Some(written) if !request.dry_run => with_result(landed, item_result(&written)),
+                    _ => as_held(landed),
+                },
+                prior,
+            ));
+        }
         let edges = resolved(edges);
         let comments_move = item
             .comment_plan
@@ -8426,6 +8567,175 @@ impl Engine {
         let mut landed = outcome(reached(Some(written), changed));
         landed.expected = expected;
         Ok((with_result(landed, sent), prior))
+    }
+
+    /// Update `held`, the counterpart `id` of `item`, writing its status alone and the metadata
+    /// keys the copy's [`CopyWrites`] names — or, in a dry run, say whether that would change
+    /// it. Answers the item as it then holds it, or `None` when it already held all of it.
+    ///
+    /// Each part is the destination's own narrow write, so title, content, labels, edges,
+    /// assets and every other key stay exactly as the destination holds them. The item is
+    /// journalled first, so a copy that cannot finish writes it back as it was.
+    async fn update_status_only(
+        &self,
+        destination: &ResolvedSource,
+        item: &Planned,
+        id: &NativeId,
+        held: &Prior,
+        dry_run: bool,
+        journal: &mut Journal,
+    ) -> Result<Option<Item>, EngineError> {
+        let level = item.item.level();
+        let source = destination.source();
+        let held_status = held.item.status().cloned();
+        let status = match (item.status_policy, item.item.status(), &held_status) {
+            (StatusPolicy::Source, Some(status), Some(held_status)) => {
+                let kind = match level {
+                    Level::Project => ItemKind::Project,
+                    _ => ItemKind::Task,
+                };
+                let wanted = source.status_as_written(kind, status);
+                (wanted.category != held_status.category).then_some(wanted)
+            }
+            _ => None,
+        };
+        // The values the copy screened, as its policy passed them; a JSON `null` removes the key.
+        let mut set = BTreeMap::new();
+        for (key, value) in &item.writes.metadata {
+            set.insert(key.as_str().to_owned(), value.clone());
+        }
+        item.rewrite.metadata_values(&mut set);
+        let held_metadata = described(&held.item).1;
+        let metadata: Vec<(MetadataKey, Value)> = item
+            .writes
+            .metadata
+            .iter()
+            .map(|(key, _)| key)
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .filter_map(|key| {
+                let value = set.get(key.as_str()).cloned().unwrap_or(Value::Null);
+                let differs = if value.is_null() {
+                    held_metadata.contains_key(key.as_str())
+                } else {
+                    held_metadata.get(key.as_str()) != Some(&value)
+                };
+                differs.then(|| (key.clone(), value))
+            })
+            .collect();
+        if status.is_none() && metadata.is_empty() {
+            return Ok(None);
+        }
+        let mut written = held.item.clone();
+        if let Some(status) = &status {
+            match &mut written {
+                Item::Task(task) => task.status = status.clone(),
+                Item::Project(project) => project.status = status.clone(),
+                Item::Document(_) => {}
+            }
+        }
+        {
+            let written = metadata_of(&mut written);
+            for (key, value) in &metadata {
+                if value.is_null() {
+                    written.remove(key.as_str());
+                } else {
+                    written.insert(key.as_str().to_owned(), value.clone());
+                }
+            }
+        }
+        if dry_run {
+            return Ok(Some(written));
+        }
+        self.at_write(
+            destination,
+            &item.source.to_string(),
+            &WriteTarget::Existing(id),
+        )
+        .await?;
+        journal.record(Undo::Updated {
+            at: destination.name().clone(),
+            id: id.clone(),
+            prior: held.clone(),
+        });
+        stored::forget(destination, level.record(), id);
+        let missing = || {
+            let id = GlobalId::new(destination.name().clone(), id.clone()).to_string();
+            match level {
+                Level::Task => EngineError::NoSuchTask { id },
+                Level::Project => EngineError::NoSuchProject { id },
+                Level::Document => EngineError::NoSuchDocument { id },
+            }
+        };
+        if let Some(status) = &status {
+            let answered = match level {
+                Level::Task => source.set_task_status(id, status.category).await,
+                Level::Project => source.set_project_status(id, status.category).await,
+                Level::Document => Ok(None),
+            }
+            .map_err(|error| refused(destination, error))?;
+            let landed = answered.ok_or_else(missing)?;
+            // Held to what was written: a source answering another category did not write it.
+            if landed.category != status.category {
+                return Err(refused(
+                    destination,
+                    SourceError::Malformed {
+                        message: format!(
+                            "a write of status {:?} to {id} was answered with {:?}",
+                            status.category, landed.category
+                        ),
+                    },
+                ));
+            }
+            match &mut written {
+                Item::Task(task) => task.status = landed,
+                Item::Project(project) => project.status = landed,
+                Item::Document(_) => {}
+            }
+        }
+        for (key, value) in &metadata {
+            if value.is_null() {
+                source
+                    .remove_record_metadata(level.record(), id, key)
+                    .await
+                    .map_err(|error| refused(destination, error))?
+                    .ok_or_else(missing)?;
+                continue;
+            }
+            // The record as the source holds it after the write, which must hold the value.
+            let answered = match level {
+                Level::Task => source
+                    .set_task_metadata(id, key, value)
+                    .await
+                    .map(|task| task.map(|task| task.metadata)),
+                Level::Project => source
+                    .set_project_metadata(id, key, value)
+                    .await
+                    .map(|project| project.map(|project| project.metadata)),
+                Level::Document => source
+                    .set_document_metadata(id, key, value)
+                    .await
+                    .map(|document| document.map(|document| document.metadata)),
+            }
+            .map_err(|error| refused(destination, error))?
+            .ok_or_else(missing)?;
+            if answered.get(key.as_str()) != Some(value) {
+                return Err(refused(
+                    destination,
+                    SourceError::Malformed {
+                        message: format!(
+                            "a write of metadata key `{}` to {id} was answered without the \
+                             value written",
+                            key.as_str()
+                        ),
+                    },
+                ));
+            }
+        }
+        journal
+            .landed
+            .insert((level, item.source.clone()), id.clone());
+        Ok(Some(written))
     }
 
     /// `plan` with each comment it writes whose links were not addressable when it was planned
@@ -11413,6 +11723,7 @@ fn outgoing(
             metadata: {
                 let mut metadata = carried(&task.metadata);
                 created_with(&mut metadata, item, held);
+                item.writes.apply(&mut metadata);
                 item.rewrite.metadata_values(&mut metadata);
                 metadata
             },
@@ -11426,6 +11737,7 @@ fn outgoing(
                 metadata.remove(MetadataKey::MEMBER_OF_KEY);
             }
             created_with(&mut metadata, item, held);
+            item.writes.apply(&mut metadata);
             item.rewrite.metadata_values(&mut metadata);
             Item::Project(Box::new(Project {
                 id,
@@ -11454,6 +11766,7 @@ fn outgoing(
             metadata: {
                 let mut metadata = carried(&document.metadata);
                 created_with(&mut metadata, item, held);
+                item.writes.apply(&mut metadata);
                 item.rewrite.metadata_values(&mut metadata);
                 metadata
             },
@@ -11798,7 +12111,7 @@ enum Origin {
 /// item records.
 fn recorded(item: &Planned, held: Option<&Prior>) -> Origin {
     if let Target::Update {
-        found: Found::Origin,
+        found: Found::Origin | Found::LinkedFrom,
         ..
     } = &item.target
     {

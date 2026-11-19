@@ -161,6 +161,8 @@ NOT_PARTIAL_WRITE_COMMANDS: frozenset[tuple[str, ...]] = frozenset(
         ("task", "attestation", "check"),
         ("project", "attestation", "check"),
         ("document", "attestation", "check"),
+        # A read of the digest an attestation records, writing nothing.
+        ("task", "digest"),
         ("label", "list"),
         ("search",),
         # Empties this host's cache of a source, never anything of the source's own work.

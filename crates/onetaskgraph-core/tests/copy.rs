@@ -5819,3 +5819,830 @@ async fn a_copy_more_than_one_private_item_links_to_is_named_by_its_own_id() {
         "more links than one page holds are no confident answer"
     );
 }
+
+/// A write policy that passes everything, yielding before each answer — so two copies on one
+/// engine take turns at every check rather than one running to its end before the other starts.
+struct Yielding;
+
+#[async_trait::async_trait]
+impl onetaskgraph_core::boundary::WritePolicy for Yielding {
+    async fn repository_visibility(
+        &self,
+        _repository: &onetaskgraph_plugin_api::Repository,
+    ) -> Result<
+        onetaskgraph_core::boundary::RepositoryVisibility,
+        onetaskgraph_core::boundary::PolicyError,
+    > {
+        tokio::task::yield_now().await;
+        Ok(onetaskgraph_core::boundary::RepositoryVisibility::Public)
+    }
+
+    async fn check_public_write(
+        &self,
+        _input: &onetaskgraph_core::boundary::PublicWriteInput,
+    ) -> Result<onetaskgraph_core::boundary::WriteVerdict, onetaskgraph_core::boundary::PolicyError>
+    {
+        for _ in 0..4 {
+            tokio::task::yield_now().await;
+        }
+        Ok(onetaskgraph_core::boundary::WriteVerdict::Pass)
+    }
+}
+
+#[tokio::test]
+async fn two_copies_at_once_on_one_engine_each_write_only_their_own_overrides() {
+    // A Rust caller running a plain copy and a `copy_with` setting a key side by side on one
+    // engine: every item the plain copy writes is without the key, every item the other writes
+    // holds it, however the two interleave.
+    let tasks: Vec<Value> = (1..=4)
+        .map(|n| task(&format!("T-{n}"), &format!("Task {n}")))
+        .collect();
+    let engine = engine_over(json!({
+        "from": {"plugin": "in-memory", "visibility": "public", "config": {"tasks": tasks}},
+        "into": {"plugin": "in-memory", "visibility": "public", "config": {}},
+        "other": {"plugin": "in-memory", "visibility": "public", "config": {}},
+    }))
+    .with_write_policy(Arc::new(Yielding));
+    let plain = many(&["from:T-1", "from:T-2"], CopyScope::Tasks);
+    let mut keyed = many(&["from:T-3", "from:T-4"], CopyScope::Tasks);
+    keyed.destination = name("other");
+    let writes = onetaskgraph_core::CopyWrites {
+        metadata: vec![(MetadataKey::new("host.m").expect("a key"), json!({"a": 1}))],
+        ..onetaskgraph_core::CopyWrites::default()
+    };
+    let (plain, keyed) = tokio::join!(engine.copy(&plain), engine.copy_with(&keyed, &writes));
+    for (report, held) in [
+        (plain.expect("plain"), None),
+        (keyed.expect("keyed"), Some(json!({"a": 1}))),
+    ] {
+        assert_eq!(report.items.len(), 2, "{report:?}");
+        for outcome in &report.items {
+            let landed = outcome.destination().expect("it landed").clone();
+            let metadata = engine.task(&landed).await.expect("a task").items[0]
+                .item
+                .metadata
+                .clone();
+            assert_eq!(metadata.get("host.m").cloned(), held, "{landed}");
+        }
+    }
+}
+
+/// How a [`Misanswering`] source answers the narrow writes a status-only copy sends.
+#[derive(Clone, Copy)]
+enum Misanswer {
+    /// A status write lands and is answered with another category.
+    Status,
+    /// A metadata write lands and is answered with a record not holding the value.
+    Metadata,
+    /// A metadata write fails after the status write before it landed.
+    MetadataFails,
+    /// A status write is answered as of a task the source does not hold.
+    StatusGone,
+    /// A metadata write lands and is answered as of a task the source does not hold.
+    MetadataGone,
+    /// A key's removal fails after the status write before it landed.
+    RemovalFails,
+    /// A key's removal is answered as of a task the source does not hold.
+    RemovalGone,
+    /// A status write fails before anything landed.
+    StatusFails,
+}
+
+/// An `in-memory` source answering every call as it does, but for one narrow write.
+struct Misanswering {
+    inner: Box<dyn TaskSource>,
+    how: Misanswer,
+}
+
+#[async_trait::async_trait]
+impl TaskSource for Misanswering {
+    fn kind(&self) -> &'static str {
+        self.inner.kind()
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        self.inner.capabilities()
+    }
+
+    fn writes(&self) -> WriteSupport {
+        self.inner.writes()
+    }
+
+    async fn health(&self) -> Result<Health, SourceError> {
+        self.inner.health().await
+    }
+
+    async fn get_task(&self, id: &NativeId) -> Result<Option<Task>, SourceError> {
+        self.inner.get_task(id).await
+    }
+
+    async fn get_project(&self, id: &NativeId) -> Result<Option<Project>, SourceError> {
+        self.inner.get_project(id).await
+    }
+
+    async fn get_document(&self, id: &NativeId) -> Result<Option<Document>, SourceError> {
+        self.inner.get_document(id).await
+    }
+
+    async fn query_tasks(
+        &self,
+        query: &TaskQuery,
+        page: &PageRequest,
+    ) -> Result<Page<Task>, SourceError> {
+        self.inner.query_tasks(query, page).await
+    }
+
+    async fn query_projects(
+        &self,
+        query: &ProjectQuery,
+        page: &PageRequest,
+    ) -> Result<Page<Project>, SourceError> {
+        self.inner.query_projects(query, page).await
+    }
+
+    async fn query_documents(
+        &self,
+        query: &DocumentQuery,
+        page: &PageRequest,
+    ) -> Result<Page<Document>, SourceError> {
+        self.inner.query_documents(query, page).await
+    }
+
+    async fn labels(&self, page: &PageRequest) -> Result<Page<Label>, SourceError> {
+        self.inner.labels(page).await
+    }
+
+    async fn task_dependencies(
+        &self,
+        id: &NativeId,
+        direction: Direction,
+        page: &PageRequest,
+    ) -> Result<Page<DependencyEdge>, SourceError> {
+        self.inner.task_dependencies(id, direction, page).await
+    }
+
+    async fn project_dependencies(
+        &self,
+        id: &NativeId,
+        direction: Direction,
+        page: &PageRequest,
+    ) -> Result<Page<DependencyEdge>, SourceError> {
+        self.inner.project_dependencies(id, direction, page).await
+    }
+
+    async fn write_task(&self, write: &ItemWrite<Task>) -> Result<NativeId, SourceError> {
+        self.inner.write_task(write).await
+    }
+
+    async fn write_project(&self, write: &ItemWrite<Project>) -> Result<NativeId, SourceError> {
+        self.inner.write_project(write).await
+    }
+
+    async fn write_document(&self, write: &ItemWrite<Document>) -> Result<NativeId, SourceError> {
+        self.inner.write_document(write).await
+    }
+
+    async fn delete_task(&self, id: &NativeId) -> Result<(), SourceError> {
+        self.inner.delete_task(id).await
+    }
+
+    async fn delete_project(&self, id: &NativeId) -> Result<(), SourceError> {
+        self.inner.delete_project(id).await
+    }
+
+    async fn delete_document(&self, id: &NativeId) -> Result<(), SourceError> {
+        self.inner.delete_document(id).await
+    }
+
+    async fn set_task_status(
+        &self,
+        id: &NativeId,
+        category: StatusCategory,
+    ) -> Result<Option<Status>, SourceError> {
+        if matches!(self.how, Misanswer::StatusFails) {
+            return Err(SourceError::Unavailable {
+                message: "the status write did not reach the store".to_owned(),
+            });
+        }
+        let answered = self.inner.set_task_status(id, category).await?;
+        Ok(self.status_answer(answered))
+    }
+
+    async fn set_project_status(
+        &self,
+        id: &NativeId,
+        category: StatusCategory,
+    ) -> Result<Option<Status>, SourceError> {
+        if matches!(self.how, Misanswer::StatusFails) {
+            return Err(SourceError::Unavailable {
+                message: "the status write did not reach the store".to_owned(),
+            });
+        }
+        let answered = self.inner.set_project_status(id, category).await?;
+        Ok(self.status_answer(answered))
+    }
+
+    async fn set_project_metadata(
+        &self,
+        id: &NativeId,
+        key: &MetadataKey,
+        value: &Value,
+    ) -> Result<Option<Project>, SourceError> {
+        match self.how {
+            Misanswer::MetadataFails => Err(SourceError::Unavailable {
+                message: "the metadata write did not reach the store".to_owned(),
+            }),
+            Misanswer::Metadata => {
+                let answered = self.inner.set_project_metadata(id, key, value).await?;
+                Ok(answered.map(|mut project| {
+                    project.metadata.remove(key.as_str());
+                    project
+                }))
+            }
+            Misanswer::MetadataGone => {
+                self.inner.set_project_metadata(id, key, value).await?;
+                Ok(None)
+            }
+            _ => self.inner.set_project_metadata(id, key, value).await,
+        }
+    }
+
+    async fn set_document_metadata(
+        &self,
+        id: &NativeId,
+        key: &MetadataKey,
+        value: &Value,
+    ) -> Result<Option<Document>, SourceError> {
+        match self.how {
+            Misanswer::MetadataFails => Err(SourceError::Unavailable {
+                message: "the metadata write did not reach the store".to_owned(),
+            }),
+            Misanswer::Metadata => {
+                let answered = self.document_metadata(id, key, Some(value)).await?;
+                Ok(answered.map(|mut document| {
+                    document.metadata.remove(key.as_str());
+                    document
+                }))
+            }
+            Misanswer::MetadataGone => {
+                self.document_metadata(id, key, Some(value)).await?;
+                Ok(None)
+            }
+            _ => self.document_metadata(id, key, Some(value)).await,
+        }
+    }
+
+    async fn set_task_metadata(
+        &self,
+        id: &NativeId,
+        key: &MetadataKey,
+        value: &Value,
+    ) -> Result<Option<Task>, SourceError> {
+        match self.how {
+            Misanswer::MetadataFails => Err(SourceError::Unavailable {
+                message: "the metadata write did not reach the store".to_owned(),
+            }),
+            Misanswer::Metadata => {
+                let answered = self.inner.set_task_metadata(id, key, value).await?;
+                Ok(answered.map(|mut task| {
+                    task.metadata.remove(key.as_str());
+                    task
+                }))
+            }
+            Misanswer::MetadataGone => {
+                self.inner.set_task_metadata(id, key, value).await?;
+                Ok(None)
+            }
+            _ => self.inner.set_task_metadata(id, key, value).await,
+        }
+    }
+
+    async fn remove_record_metadata(
+        &self,
+        record: onetaskgraph_plugin_api::MetadataRecord,
+        id: &NativeId,
+        key: &MetadataKey,
+    ) -> Result<Option<Option<String>>, SourceError> {
+        match self.how {
+            Misanswer::RemovalFails => Err(SourceError::Unavailable {
+                message: "the removal did not reach the store".to_owned(),
+            }),
+            Misanswer::RemovalGone => Ok(None),
+            _ if record == onetaskgraph_plugin_api::MetadataRecord::Document => {
+                Ok(self.document_metadata(id, key, None).await?.map(|_| None))
+            }
+            _ => self.inner.remove_record_metadata(record, id, key).await,
+        }
+    }
+}
+
+impl Misanswering {
+    /// One document's key set to `value`, or removed, as a plugin writing a document's metadata
+    /// on its own would: the wrapped source, which cannot, reads the document and writes it
+    /// back whole. Answers the document as it then holds it.
+    async fn document_metadata(
+        &self,
+        id: &NativeId,
+        key: &MetadataKey,
+        value: Option<&Value>,
+    ) -> Result<Option<Document>, SourceError> {
+        let Some(mut document) = self.inner.get_document(id).await? else {
+            return Ok(None);
+        };
+        match value {
+            Some(value) => {
+                document
+                    .metadata
+                    .insert(key.as_str().to_owned(), value.clone());
+            }
+            None => {
+                document.metadata.remove(key.as_str());
+            }
+        }
+        self.inner
+            .write_document(&ItemWrite {
+                target: Some(id.clone()),
+                item: document,
+                depends_on: Vec::new(),
+            })
+            .await?;
+        self.inner.get_document(id).await
+    }
+
+    /// A status write's answer, as this source gives it.
+    fn status_answer(&self, answered: Option<Status>) -> Option<Status> {
+        match self.how {
+            Misanswer::Status => answered.map(|status| Status {
+                category: StatusCategory::Cancelled,
+                ..status
+            }),
+            Misanswer::StatusGone => None,
+            _ => answered,
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_status_only_copy_refuses_an_answer_it_did_not_write_and_puts_the_item_back() {
+    // `into:T-1` is `from:T-1`'s counterpart by its origin, at `todo` while its source is
+    // `done`. A status-only copy setting a key writes the status and then the key, each the
+    // destination's own narrow write; whichever is refused or answered as something it did not
+    // write, the copy fails naming the destination and leaves the item as it found it.
+    let mut done = task("T-1", "Step");
+    done["status"] = json!({"category": "done", "name": "Done"});
+    let mut counterpart = task("T-1", "Step");
+    counterpart["metadata"] = json!({"onetaskgraph.origin": "from:T-1", "host.k": "held"});
+    for (how, says) in [
+        (Misanswer::Status, "answered with Cancelled"),
+        (Misanswer::Metadata, "answered without the value written"),
+        (Misanswer::MetadataFails, "did not reach the store"),
+        (Misanswer::StatusGone, "into:T-1"),
+        (Misanswer::MetadataGone, "into:T-1"),
+        (
+            Misanswer::RemovalFails,
+            "the removal did not reach the store",
+        ),
+        (Misanswer::RemovalGone, "into:T-1"),
+        (
+            Misanswer::StatusFails,
+            "the status write did not reach the store",
+        ),
+    ] {
+        let built = |source: &str, config: &Value| {
+            onetaskgraph_in_memory::Plugin
+                .build(&name(source), config, &NoSecrets)
+                .expect("the in-memory plugin builds")
+        };
+        let engine = Engine::new(
+            vec![
+                ConfiguredSource::Ready(ResolvedSource::adopt(
+                    name("from"),
+                    built("from", &json!({"tasks": [done]})),
+                )),
+                ConfiguredSource::Ready(ResolvedSource::adopt(
+                    name("into"),
+                    Box::new(Misanswering {
+                        inner: built("into", &json!({"tasks": [counterpart]})),
+                        how,
+                    }),
+                )),
+            ],
+            vec![name("from"), name("into")],
+        );
+        let before = engine.task(&id("into:T-1")).await.expect("held").items[0]
+            .item
+            .clone();
+        let writes = onetaskgraph_core::CopyWrites {
+            update_fields: onetaskgraph_core::UpdateFields::Status,
+            metadata: vec![
+                (MetadataKey::new("host.m").expect("a key"), json!(1)),
+                (MetadataKey::new("host.k").expect("a key"), Value::Null),
+            ],
+        };
+        let Err(refused) = engine.copy_with(&one("from:T-1"), &writes).await else {
+            panic!("a misanswered narrow write is refused");
+        };
+        assert!(refused.to_string().contains(says), "{refused}");
+        let after = engine.task(&id("into:T-1")).await.expect("held").items[0]
+            .item
+            .clone();
+        assert_eq!(after.status.category, before.status.category, "{refused}");
+        assert_eq!(after.metadata.get("host.m"), None, "{refused}");
+        assert_eq!(
+            after.metadata.get("host.k"),
+            Some(&json!("held")),
+            "{refused}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_status_only_project_copy_refuses_an_answer_it_did_not_write_and_puts_it_back() {
+    // As above for a project: `into:P-1` is `from:P-1`'s counterpart by its origin, at `todo`
+    // while its source is `done`, and each of its narrow writes is refused or misanswered.
+    let at = |category: &str| json!({"category": category, "name": category});
+    let done = json!({"id": "P-1", "title": "Plan", "status": at("done"), "labels": []});
+    let counterpart = json!({"id": "P-1", "title": "Plan", "status": at("todo"), "labels": [],
+                             "metadata": {"onetaskgraph.origin": "from:P-1", "host.k": "held"}});
+    for (how, says) in [
+        (Misanswer::Status, "answered with Cancelled"),
+        (Misanswer::StatusGone, "into:P-1"),
+        (
+            Misanswer::StatusFails,
+            "the status write did not reach the store",
+        ),
+        (Misanswer::Metadata, "answered without the value written"),
+        (Misanswer::MetadataGone, "into:P-1"),
+        (Misanswer::MetadataFails, "did not reach the store"),
+    ] {
+        let built = |source: &str, config: &Value| {
+            onetaskgraph_in_memory::Plugin
+                .build(&name(source), config, &NoSecrets)
+                .expect("the in-memory plugin builds")
+        };
+        let engine = Engine::new(
+            vec![
+                ConfiguredSource::Ready(ResolvedSource::adopt(
+                    name("from"),
+                    built("from", &json!({"projects": [done]})),
+                )),
+                ConfiguredSource::Ready(ResolvedSource::adopt(
+                    name("into"),
+                    Box::new(Misanswering {
+                        inner: built("into", &json!({"projects": [counterpart]})),
+                        how,
+                    }),
+                )),
+            ],
+            vec![name("from"), name("into")],
+        );
+        let shown = async || {
+            engine.project(&id("into:P-1")).await.expect("held").items[0]
+                .item
+                .clone()
+        };
+        let before = shown().await;
+        let writes = onetaskgraph_core::CopyWrites {
+            update_fields: onetaskgraph_core::UpdateFields::Status,
+            metadata: vec![(MetadataKey::new("host.m").expect("a key"), json!(1))],
+        };
+        let request = many(
+            &["from:P-1"],
+            CopyScope::Projects {
+                tasks: false,
+                documents: false,
+            },
+        );
+        let Err(refused) = engine.copy_with(&request, &writes).await else {
+            panic!("a misanswered narrow write is refused");
+        };
+        assert!(refused.to_string().contains(says), "{refused}");
+        let after = shown().await;
+        assert_eq!(after.status.category, before.status.category, "{refused}");
+        assert_eq!(after.metadata, before.metadata, "{refused}");
+    }
+}
+
+#[tokio::test]
+async fn a_status_only_document_copy_refuses_an_answer_it_did_not_write_and_puts_it_back() {
+    // A document has no status, so its status-only update is its keys alone: `host.k` removed,
+    // then `host.m` set. Whichever narrow write is refused or misanswered, the copy fails
+    // naming it and the document holds its keys as it did.
+    let held = json!({"onetaskgraph.origin": "from:D-1", "host.k": "held"});
+    for (how, says) in [
+        (Misanswer::Metadata, "answered without the value written"),
+        (Misanswer::MetadataGone, "into:D-1"),
+        (Misanswer::MetadataFails, "did not reach the store"),
+        (
+            Misanswer::RemovalFails,
+            "the removal did not reach the store",
+        ),
+        (Misanswer::RemovalGone, "into:D-1"),
+    ] {
+        let built = |source: &str, config: &Value| {
+            onetaskgraph_in_memory::Plugin
+                .build(&name(source), config, &NoSecrets)
+                .expect("the in-memory plugin builds")
+        };
+        let document = |metadata: &Value| {
+            json!({"id": "D-1", "title": "Design", "labels": [], "content": "the design",
+                   "metadata": metadata})
+        };
+        let engine = Engine::new(
+            vec![
+                ConfiguredSource::Ready(ResolvedSource::adopt(
+                    name("from"),
+                    built(
+                        "from",
+                        &json!({"capabilities": {"documents": "native"},
+                                "documents": [document(&json!({}))]}),
+                    ),
+                )),
+                ConfiguredSource::Ready(ResolvedSource::adopt(
+                    name("into"),
+                    Box::new(Misanswering {
+                        inner: built(
+                            "into",
+                            &json!({"capabilities": {"documents": "native"},
+                                    "documents": [document(&held)]}),
+                        ),
+                        how,
+                    }),
+                )),
+            ],
+            vec![name("from"), name("into")],
+        );
+        let writes = onetaskgraph_core::CopyWrites {
+            update_fields: onetaskgraph_core::UpdateFields::Status,
+            metadata: vec![
+                (MetadataKey::new("host.m").expect("a key"), json!(1)),
+                (MetadataKey::new("host.k").expect("a key"), Value::Null),
+            ],
+        };
+        let request = many(&["from:D-1"], CopyScope::Documents);
+        let Err(refused) = engine.copy_with(&request, &writes).await else {
+            panic!("a misanswered narrow write is refused");
+        };
+        assert!(refused.to_string().contains(says), "{refused}");
+        let after = engine.document(&id("into:D-1")).await.expect("held").items[0]
+            .item
+            .clone();
+        assert_eq!(after.metadata.get("host.m"), None, "{refused}");
+        assert_eq!(
+            after.metadata.get("host.k"),
+            Some(&json!("held")),
+            "{refused}"
+        );
+        assert_eq!(after.content.as_deref(), Some("the design"), "{refused}");
+    }
+}
+
+/// A linking caller's rewriting policy: a public write naming `forbidden` anywhere is refused,
+/// and every `secret` in an entry it may rewrite is replaced by `redacted`.
+struct Rewriting;
+
+#[async_trait::async_trait]
+impl onetaskgraph_core::boundary::WritePolicy for Rewriting {
+    async fn repository_visibility(
+        &self,
+        _repository: &onetaskgraph_plugin_api::Repository,
+    ) -> Result<
+        onetaskgraph_core::boundary::RepositoryVisibility,
+        onetaskgraph_core::boundary::PolicyError,
+    > {
+        Ok(onetaskgraph_core::boundary::RepositoryVisibility::Public)
+    }
+
+    async fn check_public_write(
+        &self,
+        input: &onetaskgraph_core::boundary::PublicWriteInput,
+    ) -> Result<onetaskgraph_core::boundary::WriteVerdict, onetaskgraph_core::boundary::PolicyError>
+    {
+        let named = input
+            .text
+            .iter()
+            .chain(&input.paths)
+            .chain(&input.metadata)
+            .any(|entry| entry.contains("forbidden"));
+        Ok(if named {
+            onetaskgraph_core::boundary::WriteVerdict::Refuse {
+                reason: "a term was found".to_owned(),
+            }
+        } else {
+            onetaskgraph_core::boundary::WriteVerdict::Pass
+        })
+    }
+
+    async fn sanitize_public_write(
+        &self,
+        input: &onetaskgraph_core::boundary::PublicSanitizeInput,
+    ) -> Result<
+        onetaskgraph_core::boundary::SanitizeVerdict,
+        onetaskgraph_core::boundary::PolicyError,
+    > {
+        use onetaskgraph_core::boundary::{Locator, SanitizeVerdict, WriteVerdict};
+        let every = || {
+            input
+                .text
+                .iter()
+                .chain(&input.paths)
+                .chain(&input.metadata)
+                .chain(&input.fixed.text)
+                .chain(&input.fixed.paths)
+                .chain(&input.fixed.metadata)
+        };
+        let locators = || {
+            input
+                .locators
+                .iter()
+                .map(|locator| Locator::Plain(locator.value.clone()))
+                .collect()
+        };
+        if every().any(|entry| entry.contains("forbidden")) {
+            return Ok(SanitizeVerdict {
+                verdict: WriteVerdict::Refuse {
+                    reason: "a term was found".to_owned(),
+                },
+                text: input.text.clone(),
+                paths: input.paths.clone(),
+                metadata: input.metadata.clone(),
+                replaced: 0,
+                unfixed: Vec::new(),
+                locators: locators(),
+            });
+        }
+        let mut replaced = 0;
+        let mut rewrite = |entries: &[String]| -> Vec<String> {
+            entries
+                .iter()
+                .map(|entry| {
+                    let count = entry.matches("secret").count();
+                    replaced += u32::try_from(count).expect("a small count");
+                    entry.replace("secret", "redacted")
+                })
+                .collect()
+        };
+        let (text, paths, metadata) = (
+            rewrite(&input.text),
+            rewrite(&input.paths),
+            rewrite(&input.metadata),
+        );
+        Ok(SanitizeVerdict {
+            verdict: WriteVerdict::Pass,
+            text,
+            paths,
+            metadata,
+            replaced,
+            unfixed: Vec::new(),
+            locators: locators(),
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_copys_metadata_override_is_screened_refused_or_written_as_the_policy_rewrote_it() {
+    // `--metadata` values are written like every other value a copy writes: put to the write
+    // policy first, so one naming a term refuses the copy before anything lands, and one the
+    // policy rewrites lands rewritten.
+    let engine = engine_over(json!({
+        "from": {"plugin": "in-memory", "visibility": "public",
+                 "config": {"tasks": [task("T-1", "Step")]}},
+        "into": {"plugin": "in-memory", "visibility": "public", "config": {}},
+    }))
+    .with_write_policy(Arc::new(Rewriting));
+    let overriding = |value: &str| onetaskgraph_core::CopyWrites {
+        metadata: vec![(MetadataKey::new("host.m").expect("a key"), json!(value))],
+        ..onetaskgraph_core::CopyWrites::default()
+    };
+
+    let Err(refused) = engine
+        .copy_with(&one("from:T-1"), &overriding("a forbidden plan"))
+        .await
+    else {
+        panic!("an override naming a term is refused");
+    };
+    assert!(!refused.to_string().contains("forbidden"), "{refused}");
+    assert!(listed(&engine, "into").await.is_empty(), "{refused}");
+
+    let copied = engine
+        .copy_with(&one("from:T-1"), &overriding("a secret plan"))
+        .await
+        .expect("a rewritten override lands");
+    let landed = copied.items[0].destination().expect("it landed").clone();
+    let held = engine.task(&landed).await.expect("a task").items[0]
+        .item
+        .metadata
+        .clone();
+    assert_eq!(held.get("host.m"), Some(&json!("a redacted plan")));
+
+    // The same on the status-only path, whose writes are narrow ones to the item now there.
+    let status_only = |value: &str| onetaskgraph_core::CopyWrites {
+        update_fields: onetaskgraph_core::UpdateFields::Status,
+        ..overriding(value)
+    };
+    let before = engine.task(&landed).await.expect("a task").items[0]
+        .item
+        .clone();
+    assert!(
+        engine
+            .copy_with(&one("from:T-1"), &status_only("a forbidden step"))
+            .await
+            .is_err(),
+        "an override naming a term is refused on the status-only path"
+    );
+    let after = engine.task(&landed).await.expect("a task").items[0]
+        .item
+        .clone();
+    assert_eq!(after.metadata, before.metadata);
+    engine
+        .copy_with(&one("from:T-1"), &status_only("another secret step"))
+        .await
+        .expect("a rewritten override lands");
+    let held = engine.task(&landed).await.expect("a task").items[0]
+        .item
+        .metadata
+        .clone();
+    assert_eq!(held.get("host.m"), Some(&json!("another redacted step")));
+}
+
+#[tokio::test]
+async fn a_copy_back_finds_its_counterpart_by_the_destinations_own_link_whatever_it_filters() {
+    // `from` is a public copy of the private `into`'s `T-9`, so its `T-1` records no origin
+    // naming it; `T-9`'s own link names `from:T-1` instead. Whether `into` filters by metadata
+    // itself or the engine narrows for it, the copy back updates `T-9` and creates nothing.
+    for filtering in ["native", "unsupported"] {
+        let mut source = task("T-1", "Step, renamed");
+        source["metadata"] = json!({});
+        let mut held = task("T-9", "Step");
+        held["metadata"] = json!({"onetaskgraph.copies": {"from": "from:T-1"}});
+        let engine = engine_over(json!({
+            "from": {"plugin": "in-memory", "visibility": "public",
+                     "config": {"tasks": [source]}},
+            "into": {"plugin": "in-memory", "visibility": "private", "config": {
+                "capabilities": {"filter_by_metadata": filtering},
+                "tasks": [held],
+            }},
+        }))
+        .with_write_policy(Arc::new(NothingPrivate));
+        let copied = engine
+            .copy(&one("from:T-1"))
+            .await
+            .expect("the copy back runs");
+        assert_eq!(
+            copied.items[0].destination(),
+            Some(&id("into:T-9")),
+            "{filtering}: {copied:?}"
+        );
+        let tasks = listed(&engine, "into").await;
+        assert_eq!(tasks.len(), 1, "{filtering}: {tasks:?}");
+        assert_eq!(
+            engine.task(&id("into:T-9")).await.expect("a task").items[0]
+                .item
+                .title,
+            "Step, renamed",
+            "{filtering}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_copy_back_two_destination_items_link_to_updates_one_of_them_and_creates_nothing() {
+    // Two items of the private `into` each link to `from:T-1`, a public copy withholding its
+    // origin. The copy back takes the first match, as the other counterpart lookups do: it
+    // updates exactly one of the two, leaves the other as it was, and creates nothing.
+    let mut source = task("T-1", "Step, renamed");
+    source["metadata"] = json!({});
+    let linked = |id: &str| {
+        let mut held = task(id, "Step");
+        held["metadata"] = json!({"onetaskgraph.copies": {"from": "from:T-1"}});
+        held
+    };
+    let engine = engine_over(json!({
+        "from": {"plugin": "in-memory", "visibility": "public", "config": {"tasks": [source]}},
+        "into": {"plugin": "in-memory", "visibility": "private",
+                 "config": {"tasks": [linked("T-8"), linked("T-9")]}},
+    }))
+    .with_write_policy(Arc::new(NothingPrivate));
+    let copied = engine
+        .copy(&one("from:T-1"))
+        .await
+        .expect("the copy back runs");
+    let updated = copied.items[0].destination().expect("it landed").clone();
+    assert!(
+        [id("into:T-8"), id("into:T-9")].contains(&updated),
+        "{copied:?}"
+    );
+    assert_eq!(listed(&engine, "into").await.len(), 2);
+    for held in [id("into:T-8"), id("into:T-9")] {
+        let title = engine.task(&held).await.expect("a task").items[0]
+            .item
+            .title
+            .clone();
+        let expected = if held == updated {
+            "Step, renamed"
+        } else {
+            "Step"
+        };
+        assert_eq!(title, expected, "{held}");
+    }
+}

@@ -158,6 +158,7 @@ export type RuntimeSchemaRoot =
   | "Task"
   | "TaskAssetNames"
   | "TaskAssigneeSet"
+  | "TaskContentDigest"
   | "TaskContentSet"
   | "TaskDetail"
   | "TaskDetails"
@@ -26730,6 +26731,49 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "const": "identity"
           }
         ]
+      }
+    }
+  },
+  "TaskContentDigest": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "TaskContentDigest",
+    "description": "What `task digest` answers: the digest of one task's authored content, the one an\nattestation records as its `content_digest` for the same content and the same `excludes`.\n\nA caller holding a settlement, a review or any other decision taken against a task's\ncontent records this, and a later read of it says whether the content is still the one the\ndecision was taken against, without reaching into the attestation record.",
+    "type": "object",
+    "properties": {
+      "id": {
+        "description": "The task, by qualified id.",
+        "$ref": "#/$defs/GlobalId"
+      },
+      "content_digest": {
+        "description": "`sha256:<hex>` over the task's title, content, repositories, caller-owned metadata\nnot excluded and forward dependency edges.",
+        "$ref": "#/$defs/Sha256Digest"
+      },
+      "excludes": {
+        "description": "The caller-owned metadata keys left out of it, sorted and without repeats.",
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/MetadataKey"
+        }
+      }
+    },
+    "required": [
+      "id",
+      "content_digest",
+      "excludes"
+    ],
+    "$defs": {
+      "GlobalId": {
+        "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
+        "type": "string"
+      },
+      "Sha256Digest": {
+        "description": "`sha256:` and 64 lowercase hex digits.",
+        "type": "string",
+        "pattern": "^sha256:[0-9a-f]{64}$"
+      },
+      "MetadataKey": {
+        "description": "One caller-owned metadata key: `<namespace>.<name>`, at least two non-empty segments\nseparated by dots, whose first segment is not [`MetadataKey::RESERVED_NAMESPACE`].\n\nValidated wherever one is built, deserialized included, so a plugin handed one never has\nto ask whether it names a key this product owns.",
+        "type": "string"
       }
     }
   },

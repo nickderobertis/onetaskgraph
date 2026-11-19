@@ -293,7 +293,10 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     # read from the raw document and the roots from the validated one.
     bundle = generate.validate_schema_bundle(emitted_bundle)
 
-    assert emitted_bundle["version"] == 65
+    assert emitted_bundle["version"] == 66
+    # Version 66: what `task digest` answers.
+    assert "TaskContentDigest" in bundle["roots"]
+    assert "task digest" in emitted_bundle["commands"]
     # Version 65: a `project graph` node's `location`.
     graph_node = emitted_bundle["roots"]["ProjectGraph"]["$defs"]["GraphNode"]
     assert "location" in graph_node["properties"]

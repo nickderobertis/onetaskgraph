@@ -73,8 +73,8 @@ pub use engine::{
     Body, BudgetSpent, COMMENTS_SINCE_SCHEMA_VERSION, CommentActivity, CommentCounts, CommentList,
     CommentWritten, CommentsSince, CommentsSinceRequest, CompleteAction, Completeness,
     ConfiguredSource, CopyAction, CopyConditions, CopyItems, CopyLink, CopyLookup, CopyOutcome,
-    CopyReport, CopyRequest, CopyScope, CopyVia, CreateHolder, CreatesIn, DeletedComment,
-    Delivered, DeliveryOutcome, DependencyRequest, DocumentDetail, DocumentFilters,
+    CopyReport, CopyRequest, CopyScope, CopyVia, CopyWrites, CreateHolder, CreatesIn,
+    DeletedComment, Delivered, DeliveryOutcome, DependencyRequest, DocumentDetail, DocumentFilters,
     DocumentRequest, Engine, EngineError, Filters, GraphDirection, GraphEdge, GraphNode, GroupKey,
     GuardOutcome, HeldAsset, IssueCompleted, IssuesCompleted, LabelRequest, LeftBehind,
     LocateLookup, LocateReport, LocateRequest, Located, LocatedCounterpart, MatchBy, MetadataSet,
@@ -84,7 +84,7 @@ pub use engine::{
     QualifiedEdge, QualifiedEndpoint, ReconcileOutcome, SearchHit, SearchKind, SearchRequest,
     SourceListing, SourceState, Spent, StatusCondition, StatusPolicy, StatusReconciled,
     StatusesReconciled, TaskAssetNames, TaskAssetsError, TaskContentSet, TaskDetail, TaskDetails,
-    TaskPrioritySet, TaskRequest, TaskStatusSet, TaskUpdated, graph_label, settled,
+    TaskPrioritySet, TaskRequest, TaskStatusSet, TaskUpdated, UpdateFields, graph_label, settled,
 };
 pub use engine::{
     DocumentCreate, ProjectCreate, Regenerated, Regeneration, RenderRequest, RenderTemplate,

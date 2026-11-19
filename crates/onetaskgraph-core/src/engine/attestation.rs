@@ -24,8 +24,8 @@ use super::{Engine, EngineError, Filters, Paging, ProjectRequest, ProjectSelecto
 use crate::GlobalId;
 use crate::attestation::{
     Attestation, AttestationCheck, AttestationKind, AttestationLabel, AttestationNote, Attested,
-    Authored, AuthoredEdge, FarEnd, ProjectAttestationCheck, TaskAttestationCheck, check,
-    content_digest, now, record_of, records,
+    Authored, AuthoredEdge, FarEnd, ProjectAttestationCheck, TaskAttestationCheck, TaskCheckFilter,
+    TaskContentDigest, check, content_digest, now, record_of, records,
 };
 use crate::config::SourceVisibility;
 use crate::resolve::ResolvedSource;
@@ -209,6 +209,33 @@ impl Engine {
         })
     }
 
+    /// The digest of one task's authored content with the caller-owned metadata keys
+    /// `excludes` left out — exactly the `content_digest` [`attest`](Self::attest) records on
+    /// that task for the same content and the same exclusions. One read of the task and its
+    /// own forward edges, as a check is; nothing is written.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError::UnknownSource`] for a source nothing configures,
+    /// [`EngineError::NoSuchTask`] when the task is not there, and
+    /// [`EngineError::SourceFailed`] when a read fails.
+    pub async fn task_content_digest(
+        &self,
+        id: &GlobalId,
+        excludes: &[MetadataKey],
+    ) -> Result<TaskContentDigest, EngineError> {
+        let source = self.built(&id.source)?;
+        let read = self.read_authored(source, MetadataRecord::Task, id).await?;
+        let mut excludes = excludes.to_vec();
+        excludes.sort();
+        excludes.dedup();
+        Ok(TaskContentDigest {
+            id: id.clone(),
+            content_digest: read.digest(&excludes),
+            excludes,
+        })
+    }
+
     /// Check one kind of attestation on one task, project or document: `valid` when its
     /// record's content is the item's and — when `bar` is given — its bar is `bar`.
     ///
@@ -257,6 +284,24 @@ impl Engine {
         kind: &AttestationKind,
         bar: Option<&AttestationLabel>,
     ) -> Result<ProjectAttestationCheck, EngineError> {
+        self.check_project_attestations_filtered(project, kind, bar, &TaskCheckFilter::default())
+            .await
+    }
+
+    /// [`check_project_attestations`](Self::check_project_attestations), answering only the
+    /// tasks `filter` keeps, in the order the source lists them. A task its status leaves out is
+    /// not read for its record at all; one its check state leaves out is checked and dropped.
+    ///
+    /// # Errors
+    ///
+    /// As [`check_project_attestations`](Self::check_project_attestations).
+    pub async fn check_project_attestations_filtered(
+        &self,
+        project: &GlobalId,
+        kind: &AttestationKind,
+        bar: Option<&AttestationLabel>,
+        filter: &TaskCheckFilter,
+    ) -> Result<ProjectAttestationCheck, EngineError> {
         let source = self.built(&project.source)?;
         source
             .source()
@@ -271,6 +316,9 @@ impl Engine {
             .await?;
         let mut tasks = Vec::with_capacity(listed.len());
         for task in listed {
+            if !filter.keeps_status(task.item.status.category) {
+                continue;
+            }
             let read = self
                 .authored_from(
                     source,
@@ -285,15 +333,18 @@ impl Engine {
                     },
                 )
                 .await?;
-            tasks.push(TaskAttestationCheck {
-                id: task.id,
-                check: check(
-                    kind,
-                    record_of(read.metadata(), kind),
-                    |excludes| read.digest(excludes),
-                    bar,
-                ),
-            });
+            let checked = check(
+                kind,
+                record_of(read.metadata(), kind),
+                |excludes| read.digest(excludes),
+                bar,
+            );
+            if filter.keeps_state(checked.state) {
+                tasks.push(TaskAttestationCheck {
+                    id: task.id,
+                    check: checked,
+                });
+            }
         }
         Ok(ProjectAttestationCheck {
             project: project.clone(),

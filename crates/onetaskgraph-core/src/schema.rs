@@ -19,7 +19,8 @@ use schemars::{Schema, schema_for};
 use serde_json::{Value, json};
 
 use crate::attestation::{
-    Attestation, AttestationCheck, AttestationState, Attested, ProjectAttestationCheck, VoidReason,
+    Attestation, AttestationCheck, AttestationState, Attested, ProjectAttestationCheck,
+    TaskContentDigest, VoidReason,
 };
 use crate::boundary::{PublicWriteInput, RepositoryVisibility, WriteVerdict};
 use crate::cache::{CacheCleared, CacheUse, ExpectedWrite};
@@ -57,7 +58,7 @@ use crate::{
 /// that it moves whenever [`schema_bundle`] below emits a different document. The golden
 /// that holds it to that is `PUBLISHED_BUNDLES` in `tests/engine.rs`, which records every
 /// root's schema by digest from this version on.
-pub const SCHEMA_BUNDLE_VERSION: u32 = 65;
+pub const SCHEMA_BUNDLE_VERSION: u32 = 66;
 
 /// The same typed envelope the command line serializes, keeping the payload's root name.
 pub(crate) fn write_answer_schema<T: schemars::JsonSchema>() -> Schema {
@@ -281,6 +282,8 @@ pub fn schema_bundle() -> Value {
         "ProjectAttestationCheck",
         schema_for!(ProjectAttestationCheck),
     );
+    // What `task digest` answers: the digest an attestation records, read on its own.
+    roots.insert("TaskContentDigest", schema_for!(TaskContentDigest));
     roots.insert("AttestationState", schema_for!(AttestationState));
     roots.insert("VoidReason", schema_for!(VoidReason));
     // llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]

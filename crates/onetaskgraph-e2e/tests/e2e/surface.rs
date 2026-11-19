@@ -302,7 +302,13 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
     let bundle: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("schema output is valid JSON");
 
-    assert_eq!(bundle["version"], 65);
+    assert_eq!(bundle["version"], 66);
+    // Version 66: `TaskContentDigest`, what `task digest` answers.
+    assert_eq!(
+        bundle["roots"]["TaskContentDigest"]["required"],
+        serde_json::json!(["id", "content_digest", "excludes"]),
+        "a content digest names its task, its digest and its exclusions"
+    );
     // Version 65: a `project graph` node's `location`.
     assert!(
         bundle["roots"]["ProjectGraph"]["$defs"]["GraphNode"]["properties"]["location"].is_object(),
@@ -467,6 +473,7 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
             "task metadata set",
             "task attest",
             "task attestation check",
+            "task digest",
             "task update",
             "task create",
             "task render",

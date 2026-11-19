@@ -102,10 +102,10 @@ pub use copy::MirrorTarget;
 pub(crate) use copy::spent_between;
 pub use copy::{
     BudgetSpent, CommentCounts, CopyAction, CopyConditions, CopyItems, CopyLink, CopyLookup,
-    CopyOutcome, CopyReport, CopyRequest, CopyScope, CopyVia, CreatesIn, LocateLookup,
+    CopyOutcome, CopyReport, CopyRequest, CopyScope, CopyVia, CopyWrites, CreatesIn, LocateLookup,
     LocateReport, LocateRequest, Located, LocatedCounterpart, MatchBy, NoCounterpart, NotATask,
     Otherwise, Oversized, PriorityCondition, PublicProjection, PublicProjections, Spent,
-    StatusCondition, StatusPolicy,
+    StatusCondition, StatusPolicy, UpdateFields,
 };
 pub(crate) use copy::{malformed_links, malformed_locations};
 pub use delivery::{Delivered, DeliveryOutcome, ProjectStatusSet, TaskStatusSet, settled};

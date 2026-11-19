@@ -63,7 +63,9 @@
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, SecondsFormat, SubsecRound as _, Utc};
-use onetaskgraph_plugin_api::{DependencyKind, Designator, ItemKind, MetadataKey, Repository};
+use onetaskgraph_plugin_api::{
+    DependencyKind, Designator, ItemKind, MetadataKey, Repository, StatusCategory,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -384,6 +386,50 @@ impl ProjectAttestationCheck {
     pub fn is_valid(&self) -> bool {
         self.tasks.iter().all(|task| task.check.is_valid())
     }
+}
+
+/// Which tasks `project attestation check --tasks` keeps: `--status`, `--not-status` and
+/// `--state`. Each list left empty keeps every task; a task is kept when it passes all three.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TaskCheckFilter {
+    /// The status categories a kept task is at — any one of them. Empty keeps every category.
+    pub statuses: Vec<StatusCategory>,
+    /// The status categories a kept task is at none of.
+    pub not_statuses: Vec<StatusCategory>,
+    /// The check states a kept task answers — any one of them. Empty keeps every state.
+    pub states: Vec<AttestationState>,
+}
+
+impl TaskCheckFilter {
+    /// Whether a task at `category` can be kept, before its record is read.
+    #[must_use]
+    pub fn keeps_status(&self, category: StatusCategory) -> bool {
+        (self.statuses.is_empty() || self.statuses.contains(&category))
+            && !self.not_statuses.contains(&category)
+    }
+
+    /// Whether a task whose check answered `state` is kept.
+    #[must_use]
+    pub fn keeps_state(&self, state: AttestationState) -> bool {
+        self.states.is_empty() || self.states.contains(&state)
+    }
+}
+
+/// What `task digest` answers: the digest of one task's authored content, the one an
+/// attestation records as its `content_digest` for the same content and the same `excludes`.
+///
+/// A caller holding a settlement, a review or any other decision taken against a task's
+/// content records this, and a later read of it says whether the content is still the one the
+/// decision was taken against, without reaching into the attestation record.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TaskContentDigest {
+    /// The task, by qualified id.
+    pub id: GlobalId,
+    /// `sha256:<hex>` over the task's title, content, repositories, caller-owned metadata
+    /// not excluded and forward dependency edges.
+    pub content_digest: Sha256Digest,
+    /// The caller-owned metadata keys left out of it, sorted and without repeats.
+    pub excludes: Vec<MetadataKey>,
 }
 
 /// What `attest` answers: the record it wrote, on the item it wrote it to.

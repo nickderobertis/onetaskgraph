@@ -51,6 +51,8 @@ RESPONSE_ROOTS = {
     "task_attest": "Attested",
     # One kind of attestation on one item: valid, void with a reason, or absent.
     "task_attestation_check": "AttestationCheck",
+    # The digest an attestation records for a task's content, read on its own.
+    "task_digest": "TaskContentDigest",
     "task_update": "TaskUpdated",
     # Many narrowed searches of one source, each answered under its own key across every page.
     "task_find": "FoundTasks",
@@ -311,6 +313,12 @@ OPTION_TYPES = {
     "sanitize_dry_run": "bool",
     "source": "list[str] | tuple[str, ...]",
     "status": "choice_list",
+    # The status categories a task list drops.
+    "not_status": "choice_list",
+    # The check states `project attestation check --tasks` keeps.
+    "state": "choice_list",
+    # The fields a project copy writes on an item it updates.
+    "update_fields": "choices",
     "status_name": "str",
     "status_policy": "choices",
     "template": "str",
@@ -417,6 +425,9 @@ OPTION_PLACEHOLDERS = {
     "sanitize_dry_run": None,
     "source": "S",
     "status": "S",
+    "not_status": "S",
+    "state": "STATE",
+    "update_fields": "FIELDS",
     "status_name": "NAME",
     "status_policy": "STATUS_POLICY",
     "template": "FILE",
@@ -502,6 +513,12 @@ COMMAND_OPTIONS: dict[tuple[str, ...], dict[str, OptionShape]] = {
         (noun, *verb): {"kind": OptionShape(type="str", placeholder="KIND")}
         for noun in ("task", "project", "document")
         for verb in (("attest",), ("attestation", "check"))
+    },
+    # `project attestation check --tasks` narrows its tasks by the categories each names.
+    ("project", "attestation", "check"): {
+        "kind": OptionShape(type="str", placeholder="KIND"),
+        "status": OptionShape(type="choice_list", placeholder="CATEGORY"),
+        "not_status": OptionShape(type="choice_list", placeholder="CATEGORY"),
     },
     # `task update` names one status and one priority, the ones it writes.
     ("task", "update"): {
@@ -995,6 +1012,8 @@ def operands(command: tuple[str, ...]) -> tuple[str, ...]:
         case ("task" | "project" | "document", "attest"):
             return ("id",)
         case ("task" | "project" | "document", "attestation", "check"):
+            return ("id",)
+        case ("task", "digest"):
             return ("id",)
         case ("task" | "project" | "document", "show" | "deps" | "copy"):
             return ("id",)
