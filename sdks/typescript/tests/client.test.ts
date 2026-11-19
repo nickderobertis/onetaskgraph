@@ -35,6 +35,7 @@ import {
   taskCopyFlags,
   taskUpdateFlags,
   taskUpdateOptionFlags,
+  updateFieldChoices,
 } from "../src/index.ts";
 import { CONFIGURATION_PREFIX } from "./ambient.ts";
 
@@ -2748,6 +2749,18 @@ test("copy status policy choices agree with both CLI verbs", () => {
       expect(taskCopyFlags({ statusPolicy })).toEqual(["--status-policy", statusPolicy]);
       expect(projectCopyFlags({ statusPolicy })).toEqual(["--status-policy", statusPolicy]);
     }
+  }
+});
+
+test("project copy update-fields choices agree with the binary", () => {
+  const help = spawnSync(binary, ["project", "copy", "--help"], { encoding: "utf8" });
+  expect(help.status, help.stderr).toBe(0);
+  const block = help.stdout.split("--update-fields <FIELDS>")[1]?.split(/\n +--/)[0];
+  expect(block).toBeDefined();
+  const choices = [...(block ?? "").matchAll(/^ +- ([a-z-]+):/gm)].map((match) => match[1]);
+  expect(choices).toEqual([...updateFieldChoices]);
+  for (const updateFields of updateFieldChoices) {
+    expect(projectCopyFlags({ updateFields })).toEqual(["--update-fields", updateFields]);
   }
 });
 
