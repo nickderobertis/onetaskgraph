@@ -3595,6 +3595,8 @@ one of the status categories it names, `--not-status` drops the tasks at any it 
 status leaves out is not read for its record. The exit is `0` exactly when every task listed is
 valid — so `--not-status done --not-status cancelled --state void --state absent` answers the open
 tasks a review still owes, and exits `0` exactly when there are none. No filter answers as before.
+[`docs/attestations.md`](docs/attestations.md) is the reference for these filters and for
+`task list --not-status`.
 
 `task digest` prints the digest itself, `{"id", "content_digest", "excludes"}`: the
 `content_digest` an attestation records on that task for the same content and the same
