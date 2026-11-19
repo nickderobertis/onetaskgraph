@@ -5896,6 +5896,12 @@ enum Misanswer {
     Metadata,
     /// A metadata write fails after the status write before it landed.
     MetadataFails,
+    /// A status write is answered as of a task the source does not hold.
+    StatusGone,
+    /// A metadata write lands and is answered as of a task the source does not hold.
+    MetadataGone,
+    /// A key's removal fails after the status write before it landed.
+    RemovalFails,
 }
 
 /// An `in-memory` source answering every call as it does, but for one narrow write.
@@ -6015,6 +6021,7 @@ impl TaskSource for Misanswering {
                 category: StatusCategory::Cancelled,
                 ..status
             }),
+            Misanswer::StatusGone => None,
             _ => answered,
         })
     }
@@ -6036,7 +6043,25 @@ impl TaskSource for Misanswering {
                     task
                 }))
             }
-            Misanswer::Status => self.inner.set_task_metadata(id, key, value).await,
+            Misanswer::MetadataGone => {
+                self.inner.set_task_metadata(id, key, value).await?;
+                Ok(None)
+            }
+            _ => self.inner.set_task_metadata(id, key, value).await,
+        }
+    }
+
+    async fn remove_record_metadata(
+        &self,
+        record: onetaskgraph_plugin_api::MetadataRecord,
+        id: &NativeId,
+        key: &MetadataKey,
+    ) -> Result<Option<Option<String>>, SourceError> {
+        match self.how {
+            Misanswer::RemovalFails => Err(SourceError::Unavailable {
+                message: "the removal did not reach the store".to_owned(),
+            }),
+            _ => self.inner.remove_record_metadata(record, id, key).await,
         }
     }
 }
@@ -6050,11 +6075,17 @@ async fn a_status_only_copy_refuses_an_answer_it_did_not_write_and_puts_the_item
     let mut done = task("T-1", "Step");
     done["status"] = json!({"category": "done", "name": "Done"});
     let mut counterpart = task("T-1", "Step");
-    counterpart["metadata"] = json!({"onetaskgraph.origin": "from:T-1"});
+    counterpart["metadata"] = json!({"onetaskgraph.origin": "from:T-1", "host.k": "held"});
     for (how, says) in [
         (Misanswer::Status, "answered with Cancelled"),
         (Misanswer::Metadata, "answered without the value written"),
         (Misanswer::MetadataFails, "did not reach the store"),
+        (Misanswer::StatusGone, "into:T-1"),
+        (Misanswer::MetadataGone, "into:T-1"),
+        (
+            Misanswer::RemovalFails,
+            "the removal did not reach the store",
+        ),
     ] {
         let built = |source: &str, config: &Value| {
             onetaskgraph_in_memory::Plugin
@@ -6082,7 +6113,10 @@ async fn a_status_only_copy_refuses_an_answer_it_did_not_write_and_puts_the_item
             .clone();
         let writes = onetaskgraph_core::CopyWrites {
             update_fields: onetaskgraph_core::UpdateFields::Status,
-            metadata: vec![(MetadataKey::new("host.m").expect("a key"), json!(1))],
+            metadata: vec![
+                (MetadataKey::new("host.m").expect("a key"), json!(1)),
+                (MetadataKey::new("host.k").expect("a key"), Value::Null),
+            ],
         };
         let Err(refused) = engine.copy_with(&one("from:T-1"), &writes).await else {
             panic!("a misanswered narrow write is refused");
@@ -6093,6 +6127,11 @@ async fn a_status_only_copy_refuses_an_answer_it_did_not_write_and_puts_the_item
             .clone();
         assert_eq!(after.status.category, before.status.category, "{refused}");
         assert_eq!(after.metadata.get("host.m"), None, "{refused}");
+        assert_eq!(
+            after.metadata.get("host.k"),
+            Some(&json!("held")),
+            "{refused}"
+        );
     }
 }
 
@@ -6233,4 +6272,33 @@ async fn a_copys_metadata_override_is_screened_refused_or_written_as_the_policy_
         .metadata
         .clone();
     assert_eq!(held.get("host.m"), Some(&json!("a redacted plan")));
+
+    // The same on the status-only path, whose writes are narrow ones to the item now there.
+    let status_only = |value: &str| onetaskgraph_core::CopyWrites {
+        update_fields: onetaskgraph_core::UpdateFields::Status,
+        ..overriding(value)
+    };
+    let before = engine.task(&landed).await.expect("a task").items[0]
+        .item
+        .clone();
+    assert!(
+        engine
+            .copy_with(&one("from:T-1"), &status_only("a forbidden step"))
+            .await
+            .is_err(),
+        "an override naming a term is refused on the status-only path"
+    );
+    let after = engine.task(&landed).await.expect("a task").items[0]
+        .item
+        .clone();
+    assert_eq!(after.metadata, before.metadata);
+    engine
+        .copy_with(&one("from:T-1"), &status_only("another secret step"))
+        .await
+        .expect("a rewritten override lands");
+    let held = engine.task(&landed).await.expect("a task").items[0]
+        .item
+        .metadata
+        .clone();
+    assert_eq!(held.get("host.m"), Some(&json!("another redacted step")));
 }
