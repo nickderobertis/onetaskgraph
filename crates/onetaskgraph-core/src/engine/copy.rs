@@ -8599,7 +8599,7 @@ impl Engine {
             }
             _ => None,
         };
-        // The values the copy screened, as its policy passed them; `None` removes the key.
+        // The values the copy screened, as its policy passed them; a JSON `null` removes the key.
         let mut set = BTreeMap::new();
         for (key, value) in &item.writes.metadata {
             set.insert(key.as_str().to_owned(), value.clone());
@@ -8675,6 +8675,18 @@ impl Engine {
             }
             .map_err(|error| refused(destination, error))?;
             let landed = answered.ok_or_else(missing)?;
+            // Held to what was written: a source answering another category did not write it.
+            if landed.category != status.category {
+                return Err(refused(
+                    destination,
+                    SourceError::Malformed {
+                        message: format!(
+                            "a write of status {:?} to {id} was answered with {:?}",
+                            status.category, landed.category
+                        ),
+                    },
+                ));
+            }
             match &mut written {
                 Item::Task(task) => task.status = landed,
                 Item::Project(project) => project.status = landed,
@@ -8690,23 +8702,34 @@ impl Engine {
                     .ok_or_else(missing)?;
                 continue;
             }
-            let found = match level {
+            // The record as the source holds it after the write, which must hold the value.
+            let answered = match level {
                 Level::Task => source
                     .set_task_metadata(id, key, value)
                     .await
-                    .map(|task| task.is_some()),
+                    .map(|task| task.map(|task| task.metadata)),
                 Level::Project => source
                     .set_project_metadata(id, key, value)
                     .await
-                    .map(|project| project.is_some()),
+                    .map(|project| project.map(|project| project.metadata)),
                 Level::Document => source
                     .set_document_metadata(id, key, value)
                     .await
-                    .map(|document| document.is_some()),
+                    .map(|document| document.map(|document| document.metadata)),
             }
-            .map_err(|error| refused(destination, error))?;
-            if !found {
-                return Err(missing());
+            .map_err(|error| refused(destination, error))?
+            .ok_or_else(missing)?;
+            if answered.get(key.as_str()) != Some(value) {
+                return Err(refused(
+                    destination,
+                    SourceError::Malformed {
+                        message: format!(
+                            "a write of metadata key `{}` to {id} was answered without the \
+                             value written",
+                            key.as_str()
+                        ),
+                    },
+                ));
             }
         }
         journal

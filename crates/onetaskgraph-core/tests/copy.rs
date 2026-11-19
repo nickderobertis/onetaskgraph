@@ -5886,3 +5886,212 @@ async fn two_copies_at_once_on_one_engine_each_write_only_their_own_overrides() 
         }
     }
 }
+
+/// How a [`Misanswering`] source answers the narrow writes a status-only copy sends.
+#[derive(Clone, Copy)]
+enum Misanswer {
+    /// A status write lands and is answered with another category.
+    Status,
+    /// A metadata write lands and is answered with a record not holding the value.
+    Metadata,
+    /// A metadata write fails after the status write before it landed.
+    MetadataFails,
+}
+
+/// An `in-memory` source answering every call as it does, but for one narrow write.
+struct Misanswering {
+    inner: Box<dyn TaskSource>,
+    how: Misanswer,
+}
+
+#[async_trait::async_trait]
+impl TaskSource for Misanswering {
+    fn kind(&self) -> &'static str {
+        self.inner.kind()
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        self.inner.capabilities()
+    }
+
+    fn writes(&self) -> WriteSupport {
+        self.inner.writes()
+    }
+
+    async fn health(&self) -> Result<Health, SourceError> {
+        self.inner.health().await
+    }
+
+    async fn get_task(&self, id: &NativeId) -> Result<Option<Task>, SourceError> {
+        self.inner.get_task(id).await
+    }
+
+    async fn get_project(&self, id: &NativeId) -> Result<Option<Project>, SourceError> {
+        self.inner.get_project(id).await
+    }
+
+    async fn get_document(&self, id: &NativeId) -> Result<Option<Document>, SourceError> {
+        self.inner.get_document(id).await
+    }
+
+    async fn query_tasks(
+        &self,
+        query: &TaskQuery,
+        page: &PageRequest,
+    ) -> Result<Page<Task>, SourceError> {
+        self.inner.query_tasks(query, page).await
+    }
+
+    async fn query_projects(
+        &self,
+        query: &ProjectQuery,
+        page: &PageRequest,
+    ) -> Result<Page<Project>, SourceError> {
+        self.inner.query_projects(query, page).await
+    }
+
+    async fn query_documents(
+        &self,
+        query: &DocumentQuery,
+        page: &PageRequest,
+    ) -> Result<Page<Document>, SourceError> {
+        self.inner.query_documents(query, page).await
+    }
+
+    async fn labels(&self, page: &PageRequest) -> Result<Page<Label>, SourceError> {
+        self.inner.labels(page).await
+    }
+
+    async fn task_dependencies(
+        &self,
+        id: &NativeId,
+        direction: Direction,
+        page: &PageRequest,
+    ) -> Result<Page<DependencyEdge>, SourceError> {
+        self.inner.task_dependencies(id, direction, page).await
+    }
+
+    async fn project_dependencies(
+        &self,
+        id: &NativeId,
+        direction: Direction,
+        page: &PageRequest,
+    ) -> Result<Page<DependencyEdge>, SourceError> {
+        self.inner.project_dependencies(id, direction, page).await
+    }
+
+    async fn write_task(&self, write: &ItemWrite<Task>) -> Result<NativeId, SourceError> {
+        self.inner.write_task(write).await
+    }
+
+    async fn write_project(&self, write: &ItemWrite<Project>) -> Result<NativeId, SourceError> {
+        self.inner.write_project(write).await
+    }
+
+    async fn write_document(&self, write: &ItemWrite<Document>) -> Result<NativeId, SourceError> {
+        self.inner.write_document(write).await
+    }
+
+    async fn delete_task(&self, id: &NativeId) -> Result<(), SourceError> {
+        self.inner.delete_task(id).await
+    }
+
+    async fn delete_project(&self, id: &NativeId) -> Result<(), SourceError> {
+        self.inner.delete_project(id).await
+    }
+
+    async fn delete_document(&self, id: &NativeId) -> Result<(), SourceError> {
+        self.inner.delete_document(id).await
+    }
+
+    async fn set_task_status(
+        &self,
+        id: &NativeId,
+        category: StatusCategory,
+    ) -> Result<Option<Status>, SourceError> {
+        let answered = self.inner.set_task_status(id, category).await?;
+        Ok(match self.how {
+            Misanswer::Status => answered.map(|status| Status {
+                category: StatusCategory::Cancelled,
+                ..status
+            }),
+            _ => answered,
+        })
+    }
+
+    async fn set_task_metadata(
+        &self,
+        id: &NativeId,
+        key: &MetadataKey,
+        value: &Value,
+    ) -> Result<Option<Task>, SourceError> {
+        match self.how {
+            Misanswer::MetadataFails => Err(SourceError::Unavailable {
+                message: "the metadata write did not reach the store".to_owned(),
+            }),
+            Misanswer::Metadata => {
+                let answered = self.inner.set_task_metadata(id, key, value).await?;
+                Ok(answered.map(|mut task| {
+                    task.metadata.remove(key.as_str());
+                    task
+                }))
+            }
+            Misanswer::Status => self.inner.set_task_metadata(id, key, value).await,
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_status_only_copy_refuses_an_answer_it_did_not_write_and_puts_the_item_back() {
+    // `into:T-1` is `from:T-1`'s counterpart by its origin, at `todo` while its source is
+    // `done`. A status-only copy setting a key writes the status and then the key, each the
+    // destination's own narrow write; whichever is refused or answered as something it did not
+    // write, the copy fails naming the destination and leaves the item as it found it.
+    let mut done = task("T-1", "Step");
+    done["status"] = json!({"category": "done", "name": "Done"});
+    let mut counterpart = task("T-1", "Step");
+    counterpart["metadata"] = json!({"onetaskgraph.origin": "from:T-1"});
+    for (how, says) in [
+        (Misanswer::Status, "answered with Cancelled"),
+        (Misanswer::Metadata, "answered without the value written"),
+        (Misanswer::MetadataFails, "did not reach the store"),
+    ] {
+        let built = |source: &str, config: &Value| {
+            onetaskgraph_in_memory::Plugin
+                .build(&name(source), config, &NoSecrets)
+                .expect("the in-memory plugin builds")
+        };
+        let engine = Engine::new(
+            vec![
+                ConfiguredSource::Ready(ResolvedSource::adopt(
+                    name("from"),
+                    built("from", &json!({"tasks": [done]})),
+                )),
+                ConfiguredSource::Ready(ResolvedSource::adopt(
+                    name("into"),
+                    Box::new(Misanswering {
+                        inner: built("into", &json!({"tasks": [counterpart]})),
+                        how,
+                    }),
+                )),
+            ],
+            vec![name("from"), name("into")],
+        );
+        let before = engine.task(&id("into:T-1")).await.expect("held").items[0]
+            .item
+            .clone();
+        let writes = onetaskgraph_core::CopyWrites {
+            update_fields: onetaskgraph_core::UpdateFields::Status,
+            metadata: vec![(MetadataKey::new("host.m").expect("a key"), json!(1))],
+        };
+        let Err(refused) = engine.copy_with(&one("from:T-1"), &writes).await else {
+            panic!("a misanswered narrow write is refused");
+        };
+        assert!(refused.to_string().contains(says), "{refused}");
+        let after = engine.task(&id("into:T-1")).await.expect("held").items[0]
+            .item
+            .clone();
+        assert_eq!(after.status.category, before.status.category, "{refused}");
+        assert_eq!(after.metadata.get("host.m"), None, "{refused}");
+    }
+}
