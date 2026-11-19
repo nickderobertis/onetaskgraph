@@ -6430,3 +6430,43 @@ async fn a_copys_metadata_override_is_screened_refused_or_written_as_the_policy_
         .clone();
     assert_eq!(held.get("host.m"), Some(&json!("another redacted step")));
 }
+
+#[tokio::test]
+async fn a_copy_back_finds_its_counterpart_by_the_destinations_own_link_whatever_it_filters() {
+    // `from` is a public copy of the private `into`'s `T-9`, so its `T-1` records no origin
+    // naming it; `T-9`'s own link names `from:T-1` instead. Whether `into` filters by metadata
+    // itself or the engine narrows for it, the copy back updates `T-9` and creates nothing.
+    for filtering in ["native", "unsupported"] {
+        let mut source = task("T-1", "Step, renamed");
+        source["metadata"] = json!({});
+        let mut held = task("T-9", "Step");
+        held["metadata"] = json!({"onetaskgraph.copies": {"from": "from:T-1"}});
+        let engine = engine_over(json!({
+            "from": {"plugin": "in-memory", "visibility": "public",
+                     "config": {"tasks": [source]}},
+            "into": {"plugin": "in-memory", "visibility": "private", "config": {
+                "capabilities": {"filter_by_metadata": filtering},
+                "tasks": [held],
+            }},
+        }))
+        .with_write_policy(Arc::new(NothingPrivate));
+        let copied = engine
+            .copy(&one("from:T-1"))
+            .await
+            .expect("the copy back runs");
+        assert_eq!(
+            copied.items[0].destination(),
+            Some(&id("into:T-9")),
+            "{filtering}: {copied:?}"
+        );
+        let tasks = listed(&engine, "into").await;
+        assert_eq!(tasks.len(), 1, "{filtering}: {tasks:?}");
+        assert_eq!(
+            engine.task(&id("into:T-9")).await.expect("a task").items[0]
+                .item
+                .title,
+            "Step, renamed",
+            "{filtering}"
+        );
+    }
+}

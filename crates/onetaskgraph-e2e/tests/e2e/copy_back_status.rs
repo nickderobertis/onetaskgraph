@@ -525,4 +525,28 @@ fn a_project_copy_with_its_documents_sets_and_removes_override_keys_on_each_docu
     assert_eq!(document_on_board(&copied), document, "{copied}");
     let metadata = document_metadata(&document);
     assert!(metadata.get(K).is_none(), "{metadata}");
+
+    // Status alone: a document has none, so its update is the keys alone, each a narrow write,
+    // and its content stays exactly as the board holds it.
+    let shown = |id: &str| stores.plan.json(&["document", "show", id])["items"][0]["item"].clone();
+    stores.plan.exits(
+        &["document", "metadata", "set", &document, M, "\"board\""],
+        0,
+    );
+    let before = shown(&document);
+    let copied = copy(&[
+        "--update-fields",
+        "status",
+        "--metadata",
+        &format!("{K}=\"status-only\""),
+        "--metadata",
+        &format!("{M}=null"),
+    ]);
+    assert_eq!(document_on_board(&copied), document, "{copied}");
+    let after = shown(&document);
+    assert_eq!(after["metadata"][K], "status-only", "{after}");
+    assert!(after["metadata"].get(M).is_none(), "{after}");
+    for field in ["title", "content"] {
+        assert_eq!(after[field], before[field], "{field}: {after}");
+    }
 }
