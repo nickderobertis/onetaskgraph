@@ -86,9 +86,9 @@ test("a review's open tasks, a not-status list and a task's digest", async () =>
     await expect(client.taskDigest("notes:missing")).rejects.toThrow(OnetaskgraphExecutionError);
     // Untyped JavaScript callers can pass options that are not an object, or keys that are not
     // strings; each is refused before the binary is spawned.
-    expect(() => client.taskDigest(ids.reviewed ?? "", "myapp.x" as unknown as { exclude?: string[] })).toThrow(
-      "options is not an object",
-    );
+    expect(() =>
+      client.taskDigest(ids.reviewed ?? "", "myapp.x" as unknown as { exclude?: string[] }),
+    ).toThrow("options is not an object");
     expect(() =>
       client.taskDigest(ids.reviewed ?? "", { exclude: [1] as unknown as string[] }),
     ).toThrow("exclude");
