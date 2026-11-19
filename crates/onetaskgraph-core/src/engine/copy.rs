@@ -93,22 +93,18 @@ use super::{
     TaskRequest,
 };
 
-/// A running [`Engine::copy_with`], which puts its [`CopyWrites`] back to the default however
-/// the copy ends.
-struct CopyWriting<'a>(&'a Engine);
-
-impl Drop for CopyWriting<'_> {
-    fn drop(&mut self) {
-        *self.0.held_copy_writes() = CopyWrites::default();
-    }
+tokio::task_local! {
+    /// What the [`Engine::copy_with`] whose operation this is writes beyond what it carries.
+    /// Scoped to that one operation rather than held on the engine, so two copies running at
+    /// once on one engine never see each other's.
+    static COPY_WRITES: CopyWrites;
 }
 
 impl Engine {
-    /// What the copy running now writes beyond what it carries.
-    fn held_copy_writes(&self) -> std::sync::MutexGuard<'_, CopyWrites> {
-        self.copy_writes
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    /// What the copy running now writes beyond what it carries: the default outside
+    /// [`copy_with`](Self::copy_with).
+    fn held_copy_writes(&self) -> CopyWrites {
+        COPY_WRITES.try_with(Clone::clone).unwrap_or_default()
     }
 }
 
@@ -2337,15 +2333,13 @@ impl Engine {
         request: &CopyRequest,
         writes: &CopyWrites,
     ) -> Result<CopyReport, EngineError> {
-        *self.held_copy_writes() = writes.clone();
-        let _writing = CopyWriting(self);
         let mut result = None;
         let mut operation: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> =
             Box::pin(async { result = Some(self.copy_in_scope(request).await) });
         for source in self.ready() {
             operation = source.source().scope_visibility(operation);
         }
-        operation.await;
+        COPY_WRITES.scope(writes.clone(), operation).await;
         result.expect("the scoped operation completed")
     }
 
@@ -7708,7 +7702,7 @@ impl Engine {
                 reason,
             });
         }
-        let writes = self.held_copy_writes().clone();
+        let writes = self.held_copy_writes();
         // Set on the item as planned, so the copy screens the values it sets exactly as it
         // screens every other value it writes.
         let mut item = item;

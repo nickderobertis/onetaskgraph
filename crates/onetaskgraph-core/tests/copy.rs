@@ -5819,3 +5819,70 @@ async fn a_copy_more_than_one_private_item_links_to_is_named_by_its_own_id() {
         "more links than one page holds are no confident answer"
     );
 }
+
+/// A write policy that passes everything, yielding before each answer — so two copies on one
+/// engine take turns at every check rather than one running to its end before the other starts.
+struct Yielding;
+
+#[async_trait::async_trait]
+impl onetaskgraph_core::boundary::WritePolicy for Yielding {
+    async fn repository_visibility(
+        &self,
+        _repository: &onetaskgraph_plugin_api::Repository,
+    ) -> Result<
+        onetaskgraph_core::boundary::RepositoryVisibility,
+        onetaskgraph_core::boundary::PolicyError,
+    > {
+        tokio::task::yield_now().await;
+        Ok(onetaskgraph_core::boundary::RepositoryVisibility::Public)
+    }
+
+    async fn check_public_write(
+        &self,
+        _input: &onetaskgraph_core::boundary::PublicWriteInput,
+    ) -> Result<onetaskgraph_core::boundary::WriteVerdict, onetaskgraph_core::boundary::PolicyError>
+    {
+        for _ in 0..4 {
+            tokio::task::yield_now().await;
+        }
+        Ok(onetaskgraph_core::boundary::WriteVerdict::Pass)
+    }
+}
+
+#[tokio::test]
+async fn two_copies_at_once_on_one_engine_each_write_only_their_own_overrides() {
+    // A Rust caller running a plain copy and a `copy_with` setting a key side by side on one
+    // engine: every item the plain copy writes is without the key, every item the other writes
+    // holds it, however the two interleave.
+    let tasks: Vec<Value> = (1..=4)
+        .map(|n| task(&format!("T-{n}"), &format!("Task {n}")))
+        .collect();
+    let engine = engine_over(json!({
+        "from": {"plugin": "in-memory", "visibility": "public", "config": {"tasks": tasks}},
+        "into": {"plugin": "in-memory", "visibility": "public", "config": {}},
+        "other": {"plugin": "in-memory", "visibility": "public", "config": {}},
+    }))
+    .with_write_policy(Arc::new(Yielding));
+    let plain = many(&["from:T-1", "from:T-2"], CopyScope::Tasks);
+    let mut keyed = many(&["from:T-3", "from:T-4"], CopyScope::Tasks);
+    keyed.destination = name("other");
+    let writes = onetaskgraph_core::CopyWrites {
+        metadata: vec![(MetadataKey::new("host.m").expect("a key"), json!({"a": 1}))],
+        ..onetaskgraph_core::CopyWrites::default()
+    };
+    let (plain, keyed) = tokio::join!(engine.copy(&plain), engine.copy_with(&keyed, &writes));
+    for (report, held) in [
+        (plain.expect("plain"), None),
+        (keyed.expect("keyed"), Some(json!({"a": 1}))),
+    ] {
+        assert_eq!(report.items.len(), 2, "{report:?}");
+        for outcome in &report.items {
+            let landed = outcome.destination().expect("it landed").clone();
+            let metadata = engine.task(&landed).await.expect("a task").items[0]
+                .item
+                .metadata
+                .clone();
+            assert_eq!(metadata.get("host.m").cloned(), held, "{landed}");
+        }
+    }
+}
