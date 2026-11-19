@@ -348,3 +348,106 @@ fn a_copy_back_from_the_board_writes_status_alone_imports_board_tasks_and_overri
     assert_eq!(tree(&stores.authoring), authoring);
     assert_eq!(tree(&stores.board), board);
 }
+
+#[test]
+fn a_copy_back_dry_runs_preserves_status_on_request_and_overrides_keys_on_a_whole_update() {
+    let stores = stores();
+    let project = stores.created(&[
+        "project",
+        "create",
+        "authoring",
+        "--id",
+        "plan-2",
+        "--title",
+        "A plan",
+    ]);
+    let step = stores.created(&[
+        "task",
+        "create",
+        "authoring",
+        "--project",
+        "plan-2",
+        "--title",
+        "Step",
+    ]);
+    let onto = stores
+        .plan
+        .json(&["project", "copy", &project, "--to", "board"]);
+    let board_project = onto["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .find(|item| item["source"] == json!(project))
+        .expect("the project landed")["destination"]
+        .as_str()
+        .expect("an id")
+        .to_owned();
+    let board_step = id_of(&stores.tasks_of(&board_project)["Step"]);
+    stores
+        .plan
+        .exits(&["task", "status", "set", &board_step, "done"], 0);
+    stores.plan.exits(
+        &["task", "update", &board_step, "--title", "Step, renamed"],
+        0,
+    );
+    // A key only the authoring side holds, which no copy carried there.
+    stores
+        .plan
+        .exits(&["task", "metadata", "set", &step, K, "\"authored\""], 0);
+    let back = |extra: &[&str]| {
+        let mut arguments = vec![
+            "project",
+            "copy",
+            board_project.as_str(),
+            "--to",
+            "authoring",
+        ];
+        arguments.extend_from_slice(extra);
+        stores.plan.json(&arguments)
+    };
+
+    // A dry run of the status-only copy back writes nothing and creates nothing.
+    let before = tree(&stores.authoring);
+    let planned = back(&["--update-fields", "status", "--dry-run"]);
+    for item in planned["items"].as_array().expect("items") {
+        assert_ne!(item["action"], "created", "{item}");
+    }
+    assert_eq!(
+        tree(&stores.authoring),
+        before,
+        "a dry run wrote: {planned}"
+    );
+
+    // Status alone under `preserve-destination` keeps the authoring status: nothing to write.
+    back(&[
+        "--update-fields",
+        "status",
+        "--status-policy",
+        "preserve-destination",
+    ]);
+    let kept = stores.task(&step);
+    assert_eq!(kept["status"]["category"], "todo", "{kept}");
+    assert_eq!(kept["title"], "Step");
+    assert_eq!(kept["metadata"][K], "authored");
+
+    // A whole update carries the title and status, removes the key only the authoring side
+    // held, and takes a key named twice at its last value — on the task and the project.
+    let copied = back(&[
+        "--metadata",
+        &format!("{K}=null"),
+        "--metadata",
+        &format!("{M}=1"),
+        "--metadata",
+        &format!("{M}=2"),
+    ]);
+    assert_eq!(stores.projects("authoring").len(), 1, "{copied}");
+    let authored = stores.tasks_of(&project);
+    assert_eq!(authored.len(), 1, "{copied}");
+    let whole = stores.task(&step);
+    assert_eq!(whole["title"], "Step, renamed", "{whole}");
+    assert_eq!(whole["status"]["category"], "done", "{whole}");
+    for metadata in [&whole["metadata"], &stores.project(&project)["metadata"]] {
+        assert!(metadata.get(K).is_none(), "{metadata}");
+        assert_eq!(metadata[M], json!(2), "{metadata}");
+    }
+}
