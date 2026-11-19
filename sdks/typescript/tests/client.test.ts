@@ -2629,6 +2629,8 @@ test("projectCopy flags agree with the binary help and validate membersOnly and 
     membersOnly: true,
     termScope: ["github.com/example/project"],
     statusPolicy: "preserve-destination",
+    updateFields: "status",
+    metadata: ["host.key=null"],
   });
   const all = new Set(
     [...sent, ...projectCopyFlags({ termScope: [] })].filter((flag) => flag.startsWith("--")),
