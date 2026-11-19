@@ -452,3 +452,77 @@ fn a_copy_back_dry_runs_preserves_status_on_request_and_overrides_keys_on_a_whol
         assert_eq!(metadata[M], json!(2), "{metadata}");
     }
 }
+
+#[test]
+fn a_project_copy_with_its_documents_sets_and_removes_override_keys_on_each_document() {
+    let stores = stores();
+    let project = stores.created(&[
+        "project",
+        "create",
+        "authoring",
+        "--id",
+        "plan-3",
+        "--title",
+        "A documented plan",
+    ]);
+    let body = stores.plan.sandbox.subdirectory("inputs").join("design.md");
+    std::fs::write(&body, "The design.\n").expect("a body");
+    stores.created(&[
+        "document",
+        "create",
+        "authoring",
+        "--project",
+        "plan-3",
+        "--title",
+        "Design",
+        "--body-file",
+        body.to_str().expect("UTF-8"),
+    ]);
+    let copy = |extra: &[&str]| {
+        let mut arguments = vec![
+            "project",
+            "copy",
+            project.as_str(),
+            "--to",
+            "board",
+            "--documents",
+        ];
+        arguments.extend_from_slice(extra);
+        stores.plan.json(&arguments)
+    };
+    let document_on_board = |copied: &Value| {
+        let board_project = copied["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .find(|item| item["source"] == json!(project))
+            .expect("the project landed")["destination"]
+            .as_str()
+            .expect("an id")
+            .to_owned();
+        let listed = stores
+            .plan
+            .json(&["document", "list", "--project", &board_project]);
+        let documents = listed["items"].as_array().expect("items").clone();
+        assert_eq!(documents.len(), 1, "{listed}");
+        documents[0]["id"].as_str().expect("an id").to_owned()
+    };
+    let document_metadata = |id: &str| {
+        stores.plan.json(&["document", "show", id])["items"][0]["item"]["metadata"].clone()
+    };
+
+    // A created document takes the key.
+    let copied = copy(&["--metadata", &format!("{M}={{\"a\":1}}")]);
+    let document = document_on_board(&copied);
+    assert_eq!(document_metadata(&document)[M], json!({"a": 1}), "{copied}");
+
+    // A key only the board's document holds is removed by an update naming it `null`.
+    stores.plan.exits(
+        &["document", "metadata", "set", &document, K, "\"board\""],
+        0,
+    );
+    let copied = copy(&["--metadata", &format!("{K}=null")]);
+    assert_eq!(document_on_board(&copied), document, "{copied}");
+    let metadata = document_metadata(&document);
+    assert!(metadata.get(K).is_none(), "{metadata}");
+}
