@@ -200,7 +200,8 @@ fn a_copy_back_from_the_board_writes_status_alone_imports_board_tasks_and_overri
         );
     }
 
-    // Worked on the board.
+    // Worked on the board: the edits a copy back must carry (the statuses, the added task and
+    // its edge) and the key it must remove from every item it writes.
     stores
         .plan
         .exits(&["task", "status", "set", &board_build, "done"], 0);

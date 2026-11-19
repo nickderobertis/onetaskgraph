@@ -61,6 +61,15 @@ fn the_digest_is_the_one_an_attestation_records_for_the_same_exclusions() {
         digest(&plan, &id, &["myapp.owner", "myapp.owner"])["content_digest"],
         record["content_digest"]
     );
+    // The human rendering is one line naming the task and the same digest.
+    let human = plan.exits(&["task", "digest", &id, "--exclude", "myapp.owner"], 0);
+    assert_eq!(
+        String::from_utf8(human.stdout).expect("UTF-8"),
+        format!(
+            "{id}: {}\n",
+            record["content_digest"].as_str().expect("a digest")
+        )
+    );
     // Without the exclusion the key is part of the content, so the digest differs.
     let whole = digest(&plan, &id, &[]);
     assert_ne!(whole["content_digest"], record["content_digest"]);

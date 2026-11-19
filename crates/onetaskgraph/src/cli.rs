@@ -1449,6 +1449,19 @@ impl From<CheckStateArg> for onetaskgraph_core::attestation::AttestationState {
     }
 }
 
+/// The other way round, matched exhaustively, so a state the core gains fails to compile here
+/// until `--state` can spell it, rather than going missing from its choices.
+impl From<onetaskgraph_core::attestation::AttestationState> for CheckStateArg {
+    fn from(value: onetaskgraph_core::attestation::AttestationState) -> Self {
+        use onetaskgraph_core::attestation::AttestationState;
+        match value {
+            AttestationState::Valid => Self::Valid,
+            AttestationState::Void => Self::Void,
+            AttestationState::Absent => Self::Absent,
+        }
+    }
+}
+
 /// What `onetaskgraph task status` can do.
 #[derive(Debug, Subcommand)]
 pub enum StatusCommand {
