@@ -62,6 +62,7 @@ if TYPE_CHECKING:
         SweepReport,
         TaskAssetNames,
         TaskAssigneeSet,
+        TaskContentDigest,
         TaskContentSet,
         TaskDetail,
         TaskDetails,
@@ -116,6 +117,7 @@ POSITIONALS: dict[tuple[str, ...], tuple[str, ...]] = {
     ("task", "copy"): ("ids",),
     ("task", "create"): ("source",),
     ("task", "deps"): ("id",),
+    ("task", "digest"): ("id",),
     ("task", "find"): ("source",),
     ("task", "locate"): ("ids",),
     ("task", "metadata", "set"): ("id", "key", "value"),
@@ -1575,11 +1577,38 @@ class GeneratedClient:
         *,
         bar: str | None = None,
         default_sources: list[str] | tuple[str, ...] | None = None,
+        not_status: list[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ]
+        ]
+        | tuple[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ],
+            ...,
+        ]
+        | None = None,
         page_size: int | None = None,
         reject: list[str] | tuple[str, ...] | None = None,
         replace: list[str] | tuple[str, ...] | None = None,
         sanitize_dry_run: Literal[False] | None = None,
         set: list[str] | tuple[str, ...] | None = None,
+        state: list[Literal["valid", "void", "absent"]]
+        | tuple[Literal["valid", "void", "absent"], ...]
+        | None = None,
+        status: list[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ]
+        ]
+        | tuple[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ],
+            ...,
+        ]
+        | None = None,
         tasks: bool | None = None,
     ) -> AttestationCheck | ProjectAttestationCheck: ...
 
@@ -1591,11 +1620,38 @@ class GeneratedClient:
         *,
         bar: str | None = None,
         default_sources: list[str] | tuple[str, ...] | None = None,
+        not_status: list[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ]
+        ]
+        | tuple[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ],
+            ...,
+        ]
+        | None = None,
         page_size: int | None = None,
         reject: list[str] | tuple[str, ...] | None = None,
         replace: list[str] | tuple[str, ...] | None = None,
         sanitize_dry_run: Literal[True],
         set: list[str] | tuple[str, ...] | None = None,
+        state: list[Literal["valid", "void", "absent"]]
+        | tuple[Literal["valid", "void", "absent"], ...]
+        | None = None,
+        status: list[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ]
+        ]
+        | tuple[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ],
+            ...,
+        ]
+        | None = None,
         tasks: bool | None = None,
     ) -> AttestationCheck | ProjectAttestationCheck | SanitizeDryRun: ...
 
@@ -1607,11 +1663,38 @@ class GeneratedClient:
         *,
         bar: str | None = None,
         default_sources: list[str] | tuple[str, ...] | None = None,
+        not_status: list[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ]
+        ]
+        | tuple[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ],
+            ...,
+        ]
+        | None = None,
         page_size: int | None = None,
         reject: list[str] | tuple[str, ...] | None = None,
         replace: list[str] | tuple[str, ...] | None = None,
         sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
+        state: list[Literal["valid", "void", "absent"]]
+        | tuple[Literal["valid", "void", "absent"], ...]
+        | None = None,
+        status: list[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ]
+        ]
+        | tuple[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ],
+            ...,
+        ]
+        | None = None,
         tasks: bool | None = None,
     ) -> AttestationCheck | ProjectAttestationCheck | SanitizeDryRun: ...
 
@@ -1622,11 +1705,38 @@ class GeneratedClient:
         *,
         bar: str | None = None,
         default_sources: list[str] | tuple[str, ...] | None = None,
+        not_status: list[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ]
+        ]
+        | tuple[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ],
+            ...,
+        ]
+        | None = None,
         page_size: int | None = None,
         reject: list[str] | tuple[str, ...] | None = None,
         replace: list[str] | tuple[str, ...] | None = None,
         sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
+        state: list[Literal["valid", "void", "absent"]]
+        | tuple[Literal["valid", "void", "absent"], ...]
+        | None = None,
+        status: list[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ]
+        ]
+        | tuple[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ],
+            ...,
+        ]
+        | None = None,
         tasks: bool | None = None,
     ) -> AttestationCheck | ProjectAttestationCheck | SanitizeDryRun:
         """Run ``onetaskgraph project attestation check``."""
@@ -1637,11 +1747,14 @@ class GeneratedClient:
             kind=kind,
             bar=bar,
             default_sources=default_sources,
+            not_status=not_status,
             page_size=page_size,
             reject=reject,
             replace=replace,
             sanitize_dry_run=sanitize_dry_run,
             set=set,
+            state=state,
+            status=status,
             tasks=tasks,
         )
 
@@ -1657,6 +1770,7 @@ class GeneratedClient:
         match_by: str | None = None,
         member: list[GlobalId | str] | tuple[GlobalId | str, ...] | None = None,
         members_only: bool | None = None,
+        metadata: list[str] | tuple[str, ...] | None = None,
         no_link: bool | None = None,
         no_tasks: bool | None = None,
         page_size: int | None = None,
@@ -1668,6 +1782,7 @@ class GeneratedClient:
         status_policy: Literal["source", "preserve-destination"] | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
         to: str | None = None,
+        update_fields: Literal["status"] | None = None,
     ) -> CopyReport: ...
 
     @overload
@@ -1682,6 +1797,7 @@ class GeneratedClient:
         match_by: str | None = None,
         member: list[GlobalId | str] | tuple[GlobalId | str, ...] | None = None,
         members_only: bool | None = None,
+        metadata: list[str] | tuple[str, ...] | None = None,
         no_link: bool | None = None,
         no_tasks: bool | None = None,
         page_size: int | None = None,
@@ -1693,6 +1809,7 @@ class GeneratedClient:
         status_policy: Literal["source", "preserve-destination"] | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
         to: str | None = None,
+        update_fields: Literal["status"] | None = None,
     ) -> CopyReport | SanitizeDryRun: ...
 
     @overload
@@ -1707,6 +1824,7 @@ class GeneratedClient:
         match_by: str | None = None,
         member: list[GlobalId | str] | tuple[GlobalId | str, ...] | None = None,
         members_only: bool | None = None,
+        metadata: list[str] | tuple[str, ...] | None = None,
         no_link: bool | None = None,
         no_tasks: bool | None = None,
         page_size: int | None = None,
@@ -1718,6 +1836,7 @@ class GeneratedClient:
         status_policy: Literal["source", "preserve-destination"] | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
         to: str | None = None,
+        update_fields: Literal["status"] | None = None,
     ) -> CopyReport | SanitizeDryRun: ...
 
     async def project_copy(
@@ -1731,6 +1850,7 @@ class GeneratedClient:
         match_by: str | None = None,
         member: list[GlobalId | str] | tuple[GlobalId | str, ...] | None = None,
         members_only: bool | None = None,
+        metadata: list[str] | tuple[str, ...] | None = None,
         no_link: bool | None = None,
         no_tasks: bool | None = None,
         page_size: int | None = None,
@@ -1742,6 +1862,7 @@ class GeneratedClient:
         status_policy: Literal["source", "preserve-destination"] | None = None,
         term_scope: list[str] | tuple[str, ...] | None = None,
         to: str | None = None,
+        update_fields: Literal["status"] | None = None,
     ) -> CopyReport | SanitizeDryRun:
         """Run ``onetaskgraph project copy``."""
         return await self._invoke(
@@ -1755,6 +1876,7 @@ class GeneratedClient:
             match_by=match_by,
             member=member,
             members_only=members_only,
+            metadata=_strings("project_copy", "metadata", metadata),
             no_link=no_link,
             no_tasks=no_tasks,
             page_size=page_size,
@@ -1766,6 +1888,7 @@ class GeneratedClient:
             status_policy=status_policy,
             term_scope=_strings("project_copy", "term_scope", term_scope),
             to=to,
+            update_fields=update_fields,
         )
 
     @overload
@@ -4566,6 +4689,74 @@ class GeneratedClient:
         )
 
     @overload
+    async def task_digest(
+        self,
+        id: GlobalId | str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        exclude: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> TaskContentDigest: ...
+
+    @overload
+    async def task_digest(
+        self,
+        id: GlobalId | str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        exclude: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> TaskContentDigest | SanitizeDryRun: ...
+
+    @overload
+    async def task_digest(
+        self,
+        id: GlobalId | str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        exclude: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> TaskContentDigest | SanitizeDryRun: ...
+
+    async def task_digest(
+        self,
+        id: GlobalId | str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        exclude: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> TaskContentDigest | SanitizeDryRun:
+        """Run ``onetaskgraph task digest``."""
+        return await self._invoke(
+            ["task", "digest"],
+            _models.TaskContentDigest | _models.SanitizeDryRun,
+            id=id,
+            default_sources=default_sources,
+            exclude=exclude,
+            page_size=page_size,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
+            set=set,
+        )
+
+    @overload
     async def task_find(
         self,
         source: SourceName | str,
@@ -4778,6 +4969,18 @@ class GeneratedClient:
         metadata: list[str] | tuple[str, ...] | None = None,
         no_project: bool | None = None,
         not_label: list[str] | tuple[str, ...] | None = None,
+        not_status: list[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ]
+        ]
+        | tuple[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ],
+            ...,
+        ]
+        | None = None,
         origin: GlobalId | str | None = None,
         page: str | None = None,
         page_size: int | None = None,
@@ -4821,6 +5024,18 @@ class GeneratedClient:
         metadata: list[str] | tuple[str, ...] | None = None,
         no_project: bool | None = None,
         not_label: list[str] | tuple[str, ...] | None = None,
+        not_status: list[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ]
+        ]
+        | tuple[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ],
+            ...,
+        ]
+        | None = None,
         origin: GlobalId | str | None = None,
         page: str | None = None,
         page_size: int | None = None,
@@ -4864,6 +5079,18 @@ class GeneratedClient:
         metadata: list[str] | tuple[str, ...] | None = None,
         no_project: bool | None = None,
         not_label: list[str] | tuple[str, ...] | None = None,
+        not_status: list[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ]
+        ]
+        | tuple[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ],
+            ...,
+        ]
+        | None = None,
         origin: GlobalId | str | None = None,
         page: str | None = None,
         page_size: int | None = None,
@@ -4906,6 +5133,18 @@ class GeneratedClient:
         metadata: list[str] | tuple[str, ...] | None = None,
         no_project: bool | None = None,
         not_label: list[str] | tuple[str, ...] | None = None,
+        not_status: list[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ]
+        ]
+        | tuple[
+            Literal[
+                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            ],
+            ...,
+        ]
+        | None = None,
         origin: GlobalId | str | None = None,
         page: str | None = None,
         page_size: int | None = None,
@@ -4948,6 +5187,7 @@ class GeneratedClient:
             metadata=_strings("task_list", "metadata", metadata),
             no_project=no_project,
             not_label=not_label,
+            not_status=not_status,
             origin=origin,
             page=page,
             page_size=page_size,
