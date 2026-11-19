@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.17](https://github.com/nickderobertis/onetaskgraph/compare/v0.14.16...v0.14.17) - 2026-11-19
+
+### Added
+
+- name each task's location in the project graph's JSON form ([#4056](https://github.com/nickderobertis/onetaskgraph/pull/4056))
+
 ## [0.14.15](https://github.com/nickderobertis/onetaskgraph/compare/v0.14.14...v0.14.15) - 2026-11-13
 
 ### Added
