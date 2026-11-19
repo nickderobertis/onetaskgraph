@@ -117,7 +117,12 @@ fn id_of(task: &Value) -> String {
 }
 
 #[test]
-#[allow(clippy::too_many_lines)]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one journey: the copy out, the edits on the board, the copy back and the repeat \
+              each read the state the step before left, so splitting it would only pass that \
+              state between helpers"
+)]
 fn a_copy_back_from_the_board_writes_status_alone_imports_board_tasks_and_overrides_keys() {
     let stores = stores();
     let template = stores.plan.template("task.md");
