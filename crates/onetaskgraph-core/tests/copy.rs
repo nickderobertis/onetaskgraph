@@ -6604,3 +6604,45 @@ async fn a_copy_back_finds_its_counterpart_by_the_destinations_own_link_whatever
         );
     }
 }
+
+#[tokio::test]
+async fn a_copy_back_two_destination_items_link_to_updates_one_of_them_and_creates_nothing() {
+    // Two items of the private `into` each link to `from:T-1`, a public copy withholding its
+    // origin. The copy back takes the first match, as the other counterpart lookups do: it
+    // updates exactly one of the two, leaves the other as it was, and creates nothing.
+    let mut source = task("T-1", "Step, renamed");
+    source["metadata"] = json!({});
+    let linked = |id: &str| {
+        let mut held = task(id, "Step");
+        held["metadata"] = json!({"onetaskgraph.copies": {"from": "from:T-1"}});
+        held
+    };
+    let engine = engine_over(json!({
+        "from": {"plugin": "in-memory", "visibility": "public", "config": {"tasks": [source]}},
+        "into": {"plugin": "in-memory", "visibility": "private",
+                 "config": {"tasks": [linked("T-8"), linked("T-9")]}},
+    }))
+    .with_write_policy(Arc::new(NothingPrivate));
+    let copied = engine
+        .copy(&one("from:T-1"))
+        .await
+        .expect("the copy back runs");
+    let updated = copied.items[0].destination().expect("it landed").clone();
+    assert!(
+        [id("into:T-8"), id("into:T-9")].contains(&updated),
+        "{copied:?}"
+    );
+    assert_eq!(listed(&engine, "into").await.len(), 2);
+    for held in [id("into:T-8"), id("into:T-9")] {
+        let title = engine.task(&held).await.expect("a task").items[0]
+            .item
+            .title
+            .clone();
+        let expected = if held == updated {
+            "Step, renamed"
+        } else {
+            "Step"
+        };
+        assert_eq!(title, expected, "{held}");
+    }
+}

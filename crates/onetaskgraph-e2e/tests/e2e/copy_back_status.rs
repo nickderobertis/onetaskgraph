@@ -348,6 +348,25 @@ fn a_copy_back_from_the_board_writes_status_alone_imports_board_tasks_and_overri
     );
     assert_eq!(tree(&stores.authoring), authoring);
     assert_eq!(tree(&stores.board), board);
+
+    // So is a key in the reserved `onetaskgraph.` namespace, named as the flag's.
+    let reserved = stores.plan.run(&[
+        "project",
+        "copy",
+        &board_project,
+        "--to",
+        "authoring",
+        "--metadata",
+        "onetaskgraph.origin=null",
+    ]);
+    assert_ne!(reserved.status.code(), Some(0), "{}", stdout(&reserved));
+    assert!(
+        stderr(&reserved).contains("onetaskgraph."),
+        "{}",
+        stderr(&reserved)
+    );
+    assert_eq!(tree(&stores.authoring), authoring);
+    assert_eq!(tree(&stores.board), board);
 }
 
 #[test]

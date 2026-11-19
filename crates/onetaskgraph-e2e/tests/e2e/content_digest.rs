@@ -56,7 +56,13 @@ fn the_digest_is_the_one_an_attestation_records_for_the_same_exclusions() {
     let excluded = digest(&plan, &id, &["myapp.owner"]);
     assert_eq!(excluded["content_digest"], record["content_digest"]);
     assert_eq!(excluded["excludes"], serde_json::json!(["myapp.owner"]));
-    // A repeated key is the same exclusion, and the digest is stable across reads.
+    // A repeated key is the same exclusion, and the digest is stable across reads; the
+    // exclusions come back sorted and once each, whatever order and repeats they were given in.
+    let repeated = digest(&plan, &id, &["myapp.size", "myapp.owner", "myapp.size"]);
+    assert_eq!(
+        repeated["excludes"],
+        serde_json::json!(["myapp.owner", "myapp.size"])
+    );
     assert_eq!(
         digest(&plan, &id, &["myapp.owner", "myapp.owner"])["content_digest"],
         record["content_digest"]

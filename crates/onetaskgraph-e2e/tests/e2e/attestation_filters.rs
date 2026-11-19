@@ -238,18 +238,33 @@ fn each_filter_lists_exactly_the_tasks_it_keeps_in_listing_order() {
 #[test]
 fn a_filter_without_tasks_is_refused_as_an_invocation() {
     let seeded = seed();
-    let output = seeded.plan.run(&[
-        "project",
-        "attestation",
-        "check",
-        &seeded.project,
-        "--kind",
-        KIND,
-        "--state",
-        "void",
-    ]);
-    assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
-    assert!(stderr(&output).contains("--tasks"), "{}", stderr(&output));
+    for filter in [
+        ["--state", "void"],
+        ["--status", "todo"],
+        ["--not-status", "done"],
+    ] {
+        let output = seeded.plan.run(&[
+            "project",
+            "attestation",
+            "check",
+            &seeded.project,
+            "--kind",
+            KIND,
+            filter[0],
+            filter[1],
+        ]);
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{filter:?}: {}",
+            stderr(&output)
+        );
+        assert!(
+            stderr(&output).contains("--tasks"),
+            "{filter:?}: {}",
+            stderr(&output)
+        );
+    }
 }
 
 #[test]
