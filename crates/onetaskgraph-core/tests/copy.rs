@@ -6025,14 +6025,46 @@ impl TaskSource for Misanswering {
             });
         }
         let answered = self.inner.set_task_status(id, category).await?;
-        Ok(match self.how {
-            Misanswer::Status => answered.map(|status| Status {
-                category: StatusCategory::Cancelled,
-                ..status
+        Ok(self.status_answer(answered))
+    }
+
+    async fn set_project_status(
+        &self,
+        id: &NativeId,
+        category: StatusCategory,
+    ) -> Result<Option<Status>, SourceError> {
+        if matches!(self.how, Misanswer::StatusFails) {
+            return Err(SourceError::Unavailable {
+                message: "the status write did not reach the store".to_owned(),
+            });
+        }
+        let answered = self.inner.set_project_status(id, category).await?;
+        Ok(self.status_answer(answered))
+    }
+
+    async fn set_project_metadata(
+        &self,
+        id: &NativeId,
+        key: &MetadataKey,
+        value: &Value,
+    ) -> Result<Option<Project>, SourceError> {
+        match self.how {
+            Misanswer::MetadataFails => Err(SourceError::Unavailable {
+                message: "the metadata write did not reach the store".to_owned(),
             }),
-            Misanswer::StatusGone => None,
-            _ => answered,
-        })
+            Misanswer::Metadata => {
+                let answered = self.inner.set_project_metadata(id, key, value).await?;
+                Ok(answered.map(|mut project| {
+                    project.metadata.remove(key.as_str());
+                    project
+                }))
+            }
+            Misanswer::MetadataGone => {
+                self.inner.set_project_metadata(id, key, value).await?;
+                Ok(None)
+            }
+            _ => self.inner.set_project_metadata(id, key, value).await,
+        }
     }
 
     async fn set_task_metadata(
@@ -6072,6 +6104,20 @@ impl TaskSource for Misanswering {
             }),
             Misanswer::RemovalGone => Ok(None),
             _ => self.inner.remove_record_metadata(record, id, key).await,
+        }
+    }
+}
+
+impl Misanswering {
+    /// A status write's answer, as this source gives it.
+    fn status_answer(&self, answered: Option<Status>) -> Option<Status> {
+        match self.how {
+            Misanswer::Status => answered.map(|status| Status {
+                category: StatusCategory::Cancelled,
+                ..status
+            }),
+            Misanswer::StatusGone => None,
+            _ => answered,
         }
     }
 }
@@ -6147,6 +6193,73 @@ async fn a_status_only_copy_refuses_an_answer_it_did_not_write_and_puts_the_item
             Some(&json!("held")),
             "{refused}"
         );
+    }
+}
+
+#[tokio::test]
+async fn a_status_only_project_copy_refuses_an_answer_it_did_not_write_and_puts_it_back() {
+    // As above for a project: `into:P-1` is `from:P-1`'s counterpart by its origin, at `todo`
+    // while its source is `done`, and each of its narrow writes is refused or misanswered.
+    let at = |category: &str| json!({"category": category, "name": category});
+    let done = json!({"id": "P-1", "title": "Plan", "status": at("done"), "labels": []});
+    let counterpart = json!({"id": "P-1", "title": "Plan", "status": at("todo"), "labels": [],
+                             "metadata": {"onetaskgraph.origin": "from:P-1", "host.k": "held"}});
+    for (how, says) in [
+        (Misanswer::Status, "answered with Cancelled"),
+        (Misanswer::StatusGone, "into:P-1"),
+        (
+            Misanswer::StatusFails,
+            "the status write did not reach the store",
+        ),
+        (Misanswer::Metadata, "answered without the value written"),
+        (Misanswer::MetadataGone, "into:P-1"),
+        (Misanswer::MetadataFails, "did not reach the store"),
+    ] {
+        let built = |source: &str, config: &Value| {
+            onetaskgraph_in_memory::Plugin
+                .build(&name(source), config, &NoSecrets)
+                .expect("the in-memory plugin builds")
+        };
+        let engine = Engine::new(
+            vec![
+                ConfiguredSource::Ready(ResolvedSource::adopt(
+                    name("from"),
+                    built("from", &json!({"projects": [done]})),
+                )),
+                ConfiguredSource::Ready(ResolvedSource::adopt(
+                    name("into"),
+                    Box::new(Misanswering {
+                        inner: built("into", &json!({"projects": [counterpart]})),
+                        how,
+                    }),
+                )),
+            ],
+            vec![name("from"), name("into")],
+        );
+        let shown = async || {
+            engine.project(&id("into:P-1")).await.expect("held").items[0]
+                .item
+                .clone()
+        };
+        let before = shown().await;
+        let writes = onetaskgraph_core::CopyWrites {
+            update_fields: onetaskgraph_core::UpdateFields::Status,
+            metadata: vec![(MetadataKey::new("host.m").expect("a key"), json!(1))],
+        };
+        let request = many(
+            &["from:P-1"],
+            CopyScope::Projects {
+                tasks: false,
+                documents: false,
+            },
+        );
+        let Err(refused) = engine.copy_with(&request, &writes).await else {
+            panic!("a misanswered narrow write is refused");
+        };
+        assert!(refused.to_string().contains(says), "{refused}");
+        let after = shown().await;
+        assert_eq!(after.status.category, before.status.category, "{refused}");
+        assert_eq!(after.metadata, before.metadata, "{refused}");
     }
 }
 
