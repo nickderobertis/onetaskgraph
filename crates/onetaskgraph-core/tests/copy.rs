@@ -5902,6 +5902,8 @@ enum Misanswer {
     MetadataGone,
     /// A key's removal fails after the status write before it landed.
     RemovalFails,
+    /// A key's removal is answered as of a task the source does not hold.
+    RemovalGone,
 }
 
 /// An `in-memory` source answering every call as it does, but for one narrow write.
@@ -6061,6 +6063,7 @@ impl TaskSource for Misanswering {
             Misanswer::RemovalFails => Err(SourceError::Unavailable {
                 message: "the removal did not reach the store".to_owned(),
             }),
+            Misanswer::RemovalGone => Ok(None),
             _ => self.inner.remove_record_metadata(record, id, key).await,
         }
     }
@@ -6086,6 +6089,7 @@ async fn a_status_only_copy_refuses_an_answer_it_did_not_write_and_puts_the_item
             Misanswer::RemovalFails,
             "the removal did not reach the store",
         ),
+        (Misanswer::RemovalGone, "into:T-1"),
     ] {
         let built = |source: &str, config: &Value| {
             onetaskgraph_in_memory::Plugin
