@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.18](https://github.com/nickderobertis/onetaskgraph/compare/v0.14.17...v0.14.18) - 2026-11-19
+
+### Added
+
+- *(attestations)* filter project checks by status and copy status back with metadata overrides ([#4060](https://github.com/nickderobertis/onetaskgraph/pull/4060))
+
 ## [0.14.17](https://github.com/nickderobertis/onetaskgraph/compare/v0.14.16...v0.14.17) - 2026-11-19
 
 ### Added
