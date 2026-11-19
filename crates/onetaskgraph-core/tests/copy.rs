@@ -6095,3 +6095,142 @@ async fn a_status_only_copy_refuses_an_answer_it_did_not_write_and_puts_the_item
         assert_eq!(after.metadata.get("host.m"), None, "{refused}");
     }
 }
+
+/// A linking caller's rewriting policy: a public write naming `forbidden` anywhere is refused,
+/// and every `secret` in an entry it may rewrite is replaced by `redacted`.
+struct Rewriting;
+
+#[async_trait::async_trait]
+impl onetaskgraph_core::boundary::WritePolicy for Rewriting {
+    async fn repository_visibility(
+        &self,
+        _repository: &onetaskgraph_plugin_api::Repository,
+    ) -> Result<
+        onetaskgraph_core::boundary::RepositoryVisibility,
+        onetaskgraph_core::boundary::PolicyError,
+    > {
+        Ok(onetaskgraph_core::boundary::RepositoryVisibility::Public)
+    }
+
+    async fn check_public_write(
+        &self,
+        input: &onetaskgraph_core::boundary::PublicWriteInput,
+    ) -> Result<onetaskgraph_core::boundary::WriteVerdict, onetaskgraph_core::boundary::PolicyError>
+    {
+        let named = input
+            .text
+            .iter()
+            .chain(&input.paths)
+            .chain(&input.metadata)
+            .any(|entry| entry.contains("forbidden"));
+        Ok(if named {
+            onetaskgraph_core::boundary::WriteVerdict::Refuse {
+                reason: "a term was found".to_owned(),
+            }
+        } else {
+            onetaskgraph_core::boundary::WriteVerdict::Pass
+        })
+    }
+
+    async fn sanitize_public_write(
+        &self,
+        input: &onetaskgraph_core::boundary::PublicSanitizeInput,
+    ) -> Result<
+        onetaskgraph_core::boundary::SanitizeVerdict,
+        onetaskgraph_core::boundary::PolicyError,
+    > {
+        use onetaskgraph_core::boundary::{Locator, SanitizeVerdict, WriteVerdict};
+        let every = || {
+            input
+                .text
+                .iter()
+                .chain(&input.paths)
+                .chain(&input.metadata)
+                .chain(&input.fixed.text)
+                .chain(&input.fixed.paths)
+                .chain(&input.fixed.metadata)
+        };
+        let locators = || {
+            input
+                .locators
+                .iter()
+                .map(|locator| Locator::Plain(locator.value.clone()))
+                .collect()
+        };
+        if every().any(|entry| entry.contains("forbidden")) {
+            return Ok(SanitizeVerdict {
+                verdict: WriteVerdict::Refuse {
+                    reason: "a term was found".to_owned(),
+                },
+                text: input.text.clone(),
+                paths: input.paths.clone(),
+                metadata: input.metadata.clone(),
+                replaced: 0,
+                unfixed: Vec::new(),
+                locators: locators(),
+            });
+        }
+        let mut replaced = 0;
+        let mut rewrite = |entries: &[String]| -> Vec<String> {
+            entries
+                .iter()
+                .map(|entry| {
+                    let count = entry.matches("secret").count();
+                    replaced += u32::try_from(count).expect("a small count");
+                    entry.replace("secret", "redacted")
+                })
+                .collect()
+        };
+        let (text, paths, metadata) = (
+            rewrite(&input.text),
+            rewrite(&input.paths),
+            rewrite(&input.metadata),
+        );
+        Ok(SanitizeVerdict {
+            verdict: WriteVerdict::Pass,
+            text,
+            paths,
+            metadata,
+            replaced,
+            unfixed: Vec::new(),
+            locators: locators(),
+        })
+    }
+}
+
+#[tokio::test]
+async fn a_copys_metadata_override_is_screened_refused_or_written_as_the_policy_rewrote_it() {
+    // `--metadata` values are written like every other value a copy writes: put to the write
+    // policy first, so one naming a term refuses the copy before anything lands, and one the
+    // policy rewrites lands rewritten.
+    let engine = engine_over(json!({
+        "from": {"plugin": "in-memory", "visibility": "public",
+                 "config": {"tasks": [task("T-1", "Step")]}},
+        "into": {"plugin": "in-memory", "visibility": "public", "config": {}},
+    }))
+    .with_write_policy(Arc::new(Rewriting));
+    let overriding = |value: &str| onetaskgraph_core::CopyWrites {
+        metadata: vec![(MetadataKey::new("host.m").expect("a key"), json!(value))],
+        ..onetaskgraph_core::CopyWrites::default()
+    };
+
+    let Err(refused) = engine
+        .copy_with(&one("from:T-1"), &overriding("a forbidden plan"))
+        .await
+    else {
+        panic!("an override naming a term is refused");
+    };
+    assert!(!refused.to_string().contains("forbidden"), "{refused}");
+    assert!(listed(&engine, "into").await.is_empty(), "{refused}");
+
+    let copied = engine
+        .copy_with(&one("from:T-1"), &overriding("a secret plan"))
+        .await
+        .expect("a rewritten override lands");
+    let landed = copied.items[0].destination().expect("it landed").clone();
+    let held = engine.task(&landed).await.expect("a task").items[0]
+        .item
+        .metadata
+        .clone();
+    assert_eq!(held.get("host.m"), Some(&json!("a redacted plan")));
+}
