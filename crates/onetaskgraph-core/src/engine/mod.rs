@@ -102,10 +102,10 @@ pub use copy::MirrorTarget;
 pub(crate) use copy::spent_between;
 pub use copy::{
     BudgetSpent, CommentCounts, CopyAction, CopyConditions, CopyItems, CopyLink, CopyLookup,
-    CopyOutcome, CopyReport, CopyRequest, CopyScope, CopyVia, CreatesIn, LocateLookup,
+    CopyOutcome, CopyReport, CopyRequest, CopyScope, CopyVia, CopyWrites, CreatesIn, LocateLookup,
     LocateReport, LocateRequest, Located, LocatedCounterpart, MatchBy, NoCounterpart, NotATask,
     Otherwise, Oversized, PriorityCondition, PublicProjection, PublicProjections, Spent,
-    StatusCondition, StatusPolicy,
+    StatusCondition, StatusPolicy, UpdateFields,
 };
 pub(crate) use copy::{malformed_links, malformed_locations};
 pub use delivery::{Delivered, DeliveryOutcome, ProjectStatusSet, TaskStatusSet, settled};
@@ -2147,6 +2147,8 @@ pub struct Engine {
     caches: BTreeMap<SourceName, std::sync::Arc<crate::cache::SourceCache>>,
     /// The destination version a running `task copy --expect` names, while it runs.
     copy_expect: std::sync::Mutex<Option<String>>,
+    /// What a running [`Engine::copy_with`] writes beyond what it carries, while it runs.
+    copy_writes: std::sync::Mutex<copy::CopyWrites>,
     /// Which tracker each source reads, as its configuration declares and its plugin answers.
     designators: designators::Designators,
     /// Each source's human task projection authority, as its configuration declares it.
@@ -2329,6 +2331,7 @@ impl Engine {
             boundary: boundary::Boundary::default(),
             caches: BTreeMap::new(),
             copy_expect: std::sync::Mutex::new(None),
+            copy_writes: std::sync::Mutex::new(copy::CopyWrites::default()),
             designators: designators::Designators::default(),
             projections: BTreeMap::new(),
             clock: clock.clone(),

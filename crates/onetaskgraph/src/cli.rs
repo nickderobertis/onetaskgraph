@@ -539,6 +539,9 @@ pub enum TaskCommand {
         #[command(subcommand)]
         command: AttestationCommand,
     },
+    /// Print the digest of one task's authored content: the `content_digest` an attestation
+    /// records for the same content and the same --exclude keys. Reads, writes nothing.
+    Digest(TaskDigestArgs),
     /// Update one task: every field named, and nothing else.
     ///
     /// A field already holding the value named is not written, and an update in which nothing
@@ -1381,6 +1384,24 @@ pub struct AttestationCheckArgs {
     pub bar: Option<String>,
 }
 
+/// `onetaskgraph task digest`.
+#[derive(Debug, Args)]
+pub struct TaskDigestArgs {
+    /// The task's qualified id, `<source>:<native-id>`.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — as `AttestArgs::id`.
+    #[arg(value_name = "ID")]
+    pub id: String,
+
+    /// A caller-owned metadata key to leave out of the digest, as `task attest --exclude`
+    /// leaves it out. Repeat for several.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — as `AttestArgs::exclude`: converted
+    /// through `MetadataKey::new`, naming the flag, before anything is read.
+    #[arg(long, value_name = "KEY")]
+    pub exclude: Vec<String>,
+}
+
 /// `onetaskgraph project attestation check`.
 #[derive(Debug, Args)]
 pub struct ProjectAttestationCheckArgs {
@@ -1390,6 +1411,42 @@ pub struct ProjectAttestationCheckArgs {
     /// Check every task filed under the project rather than the project itself.
     #[arg(long)]
     pub tasks: bool,
+
+    /// With --tasks, keep only the tasks at this status category; repeat for several. A task
+    /// left out is not read for its record.
+    #[arg(long, value_name = "CATEGORY", requires = "tasks")]
+    pub status: Vec<StatusArg>,
+
+    /// With --tasks, leave out the tasks at this status category; repeat for several.
+    #[arg(long = "not-status", value_name = "CATEGORY", requires = "tasks")]
+    pub not_status: Vec<StatusArg>,
+
+    /// With --tasks, keep only the tasks whose check answers this state; repeat for several.
+    /// The exit is still 0 only when every task listed is `valid`.
+    #[arg(long, value_name = "STATE", requires = "tasks")]
+    pub state: Vec<CheckStateArg>,
+}
+
+/// An attestation check's state, as the command line spells it: a mirror of
+/// [`onetaskgraph_core::attestation::AttestationState`] for the reason [`StatusArg`] is one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum CheckStateArg {
+    /// The record holds.
+    Valid,
+    /// A record is there and no longer holds.
+    Void,
+    /// No record of the kind is there.
+    Absent,
+}
+
+impl From<CheckStateArg> for onetaskgraph_core::attestation::AttestationState {
+    fn from(value: CheckStateArg) -> Self {
+        match value {
+            CheckStateArg::Valid => Self::Valid,
+            CheckStateArg::Void => Self::Void,
+            CheckStateArg::Absent => Self::Absent,
+        }
+    }
 }
 
 /// What `onetaskgraph task status` can do.
@@ -1882,6 +1939,11 @@ pub struct TaskListArgs {
 
     #[command(flatten)]
     pub filters: FilterArgs,
+
+    /// Drop tasks in this status category. Repeat for several; beside --status, a task is kept
+    /// when it is at a category --status names and at none this names.
+    #[arg(long = "not-status", value_name = "S")]
+    pub not_status: Vec<StatusArg>,
 
     /// Keep tasks in this project, qualified (`work:PROJ-1`) or by native id.
     ///
@@ -2648,8 +2710,34 @@ pub struct ProjectCopyArgs {
     #[arg(long, conflicts_with = "no_tasks")]
     pub comments: bool,
 
+    /// Which fields to write on every item the copy updates — the project and each task.
+    /// `status` writes the status alone, governed by --status-policy; every other field, edge
+    /// and metadata key but those --metadata names stays as the destination holds it. Items the
+    /// copy creates are written whole.
+    #[arg(long = "update-fields", value_enum, value_name = "FIELDS")]
+    pub update_fields: Option<UpdateFieldsArg>,
+
+    /// Set one metadata key to one JSON value on every destination item the copy writes,
+    /// created or updated, the project included, whatever --update-fields says; `null` removes
+    /// the key, one only the destination held included. Repeat for several. A value that is
+    /// not JSON, or a key in the reserved `onetaskgraph.` namespace, is refused before
+    /// anything is read or written.
+    ///
+    /// llmlint: ignore[invalid_states_unrepresentable] — as `TaskCreateArgs::metadata`: `main`
+    /// converts each through `MetadataKey::new` and parses its value as JSON before anything
+    /// is built.
+    #[arg(long = "metadata", value_name = "KEY=JSON", allow_hyphen_values = true)]
+    pub metadata: Vec<String>,
+
     #[command(flatten)]
     pub copy: CopyArgs,
+}
+
+/// The fields `project copy --update-fields` writes on an item it updates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum UpdateFieldsArg {
+    /// The status alone.
+    Status,
 }
 
 /// `onetaskgraph document copy`.

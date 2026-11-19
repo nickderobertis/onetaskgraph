@@ -7,12 +7,12 @@ use std::io::Write;
 
 use onetaskgraph_core::attestation::{
     AttestationCheck, AttestationKind, AttestationLabel, AttestationNote, AttestationState,
-    Attested, ProjectAttestationCheck,
+    Attested, ProjectAttestationCheck, TaskCheckFilter, TaskContentDigest,
 };
 use onetaskgraph_core::{AttestRequest, Failure, Loaded};
 use onetaskgraph_plugin_api::{MetadataKey, MetadataRecord};
 
-use crate::cli::{AttestArgs, AttestationCheckArgs, ProjectAttestationCheckArgs};
+use crate::cli::{AttestArgs, AttestationCheckArgs, ProjectAttestationCheckArgs, TaskDigestArgs};
 use crate::{EXIT_OK, emit, engine, qualified, rendering, write_failed};
 
 /// The check ran and answered a record that is not valid — `void` or `absent` — so a script
@@ -32,18 +32,7 @@ pub(crate) async fn attest(
         kind: kind(&args.kind)?,
         by: AttestationLabel::new("--by", args.by.as_str()).map_err(refused)?,
         bar: AttestationLabel::new("--bar", args.bar.as_str()).map_err(refused)?,
-        excludes: args
-            .exclude
-            .iter()
-            .map(|key| {
-                MetadataKey::new(key.as_str()).map_err(|message| {
-                    Failure::decided(
-                        "invalid-metadata-key",
-                        format!("--exclude {key}: {message}"),
-                    )
-                })
-            })
-            .collect::<Result<_, _>>()?,
+        excludes: excludes(&args.exclude)?,
         note: args
             .note
             .as_deref()
@@ -93,13 +82,59 @@ pub(crate) async fn check_project(
     let id = qualified(&args.check.id)?;
     let kind = kind(&args.check.kind)?;
     let bar = bar(args.check.bar.as_deref())?;
+    let filter = TaskCheckFilter {
+        statuses: args.status.iter().map(|status| status.category()).collect(),
+        not_statuses: args
+            .not_status
+            .iter()
+            .map(|status| status.category())
+            .collect(),
+        states: args.state.iter().map(|&state| state.into()).collect(),
+    };
     let checked = engine(loaded)
-        .check_project_attestations(&id, &kind, bar.as_ref())
+        .check_project_attestations_filtered(&id, &kind, bar.as_ref(), &filter)
         .await
         .map_err(|error| Failure::from(&error))?;
     let rendered = rendering(loaded, &checked, tasks_text, "the attestation check")?;
     emit(out, rendered.trim_end(), "the attestation check")?;
     Ok(exit(checked.is_valid()))
+}
+
+/// `task digest`: the digest an attestation would record, read on its own — under `--json`,
+/// `{id, content_digest, excludes}`.
+pub(crate) async fn digest(
+    out: &mut impl Write,
+    loaded: &Loaded,
+    args: &TaskDigestArgs,
+) -> Result<u8, Failure> {
+    let id = qualified(&args.id)?;
+    let excludes = excludes(&args.exclude)?;
+    let digest = engine(loaded)
+        .task_content_digest(&id, &excludes)
+        .await
+        .map_err(|error| Failure::from(&error))?;
+    let rendered = rendering(
+        loaded,
+        &digest,
+        |digest: &TaskContentDigest| format!("{}: {}", digest.id, digest.content_digest),
+        "the content digest",
+    )?;
+    emit(out, rendered.trim_end(), "the content digest")?;
+    Ok(EXIT_OK)
+}
+
+/// Each `--exclude` key, refused by name when it is not one.
+fn excludes(keys: &[String]) -> Result<Vec<MetadataKey>, Failure> {
+    keys.iter()
+        .map(|key| {
+            MetadataKey::new(key.as_str()).map_err(|message| {
+                Failure::decided(
+                    "invalid-metadata-key",
+                    format!("--exclude {key}: {message}"),
+                )
+            })
+        })
+        .collect()
 }
 
 fn exit(valid: bool) -> u8 {

@@ -74,7 +74,8 @@ onetaskgraph sources route <SOURCE> [--repository R]... [--classification public
 # by its routes — read from configuration alone, never from a source. See "Routing" below.
 
 onetaskgraph task list [--source S]... [--label L]... [--not-label L]...
-                       [--status S]... [--priority none|urgent|high|medium|low]...
+                       [--status S]... [--not-status S]...
+                       [--priority none|urgent|high|medium|low]...
                        [--project P [--members] | --no-project] [--commented-since RFC3339]
                        [--metadata KEY[/SEGMENT...]=VALUE]... [--origin SOURCE:ID]
                        [--search TEXT] [--in title|content|both]
@@ -119,6 +120,7 @@ onetaskgraph task assignee set <ID> [<PERSON>] [--if-version VERSION]
                                # replaces every assignee; no PERSON unassigns — see "Assignees"
 onetaskgraph task content set <ID> --file PATH [--expect VERSION] [--if-version VERSION]
 onetaskgraph task metadata set <ID> <KEY> <VALUE> [--expect VERSION] [--if-version VERSION]
+onetaskgraph task digest <ID> [--exclude KEY]...  # the content digest an attestation records
 onetaskgraph task update <ID> [--title TITLE] [--body-file PATH]
                          [--status CATEGORY [--status-name NAME]] [--priority PRIORITY]
                          [--metadata KEY=JSON]... [--remove-metadata KEY]...
@@ -154,6 +156,8 @@ onetaskgraph project graph <ID> [--format mermaid|json] [--direction auto|td|lr]
 onetaskgraph project copy <ID> --to <SOURCE> [--no-tasks | --member TASK-ID...]
                                                  [--documents]
                                                  [--match-by KEY] [--recreate] [--dry-run]
+                                                 [--update-fields status]
+                                                 [--metadata KEY=JSON]...
 onetaskgraph project copy <ID> --to <SOURCE> --member TASK-ID... --members-only
                                                  # into the project already there, untouched
 onetaskgraph project metadata set <ID> <KEY> <VALUE>
@@ -188,7 +192,10 @@ onetaskgraph schema                              # the JSON Schema bundle both S
 ```
 
 An `<ID>` is qualified: `work:ENG-142`. Repeating `--label` narrows — a second one is a
-second requirement — and `--not-label` excludes. `--project` takes a qualified id, which
+second requirement — and `--not-label` excludes. `task list --not-status` drops the tasks at
+the categories it names, as `--status` keeps them: beside `--status`, a task is kept at a
+category `--status` names and none `--not-status` does, and a pair leaving no category at all is
+refused as `no-status-left` rather than read as no filter. `--project` takes a qualified id, which
 narrows the query to that project's own source, or a bare native id, which is asked of
 every selected source.
 
@@ -852,6 +859,17 @@ These rules find the counterpart, in this order:
    created carrying that origin.
 <!-- llmlint: ignore-end[contracts_have_one_source_or_a_drift_gate] -->
 
+Before the search creates, one more rule answers a copy **back** from where an earlier copy
+withheld its origin. A copy out of a source declared private into one that is not records no
+origin there — so a public board's copy of a private plan names nothing in the plan. Copying
+that board item back into the private source, the destination is asked for the item whose own
+`onetaskgraph.copies` link names the item being copied: the original it was copied from. Found,
+it is updated as the origin rule's copy back is — it keeps the provenance it holds, and nothing
+new is recorded on the public item — and the report says `via: scan`. It is asked only where a
+copy the other way would have withheld the origin, so no other copy reads anything more. That
+holds for the project and every task alike, and a task the copy back creates — one added on the
+board — has each edge to such a task written to the original it found, never to the board's id.
+
 Once the whole copy has landed, every item found by `--target-task`, the link, the search or `--match-by`, or
 created, has its link for that destination recorded or refreshed — one metadata write at its
 own source, undone with everything else if the copy cannot finish. An item found by its own
@@ -887,6 +905,8 @@ copied from, which is what makes the next copy of it an update.
 | `--source S`, `--commented-since RFC3339`, `--metadata KEY=VALUE` | `task copy` only, in place of ids: copy what `task list` with the same narrowing answers. Refused beside ids. |
 | `--status CATEGORY` | `task copy` only, repeatable: keep only the tasks at these categories, as `task list --status` keeps them. In a query a task at another category is not read for its comments, not copied and not named in the answer — and on a GitHub board, a status filter naming only open categories (any but `done`, `cancelled` and `unknown`, which a closed issue reads as when closed for a reason that implies neither) narrows the board-scoped issue search with `is:open`, each candidate's category still confirmed from its own item. Beside ids, an id whose task is at another category is read only as far as its status and answered `{"source": …, "action": "skipped", "reason": "status <category> is not one of <categories>"}`, neither copied nor read for its comments, without changing the exit code. The comment snapshot a host keeps is this shape: `task copy --source board --commented-since <instant> --status backlog --to snapshot`, into a folder configured with the board's own status names. |
 | `--member TASK-ID` | Copy the project and exactly the tasks named, repeating the flag for each, when you know which of them changed. A task not named is not read at the destination, not written and not reported, so a one-task change costs what one task costs rather than a read of the whole project. A named task the destination does not hold yet is still created. An edge to a task not named is written to the destination id that task records at `onetaskgraph.origin`, and a copy whose edge names a task recording none is refused before anything is written, naming that task. A copy naming members was not told about the rest, so it reports nothing `orphaned`. |
+| `--update-fields status` | `project copy` only: on every item the copy updates — the project and each task — write the status alone, governed by `--status-policy`, each by the destination's own narrow status write. Title, body, description, labels, priority, edges, assets, template answers and every metadata key but those `--metadata` names stay exactly as the destination holds them, and no record of the copy is stamped there; an item already at that status and holding those keys is written nothing. Items the copy creates are written whole. |
+| `--metadata KEY=JSON` | `project copy` only, repeatable: set `KEY` to the JSON value on every destination item the copy writes, created or updated, the project included, whatever `--update-fields` says. A JSON `null` removes the key — one only the destination held included. One general override, put to the write policy with everything else the copy writes. A value that is not JSON, or a key in the reserved `onetaskgraph.` namespace, is refused before anything is read or written. With `--update-fields status`, `project copy BOARD:PLAN --to authoring --update-fields status --metadata board.only=null` brings an authoring plan to its board copy's statuses, imports the board-only tasks with their edges, and removes the key, in one call. |
 | `--members-only` | With `--member`, and refused without one: copy the named tasks into the project the destination already holds, and leave that project exactly as it is. It is found by the `onetaskgraph.copies` link the source project records, then by the origin it records, then by asking the destination for the project recording it as its origin — never read to be compared, never written, and not reported, so adding one task to a board's project costs that task alone and cannot overwrite the project's title, body, labels or fields. A project the destination does not hold yet is refused before anything is written, naming the `project copy` that creates it. Everything else is `--member`'s: the same edges, the same `delivered` and `via`, and nothing `orphaned`. |
 
 `--dry-run` is how you read that table's first row before trusting it: every source is
@@ -3539,7 +3559,9 @@ so it goes void the moment the content it cleared moves, the same way in every s
 onetaskgraph document attest board:ISSUE-9 --kind design-approval --by "ada" \
   --bar sha256:… [--exclude myapp.owner]… [--note "looks right"] [--if-version V]
 onetaskgraph document attestation check board:ISSUE-9 --kind design-approval [--bar sha256:…]
-onetaskgraph project attestation check notes:plan-1 --kind plan-review --tasks
+onetaskgraph project attestation check notes:plan-1 --kind plan-review --tasks \
+  [--status CATEGORY]… [--not-status CATEGORY]… [--state valid|void|absent]…
+onetaskgraph task digest notes:T-1 [--exclude myapp.owner]…
 ```
 
 Each of `task`, `project` and `document` has `attest` and `attestation check`. A record is
@@ -3566,7 +3588,19 @@ with `reason` `content-moved` when the content is not what the record cleared, e
 `bar-moved` when `--bar` is given and is not the record's bar; or `absent` (exit `3`) when the
 item holds no record of the kind. `project attestation check --tasks` answers
 `{"project", "kind", "tasks": [{"id", …}]}`, one entry per task of the project, and exits `0`
-only when every one is valid. The store records and checks and decides nothing else: who may
+only when every one is valid. With `--tasks`, three repeatable filters narrow which tasks it
+lists, in the order the source lists them and in the same shape: `--status` keeps the tasks at
+one of the status categories it names, `--not-status` drops the tasks at any it names, and
+`--state` keeps the tasks whose check answers one of `valid`, `void` and `absent`. A task its
+status leaves out is not read for its record. The exit is `0` exactly when every task listed is
+valid — so `--not-status done --not-status cancelled --state void --state absent` answers the open
+tasks a review still owes, and exits `0` exactly when there are none. No filter answers as before.
+
+`task digest` prints the digest itself, `{"id", "content_digest", "excludes"}`: the
+`content_digest` an attestation records on that task for the same content and the same
+`--exclude` keys, read on its own and writing nothing — for a caller that records which content
+a decision of its own was taken against. A library caller reaches it as
+`Engine::task_content_digest`. The store records and checks and decides nothing else: who may
 attest, and which kinds anything requires, are the caller's.
 
 ## Writing a source in another language
