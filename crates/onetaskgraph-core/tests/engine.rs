@@ -4013,7 +4013,7 @@ const PUBLISHED_BUNDLES: &[(u32, Published)] = &[
         67,
         Published::Whole {
             roots: &SIXTY_SEVENTH_BUNDLE_SHAPE,
-            beside: &SIXTY_FOURTH_BUNDLE_BESIDE,
+            beside: &SIXTY_SEVENTH_BUNDLE_BESIDE,
         },
     ),
 ];
@@ -4089,6 +4089,19 @@ const FORTY_SIXTH_BUNDLE_BESIDE: [(&str, u64); 8] = [
 /// `parents` to the in-memory configuration, `link_types` to every plugin's but the subprocess
 /// one, and `sub_issues` to the GitHub Projects one.
 /// Version 63 adds `assignees` to every plugin's configuration but the subprocess one.
+/// Version 67 says on the Linear configuration's `metadata_fields` that the `Fields` section
+/// stands directly before the collapsed block the metadata is kept in.
+const SIXTY_SEVENTH_BUNDLE_BESIDE: [(&str, u64); 8] = [
+    ("binary/FieldsReport", 0x29439ba93e5e343a),
+    ("binary/StatusNamesReport", 0x09ffa9bf46bc2090),
+    ("binary/StatusOptionsReport", 0x31ab0209e340bd4d),
+    ("plugin_config/github-projects", 0x0af98831b197c207),
+    ("plugin_config/in-memory", 0xff2254e2e0ca6f63),
+    ("plugin_config/linear", 0x6259102f7a54d0e5),
+    ("plugin_config/local-md", 0xb9f7fc0a98b87e74),
+    ("plugin_config/subprocess", 0x9be55eaf44b8f5aa),
+];
+
 /// Version 64 adds `metadata_fields` to the Linear configuration and to what `sources fields`
 /// reports for a Linear source, and says on the GitHub Projects configuration's that a list and a
 /// map are projected.
@@ -8285,7 +8298,8 @@ const SIXTY_SIXTH_BUNDLE_SHAPE: [(&str, u64); 172] = [
     ("WriteVerdict", 0xfe9f3b7541b8efb0),
 ];
 
-/// Version 67: `sources migrate`'s `StoredFormsMigrated`.
+/// Version 67: `sources migrate`'s `StoredFormsMigrated`, and the Linear configuration's reworded
+/// `metadata_fields`.
 const SIXTY_SEVENTH_BUNDLE_SHAPE: [(&str, u64); 173] = [
     ("Asset", 0x3861b2a394973652),
     ("AssetContentType", 0x045a0ea0dface7ec),
@@ -8352,7 +8366,7 @@ const SIXTY_SEVENTH_BUNDLE_SHAPE: [(&str, u64); 173] = [
     ("ItemKind", 0x75db1aa08ed04b2f),
     ("ItemType", 0x417523fd8e62d46a),
     ("Label", 0x07555503d77a90c7),
-    ("LinearConfig", 0xd78c523874ba7f90),
+    ("LinearConfig", 0x6259102f7a54d0e5),
     ("LinkBatch", 0x933fb9720d646e2b),
     ("LinkOutcome", 0x76ff5273439a22db),
     ("LinksWritten", 0x19f286ec8acf4cfa),

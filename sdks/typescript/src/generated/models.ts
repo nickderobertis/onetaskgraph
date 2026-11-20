@@ -6700,8 +6700,9 @@ link_types?: {
 assignees?: boolean
 /**
  * Caller metadata values this source shows in one collapsed `Fields` section at the end
- * of each task's, project's and document's visible description, since Linear has no
- * custom fields and never renders the slot the metadata is kept in.
+ * of each task's, project's and document's description, directly before the collapsed
+ * block the metadata is kept in, since Linear has no custom fields and shows that block's
+ * JSON only to a reader who opens it.
  *
  * Absent or empty, no section is written. Each entry names the `field` a value is shown
  * under, a top-level metadata `key` and an optional `path` of object keys walked inside
