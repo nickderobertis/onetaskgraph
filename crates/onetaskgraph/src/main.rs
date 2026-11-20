@@ -404,6 +404,24 @@ async fn run_inner(
         }
 
         Command::Sources {
+            command: SourcesCommand::Migrate(args),
+        } => {
+            let Some(source) = usable_source(&args.source, loaded) else {
+                return Ok(EXIT_USAGE);
+            };
+            let report = engine(loaded)
+                .migrate_stored_forms(&source, args.dry_run)
+                .await
+                .map_err(|error| Failure::from(&error))?;
+            let rendered = match loaded.config.output() {
+                OutputFormat::Text => render::migrated(&report),
+                OutputFormat::Json => json(&report, "the migration")?,
+            };
+            emit(out, rendered.trim_end(), "the migration")?;
+            Ok(report.exit_code())
+        }
+
+        Command::Sources {
             command: SourcesCommand::Route(args),
         } => {
             // Configuration alone: no engine is built, so no source is constructed or asked.
@@ -3045,6 +3063,7 @@ mod tests {
                 "sources fields",
                 "sources route",
                 "sources sanitize",
+                "sources migrate",
                 "task list",
                 "task show",
                 "task show-many",

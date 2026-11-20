@@ -93,6 +93,8 @@ RESPONSE_ROOTS = {
     "sources_route": "SourceRoute",
     # What one sweep of a source for declared private terms found, rewrote and could not.
     "sources_sanitize": "SweepReport",
+    # What one migration of a source's superseded stored forms rewrote, and could not.
+    "sources_migrate": "StoredFormsMigrated",
     "config_show": "EffectiveConfig",
     # What emptying the local cache of one source, or of every source, emptied.
     "cache_clear": "CacheCleared",
@@ -989,7 +991,7 @@ def operands(command: tuple[str, ...]) -> tuple[str, ...]:
     match command:
         case ("search",):
             return ("text",)
-        case ("sources", "status-options" | "fields" | "route" | "sanitize"):
+        case ("sources", "status-options" | "fields" | "route" | "sanitize" | "migrate"):
             return ("source",)
         case ("task" | "document", "copy") | ("task", "show-many" | "locate" | "relations"):
             return ("ids",)

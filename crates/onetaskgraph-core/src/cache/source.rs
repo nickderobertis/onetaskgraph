@@ -41,8 +41,8 @@ use onetaskgraph_plugin_api::{
     IssueHolding, IssueRef, ItemKind, ItemWrite, Label, Location, MetadataKey, MetadataRecord,
     Metering, NativeId, NewComment, Page, PageRequest, PartOutcome, Priority, Project,
     ProjectQuery, ProjectVersionCoverage, SourceError, Status, StatusCategory, StatusContradiction,
-    Task, TaskDetailRead, TaskQuery, TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome,
-    VersionCoverage, Visibility, WriteJournal, WriteSupport, WriteTarget,
+    StoredFormMigration, Task, TaskDetailRead, TaskQuery, TaskRef, TaskSource, TaskUpdate,
+    TaskUpdateOutcome, VersionCoverage, Visibility, WriteJournal, WriteSupport, WriteTarget,
 };
 use serde_json::Value;
 
@@ -2158,6 +2158,20 @@ impl TaskSource for CachedSource {
     async fn end_command(&self) -> Result<(), SourceError> {
         self.cache.end_command();
         self.inner.end_command().await
+    }
+
+    async fn migrate_stored_forms(
+        &self,
+        dry_run: bool,
+    ) -> Result<StoredFormMigration, SourceError> {
+        // Which items a sweep rewrites is not known until it has listed them, so every entry of
+        // this source is retired before the first rewrite can be sent: a listing that fails part
+        // way, after some items were rewritten, leaves no entry for a version its source has
+        // since moved past. A dry run writes nothing, and leaves every entry in service.
+        if !dry_run {
+            self.cache.retire_everything_before_writes()?;
+        }
+        self.inner.migrate_stored_forms(dry_run).await
     }
 
     async fn visibility(&self, target: &WriteTarget<'_>) -> Result<Visibility, SourceError> {

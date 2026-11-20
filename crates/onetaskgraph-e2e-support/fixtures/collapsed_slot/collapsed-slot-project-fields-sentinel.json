@@ -1,0 +1,493 @@
+{
+  "record": "spike-linear-collapsed-slot project fields-sentinel",
+  "captured": "2026-11-19",
+  "provenance": "captured",
+  "team": "TES2",
+  "note": "Spike spike-linear-collapsed-slot, case fields-sentinel: 4b. Fields section, then the code-span block opening with a code-span sentinel paragraph. Captured from the answer to the create that wrote it, through Linear's GraphQL API. The record's URL is left out: it names the workspace.",
+  "field": "contentState",
+  "markdown": "Keep the Linear source's metadata in a collapsed block at the end of each long form.\n\n## Context\n\nThe slot ends every issue description, project content and document content this source writes. Today it shows as a line of literal text.\n\n## Acceptance criteria\n\n| Check | Command |\n| -- | -- |\n| harness | `cargo test -p onetaskgraph-linear-e2e --test e2e spike_collapsed_slot` |\n| unchanged write | sends no update |\n\n* The stored tail is byte for byte what was sent.\n* A re-write of the stored form is stored unchanged.\n\nRun `onetaskgraph task show linear:TES2-1` to read it back.\n\n+++ Fields\n\n* **Owner**: `nick`\n* **Bar**: `design-approval`\n\n+++\n\n+++ onetaskgraph metadata\n\n`onetaskgraph.fields`\n\n`{\"onepipeline.acceptance_digests\":[\"sha256:33b562849faef00bf0edc917c339c12d1fb246b012e6bf8c743a14aa2b7f94ae\",\"sha256:0873b8e5644b82a8a1c8d62aab18c8232aa038375236e46c8adb9916480849d0\",\"sha256:3e4bdea70641b7f512d342ea9786778b6a310e5b9c2e7896597fb9d561cb8d5a\",\"sha256:f83afb7bc2cdf00c31d1f696b9120f45f9204958e0d57cbda8223819c7a6488b\",\"sha256:2742c4c9d44f747c45cc529f9a16dc84531d433ba471a3318fc9c036575be96a\",\"sha256:53a1b9b07813972540116bac210d550cf6337b5fecfd6c754b3026fbf5ebf7f4\",\"sha256:723a96441e2459ea2120236ca95fb52cb0ac15bc9600a46a6a33fd3dac6aaec8\",\"sha256:628a5623255d91fe3c7289623c85833716d6fc049b0b6da590bfb2901ea4c749\",\"sha256:56872414ec167b88ff91ad5eb6d3be67ba5b1464b07f86121dcdfde739d9df64\",\"sha256:a25ffa463d4108649f0d4d274c5ee0f8546a4befa04482392faa05afddedcde7\",\"sha256:388c92311285198f1953bdd8f022b7ef1423e17b6e2ec29800e6d4612a108aae\",\"sha256:577d72d617206a2bef7862f0d04839cdfaea32a6cf9a1c353b47daba217e2794\",\"sha256:d7e796c23a07f07ebcd29c38a23f151b21c9dd8a98a6ca261b0e81d2461ef7cf\",\"sha256:03fe3336c8cf49ab358948e225829abed1f8ce26850cffbf6fabf1b5e9b673dc\",\"sha256:4d4b0899ef05d1f4421437389759c18479f6ff70c059f93d3c025b3f06e1f441\",\"sha256:8ba55e72271a1515b49144317275be216d1562a4c473726c5d878355e9844903\",\"sha256:945efe9662b19d4a241097b3195c18c633395f2cbc7f257fe93d56087bfeb877\",\"sha256:ddfbdac4694474425db7fe759a085e87de1e47a13c219e3caa22714fc432e8a5\",\"sha256:8a13f1439bc3730767435ae34bfd8980d513bece31873ad868dc3d4bdb08c9a4\",\"sha256:eebe64a365a6b77a9a26d2ef135ea234c02df2fb87eca95de7ad49f9aadb741b\",\"sha256:38aa2253e44f295005ae555be0d7d4731d3c91c4382a6d1820aa9189c2001842\",\"sha256:8f6c10f0d599034434f0b7532916dc94da4d226934c8bc0e195fb8be4d36505f\",\"sha256:27425d2d73f73a9ac0f02a7b7d88009a3371e0071a989d816eccb4c1f3a19b28\",\"sha256:10dc1f486f9f7e5a2b2f8e67a316ebb8c9e02450a9131a50c75a437ea1e0597a\",\"sha256:1b333e5a15548c13cfb3eeb9f9f62d844544779d34ef5fee56fd3e1807119cc5\",\"sha256:5b50e3af4de6d529425ea580bed1b65fb3a04cde88800f9188aa9d0c2ce1b4d9\"],\"onepipeline.agent_graph\":\"/srv/orchestrator/graphs/plan-task.yaml\",\"onepipeline.id\":\"spike-linear-collapsed-slot\",\"onepipeline.node\":\"spike-linear-collapsed-slot\",\"onepipeline.persona\":\"../personas/implementer.yaml\",\"onetaskgraph.copied_destination_version\":\"sha256:b5c755aaab1038b3d5627bbde7f47ca80c5f5c0481c6d33f04139d07aa1530e7\",\"onetaskgraph.copied_version\":\"md1|78d8b72bbd2bd533b2cd6a4607e8e013cf4b205863b544f0c91580d0cc851fe1\",\"onetaskgraph.copies\":{\"plans\":\"plans:I_kwDOTXCWqs8AAAABe6_SeA\"},\"onetaskgraph.copy_locations\":{\"plans\":{\"id\":\"plans:I_kwDOTXCWqs8AAAABe6_SeA\",\"location\":{\"url\":\"https://github.com/example-org/example-plans/issues/2507\"}}},\"onetaskgraph.create_key\":\"0ddc8121-80b1-509b-9639-ed16e539dd23\",\"onetaskgraph.edges_on_record\":1,\"onetaskgraph.item_kind\":\"task\",\"onetaskgraph.origin\":\"gh:I_kwDOTXCWqs8AAAABe3Kl1w\",\"onetaskgraph.template\":{\"template\":\"onepipeline:plan-task\",\"digest\":\"sha256:ba89a3517c71e94a9f0be7c3bdf1cd1861633f72e9c113429e0629075abd4af3\",\"body_digest\":\"sha256:6cf008555fc83cb134e2030a8818b028e34ea956c074f9fae38611b7bcc8c028\",\"answers_digest\":\"sha256:677fe21b65f4a6cf1d105853d51f4f0a562698aa6374cb4d279d46a99dd3e6a3\"},\"orchestrator.follow-up-sample\":{\"host\":\"lima-hp\",\"owning_runs\":\"User-rulings-bind--manager-rulings-are-challengeable\",\"basis\":\"github.com/example-org/onejudge: e1299b8ac7b4131bf3b7de587dfadda70bf7ba10\\ngithub.com/example-org/onepipeline: 5f7f4611e1a88685dd8846b50d77d06eb50d2f89\",\"drafts\":\"drafts:User-rulings-bind/drafts/20261112T195514Z-let-a-read-only-judge-decline\",\"transcripts\":\"onepipeline transcript User-rulings-bind aio-adopt-ruling-provenance\",\"witnesses\":\"none recorded (the source ticket names no witness)\",\"verified_at\":\"2026-11-13T04:36:44Z\"},\"orchestrator.follow_x_up\":\"snake_x_case and _y_ emphasis-like\",\"orchestrator.home\":\"~/plans/approx ~4 KB\",\"orchestrator.markup\":\"a \\u003cb\\u003etag\\u003c/b\\u003e and a \\u0060tick\\u0060\",\"orchestrator.owner\":\"Zoë Brontë — naïve café résumé\",\"orchestrator.quote\":\"the reviewer said \\\"ship it\\\"\",\"orchestrator.review[0]\":\"accepted [with notes]\"}`\n\n+++",
+  "state": "AaoB5KHi8AgABwELcHJvc2VtaXJyb3IDCXBhcmFncmFwaAcA5KHi8AgABgYA5KHi8AgBC2F0dHJpYnV0aW9uRHsidXNlcklkIjoiYjc2MDdiMjEtMTYzMS00MzVlLTkyZDgtZDZhNjUyODZmZjc3IiwiYWN0b3JUeXBlIjoidXNlciJ9hOSh4vAIAlRLZWVwIHRoZSBMaW5lYXIgc291cmNlJ3MgbWV0YWRhdGEgaW4gYSBjb2xsYXBzZWQgYmxvY2sgYXQgdGhlIGVuZCBvZiBlYWNoIGxvbmcgZm9ybS6G5KHi8AhWC2F0dHJpYnV0aW9uBG51bGyH5KHi8AgAAwdoZWFkaW5nBwDkoeLwCFgGBgDkoeLwCFkLYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2E5KHi8AhaB0NvbnRleHSG5KHi8AhhC2F0dHJpYnV0aW9uBG51bGwoAOSh4vAIWAVsZXZlbAF9AigA5KHi8AhYAmlkAXckYzk1YjkwZDYtOTNiMS00OWE3LTg5NGUtNGUwOGJiMjk5M2Eyh+Sh4vAIWAMJcGFyYWdyYXBoBwDkoeLwCGUGBgDkoeLwCGYLYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2E5KHi8AhniQFUaGUgc2xvdCBlbmRzIGV2ZXJ5IGlzc3VlIGRlc2NyaXB0aW9uLCBwcm9qZWN0IGNvbnRlbnQgYW5kIGRvY3VtZW50IGNvbnRlbnQgdGhpcyBzb3VyY2Ugd3JpdGVzLiBUb2RheSBpdCBzaG93cyBhcyBhIGxpbmUgb2YgbGl0ZXJhbCB0ZXh0LobkoeLwCPABC2F0dHJpYnV0aW9uBG51bGyH5KHi8AhlAwdoZWFkaW5nBwDkoeLwCPIBBgYA5KHi8AjzAQthdHRyaWJ1dGlvbkR7InVzZXJJZCI6ImI3NjA3YjIxLTE2MzEtNDM1ZS05MmQ4LWQ2YTY1Mjg2ZmY3NyIsImFjdG9yVHlwZSI6InVzZXIifYTkoeLwCPQBE0FjY2VwdGFuY2UgY3JpdGVyaWGG5KHi8AiHAgthdHRyaWJ1dGlvbgRudWxsKADkoeLwCPIBBWxldmVsAX0CKADkoeLwCPIBAmlkAXckYmJiNjI2NzItNDRkYy00MTc5LTk1Y2QtMzA5ZDY4NzkxNGE1h+Sh4vAI8gEDBXRhYmxlBwDkoeLwCIsCAwl0YWJsZV9yb3cHAOSh4vAIjAIDDHRhYmxlX2hlYWRlcgcA5KHi8AiNAgMJcGFyYWdyYXBoBwDkoeLwCI4CBgYA5KHi8AiPAgthdHRyaWJ1dGlvbkR7InVzZXJJZCI6ImI3NjA3YjIxLTE2MzEtNDM1ZS05MmQ4LWQ2YTY1Mjg2ZmY3NyIsImFjdG9yVHlwZSI6InVzZXIifYTkoeLwCJACBUNoZWNrhuSh4vAIlQILYXR0cmlidXRpb24EbnVsbCgA5KHi8AiNAgdjb2xzcGFuAX0BKADkoeLwCI0CB3Jvd3NwYW4BfQGH5KHi8AiNAgMMdGFibGVfaGVhZGVyBwDkoeLwCJkCAwlwYXJhZ3JhcGgHAOSh4vAImgIGBgDkoeLwCJsCC2F0dHJpYnV0aW9uRHsidXNlcklkIjoiYjc2MDdiMjEtMTYzMS00MzVlLTkyZDgtZDZhNjUyODZmZjc3IiwiYWN0b3JUeXBlIjoidXNlciJ9hOSh4vAInAIHQ29tbWFuZIbkoeLwCKMCC2F0dHJpYnV0aW9uBG51bGwoAOSh4vAImQIHY29sc3BhbgF9ASgA5KHi8AiZAgdyb3dzcGFuAX0Bh+Sh4vAIjAIDCXRhYmxlX3JvdwcA5KHi8AinAgMKdGFibGVfY2VsbAcA5KHi8AioAgMJcGFyYWdyYXBoBwDkoeLwCKkCBgYA5KHi8AiqAgthdHRyaWJ1dGlvbkR7InVzZXJJZCI6ImI3NjA3YjIxLTE2MzEtNDM1ZS05MmQ4LWQ2YTY1Mjg2ZmY3NyIsImFjdG9yVHlwZSI6InVzZXIifYTkoeLwCKsCB2hhcm5lc3OG5KHi8AiyAgthdHRyaWJ1dGlvbgRudWxsKADkoeLwCKgCB2NvbHNwYW4BfQEoAOSh4vAIqAIHcm93c3BhbgF9AYfkoeLwCKgCAwp0YWJsZV9jZWxsBwDkoeLwCLYCAwlwYXJhZ3JhcGgHAOSh4vAItwIGBgDkoeLwCLgCBGNvZGUCe32G5KHi8Ai5AgthdHRyaWJ1dGlvbkR7InVzZXJJZCI6ImI3NjA3YjIxLTE2MzEtNDM1ZS05MmQ4LWQ2YTY1Mjg2ZmY3NyIsImFjdG9yVHlwZSI6InVzZXIifYTkoeLwCLoCRWNhcmdvIHRlc3QgLXAgb25ldGFza2dyYXBoLWxpbmVhci1lMmUgLS10ZXN0IGUyZSBzcGlrZV9jb2xsYXBzZWRfc2xvdIbkoeLwCP8CBGNvZGUEbnVsbIbkoeLwCIADC2F0dHJpYnV0aW9uBG51bGwoAOSh4vAItgIHY29sc3BhbgF9ASgA5KHi8Ai2Agdyb3dzcGFuAX0Bh+Sh4vAIpwIDCXRhYmxlX3JvdwcA5KHi8AiEAwMKdGFibGVfY2VsbAcA5KHi8AiFAwMJcGFyYWdyYXBoBwDkoeLwCIYDBgYA5KHi8AiHAwthdHRyaWJ1dGlvbkR7InVzZXJJZCI6ImI3NjA3YjIxLTE2MzEtNDM1ZS05MmQ4LWQ2YTY1Mjg2ZmY3NyIsImFjdG9yVHlwZSI6InVzZXIifYTkoeLwCIgDD3VuY2hhbmdlZCB3cml0ZYbkoeLwCJcDC2F0dHJpYnV0aW9uBG51bGwoAOSh4vAIhQMHY29sc3BhbgF9ASgA5KHi8AiFAwdyb3dzcGFuAX0Bh+Sh4vAIhQMDCnRhYmxlX2NlbGwHAOSh4vAImwMDCXBhcmFncmFwaAcA5KHi8AicAwYGAOSh4vAInQMLYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2E5KHi8AieAw9zZW5kcyBubyB1cGRhdGWG5KHi8AitAwthdHRyaWJ1dGlvbgRudWxsKADkoeLwCJsDB2NvbHNwYW4BfQEoAOSh4vAImwMHcm93c3BhbgF9ASgA5KHi8AiLAgZzaXppbmcBdwNmaXSH5KHi8AiLAgMLYnVsbGV0X2xpc3QHAOSh4vAIsgMDCWxpc3RfaXRlbQcA5KHi8AizAwMJcGFyYWdyYXBoBwDkoeLwCLQDBgYA5KHi8Ai1AwthdHRyaWJ1dGlvbkR7InVzZXJJZCI6ImI3NjA3YjIxLTE2MzEtNDM1ZS05MmQ4LWQ2YTY1Mjg2ZmY3NyIsImFjdG9yVHlwZSI6InVzZXIifYTkoeLwCLYDL1RoZSBzdG9yZWQgdGFpbCBpcyBieXRlIGZvciBieXRlIHdoYXQgd2FzIHNlbnQuhuSh4vAI5QMLYXR0cmlidXRpb24EbnVsbIfkoeLwCLMDAwlsaXN0X2l0ZW0HAOSh4vAI5wMDCXBhcmFncmFwaAcA5KHi8AjoAwYGAOSh4vAI6QMLYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2E5KHi8AjqAzJBIHJlLXdyaXRlIG9mIHRoZSBzdG9yZWQgZm9ybSBpcyBzdG9yZWQgdW5jaGFuZ2VkLobkoeLwCJwEC2F0dHJpYnV0aW9uBG51bGyH5KHi8AiyAwMJcGFyYWdyYXBoBwDkoeLwCJ4EBgYA5KHi8AifBAthdHRyaWJ1dGlvbkR7InVzZXJJZCI6ImI3NjA3YjIxLTE2MzEtNDM1ZS05MmQ4LWQ2YTY1Mjg2ZmY3NyIsImFjdG9yVHlwZSI6InVzZXIifYTkoeLwCKAEBFJ1biCG5KHi8AikBAthdHRyaWJ1dGlvbgRudWxshuSh4vAIpQQEY29kZQJ7fYbkoeLwCKYEC2F0dHJpYnV0aW9uRHsidXNlcklkIjoiYjc2MDdiMjEtMTYzMS00MzVlLTkyZDgtZDZhNjUyODZmZjc3IiwiYWN0b3JUeXBlIjoidXNlciJ9hOSh4vAIpwQkb25ldGFza2dyYXBoIHRhc2sgc2hvdyBsaW5lYXI6VEVTMi0xhuSh4vAIywQEY29kZQRudWxshuSh4vAIzAQLYXR0cmlidXRpb24EbnVsbIbkoeLwCM0EC2F0dHJpYnV0aW9uRHsidXNlcklkIjoiYjc2MDdiMjEtMTYzMS00MzVlLTkyZDgtZDZhNjUyODZmZjc3IiwiYWN0b3JUeXBlIjoidXNlciJ9hOSh4vAIzgQRIHRvIHJlYWQgaXQgYmFjay6G5KHi8AjfBAthdHRyaWJ1dGlvbgRudWxsh+Sh4vAIngQDE2NvbGxhcHNpYmxlX3NlY3Rpb24HAOSh4vAI4QQDE2NvbGxhcHNpYmxlX2hlYWRpbmcHAOSh4vAI4gQDCXBhcmFncmFwaAcA5KHi8AjjBAYGAOSh4vAI5AQLYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2E5KHi8AjlBAZGaWVsZHOG5KHi8AjrBAthdHRyaWJ1dGlvbgRudWxsh+Sh4vAI4gQDC2J1bGxldF9saXN0BwDkoeLwCO0EAwlsaXN0X2l0ZW0HAOSh4vAI7gQDCXBhcmFncmFwaAcA5KHi8AjvBAYGAOSh4vAI8AQGc3Ryb25nAnt9huSh4vAI8QQLYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2E5KHi8AjyBAVPd25lcobkoeLwCPcEBnN0cm9uZwRudWxshuSh4vAI+AQLYXR0cmlidXRpb24EbnVsbIbkoeLwCPkEC2F0dHJpYnV0aW9uRHsidXNlcklkIjoiYjc2MDdiMjEtMTYzMS00MzVlLTkyZDgtZDZhNjUyODZmZjc3IiwiYWN0b3JUeXBlIjoidXNlciJ9hOSh4vAI+gQCOiCG5KHi8Aj8BAthdHRyaWJ1dGlvbgRudWxshuSh4vAI/QQEY29kZQJ7fYbkoeLwCP4EC2F0dHJpYnV0aW9uRHsidXNlcklkIjoiYjc2MDdiMjEtMTYzMS00MzVlLTkyZDgtZDZhNjUyODZmZjc3IiwiYWN0b3JUeXBlIjoidXNlciJ9hOSh4vAI/wQEbmlja4bkoeLwCIMFBGNvZGUEbnVsbIbkoeLwCIQFC2F0dHJpYnV0aW9uBG51bGyH5KHi8AjuBAMJbGlzdF9pdGVtBwDkoeLwCIYFAwlwYXJhZ3JhcGgHAOSh4vAIhwUGBgDkoeLwCIgFBnN0cm9uZwJ7fYbkoeLwCIkFC2F0dHJpYnV0aW9uRHsidXNlcklkIjoiYjc2MDdiMjEtMTYzMS00MzVlLTkyZDgtZDZhNjUyODZmZjc3IiwiYWN0b3JUeXBlIjoidXNlciJ9hOSh4vAIigUDQmFyhuSh4vAIjQUGc3Ryb25nBG51bGyG5KHi8AiOBQthdHRyaWJ1dGlvbgRudWxshuSh4vAIjwULYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2E5KHi8AiQBQI6IIbkoeLwCJIFC2F0dHJpYnV0aW9uBG51bGyG5KHi8AiTBQRjb2RlAnt9huSh4vAIlAULYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2E5KHi8AiVBQ9kZXNpZ24tYXBwcm92YWyG5KHi8AikBQRjb2RlBG51bGyG5KHi8AilBQthdHRyaWJ1dGlvbgRudWxsKADkoeLwCOEEAmlkAXckMjRiYTc3YzUtZDFiMi00YWRhLTk0MmQtMWMyZjNlNjQyYTVkKADkoeLwCOEEEndhc0NvcGllZFdoaWxlT3BlbgF/h+Sh4vAI4QQDE2NvbGxhcHNpYmxlX3NlY3Rpb24HAOSh4vAIqQUDE2NvbGxhcHNpYmxlX2hlYWRpbmcHAOSh4vAIqgUDCXBhcmFncmFwaAcA5KHi8AirBQYGAOSh4vAIrAULYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2E5KHi8AitBRVvbmV0YXNrZ3JhcGggbWV0YWRhdGGG5KHi8AjCBQthdHRyaWJ1dGlvbgRudWxsh+Sh4vAIqgUDCXBhcmFncmFwaAcA5KHi8AjEBQYGAOSh4vAIxQUEY29kZQJ7fYbkoeLwCMYFC2F0dHJpYnV0aW9uRHsidXNlcklkIjoiYjc2MDdiMjEtMTYzMS00MzVlLTkyZDgtZDZhNjUyODZmZjc3IiwiYWN0b3JUeXBlIjoidXNlciJ9hOSh4vAIxwUTb25ldGFza2dyYXBoLmZpZWxkc4bkoeLwCNoFBGNvZGUEbnVsbIbkoeLwCNsFC2F0dHJpYnV0aW9uBG51bGyH5KHi8AjEBQMJcGFyYWdyYXBoBwDkoeLwCN0FBgYA5KHi8AjeBQRjb2RlAnt9huSh4vAI3wULYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2E5KHi8AjgBcAfeyJvbmVwaXBlbGluZS5hY2NlcHRhbmNlX2RpZ2VzdHMiOlsic2hhMjU2OjMzYjU2Mjg0OWZhZWYwMGJmMGVkYzkxN2MzMzljMTJkMWZiMjQ2YjAxMmU2YmY4Yzc0M2ExNGFhMmI3Zjk0YWUiLCJzaGEyNTY6MDg3M2I4ZTU2NDRiODJhOGExYzhkNjJhYWIxOGM4MjMyYWEwMzgzNzUyMzZlNDZjOGFkYjk5MTY0ODA4NDlkMCIsInNoYTI1NjozZTRiZGVhNzA2NDFiN2Y1MTJkMzQyZWE5Nzg2Nzc4YjZhMzEwZTViOWMyZTc4OTY1OTdmYjlkNTYxY2I4ZDVhIiwic2hhMjU2OmY4M2FmYjdiYzJjZGYwMGMzMWQxZjY5NmI5MTIwZjQ1ZjkyMDQ5NThlMGQ1N2NiZGE4MjIzODE5YzdhNjQ4OGIiLCJzaGEyNTY6Mjc0MmM0YzlkNDRmNzQ3YzQ1Y2M1MjlmOWExNmRjODQ1MzFkNDMzYmE0NzFhMzMxOGZjOWMwMzY1NzViZTk2YSIsInNoYTI1Njo1M2ExYjliMDc4MTM5NzI1NDAxMTZiYWMyMTBkNTUwY2Y2MzM3YjVmZWNmZDZjNzU0YjMwMjZmYmY1ZWJmN2Y0Iiwic2hhMjU2OjcyM2E5NjQ0MWUyNDU5ZWEyMTIwMjM2Y2E5NWZiNTJjYjBhYzE1YmM5NjAwYTQ2YTZhMzNmZDNkYWM2YWFlYzgiLCJzaGEyNTY6NjI4YTU2MjMyNTVkOTFmZTNjNzI4OTYyM2M4NTgzMzcxNmQ2ZmMwNDliMGI2ZGE1OTBiZmIyOTAxZWE0Yzc0OSIsInNoYTI1Njo1Njg3MjQxNGVjMTY3Yjg4ZmY5MWFkNWViNmQzYmU2N2JhNWIxNDY0YjA3Zjg2MTIxZGNkZmRlNzM5ZDlkZjY0Iiwic2hhMjU2OmEyNWZmYTQ2M2Q0MTA4NjQ5ZjBkNGQyNzRjNWVlMGY4NTQ2YTRiZWZhMDQ0ODIzOTJmYWEwNWFmZGRlZGNkZTciLCJzaGEyNTY6Mzg4YzkyMzExMjg1MTk4ZjE5NTNiZGQ4ZjAyMmI3ZWYxNDIzZTE3YjZlMmVjMjk4MDBlNmQ0NjEyYTEwOGFhZSIsInNoYTI1Njo1NzdkNzJkNjE3MjA2YTJiZWY3ODYyZjBkMDQ4MzljZGZhZWEzMmE2Y2Y5YTFjMzUzYjQ3ZGFiYTIxN2UyNzk0Iiwic2hhMjU2OmQ3ZTc5NmMyM2EwN2YwN2ViY2QyOWMzOGEyM2YxNTFiMjFjOWRkOGE5OGE2Y2EyNjFiMGU4MWQyNDYxZWY3Y2YiLCJzaGEyNTY6MDNmZTMzMzZjOGNmNDlhYjM1ODk0OGUyMjU4MjlhYmVkMWY4Y2UyNjg1MGNmZmJmNmZhYmYxYjVlOWI2NzNkYyIsInNoYTI1Njo0ZDRiMDg5OWVmMDVkMWY0NDIxNDM3Mzg5NzU5YzE4NDc5ZjZmZjcwYzA1OWY5M2QzYzAyNWIzZjA2ZTFmNDQxIiwic2hhMjU2OjhiYTU1ZTcyMjcxYTE1MTViNDkxNDQzMTcyNzViZTIxNmQxNTYyYTRjNDczNzI2YzVkODc4MzU1ZTk4NDQ5MDMiLCJzaGEyNTY6OTQ1ZWZlOTY2MmIxOWQ0YTI0MTA5N2IzMTk1YzE4YzYzMzM5NWYyY2JjN2YyNTdmZTkzZDU2MDg3YmZlYjg3NyIsInNoYTI1NjpkZGZiZGFjNDY5NDQ3NDQyNWRiN2ZlNzU5YTA4NWU4N2RlMWU0N2ExM2MyMTllM2NhYTIyNzE0ZmM0MzJlOGE1Iiwic2hhMjU2OjhhMTNmMTQzOWJjMzczMDc2NzQzNWFlMzRiZmQ4OTgwZDUxM2JlY2UzMTg3M2FkODY4ZGMzZDRiZGIwOGM5YTQiLCJzaGEyNTY6ZWViZTY0YTM2NWE2Yjc3YTlhMjZkMmVmMTM1ZWEyMzRjMDJkZjJmYjg3ZWNhOTVkZTdhZDQ5ZjlhYWRiNzQxYiIsInNoYTI1NjozOGFhMjI1M2U0NGYyOTUwMDVhZTU1NWJlMGQ3ZDQ3MzFkM2M5MWM0MzgyYTZkMTgyMGFhOTE4OWMyMDAxODQyIiwic2hhMjU2OjhmNmMxMGYwZDU5OTAzNDQzNGYwYjc1MzI5MTZkYzk0ZGE0ZDIyNjkzNGM4YmMwZTE5NWZiOGJlNGQzNjUwNWYiLCJzaGEyNTY6Mjc0MjVkMmQ3M2Y3M2E5YWMwZjAyYTdiN2Q4ODAwOWEzMzcxZTAwNzFhOTg5ZDgxNmVjY2I0YzFmM2ExOWIyOCIsInNoYTI1NjoxMGRjMWY0ODZmOWY3ZTVhMmIyZjhlNjdhMzE2ZWJiOGM5ZTAyNDUwYTkxMzFhNTBjNzVhNDM3ZWExZTA1OTdhIiwic2hhMjU2OjFiMzMzZTVhMTU1NDhjMTNjZmIzZWViOWY5ZjYyZDg0NDU0NDc3OWQzNGVmNWZlZTU2ZmQzZTE4MDcxMTljYzUiLCJzaGEyNTY6NWI1MGUzYWY0ZGU2ZDUyOTQyNWVhNTgwYmVkMWI2NWZiM2EwNGNkZTg4ODAwZjkxODhhYTlkMGMyY2UxYjRkOSJdLCJvbmVwaXBlbGluZS5hZ2VudF9ncmFwaCI6Ii9zcnYvb3JjaGVzdHJhdG9yL2dyYXBocy9wbGFuLXRhc2sueWFtbCIsIm9uZXBpcGVsaW5lLmlkIjoic3Bpa2UtbGluZWFyLWNvbGxhcHNlZC1zbG90Iiwib25lcGlwZWxpbmUubm9kZSI6InNwaWtlLWxpbmVhci1jb2xsYXBzZWQtc2xvdCIsIm9uZXBpcGVsaW5lLnBlcnNvbmEiOiIuLi9wZXJzb25hcy9pbXBsZW1lbnRlci55YW1sIiwib25ldGFza2dyYXBoLmNvcGllZF9kZXN0aW5hdGlvbl92ZXJzaW9uIjoic2hhMjU2OmI1Yzc1NWFhYWIxMDM4YjNkNTYyN2JiZGU3ZjQ3Y2E4MGM1ZjVjMDQ4MWM2ZDMzZjA0MTM5ZDA3YWExNTMwZTciLCJvbmV0YXNrZ3JhcGguY29waWVkX3ZlcnNpb24iOiJtZDF8NzhkOGI3MmJiZDJiZDUzM2IyY2Q2YTQ2MDdlOGUwMTNjZjRiMjA1ODYzYjU0NGYwYzkxNTgwZDBjYzg1MWZlMSIsIm9uZXRhc2tncmFwaC5jb3BpZXMiOnsicGxhbnMiOiJwbGFuczpJX2t3RE9UWENXcXM4QUFBQUJlNl9TZUEifSwib25ldGFza2dyYXBoLmNvcHlfbG9jYXRpb25zIjp7InBsYW5zIjp7ImlkIjoicGxhbnM6SV9rd0RPVFhDV3FzOEFBQUFCZTZfU2VBIiwibG9jYXRpb24iOnsidXJsIjoiaHR0cHM6Ly9naXRodWIuY29tL2V4YW1wbGUtb3JnL2V4YW1wbGUtcGxhbnMvaXNzdWVzLzI1MDcifX19LCJvbmV0YXNrZ3JhcGguY3JlYXRlX2tleSI6IjBkZGM4MTIxLTgwYjEtNTA5Yi05NjM5LWVkMTZlNTM5ZGQyMyIsIm9uZXRhc2tncmFwaC5lZGdlc19vbl9yZWNvcmQiOjEsIm9uZXRhc2tncmFwaC5pdGVtX2tpbmQiOiJ0YXNrIiwib25ldGFza2dyYXBoLm9yaWdpbiI6ImdoOklfa3dET1RYQ1dxczhBQUFBQmUzS2wxdyIsIm9uZXRhc2tncmFwaC50ZW1wbGF0ZSI6eyJ0ZW1wbGF0ZSI6Im9uZXBpcGVsaW5lOnBsYW4tdGFzayIsImRpZ2VzdCI6InNoYTI1NjpiYTg5YTM1MTdjNzFlOTRhOWYwYmU3YzNiZGYxY2QxODYxNjMzZjcyZTljMTEzNDI5ZTA2MjkwNzVhYmQ0YWYzIiwiYm9keV9kaWdlc3QiOiJzaGEyNTY6NmNmMDA4NTU1ZmM4M2NiMTM0ZTIwMzBhODgxOGIwMjhlMzRlYTk1NmMwNzRmOWZhZTM4NjExYjdiY2M4YzAyOCIsImFuc3dlcnNfZGlnZXN0Ijoic2hhMjU2OjY3N2ZlMjFiNjVmNGE2Y2YxZDEwNTg1M2Q1MWY0ZjBhNTYyNjk4YWE2Mzc0Y2I0ZDI3OWQ0NmE5OWRkM2U2YTMifSwib3JjaGVzdHJhdG9yLmZvbGxvdy11cC1zYW1wbGUiOnsiaG9zdCI6ImxpbWEtaHAiLCJvd25pbmdfcnVucyI6IlVzZXItcnVsaW5ncy1iaW5kLS1tYW5hZ2VyLXJ1bGluZ3MtYXJlLWNoYWxsZW5nZWFibGUiLCJiYXNpcyI6ImdpdGh1Yi5jb20vZXhhbXBsZS1vcmcvb25lanVkZ2U6IGUxMjk5YjhhYzdiNDEzMWJmM2I3ZGU1ODdkZmFkZGE3MGJmN2JhMTBcbmdpdGh1Yi5jb20vZXhhbXBsZS1vcmcvb25lcGlwZWxpbmU6IDVmN2Y0NjExZTFhODg2ODVkZDg4NDZiNTBkNzdkMDZlYjUwZDJmODkiLCJkcmFmdHMiOiJkcmFmdHM6VXNlci1ydWxpbmdzLWJpbmQvZHJhZnRzLzIwMjYxMTEyVDE5NTUxNFotbGV0LWEtcmVhZC1vbmx5LWp1ZGdlLWRlY2xpbmUiLCJ0cmFuc2NyaXB0cyI6Im9uZXBpcGVsaW5lIHRyYW5zY3JpcHQgVXNlci1ydWxpbmdzLWJpbmQgYWlvLWFkb3B0LXJ1bGluZy1wcm92ZW5hbmNlIiwid2l0bmVzc2VzIjoibm9uZSByZWNvcmRlZCAodGhlIHNvdXJjZSB0aWNrZXQgbmFtZXMgbm8gd2l0bmVzcykiLCJ2ZXJpZmllZF9hdCI6IjIwMjYtMTEtMTNUMDQ6MzY6NDRaIn0sIm9yY2hlc3RyYXRvci5mb2xsb3dfeF91cCI6InNuYWtlX3hfY2FzZSBhbmQgX3lfIGVtcGhhc2lzLWxpa2UiLCJvcmNoZXN0cmF0b3IuaG9tZSI6In4vcGxhbnMvYXBwcm94IH40IEtCIiwib3JjaGVzdHJhdG9yLm1hcmt1cCI6ImEgXHUwMDNjYlx1MDAzZXRhZ1x1MDAzYy9iXHUwMDNlIGFuZCBhIFx1MDA2MHRpY2tcdTAwNjAiLCJvcmNoZXN0cmF0b3Iub3duZXIiOiJab8OrIEJyb250w6sg4oCUIG5hw692ZSBjYWbDqSByw6lzdW3DqSIsIm9yY2hlc3RyYXRvci5xdW90ZSI6InRoZSByZXZpZXdlciBzYWlkIFwic2hpcCBpdFwiIiwib3JjaGVzdHJhdG9yLnJldmlld1swXSI6ImFjY2VwdGVkIFt3aXRoIG5vdGVzXSJ9huSh4vAImCUEY29kZQRudWxshuSh4vAImSULYXR0cmlidXRpb24EbnVsbCgA5KHi8AipBQJpZAF3JGUwYjRhNDRmLThkMDAtNDg0OC1iYjJmLTAyMjI0OWE1MjlmMSgA5KHi8AipBRJ3YXNDb3BpZWRXaGlsZU9wZW4BfwA=",
+  "node_tree": {
+    "type": "doc",
+    "content": [
+      {
+        "type": "paragraph",
+        "attrs": {},
+        "content": [
+          {
+            "type": "#text",
+            "runs": [
+              {
+                "marks": {},
+                "text": "Keep the Linear source's metadata in a collapsed block at the end of each long form."
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "heading",
+        "attrs": {
+          "id": "c95b90d6-93b1-49a7-894e-4e08bb2993a2",
+          "level": 2.0
+        },
+        "content": [
+          {
+            "type": "#text",
+            "runs": [
+              {
+                "marks": {},
+                "text": "Context"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "paragraph",
+        "attrs": {},
+        "content": [
+          {
+            "type": "#text",
+            "runs": [
+              {
+                "marks": {},
+                "text": "The slot ends every issue description, project content and document content this source writes. Today it shows as a line of literal text."
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "heading",
+        "attrs": {
+          "id": "bbb62672-44dc-4179-95cd-309d687914a5",
+          "level": 2.0
+        },
+        "content": [
+          {
+            "type": "#text",
+            "runs": [
+              {
+                "marks": {},
+                "text": "Acceptance criteria"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "table",
+        "attrs": {
+          "sizing": "fit"
+        },
+        "content": [
+          {
+            "type": "table_row",
+            "attrs": {},
+            "content": [
+              {
+                "type": "table_header",
+                "attrs": {
+                  "colspan": 1.0,
+                  "rowspan": 1.0
+                },
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "attrs": {},
+                    "content": [
+                      {
+                        "type": "#text",
+                        "runs": [
+                          {
+                            "marks": {},
+                            "text": "Check"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "type": "table_header",
+                "attrs": {
+                  "colspan": 1.0,
+                  "rowspan": 1.0
+                },
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "attrs": {},
+                    "content": [
+                      {
+                        "type": "#text",
+                        "runs": [
+                          {
+                            "marks": {},
+                            "text": "Command"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "table_row",
+            "attrs": {},
+            "content": [
+              {
+                "type": "table_cell",
+                "attrs": {
+                  "colspan": 1.0,
+                  "rowspan": 1.0
+                },
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "attrs": {},
+                    "content": [
+                      {
+                        "type": "#text",
+                        "runs": [
+                          {
+                            "marks": {},
+                            "text": "harness"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "type": "table_cell",
+                "attrs": {
+                  "colspan": 1.0,
+                  "rowspan": 1.0
+                },
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "attrs": {},
+                    "content": [
+                      {
+                        "type": "#text",
+                        "runs": [
+                          {
+                            "marks": {
+                              "code": {}
+                            },
+                            "text": "cargo test -p onetaskgraph-linear-e2e --test e2e spike_collapsed_slot"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "table_row",
+            "attrs": {},
+            "content": [
+              {
+                "type": "table_cell",
+                "attrs": {
+                  "colspan": 1.0,
+                  "rowspan": 1.0
+                },
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "attrs": {},
+                    "content": [
+                      {
+                        "type": "#text",
+                        "runs": [
+                          {
+                            "marks": {},
+                            "text": "unchanged write"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "type": "table_cell",
+                "attrs": {
+                  "colspan": 1.0,
+                  "rowspan": 1.0
+                },
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "attrs": {},
+                    "content": [
+                      {
+                        "type": "#text",
+                        "runs": [
+                          {
+                            "marks": {},
+                            "text": "sends no update"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "bullet_list",
+        "attrs": {},
+        "content": [
+          {
+            "type": "list_item",
+            "attrs": {},
+            "content": [
+              {
+                "type": "paragraph",
+                "attrs": {},
+                "content": [
+                  {
+                    "type": "#text",
+                    "runs": [
+                      {
+                        "marks": {},
+                        "text": "The stored tail is byte for byte what was sent."
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "list_item",
+            "attrs": {},
+            "content": [
+              {
+                "type": "paragraph",
+                "attrs": {},
+                "content": [
+                  {
+                    "type": "#text",
+                    "runs": [
+                      {
+                        "marks": {},
+                        "text": "A re-write of the stored form is stored unchanged."
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "paragraph",
+        "attrs": {},
+        "content": [
+          {
+            "type": "#text",
+            "runs": [
+              {
+                "marks": {},
+                "text": "Run "
+              },
+              {
+                "marks": {
+                  "code": {}
+                },
+                "text": "onetaskgraph task show linear:TES2-1"
+              },
+              {
+                "marks": {},
+                "text": " to read it back."
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "collapsible_section",
+        "attrs": {
+          "id": "24ba77c5-d1b2-4ada-942d-1c2f3e642a5d",
+          "wasCopiedWhileOpen": null
+        },
+        "content": [
+          {
+            "type": "collapsible_heading",
+            "attrs": {},
+            "content": [
+              {
+                "type": "paragraph",
+                "attrs": {},
+                "content": [
+                  {
+                    "type": "#text",
+                    "runs": [
+                      {
+                        "marks": {},
+                        "text": "Fields"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "bullet_list",
+            "attrs": {},
+            "content": [
+              {
+                "type": "list_item",
+                "attrs": {},
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "attrs": {},
+                    "content": [
+                      {
+                        "type": "#text",
+                        "runs": [
+                          {
+                            "marks": {
+                              "strong": {}
+                            },
+                            "text": "Owner"
+                          },
+                          {
+                            "marks": {},
+                            "text": ": "
+                          },
+                          {
+                            "marks": {
+                              "code": {}
+                            },
+                            "text": "nick"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "type": "list_item",
+                "attrs": {},
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "attrs": {},
+                    "content": [
+                      {
+                        "type": "#text",
+                        "runs": [
+                          {
+                            "marks": {
+                              "strong": {}
+                            },
+                            "text": "Bar"
+                          },
+                          {
+                            "marks": {},
+                            "text": ": "
+                          },
+                          {
+                            "marks": {
+                              "code": {}
+                            },
+                            "text": "design-approval"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "collapsible_section",
+        "attrs": {
+          "id": "e0b4a44f-8d00-4848-bb2f-022249a529f1",
+          "wasCopiedWhileOpen": null
+        },
+        "content": [
+          {
+            "type": "collapsible_heading",
+            "attrs": {},
+            "content": [
+              {
+                "type": "paragraph",
+                "attrs": {},
+                "content": [
+                  {
+                    "type": "#text",
+                    "runs": [
+                      {
+                        "marks": {},
+                        "text": "onetaskgraph metadata"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "paragraph",
+            "attrs": {},
+            "content": [
+              {
+                "type": "#text",
+                "runs": [
+                  {
+                    "marks": {
+                      "code": {}
+                    },
+                    "text": "onetaskgraph.fields"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "paragraph",
+            "attrs": {},
+            "content": [
+              {
+                "type": "#text",
+                "runs": [
+                  {
+                    "marks": {
+                      "code": {}
+                    },
+                    "text": "{\"onepipeline.acceptance_digests\":[\"sha256:33b562849faef00bf0edc917c339c12d1fb246b012e6bf8c743a14aa2b7f94ae\",\"sha256:0873b8e5644b82a8a1c8d62aab18c8232aa038375236e46c8adb9916480849d0\",\"sha256:3e4bdea70641b7f512d342ea9786778b6a310e5b9c2e7896597fb9d561cb8d5a\",\"sha256:f83afb7bc2cdf00c31d1f696b9120f45f9204958e0d57cbda8223819c7a6488b\",\"sha256:2742c4c9d44f747c45cc529f9a16dc84531d433ba471a3318fc9c036575be96a\",\"sha256:53a1b9b07813972540116bac210d550cf6337b5fecfd6c754b3026fbf5ebf7f4\",\"sha256:723a96441e2459ea2120236ca95fb52cb0ac15bc9600a46a6a33fd3dac6aaec8\",\"sha256:628a5623255d91fe3c7289623c85833716d6fc049b0b6da590bfb2901ea4c749\",\"sha256:56872414ec167b88ff91ad5eb6d3be67ba5b1464b07f86121dcdfde739d9df64\",\"sha256:a25ffa463d4108649f0d4d274c5ee0f8546a4befa04482392faa05afddedcde7\",\"sha256:388c92311285198f1953bdd8f022b7ef1423e17b6e2ec29800e6d4612a108aae\",\"sha256:577d72d617206a2bef7862f0d04839cdfaea32a6cf9a1c353b47daba217e2794\",\"sha256:d7e796c23a07f07ebcd29c38a23f151b21c9dd8a98a6ca261b0e81d2461ef7cf\",\"sha256:03fe3336c8cf49ab358948e225829abed1f8ce26850cffbf6fabf1b5e9b673dc\",\"sha256:4d4b0899ef05d1f4421437389759c18479f6ff70c059f93d3c025b3f06e1f441\",\"sha256:8ba55e72271a1515b49144317275be216d1562a4c473726c5d878355e9844903\",\"sha256:945efe9662b19d4a241097b3195c18c633395f2cbc7f257fe93d56087bfeb877\",\"sha256:ddfbdac4694474425db7fe759a085e87de1e47a13c219e3caa22714fc432e8a5\",\"sha256:8a13f1439bc3730767435ae34bfd8980d513bece31873ad868dc3d4bdb08c9a4\",\"sha256:eebe64a365a6b77a9a26d2ef135ea234c02df2fb87eca95de7ad49f9aadb741b\",\"sha256:38aa2253e44f295005ae555be0d7d4731d3c91c4382a6d1820aa9189c2001842\",\"sha256:8f6c10f0d599034434f0b7532916dc94da4d226934c8bc0e195fb8be4d36505f\",\"sha256:27425d2d73f73a9ac0f02a7b7d88009a3371e0071a989d816eccb4c1f3a19b28\",\"sha256:10dc1f486f9f7e5a2b2f8e67a316ebb8c9e02450a9131a50c75a437ea1e0597a\",\"sha256:1b333e5a15548c13cfb3eeb9f9f62d844544779d34ef5fee56fd3e1807119cc5\",\"sha256:5b50e3af4de6d529425ea580bed1b65fb3a04cde88800f9188aa9d0c2ce1b4d9\"],\"onepipeline.agent_graph\":\"/srv/orchestrator/graphs/plan-task.yaml\",\"onepipeline.id\":\"spike-linear-collapsed-slot\",\"onepipeline.node\":\"spike-linear-collapsed-slot\",\"onepipeline.persona\":\"../personas/implementer.yaml\",\"onetaskgraph.copied_destination_version\":\"sha256:b5c755aaab1038b3d5627bbde7f47ca80c5f5c0481c6d33f04139d07aa1530e7\",\"onetaskgraph.copied_version\":\"md1|78d8b72bbd2bd533b2cd6a4607e8e013cf4b205863b544f0c91580d0cc851fe1\",\"onetaskgraph.copies\":{\"plans\":\"plans:I_kwDOTXCWqs8AAAABe6_SeA\"},\"onetaskgraph.copy_locations\":{\"plans\":{\"id\":\"plans:I_kwDOTXCWqs8AAAABe6_SeA\",\"location\":{\"url\":\"https://github.com/example-org/example-plans/issues/2507\"}}},\"onetaskgraph.create_key\":\"0ddc8121-80b1-509b-9639-ed16e539dd23\",\"onetaskgraph.edges_on_record\":1,\"onetaskgraph.item_kind\":\"task\",\"onetaskgraph.origin\":\"gh:I_kwDOTXCWqs8AAAABe3Kl1w\",\"onetaskgraph.template\":{\"template\":\"onepipeline:plan-task\",\"digest\":\"sha256:ba89a3517c71e94a9f0be7c3bdf1cd1861633f72e9c113429e0629075abd4af3\",\"body_digest\":\"sha256:6cf008555fc83cb134e2030a8818b028e34ea956c074f9fae38611b7bcc8c028\",\"answers_digest\":\"sha256:677fe21b65f4a6cf1d105853d51f4f0a562698aa6374cb4d279d46a99dd3e6a3\"},\"orchestrator.follow-up-sample\":{\"host\":\"lima-hp\",\"owning_runs\":\"User-rulings-bind--manager-rulings-are-challengeable\",\"basis\":\"github.com/example-org/onejudge: e1299b8ac7b4131bf3b7de587dfadda70bf7ba10\\ngithub.com/example-org/onepipeline: 5f7f4611e1a88685dd8846b50d77d06eb50d2f89\",\"drafts\":\"drafts:User-rulings-bind/drafts/20261112T195514Z-let-a-read-only-judge-decline\",\"transcripts\":\"onepipeline transcript User-rulings-bind aio-adopt-ruling-provenance\",\"witnesses\":\"none recorded (the source ticket names no witness)\",\"verified_at\":\"2026-11-13T04:36:44Z\"},\"orchestrator.follow_x_up\":\"snake_x_case and _y_ emphasis-like\",\"orchestrator.home\":\"~/plans/approx ~4 KB\",\"orchestrator.markup\":\"a \\u003cb\\u003etag\\u003c/b\\u003e and a \\u0060tick\\u0060\",\"orchestrator.owner\":\"Zoë Brontë — naïve café résumé\",\"orchestrator.quote\":\"the reviewer said \\\"ship it\\\"\",\"orchestrator.review[0]\":\"accepted [with notes]\"}"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "headings": []
+}

@@ -58,7 +58,7 @@ use crate::{
 /// that it moves whenever [`schema_bundle`] below emits a different document. The golden
 /// that holds it to that is `PUBLISHED_BUNDLES` in `tests/engine.rs`, which records every
 /// root's schema by digest from this version on.
-pub const SCHEMA_BUNDLE_VERSION: u32 = 66;
+pub const SCHEMA_BUNDLE_VERSION: u32 = 67;
 
 /// The same typed envelope the command line serializes, keeping the payload's root name.
 pub(crate) fn write_answer_schema<T: schemars::JsonSchema>() -> Schema {
@@ -336,6 +336,8 @@ pub fn schema_bundle() -> Value {
     // each item it landed.
     roots.insert("SourceRoute", schema_for!(SourceRoute));
     roots.extend(crate::engine::sweep_schemas());
+    // What `sources migrate` rewrote of one source's superseded stored forms.
+    roots.extend(crate::engine::migrate_schemas());
     roots.extend(crate::boundary::schemas());
     roots.insert("Placement", schema_for!(Placement));
     roots.insert("Setting", schema_for!(Setting));

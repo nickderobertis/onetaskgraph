@@ -898,7 +898,9 @@ fn measure_linear_requests_per_relation_batch() {
 /// The `## Links` section of a stored description — its heading up to the metadata slot.
 fn links_section(stored: &str) -> String {
     let start = stored.find("## Links\n").unwrap_or(stored.len());
-    let end = stored.find("<!--").unwrap_or(stored.len());
+    let end = stored
+        .find("+++ onetaskgraph metadata")
+        .unwrap_or(stored.len());
     stored[start..end.max(start)].trim_end().to_owned()
 }
 

@@ -833,6 +833,16 @@ mod tests {
                 "| a |\n| -- |\n\n\n<!-- onetaskgraph.metadata `{}` -->",
                 "| a |\n| -- |\n\n<!-- onetaskgraph.metadata `{}` -->",
             ),
+            // And the collapsed block the source writes now, the same way.
+            (
+                "| a |\n| -- |\n\n\n+++ onetaskgraph metadata\n\n`{}`\n\n+++",
+                "| a |\n| -- |\n\n+++ onetaskgraph metadata\n\n`{}`\n\n+++",
+            ),
+            // A `Fields` section's `- ` bullets stored as `* `, which is why the source writes `* `.
+            (
+                "+++ Fields\n\n- **Owner**: `nick`\n\n+++",
+                "+++ Fields\n\n* **Owner**: `nick`\n\n+++",
+            ),
         ] {
             assert_eq!(stored(sent), wanted, "{sent:?}");
             assert_eq!(stored(wanted), wanted, "storing {wanted:?} again");
@@ -843,6 +853,9 @@ mod tests {
     fn a_slot_a_fence_and_a_code_span_are_kept_byte_for_byte() {
         for kept in [
             "<!-- onetaskgraph.metadata `{\"k\":\"[x] ~ _y_ ** \\u0060\"}` -->",
+            "+++ onetaskgraph metadata\n\n`{\"k\":\"[x] ~ _y_ ** example.com \\u0060\"}`\n\n+++",
+            "+++ Fields\n\n* **Owner**: `nick`\n* **Bar**: `design-approval`\n\n+++\n\n\
+             +++ onetaskgraph metadata\n\n`onetaskgraph.fields`\n\n`{\"k\":1}`\n\n+++",
             "`- [x] _y_ example.com ~ **`",
             "```\n- a **b\n    c\n```",
         ] {

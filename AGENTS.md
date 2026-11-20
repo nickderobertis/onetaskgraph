@@ -88,6 +88,7 @@ silence. See the note on `Health` below for the one difference it carries delibe
   `StatusNames`, `StatusName` and `UnmappedStatus`; the image-asset types `Asset`,
   `AssetName`, `AssetContentType`, `AssetPayload`, `AssetUpload`, `AssetUploads`, `AssetWrite`
   and `AssetsWritten`; the clock types `Clock`, `SharedClock` and `WaitCause`; the held-write type `HeldVersion`;
+  the stored-form migration types `StoredFormMigration`, `MigratedItem` and `MigrationFailure`;
   the closure types `IssueRef`,
   `IssueHolding`, `HeldTask`, `Completion`, `ClosedAs`, `StatusContradiction` and
   `ContradictedItem`; the local-cache types
@@ -1618,6 +1619,17 @@ them do; this is the inventory of what is owed, not a status board.
      landed; on Linear a stored `## Links` section with `*` bullets and extra blank lines reads
      back without it. Both record one relation batch's cost as telemetry
      (`github-points-per-relation-batch`, `linear-requests-per-relation-batch`).
+165. A task, a project and a document a `linear` source creates, updates, copies in and writes
+     with a `Fields` section end in exactly the collapsed `+++ onetaskgraph metadata` block — after
+     a `* `-bulleted `+++ Fields` section and the `` `onetaskgraph.fields` `` sentinel when one is
+     configured — and the text a person sees with every collapsed node closed holds no metadata
+     and no HTML comment; each legacy comment spelling reads as before, its first write sends one
+     update writing the block and its repeat none; and a caller's own expandable block of any
+     summary reads back as itself, one ending the content refused only when no metadata follows.
+166. `sources migrate` rewrites each Linear item still in a legacy spelling with one update,
+     reports what it left, fails an item Linear refuses with exit 1, rewrites nothing a second
+     time and nothing under `--dry-run`; a folder of Markdown and a stdio peer declaring no
+     migration are reported as holding nothing to migrate and are sent nothing.
 
 ## The public boundary
 

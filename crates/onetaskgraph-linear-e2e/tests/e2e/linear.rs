@@ -632,9 +632,24 @@ fn a_metadata_set_moves_a_linear_tasks_change_token_past_the_one_read_before_it(
 
 /// `field` split at its trailing slot: the bytes above it, and the slot's parsed JSON.
 ///
-/// Either spelling: the one-line code span a source writes, and the multi-line one a
-/// workspace seeded before it holds.
+/// Every spelling: the collapsed block a source writes, and the one-line code span and the
+/// multi-line comment an earlier release wrote, which a workspace seeded before it holds.
 fn split_slot(field: &str) -> (String, Value) {
+    // The collapsed block this source writes: its payload is the last code span before the close.
+    if let Some(start) = field.rfind("+++ onetaskgraph metadata\n\n") {
+        let body = field[start..]
+            .trim_end_matches('\n')
+            .trim_end_matches("\n\n+++");
+        let encoded = body.rsplit('\n').next().unwrap_or_default();
+        let encoded = encoded
+            .strip_prefix('`')
+            .and_then(|span| span.strip_suffix('`'));
+        return (
+            field[..start].to_owned(),
+            serde_json::from_str(encoded.expect("the block holds one code span"))
+                .expect("the block holds JSON"),
+        );
+    }
     let start = field
         .rfind("<!-- onetaskgraph.metadata")
         .expect("the field ends in a slot");

@@ -302,7 +302,14 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
     let bundle: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("schema output is valid JSON");
 
-    assert_eq!(bundle["version"], 66);
+    assert_eq!(bundle["version"], 67);
+    // Version 67: `StoredFormsMigrated`, what `sources migrate` answers.
+    for member in ["source", "dry_run", "rewritten", "current", "failed"] {
+        assert!(
+            bundle["roots"]["StoredFormsMigrated"]["properties"][member].is_object(),
+            "a migration report names {member}"
+        );
+    }
     // Version 66: `TaskContentDigest`, what `task digest` answers.
     assert_eq!(
         bundle["roots"]["TaskContentDigest"]["required"],
@@ -446,6 +453,7 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
             "sources fields",
             "sources route",
             "sources sanitize",
+            "sources migrate",
             "task list",
             "task show",
             "task show-many",

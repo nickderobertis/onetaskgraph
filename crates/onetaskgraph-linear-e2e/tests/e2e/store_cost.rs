@@ -795,6 +795,58 @@ fn held_back(errors: &[onetaskgraph_core::SourceFailure]) -> Option<(Option<u64>
     }
 }
 
+/// A migration Linear answers rate limited, through the engine the binary builds on a
+/// hand-moved clock: it fails naming the wait, the next migration before the reset sends nothing
+/// and is told the seconds left, and the first one at the reset reaches Linear and is answered.
+#[test]
+fn a_migration_answered_rate_limited_holds_linear_off_until_its_reset() {
+    let (_sandbox, linear, engine, clock) = held_engine();
+    let source = onetaskgraph_plugin_api::SourceName::new("linear").unwrap();
+    let limited = |error: onetaskgraph_core::EngineError| match error {
+        onetaskgraph_core::EngineError::SourceRefused {
+            error:
+                SourceError::RateLimited {
+                    retry_after_seconds,
+                    message,
+                },
+            ..
+        } => (
+            retry_after_seconds,
+            message.as_deref().unwrap_or_default().contains("not sent"),
+        ),
+        other => panic!("refused for a rate limit: {other}"),
+    };
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            linear.rate_limit(&[Some(30)]);
+            let refused = engine.migrate_stored_forms(&source, false).await;
+            assert_eq!(
+                limited(refused.expect_err("rate limited")),
+                (Some(30), false)
+            );
+            let sent = linear.served().len();
+            clock.advance(10);
+            let held = engine.migrate_stored_forms(&source, false).await;
+            let (left, unsent) = limited(held.expect_err("held off"));
+            assert!(unsent, "refused here, before Linear");
+            assert_eq!(left, Some(20));
+            assert_eq!(linear.served().len(), sent, "nothing sent during the hold");
+            clock.advance(20);
+            let answered = engine
+                .migrate_stored_forms(&source, false)
+                .await
+                .expect("answered at the reset");
+            assert_eq!(
+                answered.current, 3,
+                "the three issues hold the current form"
+            );
+            assert!(answered.rewritten.is_empty() && answered.failed.is_empty());
+        });
+}
+
 /// Through the engine the binary builds, on a hand-moved clock, over loopback Linear: a rate
 /// limit Linear answers inside a batched read starts the hold, keeping the later of the two
 /// resets that batch is answered with; a later call sends nothing and is told the seconds

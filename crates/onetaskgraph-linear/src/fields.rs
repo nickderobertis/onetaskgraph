@@ -1,16 +1,17 @@
 //! A source's `metadata_fields`, shown as one collapsed `Fields` section at the end of an item's
-//! visible description.
+//! long form, directly before the collapsed block its metadata lives in (see the `slot` module).
 //!
-//! Linear has no custom fields, and the metadata slot (see `METADATA_OPEN_SPAN`) is an HTML
-//! comment Linear never renders. So a source configured with `metadata_fields` writes, between
-//! the caller's content and the slot of every task's, project's and document's long form, one
-//! store-owned expandable block in the authored form — `<details>`, the summary `Fields`, and
-//! one bullet per configured entry holding a value — which the engine's markup then writes as
-//! Linear's own `+++ Fields` … `+++` section, as it writes any authored block. Which values an
-//! entry shows is the shared rule, [`ProjectedValue`]; `docs/metadata.md` states the section's
-//! shape for a caller.
+//! Linear has no custom fields. So a source configured with `metadata_fields` writes, between the
+//! caller's content and the metadata block of every task's, project's and document's long form,
+//! one store-owned collapsible section in Linear's own form — `+++ Fields`, one `* ` bullet per
+//! configured entry holding a value, and `+++` — and opens the metadata block after it with the
+//! paragraph `` `onetaskgraph.fields` ``, the record that this section is the store's. Its bullets
+//! are written `* `, because Linear stores a `- ` bullet as `* ` (measured by spike
+//! `spike-linear-collapsed-slot`): writing what Linear stores is what lets an unchanged write send
+//! nothing. Which values an entry shows is the shared rule, [`ProjectedValue`]; `docs/metadata.md`
+//! states the section's shape for a caller.
 //!
-//! **Display only.** The slot stays the metadata's one home. The section is added where every
+//! **Display only.** The block stays the metadata's one home. The section is added where every
 //! request is sent, to each long form a mutation carries that ends in a slot, regenerated from
 //! that slot's metadata, and taken off every long form an answer carries: so nothing above the
 //! transport — no read, no comparison deciding whether a write is needed, no stored-content
@@ -18,22 +19,17 @@
 //! sends the long form writes it afresh; an unchanged write is still not sent, whatever Linear
 //! did to the section's text. A comment's `body` carries no slot and gets no section.
 //!
-//! **How the section is told from a caller's block.** It is set off by a marker of its own, an
-//! HTML comment holding a code span — the one spelling Linear keeps byte for byte, as the slot
-//! is — directly before it: [`MARKER`], a blank line, then the block. A read takes off everything
-//! from a marker standing on its own line and followed by an expandable block in either form to
-//! the slot, and nothing else; so a caller's own block of any summary, `Fields` included, reads
-//! back as it always did.
+//! **How the section is told from a caller's block.** By the sentinel paragraph alone: a read
+//! takes off the one `+++ Fields` section standing directly before a metadata block that opens
+//! with it, and nothing else, so a caller's own block of any summary, `Fields` included, reads
+//! back as it always did. Items written before the block kept the section set off by the HTML
+//! comment ``<!-- `onetaskgraph.fields` -->`` on the line before it, which Linear renders as text;
+//! reads still take that spelling off, and no write writes it.
 
 use std::collections::BTreeMap;
 
 use onetaskgraph_plugin_api::{ProjectedValue, SourceError, SourceName};
 use serde_json::Value;
-
-/// Written alone on the line before the section, and the one thing a read recognises it by: an
-/// HTML comment, which Linear does not render, holding its name in a code span, which Linear
-/// stores byte for byte where it would autolink the bare `onetaskgraph.fields`.
-pub(crate) const MARKER: &str = "<!-- `onetaskgraph.fields` -->";
 
 /// The fixed summary every item's section is collapsed under, whatever its entries; a read
 /// never relies on it, since a caller's own block may carry the same one.
@@ -160,11 +156,11 @@ impl MetadataField {
                 });
             }
         };
-        let head = format!("- **{}**:", markdown_escaped(&self.field.0));
+        let head = format!("* **{}**:", markdown_escaped(&self.field.0));
         let nested = |lines: Vec<String>| {
             lines
                 .iter()
-                .map(|line| format!("\n  - {}", code_span(line)))
+                .map(|line| format!("\n  * {}", code_span(line)))
                 .collect::<String>()
         };
         Ok(Some(match value {
@@ -228,8 +224,9 @@ fn code_span(text: &str) -> String {
     }
 }
 
-/// The section `fields` show for `metadata`, in the authored form, or `None` when no entry has
-/// a value to show — or the refusal for the first value none can show.
+/// The section `fields` show for `metadata`, in Linear's own form — `+++ Fields`, a blank line,
+/// one bullet per entry, a blank line, `+++` — or `None` when no entry has a value to show, or
+/// the refusal for the first value none can show.
 pub(crate) fn section(
     fields: &[MetadataField],
     metadata: &BTreeMap<String, Value>,
@@ -241,25 +238,5 @@ pub(crate) fn section(
             bullets.push(bullet);
         }
     }
-    Ok((!bullets.is_empty()).then(|| {
-        format!(
-            "<details>\n<summary>{SUMMARY}</summary>\n\n{}\n\n</details>",
-            bullets.join("\n")
-        )
-    }))
-}
-
-/// Where a section of this source's sits in `above` — the text of a long form above its
-/// metadata slot: the byte its marker starts at, or `None` when it holds none.
-///
-/// A marker counts only alone on a line of its own, followed after blank lines by an
-/// expandable block in either form, so prose quoting the marker is never taken for one.
-pub(crate) fn marker_at(above: &str) -> Option<usize> {
-    let at = above.rfind(MARKER)?;
-    let own_line = at == 0 || above[..at].ends_with('\n');
-    // The marker ends its line, and only blank lines stand between it and the block.
-    let after = above[at + MARKER.len()..].strip_prefix('\n')?;
-    let after = after.trim_start_matches('\n');
-    let block = after.starts_with("<details>\n") || after.starts_with("+++ ");
-    (own_line && block).then_some(at)
+    Ok((!bullets.is_empty()).then(|| format!("+++ {SUMMARY}\n\n{}\n\n+++", bullets.join("\n"))))
 }

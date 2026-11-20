@@ -27,6 +27,7 @@ mod id;
 mod issue;
 mod metadata;
 mod metering;
+mod migration;
 mod projection;
 mod query;
 mod relation;
@@ -64,6 +65,7 @@ pub use issue::{
 };
 pub use metadata::{MetadataKey, MetadataRecord, unwritable_metadata};
 pub use metering::{Metered, Metering};
+pub use migration::{MigratedItem, MigrationFailure, StoredFormMigration};
 pub use projection::ProjectedValue;
 pub use query::{
     Cursor, DocumentQuery, LabelFilter, MetadataMatch, Page, PageRequest, ProjectFilter,

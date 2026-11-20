@@ -1464,6 +1464,7 @@ dependencies = [
  "graphql-parser",
  "onetaskgraph-live",
  "onetaskgraph-plugin-api",
+ "pulldown-cmark",
  "reqwest",
  "schemars",
  "secrecy",

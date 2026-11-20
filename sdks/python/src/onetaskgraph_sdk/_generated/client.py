@@ -59,6 +59,7 @@ if TYPE_CHECKING:
         StatusesReconciled,
         StatusNamesReport,
         StatusOptionsReport,
+        StoredFormsMigrated,
         SweepReport,
         TaskAssetNames,
         TaskAssigneeSet,
@@ -99,6 +100,7 @@ POSITIONALS: dict[tuple[str, ...], tuple[str, ...]] = {
     ("project", "status", "set"): ("id", "category"),
     ("search",): ("text",),
     ("sources", "fields"): ("source",),
+    ("sources", "migrate"): ("source",),
     ("sources", "route"): ("source",),
     ("sources", "sanitize"): ("source",),
     ("sources", "status-options"): ("source",),
@@ -2942,6 +2944,74 @@ class GeneratedClient:
             ["sources", "list"],
             list[_models.SourceListing] | _models.SanitizeDryRun,
             default_sources=default_sources,
+            page_size=page_size,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
+            set=set,
+        )
+
+    @overload
+    async def sources_migrate(
+        self,
+        source: SourceName | str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        dry_run: bool | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> StoredFormsMigrated: ...
+
+    @overload
+    async def sources_migrate(
+        self,
+        source: SourceName | str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        dry_run: bool | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> StoredFormsMigrated | SanitizeDryRun: ...
+
+    @overload
+    async def sources_migrate(
+        self,
+        source: SourceName | str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        dry_run: bool | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> StoredFormsMigrated | SanitizeDryRun: ...
+
+    async def sources_migrate(
+        self,
+        source: SourceName | str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        dry_run: bool | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> StoredFormsMigrated | SanitizeDryRun:
+        """Run ``onetaskgraph sources migrate``."""
+        return await self._invoke(
+            ["sources", "migrate"],
+            _models.StoredFormsMigrated | _models.SanitizeDryRun,
+            source=source,
+            default_sources=default_sources,
+            dry_run=dry_run,
             page_size=page_size,
             reject=reject,
             replace=replace,

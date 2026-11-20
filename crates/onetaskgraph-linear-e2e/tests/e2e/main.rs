@@ -22,6 +22,7 @@ mod cache;
 mod cache_budget;
 mod cache_documents;
 mod cache_parts;
+mod collapsed_slot;
 mod copy_skip;
 mod follow_up_cycle;
 mod health;

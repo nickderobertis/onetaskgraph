@@ -4218,7 +4218,7 @@ async fn a_document_is_created_updated_and_removed_again_over_real_http() {
         "{request}"
     );
     assert!(
-        request.contains("onetaskgraph.metadata"),
+        request.contains("+++ onetaskgraph metadata"),
         "the caller's metadata goes back into this source's own slot: {request}"
     );
     assert!(
@@ -5125,6 +5125,60 @@ fn held_document(id: &str, content: &str) -> serde_json::Value {
         "archivedAt":null,"project":{"id":"p1"}}})
 }
 
+/// Taking off a key a project or a document does not hold writes nothing — unless its metadata
+/// is held in a comment slot an earlier release wrote, which that one write rewrites as the
+/// collapsed block, its metadata as it was; a repeat over the block reads and writes nothing.
+#[tokio::test]
+async fn removing_an_absent_key_rewrites_a_legacy_slot_once_and_a_current_block_never() {
+    use onetaskgraph_plugin_api::MetadataRecord;
+    let key = MetadataKey::new("caller.absent").unwrap();
+    let legacy = "Prose.\n\n<!-- onetaskgraph.metadata `{\"caller.kept\":1}` -->";
+    let block = "Prose.\n\n+++ onetaskgraph metadata\n\n`{\"caller.kept\":1}`\n\n+++";
+    for record in [MetadataRecord::Project, MetadataRecord::Document] {
+        let (held, updated, update) = match record {
+            MetadataRecord::Project => (
+                held_project("x1", legacy),
+                serde_json::json!({"projectUpdate":{"success":true,
+                    "project":held_project("x1", block)["project"]}}),
+                onetaskgraph_linear::graphql::PROJECT_UPDATE,
+            ),
+            _ => (
+                held_document("x1", legacy),
+                serde_json::json!({"documentUpdate":{"success":true,
+                    "document":held_document("x1", block)["document"]}}),
+                onetaskgraph_linear::graphql::DOCUMENT_UPDATE,
+            ),
+        };
+        let (endpoint, wire) = response_server(vec![held, updated]);
+        writable_source(&endpoint)
+            .remove_record_metadata(record, &"x1".into(), &key)
+            .await
+            .unwrap()
+            .expect("the record is held");
+        let requests: Vec<serde_json::Value> =
+            wire.try_iter().map(|request| sent(&request)).collect();
+        assert_eq!(requests.len(), 2, "{record:?}: {requests:?}");
+        assert_eq!(requests[1]["query"], update, "{record:?}");
+        assert_eq!(
+            requests[1]["variables"],
+            serde_json::json!({"id":"x1","input":{"content":block}}),
+            "{record:?}"
+        );
+
+        let current = match record {
+            MetadataRecord::Project => held_project("x1", block),
+            _ => held_document("x1", block),
+        };
+        let (endpoint, wire) = response_server(vec![current]);
+        writable_source(&endpoint)
+            .remove_record_metadata(record, &"x1".into(), &key)
+            .await
+            .unwrap()
+            .expect("the record is held");
+        assert_eq!(wire.try_iter().count(), 1, "{record:?}: the read alone");
+    }
+}
+
 /// One metadata key of a task, a project and a document is set by one read and one update
 /// carrying the long-form field alone — `description`, `content` and `content` — which
 /// differs from what Linear holds only inside the trailing slot: every byte above it, the
@@ -5138,7 +5192,7 @@ async fn a_metadata_key_is_set_by_rewriting_the_slot_alone_for_every_record() {
     // Linear escapes a line opening `-->` when it stores a field, so the held slot closes the
     // way Linear hands it back; the rewritten one is sent in this source's one encoding.
     let held = "Prose a person wrote,\n\n  with its own spacing.\n\n<!-- onetaskgraph.metadata\n{\"caller.kept\":[1]}\n\\-->";
-    let sent_back = "Prose a person wrote,\n\n  with its own spacing.\n\n<!-- onetaskgraph.metadata `{\"caller.kept\":[1],\"myapp.review\":{\"approved\":true}}` -->";
+    let sent_back = "Prose a person wrote,\n\n  with its own spacing.\n\n+++ onetaskgraph metadata\n\n`{\"caller.kept\":[1],\"myapp.review\":{\"approved\":true}}`\n\n+++";
 
     let (endpoint, wire) = response_server(vec![
         prioritised_issue("i1", Some(held), serde_json::json!(2)),
@@ -5234,7 +5288,7 @@ async fn a_metadata_key_is_set_by_rewriting_the_slot_alone_for_every_record() {
     assert_eq!(
         requests[1]["variables"]["input"]["description"],
         serde_json::json!(
-            "Bare prose\n\n\n<!-- onetaskgraph.metadata `{\"myapp.review\":{\"approved\":true}}` -->"
+            "Bare prose\n\n\n+++ onetaskgraph metadata\n\n`{\"myapp.review\":{\"approved\":true}}`\n\n+++"
         )
     );
 
@@ -5283,7 +5337,7 @@ async fn a_metadata_key_is_set_by_rewriting_the_slot_alone_for_every_record() {
 async fn a_rendering_replaces_the_content_and_its_provenance_in_one_write() {
     let held = "Old rendering\n\n<!-- onetaskgraph.metadata\n{\"caller.kept\":[1],\"onetaskgraph.template\":{\"digest\":\"old\"}}\n-->";
     let provenance = serde_json::json!({"digest":"new"});
-    let expected = "New rendering\n\n<!-- onetaskgraph.metadata `{\"caller.kept\":[1],\"onetaskgraph.template\":{\"digest\":\"new\"}}` -->";
+    let expected = "New rendering\n\n+++ onetaskgraph metadata\n\n`{\"caller.kept\":[1],\"onetaskgraph.template\":{\"digest\":\"new\"}}`\n\n+++";
     let (endpoint, wire) = response_server(vec![
         prioritised_issue("i1", Some(held), serde_json::json!(2)),
         serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"i1","description":null}}}),
@@ -5354,7 +5408,7 @@ async fn a_rendering_replaces_the_content_and_its_provenance_in_one_write() {
     let description = requests[1]["variables"]["input"]["description"]
         .as_str()
         .expect("a description");
-    assert!(description.starts_with(&format!("{quoted}\n\n<!-- onetaskgraph.metadata `")));
+    assert!(description.starts_with(&format!("{quoted}\n\n+++ onetaskgraph metadata\n\n`")));
 }
 
 /// `body` with its first node's long-form field replaced by `visible` and a metadata slot
@@ -5517,7 +5571,7 @@ async fn delivery_lists_are_read_out_of_the_slot_and_never_left_in_free_metadata
     assert_eq!(
         update["variables"]["input"]["description"],
         serde_json::json!(
-            "Recorded body\n\n<!-- onetaskgraph.metadata `{\"caller.number\":7,\"onetaskgraph.delivered_by\":[\"plan:T-1\"],\"onetaskgraph.delivers\":[\"i2\",\"elsewhere:T-9\"]}` -->"
+            "Recorded body\n\n+++ onetaskgraph metadata\n\n`{\"caller.number\":7,\"onetaskgraph.delivered_by\":[\"plan:T-1\"],\"onetaskgraph.delivers\":[\"i2\",\"elsewhere:T-9\"]}`\n\n+++"
         )
     );
 
@@ -5547,7 +5601,7 @@ async fn delivery_lists_are_read_out_of_the_slot_and_never_left_in_free_metadata
     assert_eq!(
         create["variables"]["input"]["description"],
         serde_json::json!(
-            "Recorded body\n\n<!-- onetaskgraph.metadata `{\"caller.number\":7}` -->"
+            "Recorded body\n\n+++ onetaskgraph metadata\n\n`{\"caller.number\":7}`\n\n+++"
         )
     );
 }
@@ -5732,11 +5786,11 @@ async fn delivered_by_is_written_into_the_slot_and_moves_nothing_else() {
     assert_eq!(
         requests[1]["variables"],
         serde_json::json!({"id":"i1","input":{"description":
-            "Prose a person wrote,\nwith its own spacing.  \n\n<!-- onetaskgraph.metadata `{\"caller.kept\":[1],\"onetaskgraph.delivered_by\":[\"plan:T-1\"]}` -->"}})
+            "Prose a person wrote,\nwith its own spacing.  \n\n+++ onetaskgraph metadata\n\n`{\"caller.kept\":[1],\"onetaskgraph.delivered_by\":[\"plan:T-1\"]}`\n\n+++"}})
     );
 
-    let already =
-        "Prose.\n\n<!-- onetaskgraph.metadata\n{\"onetaskgraph.delivered_by\":[\"plan:T-1\"]}\n-->";
+    // Already holding the list in the block: the read alone.
+    let already = "Prose.\n\n+++ onetaskgraph metadata\n\n`{\"onetaskgraph.delivered_by\":[\"plan:T-1\"]}`\n\n+++";
     let (endpoint, wire) = response_server(vec![prioritised_issue(
         "i1",
         Some(already),
@@ -5748,6 +5802,26 @@ async fn delivered_by_is_written_into_the_slot_and_moves_nothing_else() {
         .unwrap()
         .expect("the issue is held");
     assert_eq!(wire.try_iter().count(), 1, "the read alone");
+
+    // Holding it in the comment slot an earlier release wrote: the one update writing the
+    // block, its metadata as it was.
+    let legacy =
+        "Prose.\n\n<!-- onetaskgraph.metadata\n{\"onetaskgraph.delivered_by\":[\"plan:T-1\"]}\n-->";
+    let (endpoint, wire) = response_server(vec![
+        prioritised_issue("i1", Some(legacy), serde_json::json!(0)),
+        serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"i1","description":null}}}),
+    ]);
+    writable_source(&endpoint)
+        .set_delivered_by(&"i1".into(), &[TaskRef::new("plan:T-1").unwrap()])
+        .await
+        .unwrap()
+        .expect("the issue is held");
+    let requests: Vec<serde_json::Value> = wire.try_iter().map(|request| sent(&request)).collect();
+    assert_eq!(requests.len(), 2, "{requests:?}");
+    assert_eq!(
+        requests[1]["variables"]["input"]["description"],
+        serde_json::json!(already)
+    );
 
     let (endpoint, wire) = response_server(vec![serde_json::json!({"issue":null})]);
     assert_eq!(
@@ -6158,18 +6232,26 @@ async fn a_narrow_write_linear_did_not_confirm_is_not_reported_written() {
 }
 
 /// A content write sends `issueUpdate` with `description` alone, and that description keeps
-/// the issue's metadata slot byte for byte — so a later read reports the given content and
-/// every other field, the metadata in the slot included, exactly as it was.
+/// the issue's metadata exactly — written as the collapsed block, whatever spelling the issue
+/// held it in — so a later read reports the given content and every other field, the metadata
+/// included, exactly as it was.
 #[tokio::test]
 async fn a_content_write_sends_only_the_description_and_moves_nothing_else() {
     use onetaskgraph_linear::graphql;
     let slot = "<!-- onetaskgraph.metadata\n{\"caller.number\":7,\"onetaskgraph.repositories\":[\"github.com/acme/work\"]}\n-->";
+    let block = "+++ onetaskgraph metadata\n\n`{\"caller.number\":7,\"onetaskgraph.repositories\":[\"github.com/acme/work\"]}`\n\n+++";
     for (before, content, sent_description, read_content) in [
-        // A slot is kept as stored, after the separator a copy writes.
+        // A slot's metadata is kept, as the block, after the separator a copy writes.
         (
             Some(format!("old body\n\n{slot}")),
             "new body\nsecond line",
-            format!("new body\nsecond line\n\n{slot}"),
+            format!("new body\nsecond line\n\n{block}"),
+            Some("new body\nsecond line"),
+        ),
+        (
+            Some(format!("old body\n\n{block}")),
+            "new body\nsecond line",
+            format!("new body\nsecond line\n\n{block}"),
             Some("new body\nsecond line"),
         ),
         // Whitespace at the content's end is content: it goes before the separator, and a
@@ -6177,14 +6259,14 @@ async fn a_content_write_sends_only_the_description_and_moves_nothing_else() {
         (
             Some(format!("old body\n\n{slot}")),
             "new body  \n\n\n",
-            format!("new body  \n\n\n\n\n{slot}"),
+            format!("new body  \n\n\n\n\n{block}"),
             Some("new body  \n\n\n"),
         ),
-        // Content emptied beside a slot: the slot alone.
+        // Content emptied beside a slot: the block alone.
         (
             Some(format!("old body\n\n{slot}")),
             "",
-            slot.to_owned(),
+            block.to_owned(),
             None,
         ),
         // No slot: the content verbatim, its trailing newline included.
@@ -6240,39 +6322,44 @@ async fn a_content_write_sends_only_the_description_and_moves_nothing_else() {
     }
 }
 
-/// Content ending in what this source reads as its own metadata slot is refused before
-/// anything is sent — written, it would read back as metadata rather than as the content it
-/// was — and one naming such a block anywhere but the end, beside the issue's real slot, reads
-/// back as the content it is.
+/// Content ending in what this source reads as its own metadata slot — the collapsed block, or
+/// a comment slot an earlier release wrote — is refused before anything is sent: written, it
+/// would read back as metadata rather than as the content it was. One naming such a block
+/// anywhere but the end, beside the issue's real metadata, reads back as the content it is.
 #[tokio::test]
 async fn content_that_would_read_back_as_metadata_is_refused_before_it_is_sent() {
-    let lookalike = "Notes.\n\n<!-- onetaskgraph.metadata\n{\"caller.number\":1}\n-->";
-    let (endpoint, wire) = response_server(vec![prioritised_issue("I-1", Some("Old."), 0.into())]);
-    let refused = writable_source(&endpoint)
-        .set_task_content(&"I-1".into(), lookalike)
-        .await
-        .expect_err("refused");
-    assert!(
-        matches!(&refused, SourceError::Refused { message }
-            if message.contains("reads as its own metadata slot") && message.contains("next:")),
-        "{refused:?}"
-    );
-    assert_eq!(wire.iter().count(), 1, "no issueUpdate was sent");
+    for lookalike in [
+        "Notes.\n\n<!-- onetaskgraph.metadata\n{\"caller.number\":1}\n-->",
+        "Notes.\n\n+++ onetaskgraph metadata\n\n`{\"caller.number\":1}`\n\n+++",
+    ] {
+        let (endpoint, wire) =
+            response_server(vec![prioritised_issue("I-1", Some("Old."), 0.into())]);
+        let refused = writable_source(&endpoint)
+            .set_task_content(&"I-1".into(), lookalike)
+            .await
+            .expect_err("refused");
+        assert!(
+            matches!(&refused, SourceError::Refused { message }
+                if message.contains("reads as its own metadata slot") && message.contains("next:")),
+            "{refused:?}"
+        );
+        assert_eq!(wire.iter().count(), 1, "no issueUpdate was sent");
 
-    let slot = "<!-- onetaskgraph.metadata\n{\"caller.number\":7}\n-->";
-    let (endpoint, wire) = response_server(vec![
-        prioritised_issue("I-1", Some(&format!("Old.\n\n{slot}")), 0.into()),
-        serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"I-1","description":null}}}),
-    ]);
-    writable_source(&endpoint)
-        .set_task_content(&"I-1".into(), lookalike)
-        .await
-        .expect("the issue's own slot stays the slot");
-    let requests: Vec<serde_json::Value> = wire.iter().map(|request| sent(&request)).collect();
-    assert_eq!(
-        requests[1]["variables"]["input"]["description"],
-        format!("{lookalike}\n\n{slot}")
-    );
+        let slot = "<!-- onetaskgraph.metadata\n{\"caller.number\":7}\n-->";
+        let (endpoint, wire) = response_server(vec![
+            prioritised_issue("I-1", Some(&format!("Old.\n\n{slot}")), 0.into()),
+            serde_json::json!({"issueUpdate":{"success":true,"issue":{"id":"I-1","description":null}}}),
+        ]);
+        writable_source(&endpoint)
+            .set_task_content(&"I-1".into(), lookalike)
+            .await
+            .expect("the issue's own metadata stays its metadata");
+        let requests: Vec<serde_json::Value> = wire.iter().map(|request| sent(&request)).collect();
+        assert_eq!(
+            requests[1]["variables"]["input"]["description"],
+            format!("{lookalike}\n\n+++ onetaskgraph metadata\n\n`{{\"caller.number\":7}}`\n\n+++")
+        );
+    }
 }
 
 /// A source over `endpoint` on the team `ENG`, configured with `extra` beside it.
@@ -6629,7 +6716,7 @@ async fn the_slot_is_written_in_the_one_spelling_linear_keeps_byte_for_byte() {
         .to_owned();
     assert_eq!(
         written,
-        "Prose.\n\n<!-- onetaskgraph.metadata `{\"caller.live\":[\"a --\\u003e b \\u003c!-- c\",\"\\u0060tick\\u0060\",\"github.com/a/b\",\"_y_ [z]\"]}` -->"
+        "Prose.\n\n+++ onetaskgraph metadata\n\n`{\"caller.live\":[\"a --\\u003e b \\u003c!-- c\",\"\\u0060tick\\u0060\",\"github.com/a/b\",\"_y_ [z]\"]}`\n\n+++"
     );
     // What was written reads back as the value it was.
     let (endpoint, _) = response_server(vec![prioritised_issue(
@@ -6697,7 +6784,7 @@ async fn a_slot_in_the_multi_line_spelling_written_before_still_parses() {
             .collect::<Vec<_>>();
         assert_eq!(
             requests[1]["variables"]["input"]["description"],
-            "Prose.\n\n<!-- onetaskgraph.metadata `{\"caller.added\":true,\"caller.kept\":1,\"onetaskgraph.delivered_by\":[\"plan:T-1\"]}` -->",
+            "Prose.\n\n+++ onetaskgraph metadata\n\n`{\"caller.added\":true,\"caller.kept\":1,\"onetaskgraph.delivered_by\":[\"plan:T-1\"]}`\n\n+++",
             "{old:?}"
         );
     }
@@ -7022,7 +7109,7 @@ async fn a_project_with_ten_kilobytes_of_caller_metadata_copies_into_its_content
         stored.len() > encoded.len(),
         "the whole value is in the content"
     );
-    assert!(stored.starts_with("The plan's description.\n\n<!-- onetaskgraph.metadata `"));
+    assert!(stored.starts_with("The plan's description.\n\n+++ onetaskgraph metadata\n\n`"));
 
     let project = source
         .get_project(&"P-BIG".into())

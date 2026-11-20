@@ -1,9 +1,10 @@
 //! A `linear` source's `metadata_fields`, through the real command-line boundary against the
 //! loopback Linear, which stores every long form as the recorded Linear normalisations say: the
 //! collapsed `Fields` section each task, project and document shows between its content and its
-//! metadata slot, in Linear's own `+++ Fields` form; every read giving back the caller's content
-//! and metadata as they were; and each write sending exactly the requests the same write sends
-//! with no `metadata_fields` configured.
+//! collapsed metadata block, in Linear's own `+++ Fields` form with `* ` bullets and no HTML
+//! comment, the block opening with the `` `onetaskgraph.fields` `` sentinel paragraph; every read
+//! giving back the caller's content and metadata as they were; and each write sending exactly the
+//! requests the same write sends with no `metadata_fields` configured.
 
 use std::path::PathBuf;
 use std::process::Output;
@@ -27,8 +28,12 @@ const PROJECT_STATUSES: &[(&str, &str)] = &[
     ("Abandoned", "canceled"),
 ];
 
-/// The marker the source sets its section off by.
+/// The marker an earlier release set its section off by, which Linear renders as text: no write
+/// writes it now, and a caller quoting it keeps every byte of it.
 const MARKER: &str = "<!-- `onetaskgraph.fields` -->";
+
+/// How the metadata block opens when a `Fields` section stands directly before it.
+const SENTINEL_BLOCK: &str = "+++ onetaskgraph metadata\n\n`onetaskgraph.fields`\n\n`";
 
 /// The metadata key every entry reads.
 const KEY: &str = "orchestrator.follow-up";
@@ -58,14 +63,15 @@ fn record() -> Value {
     })
 }
 
-/// The section [`record`] shows, in Linear's form, as it is sent.
+/// The section [`record`] shows, in Linear's form, as it is sent — its bullets `* `, as Linear
+/// stores them, so it is stored as sent.
 const SECTION: &str = "+++ Fields\n\
 \n\
-- **Host**: `workstation-1`\n\
-- **Owning runs**:\n  - `run-a`\n  - `run-b`\n\
-- **Basis**:\n  - `github.com/acme/gadget: fedcba9876543210fedcba9876543210fedcba98`\n  \
-- `github.com/acme/widget: 0123456789abcdef0123456789abcdef01234567`\n\
-- **Notes**:\n  - `first line`\n  - ``second `tick` line``\n\
+* **Host**: `workstation-1`\n\
+* **Owning runs**:\n  * `run-a`\n  * `run-b`\n\
+* **Basis**:\n  * `github.com/acme/gadget: fedcba9876543210fedcba9876543210fedcba98`\n  \
+* `github.com/acme/widget: 0123456789abcdef0123456789abcdef01234567`\n\
+* **Notes**:\n  * `first line`\n  * ``second `tick` line``\n\
 \n\
 +++";
 
@@ -275,11 +281,11 @@ fn updates(served: &[(String, Value)]) -> usize {
         .count()
 }
 
-/// What `long_form` holds between its content and its metadata slot.
+/// What `long_form` holds between its content and its metadata block — the last one.
 fn between<'a>(long_form: &'a str, content: &str) -> &'a str {
     let (above, _) = long_form
-        .split_once("<!-- onetaskgraph.metadata `")
-        .unwrap_or_else(|| panic!("a slot: {long_form}"));
+        .rsplit_once("+++ onetaskgraph metadata\n\n")
+        .unwrap_or_else(|| panic!("a metadata block: {long_form}"));
     above
         .strip_prefix(content)
         .unwrap_or_else(|| panic!("the content first: {long_form}"))
@@ -290,16 +296,24 @@ fn every_kind_is_stored_with_its_fields_section_and_read_back_without_it() {
     let setup = Setup::new(true);
     setup.author(&record());
     let (ids, served) = setup.copy();
-    // Each item's long form is sent with the section between the content and the slot,
-    // exactly as the contract renders it, in Linear's form.
+    // Each item's long form is sent with the section between the content and the block,
+    // exactly as the contract renders it, in Linear's form — and no HTML comment anywhere.
     let sent = long_forms_sent(&served);
-    let sectioned: Vec<_> = sent.iter().filter(|form| form.contains(MARKER)).collect();
+    let sectioned: Vec<_> = sent
+        .iter()
+        .filter(|form| form.contains(SENTINEL_BLOCK))
+        .collect();
     assert_eq!(sectioned.len(), 3, "{sent:#?}");
     for form in sectioned {
         assert_eq!(
             between(form, CONTENT_SENT),
-            format!("\n\n{MARKER}\n\n{SECTION}\n\n"),
+            format!("\n\n{SECTION}\n\n"),
             "{form}"
+        );
+        assert!(!form.contains("<!--"), "{form}");
+        assert!(
+            form.ends_with("`\n\n+++"),
+            "nothing after the block: {form}"
         );
     }
     for ((kind, table), id) in KINDS.iter().zip(&ids) {
@@ -307,12 +321,13 @@ fn every_kind_is_stored_with_its_fields_section_and_read_back_without_it() {
             .workspace
             .long_form(table, id)
             .unwrap_or_else(|| panic!("{kind} {id} is held"));
-        // Linear keeps the section a collapsible section, its bullets as Linear spells them.
+        // Linear keeps the section a collapsible section, stored exactly as it was sent.
         assert_eq!(
             between(&stored, CONTENT_SENT),
-            format!("\n\n{MARKER}\n\n{}\n\n", SECTION.replace("- ", "* ")),
+            format!("\n\n{SECTION}\n\n"),
             "{kind}: {stored}"
         );
+        assert!(stored.contains(SENTINEL_BLOCK), "{kind}: {stored}");
         // A read is the caller's content — its own Fields block included — and its metadata.
         let shown = setup.show(kind, id);
         assert_eq!(shown["content"], CONTENT, "{kind}: {shown}");
@@ -410,9 +425,8 @@ fn every_write_sends_the_requests_it_sends_without_metadata_fields_and_keeps_the
         let sent = long_forms_sent(served);
         assert_eq!(sent.len(), 1, "{kind}: {sent:#?}");
         assert!(
-            sent[0].contains(&format!(
-                "{MARKER}\n\n+++ Fields\n\n- **Host**: `workstation-2`\n"
-            )),
+            sent[0].contains("\n\n+++ Fields\n\n* **Host**: `workstation-2`\n")
+                && sent[0].contains(SENTINEL_BLOCK),
             "{kind}: {}",
             sent[0]
         );
@@ -433,7 +447,7 @@ fn every_write_sends_the_requests_it_sends_without_metadata_fields_and_keeps_the
     assert!(
         updated
             .iter()
-            .any(|form| form.contains("- **Owning runs**:\n  - `run-c`\n- **Basis**:")),
+            .any(|form| form.contains("* **Owning runs**:\n  * `run-c`\n* **Basis**:")),
         "{updated:#?}"
     );
     // A comment carries no slot and gets no section.
@@ -444,14 +458,14 @@ fn every_write_sends_the_requests_it_sends_without_metadata_fields_and_keeps_the
         .map(|(_, variables)| &variables["input"]["body"])
         .collect();
     assert_eq!(bodies, [&json!("Seen again.\n")], "{comment:#?}");
-    // Every value empty: no bullet, so no section, and the content and slot as before.
+    // Every value empty: no bullet, so no section and no sentinel, and the content and block.
     let stored = projecting.workspace.long_form("tasks", &ids[1]).unwrap();
-    assert!(!stored.contains(MARKER), "{stored}");
+    assert!(!stored.contains("`onetaskgraph.fields`"), "{stored}");
     assert!(!stored.contains("Fields\n\n* **"), "{stored}");
     assert_eq!(
         between(&stored, CONTENT_SENT),
         "\n\n",
-        "the content, a blank line and the slot: {stored}"
+        "the content, a blank line and the block: {stored}"
     );
     let shown = projecting.show("task", &ids[1]);
     assert_eq!(shown["content"], CONTENT);
@@ -588,11 +602,11 @@ fn every_value_is_one_code_span_whatever_backticks_spaces_or_line_breaks_it_hold
     assert_eq!(
         between(&sent, "Prose."),
         format!(
-            "\n\n{MARKER}\n\n+++ Fields\n\n\
-             - **Host**: `` `edge` ``\n\
-             - **Owning runs**:\n  - ` `\n  - `two lines`\n  - `` ends with ` ``\n\
-             - **Basis**:\n  - `` k: v` ``\n\
-             - **Notes**: `  spaced  `\n\
+            "\n\n+++ Fields\n\n\
+             * **Host**: `` `edge` ``\n\
+             * **Owning runs**:\n  * ` `\n  * `two lines`\n  * `` ends with ` ``\n\
+             * **Basis**:\n  * `` k: v` ``\n\
+             * **Notes**: `  spaced  `\n\
              \n+++\n\n"
         ),
         "{sent}"
@@ -604,8 +618,8 @@ fn every_value_is_one_code_span_whatever_backticks_spaces_or_line_breaks_it_hold
 
 #[test]
 fn a_caller_quoting_the_marker_keeps_every_byte_of_it_with_a_section_or_without() {
-    // The marker quoted inline, and alone on a line before prose rather than a block: neither is
-    // a section of the source's, so both read back as written.
+    // The marker an earlier release wrote, quoted inline, and alone on a line before prose rather
+    // than a block: neither is a section of the source's, so both read back as written.
     // So is one opening a line with a block's opening after it on that same line.
     let content = format!(
         "Quoting {MARKER} inline.\n\n{MARKER}\n\nJust prose after it.\n\n{MARKER} +++ Fields\n\n\
@@ -613,7 +627,7 @@ fn a_caller_quoting_the_marker_keeps_every_byte_of_it_with_a_section_or_without(
     );
     let setup = Setup::new(true);
     let (id, sent) = copied_task(&setup, &content, &record());
-    assert!(sent.contains("\n\n+++ Fields\n\n- **Host**"), "{sent}");
+    assert!(sent.contains("\n\n+++ Fields\n\n* **Host**"), "{sent}");
     assert_eq!(setup.show("task", &id)["content"], content.as_str());
     let empty = json!({"host": ""}).to_string();
     let target = format!("linear:{id}");
@@ -657,9 +671,7 @@ fn a_field_name_holding_markup_is_shown_as_written_and_keeps_the_section_whole()
     let (id, sent) = copied_task(&setup, "Prose.", &json!({"host": "h"}));
     assert_eq!(
         between(&sent, "Prose."),
-        format!(
-            "\n\n{MARKER}\n\n+++ Fields\n\n- **Owner \\*of\\* \\<it\\>\\_now\\_**: `h`\n\n+++\n\n"
-        ),
+        format!("\n\n+++ Fields\n\n* **Owner \\*of\\* \\<it\\>\\_now\\_**: `h`\n\n+++\n\n"),
         "{sent}"
     );
     assert_eq!(setup.show("task", &id)["content"], "Prose.");
@@ -757,7 +769,7 @@ fn a_section_a_person_edited_is_never_read_and_is_written_afresh_by_the_next_wri
     let sent = long_forms_sent(&served);
     assert_eq!(sent.len(), 1, "{sent:#?}");
     assert!(
-        sent[0].contains("- **Host**: `workstation-2`") && !sent[0].contains("edited by hand"),
+        sent[0].contains("* **Host**: `workstation-2`") && !sent[0].contains("edited by hand"),
         "{}",
         sent[0]
     );

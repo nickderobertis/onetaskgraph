@@ -336,6 +336,29 @@ pub enum SourcesCommand {
     /// decide, and 3 when coverage is incomplete and nothing else failed.
     // llmlint: ignore[new_command_or_client_gets_its_own_project] This subcommand belongs to the existing binary and engine projects, has no independent executable or package, and affected selection already selects both.
     Sanitize(SanitizeArgs),
+    /// Rewrite every item of one source still held in a stored form its plugin no longer writes
+    /// into the form it writes now, changing nothing a read gives back.
+    ///
+    /// A `linear` source once kept each item's metadata in an HTML comment at the end of its
+    /// description or content, which Linear shows as text; it now writes one collapsed block,
+    /// and still reads the old spellings. This sends one update for each task, project and
+    /// document still held in an old spelling, and nothing for an item already current, so a
+    /// second run rewrites nothing. A source of any other plugin has nothing to migrate and is
+    /// sent nothing. Exits 0 when nothing failed and 1 when any item could not be rewritten,
+    /// each named with why.
+    // llmlint: ignore[new_command_or_client_gets_its_own_project] This subcommand belongs to the existing binary and engine projects, has no independent executable or package, and affected selection already selects both.
+    Migrate(MigrateArgs),
+}
+
+/// `onetaskgraph sources migrate`.
+#[derive(Debug, Args)]
+pub struct MigrateArgs {
+    /// The configured source to migrate.
+    // llmlint: ignore[invalid_states_unrepresentable] Clap collects this token as text so an unknown name is refused naming the configured ones; the command converts it to a `SourceName` before any lookup.
+    pub source: String,
+    /// Send reads only, and no write: report each item that would be rewritten.
+    #[arg(long)]
+    pub dry_run: bool,
 }
 
 /// `onetaskgraph sources sanitize`.

@@ -1081,7 +1081,7 @@ fn a_rendering_ending_in_a_table_copies_to_linear_verifiably_and_recopies_as_not
     let native = destination.trim_start_matches("linear:");
     let held = plan.workspace.long_form("tasks", native).expect("held");
     assert!(
-        held.contains("| build | ops |\n\n<!-- onetaskgraph.metadata `"),
+        held.contains("| build | ops |\n\n+++ onetaskgraph metadata\n\n`"),
         "the separator after the table's line break is one line break: {held:?}"
     );
     let item = plan.show("task", &destination);

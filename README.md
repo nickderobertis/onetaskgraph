@@ -72,6 +72,10 @@ onetaskgraph sources status-options <SOURCE> [--apply] [--json]
 onetaskgraph sources route <SOURCE> [--repository R]... [--classification public|private] [--json]
 # Where an item with these repositories and this classification, written to SOURCE, would land
 # by its routes — read from configuration alone, never from a source. See "Routing" below.
+onetaskgraph sources migrate <SOURCE> [--dry-run] [--json]
+# Rewrites every item of SOURCE still held in a stored form its plugin no longer writes — on a
+# Linear source, metadata in an HTML comment Linear shows as text — into the collapsed block it
+# writes now, changing nothing a read gives back. See "Rewriting a source's stored forms" below.
 
 onetaskgraph task list [--source S]... [--label L]... [--not-label L]...
                        [--status S]... [--not-status S]...
@@ -3318,6 +3322,28 @@ ordinals counted from 1 per report or answer, its record `unfixable` with `"why"
 carries a private term"`, and the command exits 1. A policy that cannot decide redacts every
 locator, and the sweep exits 2. A linking caller's policy that implements only the two methods
 that existed before cannot say which entry it stopped at, so its refusal redacts every locator.
+
+**Rewriting a source's stored forms: `onetaskgraph sources migrate <SOURCE> [--dry-run]
+[--json]`.** A `linear` source keeps each item's metadata in one collapsed block at the end of its
+description or content (docs/metadata.md, "Linear's slot, settled"). Earlier releases kept it in
+an HTML comment there, which Linear renders as text, so every such item shows its JSON under its
+own text until it is next written. Reads still accept every earlier spelling, and the next write
+of such an item rewrites it; this rewrites the backlog at once. It lists the source's issues,
+projects and documents and sends one update for each item still held in an earlier spelling, its
+content and metadata reading back exactly as before, and nothing for an item already current, so
+a second run rewrites nothing. `--dry-run` sends reads only. A source of any other plugin, one
+served over the stdio protocol included, has nothing to migrate and is sent nothing.
+
+```json
+{"source": "work", "dry_run": false, "current": 41,
+ "rewritten": [{"kind": "task", "id": "work:4f0c…", "from": "html-comment-slot"},
+               {"kind": "project", "id": "work:9a1e…", "from": "fields-comment-marker"}],
+ "failed": [{"kind": "document", "id": "work:7c2d…", "from": "multi-line-comment-slot",
+             "reason": "Linear reported documentUpdate was unsuccessful"}]}
+```
+
+`from` names the form an item left: `html-comment-slot`, `multi-line-comment-slot` or
+`fields-comment-marker`. Exit 0 when nothing failed, and 1 when any item could not be rewritten.
 
 **A task owns its classification.** Who may read a task is its own declaration and every
 repository it names, and nothing else: all-public repositories leave it public unless it says

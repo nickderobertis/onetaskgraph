@@ -1,0 +1,493 @@
+{
+  "record": "spike-linear-collapsed-slot issue fields-sentinel",
+  "captured": "2026-11-19",
+  "provenance": "captured",
+  "team": "TES2",
+  "note": "Spike spike-linear-collapsed-slot, case fields-sentinel: 4b. Fields section, then the code-span block opening with a code-span sentinel paragraph. Captured from the answer to the create that wrote it, through Linear's GraphQL API. The record's URL is left out: it names the workspace.",
+  "field": "descriptionState",
+  "markdown": "Keep the Linear source's metadata in a collapsed block at the end of each long form.\n\n## Context\n\nThe slot ends every issue description, project content and document content this source writes. Today it shows as a line of literal text.\n\n## Acceptance criteria\n\n| Check | Command |\n| -- | -- |\n| harness | `cargo test -p onetaskgraph-linear-e2e --test e2e spike_collapsed_slot` |\n| unchanged write | sends no update |\n\n* The stored tail is byte for byte what was sent.\n* A re-write of the stored form is stored unchanged.\n\nRun `onetaskgraph task show linear:TES2-1` to read it back.\n\n+++ Fields\n\n* **Owner**: `nick`\n* **Bar**: `design-approval`\n\n+++\n\n+++ onetaskgraph metadata\n\n`onetaskgraph.fields`\n\n`{\"onepipeline.acceptance_digests\":[\"sha256:33b562849faef00bf0edc917c339c12d1fb246b012e6bf8c743a14aa2b7f94ae\",\"sha256:0873b8e5644b82a8a1c8d62aab18c8232aa038375236e46c8adb9916480849d0\",\"sha256:3e4bdea70641b7f512d342ea9786778b6a310e5b9c2e7896597fb9d561cb8d5a\",\"sha256:f83afb7bc2cdf00c31d1f696b9120f45f9204958e0d57cbda8223819c7a6488b\",\"sha256:2742c4c9d44f747c45cc529f9a16dc84531d433ba471a3318fc9c036575be96a\",\"sha256:53a1b9b07813972540116bac210d550cf6337b5fecfd6c754b3026fbf5ebf7f4\",\"sha256:723a96441e2459ea2120236ca95fb52cb0ac15bc9600a46a6a33fd3dac6aaec8\",\"sha256:628a5623255d91fe3c7289623c85833716d6fc049b0b6da590bfb2901ea4c749\",\"sha256:56872414ec167b88ff91ad5eb6d3be67ba5b1464b07f86121dcdfde739d9df64\",\"sha256:a25ffa463d4108649f0d4d274c5ee0f8546a4befa04482392faa05afddedcde7\",\"sha256:388c92311285198f1953bdd8f022b7ef1423e17b6e2ec29800e6d4612a108aae\",\"sha256:577d72d617206a2bef7862f0d04839cdfaea32a6cf9a1c353b47daba217e2794\",\"sha256:d7e796c23a07f07ebcd29c38a23f151b21c9dd8a98a6ca261b0e81d2461ef7cf\",\"sha256:03fe3336c8cf49ab358948e225829abed1f8ce26850cffbf6fabf1b5e9b673dc\",\"sha256:4d4b0899ef05d1f4421437389759c18479f6ff70c059f93d3c025b3f06e1f441\",\"sha256:8ba55e72271a1515b49144317275be216d1562a4c473726c5d878355e9844903\",\"sha256:945efe9662b19d4a241097b3195c18c633395f2cbc7f257fe93d56087bfeb877\",\"sha256:ddfbdac4694474425db7fe759a085e87de1e47a13c219e3caa22714fc432e8a5\",\"sha256:8a13f1439bc3730767435ae34bfd8980d513bece31873ad868dc3d4bdb08c9a4\",\"sha256:eebe64a365a6b77a9a26d2ef135ea234c02df2fb87eca95de7ad49f9aadb741b\",\"sha256:38aa2253e44f295005ae555be0d7d4731d3c91c4382a6d1820aa9189c2001842\",\"sha256:8f6c10f0d599034434f0b7532916dc94da4d226934c8bc0e195fb8be4d36505f\",\"sha256:27425d2d73f73a9ac0f02a7b7d88009a3371e0071a989d816eccb4c1f3a19b28\",\"sha256:10dc1f486f9f7e5a2b2f8e67a316ebb8c9e02450a9131a50c75a437ea1e0597a\",\"sha256:1b333e5a15548c13cfb3eeb9f9f62d844544779d34ef5fee56fd3e1807119cc5\",\"sha256:5b50e3af4de6d529425ea580bed1b65fb3a04cde88800f9188aa9d0c2ce1b4d9\"],\"onepipeline.agent_graph\":\"/srv/orchestrator/graphs/plan-task.yaml\",\"onepipeline.id\":\"spike-linear-collapsed-slot\",\"onepipeline.node\":\"spike-linear-collapsed-slot\",\"onepipeline.persona\":\"../personas/implementer.yaml\",\"onetaskgraph.copied_destination_version\":\"sha256:b5c755aaab1038b3d5627bbde7f47ca80c5f5c0481c6d33f04139d07aa1530e7\",\"onetaskgraph.copied_version\":\"md1|78d8b72bbd2bd533b2cd6a4607e8e013cf4b205863b544f0c91580d0cc851fe1\",\"onetaskgraph.copies\":{\"plans\":\"plans:I_kwDOTXCWqs8AAAABe6_SeA\"},\"onetaskgraph.copy_locations\":{\"plans\":{\"id\":\"plans:I_kwDOTXCWqs8AAAABe6_SeA\",\"location\":{\"url\":\"https://github.com/example-org/example-plans/issues/2507\"}}},\"onetaskgraph.create_key\":\"0ddc8121-80b1-509b-9639-ed16e539dd23\",\"onetaskgraph.edges_on_record\":1,\"onetaskgraph.item_kind\":\"task\",\"onetaskgraph.origin\":\"gh:I_kwDOTXCWqs8AAAABe3Kl1w\",\"onetaskgraph.template\":{\"template\":\"onepipeline:plan-task\",\"digest\":\"sha256:ba89a3517c71e94a9f0be7c3bdf1cd1861633f72e9c113429e0629075abd4af3\",\"body_digest\":\"sha256:6cf008555fc83cb134e2030a8818b028e34ea956c074f9fae38611b7bcc8c028\",\"answers_digest\":\"sha256:677fe21b65f4a6cf1d105853d51f4f0a562698aa6374cb4d279d46a99dd3e6a3\"},\"orchestrator.follow-up-sample\":{\"host\":\"lima-hp\",\"owning_runs\":\"User-rulings-bind--manager-rulings-are-challengeable\",\"basis\":\"github.com/example-org/onejudge: e1299b8ac7b4131bf3b7de587dfadda70bf7ba10\\ngithub.com/example-org/onepipeline: 5f7f4611e1a88685dd8846b50d77d06eb50d2f89\",\"drafts\":\"drafts:User-rulings-bind/drafts/20261112T195514Z-let-a-read-only-judge-decline\",\"transcripts\":\"onepipeline transcript User-rulings-bind aio-adopt-ruling-provenance\",\"witnesses\":\"none recorded (the source ticket names no witness)\",\"verified_at\":\"2026-11-13T04:36:44Z\"},\"orchestrator.follow_x_up\":\"snake_x_case and _y_ emphasis-like\",\"orchestrator.home\":\"~/plans/approx ~4 KB\",\"orchestrator.markup\":\"a \\u003cb\\u003etag\\u003c/b\\u003e and a \\u0060tick\\u0060\",\"orchestrator.owner\":\"Zoë Brontë — naïve café résumé\",\"orchestrator.quote\":\"the reviewer said \\\"ship it\\\"\",\"orchestrator.review[0]\":\"accepted [with notes]\"}`\n\n+++",
+  "state": "AaoB/piHHQAHAQtwcm9zZW1pcnJvcgMJcGFyYWdyYXBoBwD+mIcdAAYGAP6Yhx0BC2F0dHJpYnV0aW9uRHsidXNlcklkIjoiYjc2MDdiMjEtMTYzMS00MzVlLTkyZDgtZDZhNjUyODZmZjc3IiwiYWN0b3JUeXBlIjoidXNlciJ9hP6Yhx0CVEtlZXAgdGhlIExpbmVhciBzb3VyY2UncyBtZXRhZGF0YSBpbiBhIGNvbGxhcHNlZCBibG9jayBhdCB0aGUgZW5kIG9mIGVhY2ggbG9uZyBmb3JtLob+mIcdVgthdHRyaWJ1dGlvbgRudWxsh/6Yhx0AAwdoZWFkaW5nBwD+mIcdWAYGAP6Yhx1ZC2F0dHJpYnV0aW9uRHsidXNlcklkIjoiYjc2MDdiMjEtMTYzMS00MzVlLTkyZDgtZDZhNjUyODZmZjc3IiwiYWN0b3JUeXBlIjoidXNlciJ9hP6Yhx1aB0NvbnRleHSG/piHHWELYXR0cmlidXRpb24EbnVsbCgA/piHHVgFbGV2ZWwBfQIoAP6Yhx1YAmlkAXckZjkzYTU5MDMtYzM0NS00OWQ1LThhMmUtN2JhMGI5NzhhNTZjh/6Yhx1YAwlwYXJhZ3JhcGgHAP6Yhx1lBgYA/piHHWYLYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2E/piHHWeJAVRoZSBzbG90IGVuZHMgZXZlcnkgaXNzdWUgZGVzY3JpcHRpb24sIHByb2plY3QgY29udGVudCBhbmQgZG9jdW1lbnQgY29udGVudCB0aGlzIHNvdXJjZSB3cml0ZXMuIFRvZGF5IGl0IHNob3dzIGFzIGEgbGluZSBvZiBsaXRlcmFsIHRleHQuhv6Yhx3wAQthdHRyaWJ1dGlvbgRudWxsh/6Yhx1lAwdoZWFkaW5nBwD+mIcd8gEGBgD+mIcd8wELYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2E/piHHfQBE0FjY2VwdGFuY2UgY3JpdGVyaWGG/piHHYcCC2F0dHJpYnV0aW9uBG51bGwoAP6Yhx3yAQVsZXZlbAF9AigA/piHHfIBAmlkAXckNjY3MTVkMzktMGJjNS00OTFmLThkZjctMWMwZmIzNGM4NTI5h/6Yhx3yAQMFdGFibGUHAP6Yhx2LAgMJdGFibGVfcm93BwD+mIcdjAIDDHRhYmxlX2hlYWRlcgcA/piHHY0CAwlwYXJhZ3JhcGgHAP6Yhx2OAgYGAP6Yhx2PAgthdHRyaWJ1dGlvbkR7InVzZXJJZCI6ImI3NjA3YjIxLTE2MzEtNDM1ZS05MmQ4LWQ2YTY1Mjg2ZmY3NyIsImFjdG9yVHlwZSI6InVzZXIifYT+mIcdkAIFQ2hlY2uG/piHHZUCC2F0dHJpYnV0aW9uBG51bGwoAP6Yhx2NAgdjb2xzcGFuAX0BKAD+mIcdjQIHcm93c3BhbgF9AYf+mIcdjQIDDHRhYmxlX2hlYWRlcgcA/piHHZkCAwlwYXJhZ3JhcGgHAP6Yhx2aAgYGAP6Yhx2bAgthdHRyaWJ1dGlvbkR7InVzZXJJZCI6ImI3NjA3YjIxLTE2MzEtNDM1ZS05MmQ4LWQ2YTY1Mjg2ZmY3NyIsImFjdG9yVHlwZSI6InVzZXIifYT+mIcdnAIHQ29tbWFuZIb+mIcdowILYXR0cmlidXRpb24EbnVsbCgA/piHHZkCB2NvbHNwYW4BfQEoAP6Yhx2ZAgdyb3dzcGFuAX0Bh/6Yhx2MAgMJdGFibGVfcm93BwD+mIcdpwIDCnRhYmxlX2NlbGwHAP6Yhx2oAgMJcGFyYWdyYXBoBwD+mIcdqQIGBgD+mIcdqgILYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2E/piHHasCB2hhcm5lc3OG/piHHbICC2F0dHJpYnV0aW9uBG51bGwoAP6Yhx2oAgdjb2xzcGFuAX0BKAD+mIcdqAIHcm93c3BhbgF9AYf+mIcdqAIDCnRhYmxlX2NlbGwHAP6Yhx22AgMJcGFyYWdyYXBoBwD+mIcdtwIGBgD+mIcduAIEY29kZQJ7fYb+mIcduQILYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2E/piHHboCRWNhcmdvIHRlc3QgLXAgb25ldGFza2dyYXBoLWxpbmVhci1lMmUgLS10ZXN0IGUyZSBzcGlrZV9jb2xsYXBzZWRfc2xvdIb+mIcd/wIEY29kZQRudWxshv6Yhx2AAwthdHRyaWJ1dGlvbgRudWxsKAD+mIcdtgIHY29sc3BhbgF9ASgA/piHHbYCB3Jvd3NwYW4BfQGH/piHHacCAwl0YWJsZV9yb3cHAP6Yhx2EAwMKdGFibGVfY2VsbAcA/piHHYUDAwlwYXJhZ3JhcGgHAP6Yhx2GAwYGAP6Yhx2HAwthdHRyaWJ1dGlvbkR7InVzZXJJZCI6ImI3NjA3YjIxLTE2MzEtNDM1ZS05MmQ4LWQ2YTY1Mjg2ZmY3NyIsImFjdG9yVHlwZSI6InVzZXIifYT+mIcdiAMPdW5jaGFuZ2VkIHdyaXRlhv6Yhx2XAwthdHRyaWJ1dGlvbgRudWxsKAD+mIcdhQMHY29sc3BhbgF9ASgA/piHHYUDB3Jvd3NwYW4BfQGH/piHHYUDAwp0YWJsZV9jZWxsBwD+mIcdmwMDCXBhcmFncmFwaAcA/piHHZwDBgYA/piHHZ0DC2F0dHJpYnV0aW9uRHsidXNlcklkIjoiYjc2MDdiMjEtMTYzMS00MzVlLTkyZDgtZDZhNjUyODZmZjc3IiwiYWN0b3JUeXBlIjoidXNlciJ9hP6Yhx2eAw9zZW5kcyBubyB1cGRhdGWG/piHHa0DC2F0dHJpYnV0aW9uBG51bGwoAP6Yhx2bAwdjb2xzcGFuAX0BKAD+mIcdmwMHcm93c3BhbgF9ASgA/piHHYsCBnNpemluZwF3A2ZpdIf+mIcdiwIDC2J1bGxldF9saXN0BwD+mIcdsgMDCWxpc3RfaXRlbQcA/piHHbMDAwlwYXJhZ3JhcGgHAP6Yhx20AwYGAP6Yhx21AwthdHRyaWJ1dGlvbkR7InVzZXJJZCI6ImI3NjA3YjIxLTE2MzEtNDM1ZS05MmQ4LWQ2YTY1Mjg2ZmY3NyIsImFjdG9yVHlwZSI6InVzZXIifYT+mIcdtgMvVGhlIHN0b3JlZCB0YWlsIGlzIGJ5dGUgZm9yIGJ5dGUgd2hhdCB3YXMgc2VudC6G/piHHeUDC2F0dHJpYnV0aW9uBG51bGyH/piHHbMDAwlsaXN0X2l0ZW0HAP6Yhx3nAwMJcGFyYWdyYXBoBwD+mIcd6AMGBgD+mIcd6QMLYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2E/piHHeoDMkEgcmUtd3JpdGUgb2YgdGhlIHN0b3JlZCBmb3JtIGlzIHN0b3JlZCB1bmNoYW5nZWQuhv6Yhx2cBAthdHRyaWJ1dGlvbgRudWxsh/6Yhx2yAwMJcGFyYWdyYXBoBwD+mIcdngQGBgD+mIcdnwQLYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2E/piHHaAEBFJ1biCG/piHHaQEC2F0dHJpYnV0aW9uBG51bGyG/piHHaUEBGNvZGUCe32G/piHHaYEC2F0dHJpYnV0aW9uRHsidXNlcklkIjoiYjc2MDdiMjEtMTYzMS00MzVlLTkyZDgtZDZhNjUyODZmZjc3IiwiYWN0b3JUeXBlIjoidXNlciJ9hP6Yhx2nBCRvbmV0YXNrZ3JhcGggdGFzayBzaG93IGxpbmVhcjpURVMyLTGG/piHHcsEBGNvZGUEbnVsbIb+mIcdzAQLYXR0cmlidXRpb24EbnVsbIb+mIcdzQQLYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2E/piHHc4EESB0byByZWFkIGl0IGJhY2suhv6Yhx3fBAthdHRyaWJ1dGlvbgRudWxsh/6Yhx2eBAMTY29sbGFwc2libGVfc2VjdGlvbgcA/piHHeEEAxNjb2xsYXBzaWJsZV9oZWFkaW5nBwD+mIcd4gQDCXBhcmFncmFwaAcA/piHHeMEBgYA/piHHeQEC2F0dHJpYnV0aW9uRHsidXNlcklkIjoiYjc2MDdiMjEtMTYzMS00MzVlLTkyZDgtZDZhNjUyODZmZjc3IiwiYWN0b3JUeXBlIjoidXNlciJ9hP6Yhx3lBAZGaWVsZHOG/piHHesEC2F0dHJpYnV0aW9uBG51bGyH/piHHeIEAwtidWxsZXRfbGlzdAcA/piHHe0EAwlsaXN0X2l0ZW0HAP6Yhx3uBAMJcGFyYWdyYXBoBwD+mIcd7wQGBgD+mIcd8AQGc3Ryb25nAnt9hv6Yhx3xBAthdHRyaWJ1dGlvbkR7InVzZXJJZCI6ImI3NjA3YjIxLTE2MzEtNDM1ZS05MmQ4LWQ2YTY1Mjg2ZmY3NyIsImFjdG9yVHlwZSI6InVzZXIifYT+mIcd8gQFT3duZXKG/piHHfcEBnN0cm9uZwRudWxshv6Yhx34BAthdHRyaWJ1dGlvbgRudWxshv6Yhx35BAthdHRyaWJ1dGlvbkR7InVzZXJJZCI6ImI3NjA3YjIxLTE2MzEtNDM1ZS05MmQ4LWQ2YTY1Mjg2ZmY3NyIsImFjdG9yVHlwZSI6InVzZXIifYT+mIcd+gQCOiCG/piHHfwEC2F0dHJpYnV0aW9uBG51bGyG/piHHf0EBGNvZGUCe32G/piHHf4EC2F0dHJpYnV0aW9uRHsidXNlcklkIjoiYjc2MDdiMjEtMTYzMS00MzVlLTkyZDgtZDZhNjUyODZmZjc3IiwiYWN0b3JUeXBlIjoidXNlciJ9hP6Yhx3/BARuaWNrhv6Yhx2DBQRjb2RlBG51bGyG/piHHYQFC2F0dHJpYnV0aW9uBG51bGyH/piHHe4EAwlsaXN0X2l0ZW0HAP6Yhx2GBQMJcGFyYWdyYXBoBwD+mIcdhwUGBgD+mIcdiAUGc3Ryb25nAnt9hv6Yhx2JBQthdHRyaWJ1dGlvbkR7InVzZXJJZCI6ImI3NjA3YjIxLTE2MzEtNDM1ZS05MmQ4LWQ2YTY1Mjg2ZmY3NyIsImFjdG9yVHlwZSI6InVzZXIifYT+mIcdigUDQmFyhv6Yhx2NBQZzdHJvbmcEbnVsbIb+mIcdjgULYXR0cmlidXRpb24EbnVsbIb+mIcdjwULYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2E/piHHZAFAjoghv6Yhx2SBQthdHRyaWJ1dGlvbgRudWxshv6Yhx2TBQRjb2RlAnt9hv6Yhx2UBQthdHRyaWJ1dGlvbkR7InVzZXJJZCI6ImI3NjA3YjIxLTE2MzEtNDM1ZS05MmQ4LWQ2YTY1Mjg2ZmY3NyIsImFjdG9yVHlwZSI6InVzZXIifYT+mIcdlQUPZGVzaWduLWFwcHJvdmFshv6Yhx2kBQRjb2RlBG51bGyG/piHHaUFC2F0dHJpYnV0aW9uBG51bGwoAP6Yhx3hBAJpZAF3JGUxYzZmYjg5LThmNmQtNDZkOS04ZDA4LWU5OTE3MWM0NzYxYigA/piHHeEEEndhc0NvcGllZFdoaWxlT3BlbgF/h/6Yhx3hBAMTY29sbGFwc2libGVfc2VjdGlvbgcA/piHHakFAxNjb2xsYXBzaWJsZV9oZWFkaW5nBwD+mIcdqgUDCXBhcmFncmFwaAcA/piHHasFBgYA/piHHawFC2F0dHJpYnV0aW9uRHsidXNlcklkIjoiYjc2MDdiMjEtMTYzMS00MzVlLTkyZDgtZDZhNjUyODZmZjc3IiwiYWN0b3JUeXBlIjoidXNlciJ9hP6Yhx2tBRVvbmV0YXNrZ3JhcGggbWV0YWRhdGGG/piHHcIFC2F0dHJpYnV0aW9uBG51bGyH/piHHaoFAwlwYXJhZ3JhcGgHAP6Yhx3EBQYGAP6Yhx3FBQRjb2RlAnt9hv6Yhx3GBQthdHRyaWJ1dGlvbkR7InVzZXJJZCI6ImI3NjA3YjIxLTE2MzEtNDM1ZS05MmQ4LWQ2YTY1Mjg2ZmY3NyIsImFjdG9yVHlwZSI6InVzZXIifYT+mIcdxwUTb25ldGFza2dyYXBoLmZpZWxkc4b+mIcd2gUEY29kZQRudWxshv6Yhx3bBQthdHRyaWJ1dGlvbgRudWxsh/6Yhx3EBQMJcGFyYWdyYXBoBwD+mIcd3QUGBgD+mIcd3gUEY29kZQJ7fYb+mIcd3wULYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2E/piHHeAFwB97Im9uZXBpcGVsaW5lLmFjY2VwdGFuY2VfZGlnZXN0cyI6WyJzaGEyNTY6MzNiNTYyODQ5ZmFlZjAwYmYwZWRjOTE3YzMzOWMxMmQxZmIyNDZiMDEyZTZiZjhjNzQzYTE0YWEyYjdmOTRhZSIsInNoYTI1NjowODczYjhlNTY0NGI4MmE4YTFjOGQ2MmFhYjE4YzgyMzJhYTAzODM3NTIzNmU0NmM4YWRiOTkxNjQ4MDg0OWQwIiwic2hhMjU2OjNlNGJkZWE3MDY0MWI3ZjUxMmQzNDJlYTk3ODY3NzhiNmEzMTBlNWI5YzJlNzg5NjU5N2ZiOWQ1NjFjYjhkNWEiLCJzaGEyNTY6ZjgzYWZiN2JjMmNkZjAwYzMxZDFmNjk2YjkxMjBmNDVmOTIwNDk1OGUwZDU3Y2JkYTgyMjM4MTljN2E2NDg4YiIsInNoYTI1NjoyNzQyYzRjOWQ0NGY3NDdjNDVjYzUyOWY5YTE2ZGM4NDUzMWQ0MzNiYTQ3MWEzMzE4ZmM5YzAzNjU3NWJlOTZhIiwic2hhMjU2OjUzYTFiOWIwNzgxMzk3MjU0MDExNmJhYzIxMGQ1NTBjZjYzMzdiNWZlY2ZkNmM3NTRiMzAyNmZiZjVlYmY3ZjQiLCJzaGEyNTY6NzIzYTk2NDQxZTI0NTllYTIxMjAyMzZjYTk1ZmI1MmNiMGFjMTViYzk2MDBhNDZhNmEzM2ZkM2RhYzZhYWVjOCIsInNoYTI1Njo2MjhhNTYyMzI1NWQ5MWZlM2M3Mjg5NjIzYzg1ODMzNzE2ZDZmYzA0OWIwYjZkYTU5MGJmYjI5MDFlYTRjNzQ5Iiwic2hhMjU2OjU2ODcyNDE0ZWMxNjdiODhmZjkxYWQ1ZWI2ZDNiZTY3YmE1YjE0NjRiMDdmODYxMjFkY2RmZGU3MzlkOWRmNjQiLCJzaGEyNTY6YTI1ZmZhNDYzZDQxMDg2NDlmMGQ0ZDI3NGM1ZWUwZjg1NDZhNGJlZmEwNDQ4MjM5MmZhYTA1YWZkZGVkY2RlNyIsInNoYTI1NjozODhjOTIzMTEyODUxOThmMTk1M2JkZDhmMDIyYjdlZjE0MjNlMTdiNmUyZWMyOTgwMGU2ZDQ2MTJhMTA4YWFlIiwic2hhMjU2OjU3N2Q3MmQ2MTcyMDZhMmJlZjc4NjJmMGQwNDgzOWNkZmFlYTMyYTZjZjlhMWMzNTNiNDdkYWJhMjE3ZTI3OTQiLCJzaGEyNTY6ZDdlNzk2YzIzYTA3ZjA3ZWJjZDI5YzM4YTIzZjE1MWIyMWM5ZGQ4YTk4YTZjYTI2MWIwZTgxZDI0NjFlZjdjZiIsInNoYTI1NjowM2ZlMzMzNmM4Y2Y0OWFiMzU4OTQ4ZTIyNTgyOWFiZWQxZjhjZTI2ODUwY2ZmYmY2ZmFiZjFiNWU5YjY3M2RjIiwic2hhMjU2OjRkNGIwODk5ZWYwNWQxZjQ0MjE0MzczODk3NTljMTg0NzlmNmZmNzBjMDU5ZjkzZDNjMDI1YjNmMDZlMWY0NDEiLCJzaGEyNTY6OGJhNTVlNzIyNzFhMTUxNWI0OTE0NDMxNzI3NWJlMjE2ZDE1NjJhNGM0NzM3MjZjNWQ4NzgzNTVlOTg0NDkwMyIsInNoYTI1Njo5NDVlZmU5NjYyYjE5ZDRhMjQxMDk3YjMxOTVjMThjNjMzMzk1ZjJjYmM3ZjI1N2ZlOTNkNTYwODdiZmViODc3Iiwic2hhMjU2OmRkZmJkYWM0Njk0NDc0NDI1ZGI3ZmU3NTlhMDg1ZTg3ZGUxZTQ3YTEzYzIxOWUzY2FhMjI3MTRmYzQzMmU4YTUiLCJzaGEyNTY6OGExM2YxNDM5YmMzNzMwNzY3NDM1YWUzNGJmZDg5ODBkNTEzYmVjZTMxODczYWQ4NjhkYzNkNGJkYjA4YzlhNCIsInNoYTI1NjplZWJlNjRhMzY1YTZiNzdhOWEyNmQyZWYxMzVlYTIzNGMwMmRmMmZiODdlY2E5NWRlN2FkNDlmOWFhZGI3NDFiIiwic2hhMjU2OjM4YWEyMjUzZTQ0ZjI5NTAwNWFlNTU1YmUwZDdkNDczMWQzYzkxYzQzODJhNmQxODIwYWE5MTg5YzIwMDE4NDIiLCJzaGEyNTY6OGY2YzEwZjBkNTk5MDM0NDM0ZjBiNzUzMjkxNmRjOTRkYTRkMjI2OTM0YzhiYzBlMTk1ZmI4YmU0ZDM2NTA1ZiIsInNoYTI1NjoyNzQyNWQyZDczZjczYTlhYzBmMDJhN2I3ZDg4MDA5YTMzNzFlMDA3MWE5ODlkODE2ZWNjYjRjMWYzYTE5YjI4Iiwic2hhMjU2OjEwZGMxZjQ4NmY5ZjdlNWEyYjJmOGU2N2EzMTZlYmI4YzllMDI0NTBhOTEzMWE1MGM3NWE0MzdlYTFlMDU5N2EiLCJzaGEyNTY6MWIzMzNlNWExNTU0OGMxM2NmYjNlZWI5ZjlmNjJkODQ0NTQ0Nzc5ZDM0ZWY1ZmVlNTZmZDNlMTgwNzExOWNjNSIsInNoYTI1Njo1YjUwZTNhZjRkZTZkNTI5NDI1ZWE1ODBiZWQxYjY1ZmIzYTA0Y2RlODg4MDBmOTE4OGFhOWQwYzJjZTFiNGQ5Il0sIm9uZXBpcGVsaW5lLmFnZW50X2dyYXBoIjoiL3Nydi9vcmNoZXN0cmF0b3IvZ3JhcGhzL3BsYW4tdGFzay55YW1sIiwib25lcGlwZWxpbmUuaWQiOiJzcGlrZS1saW5lYXItY29sbGFwc2VkLXNsb3QiLCJvbmVwaXBlbGluZS5ub2RlIjoic3Bpa2UtbGluZWFyLWNvbGxhcHNlZC1zbG90Iiwib25lcGlwZWxpbmUucGVyc29uYSI6Ii4uL3BlcnNvbmFzL2ltcGxlbWVudGVyLnlhbWwiLCJvbmV0YXNrZ3JhcGguY29waWVkX2Rlc3RpbmF0aW9uX3ZlcnNpb24iOiJzaGEyNTY6YjVjNzU1YWFhYjEwMzhiM2Q1NjI3YmJkZTdmNDdjYTgwYzVmNWMwNDgxYzZkMzNmMDQxMzlkMDdhYTE1MzBlNyIsIm9uZXRhc2tncmFwaC5jb3BpZWRfdmVyc2lvbiI6Im1kMXw3OGQ4YjcyYmJkMmJkNTMzYjJjZDZhNDYwN2U4ZTAxM2NmNGIyMDU4NjNiNTQ0ZjBjOTE1ODBkMGNjODUxZmUxIiwib25ldGFza2dyYXBoLmNvcGllcyI6eyJwbGFucyI6InBsYW5zOklfa3dET1RYQ1dxczhBQUFBQmU2X1NlQSJ9LCJvbmV0YXNrZ3JhcGguY29weV9sb2NhdGlvbnMiOnsicGxhbnMiOnsiaWQiOiJwbGFuczpJX2t3RE9UWENXcXM4QUFBQUJlNl9TZUEiLCJsb2NhdGlvbiI6eyJ1cmwiOiJodHRwczovL2dpdGh1Yi5jb20vZXhhbXBsZS1vcmcvZXhhbXBsZS1wbGFucy9pc3N1ZXMvMjUwNyJ9fX0sIm9uZXRhc2tncmFwaC5jcmVhdGVfa2V5IjoiMGRkYzgxMjEtODBiMS01MDliLTk2MzktZWQxNmU1MzlkZDIzIiwib25ldGFza2dyYXBoLmVkZ2VzX29uX3JlY29yZCI6MSwib25ldGFza2dyYXBoLml0ZW1fa2luZCI6InRhc2siLCJvbmV0YXNrZ3JhcGgub3JpZ2luIjoiZ2g6SV9rd0RPVFhDV3FzOEFBQUFCZTNLbDF3Iiwib25ldGFza2dyYXBoLnRlbXBsYXRlIjp7InRlbXBsYXRlIjoib25lcGlwZWxpbmU6cGxhbi10YXNrIiwiZGlnZXN0Ijoic2hhMjU2OmJhODlhMzUxN2M3MWU5NGE5ZjBiZTdjM2JkZjFjZDE4NjE2MzNmNzJlOWMxMTM0MjllMDYyOTA3NWFiZDRhZjMiLCJib2R5X2RpZ2VzdCI6InNoYTI1Njo2Y2YwMDg1NTVmYzgzY2IxMzRlMjAzMGE4ODE4YjAyOGUzNGVhOTU2YzA3NGY5ZmFlMzg2MTFiN2JjYzhjMDI4IiwiYW5zd2Vyc19kaWdlc3QiOiJzaGEyNTY6Njc3ZmUyMWI2NWY0YTZjZjFkMTA1ODUzZDUxZjRmMGE1NjI2OThhYTYzNzRjYjRkMjc5ZDQ2YTk5ZGQzZTZhMyJ9LCJvcmNoZXN0cmF0b3IuZm9sbG93LXVwLXNhbXBsZSI6eyJob3N0IjoibGltYS1ocCIsIm93bmluZ19ydW5zIjoiVXNlci1ydWxpbmdzLWJpbmQtLW1hbmFnZXItcnVsaW5ncy1hcmUtY2hhbGxlbmdlYWJsZSIsImJhc2lzIjoiZ2l0aHViLmNvbS9leGFtcGxlLW9yZy9vbmVqdWRnZTogZTEyOTliOGFjN2I0MTMxYmYzYjdkZTU4N2RmYWRkYTcwYmY3YmExMFxuZ2l0aHViLmNvbS9leGFtcGxlLW9yZy9vbmVwaXBlbGluZTogNWY3ZjQ2MTFlMWE4ODY4NWRkODg0NmI1MGQ3N2QwNmViNTBkMmY4OSIsImRyYWZ0cyI6ImRyYWZ0czpVc2VyLXJ1bGluZ3MtYmluZC9kcmFmdHMvMjAyNjExMTJUMTk1NTE0Wi1sZXQtYS1yZWFkLW9ubHktanVkZ2UtZGVjbGluZSIsInRyYW5zY3JpcHRzIjoib25lcGlwZWxpbmUgdHJhbnNjcmlwdCBVc2VyLXJ1bGluZ3MtYmluZCBhaW8tYWRvcHQtcnVsaW5nLXByb3ZlbmFuY2UiLCJ3aXRuZXNzZXMiOiJub25lIHJlY29yZGVkICh0aGUgc291cmNlIHRpY2tldCBuYW1lcyBubyB3aXRuZXNzKSIsInZlcmlmaWVkX2F0IjoiMjAyNi0xMS0xM1QwNDozNjo0NFoifSwib3JjaGVzdHJhdG9yLmZvbGxvd194X3VwIjoic25ha2VfeF9jYXNlIGFuZCBfeV8gZW1waGFzaXMtbGlrZSIsIm9yY2hlc3RyYXRvci5ob21lIjoifi9wbGFucy9hcHByb3ggfjQgS0IiLCJvcmNoZXN0cmF0b3IubWFya3VwIjoiYSBcdTAwM2NiXHUwMDNldGFnXHUwMDNjL2JcdTAwM2UgYW5kIGEgXHUwMDYwdGlja1x1MDA2MCIsIm9yY2hlc3RyYXRvci5vd25lciI6Ilpvw6sgQnJvbnTDqyDigJQgbmHDr3ZlIGNhZsOpIHLDqXN1bcOpIiwib3JjaGVzdHJhdG9yLnF1b3RlIjoidGhlIHJldmlld2VyIHNhaWQgXCJzaGlwIGl0XCIiLCJvcmNoZXN0cmF0b3IucmV2aWV3WzBdIjoiYWNjZXB0ZWQgW3dpdGggbm90ZXNdIn2G/piHHZglBGNvZGUEbnVsbIb+mIcdmSULYXR0cmlidXRpb24EbnVsbCgA/piHHakFAmlkAXckNDQ3MTc1ZWYtYWJkMC00YzQxLWE5MDgtNDU3NmU3MmZjNzNhKAD+mIcdqQUSd2FzQ29waWVkV2hpbGVPcGVuAX8A",
+  "node_tree": {
+    "type": "doc",
+    "content": [
+      {
+        "type": "paragraph",
+        "attrs": {},
+        "content": [
+          {
+            "type": "#text",
+            "runs": [
+              {
+                "marks": {},
+                "text": "Keep the Linear source's metadata in a collapsed block at the end of each long form."
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "heading",
+        "attrs": {
+          "id": "f93a5903-c345-49d5-8a2e-7ba0b978a56c",
+          "level": 2.0
+        },
+        "content": [
+          {
+            "type": "#text",
+            "runs": [
+              {
+                "marks": {},
+                "text": "Context"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "paragraph",
+        "attrs": {},
+        "content": [
+          {
+            "type": "#text",
+            "runs": [
+              {
+                "marks": {},
+                "text": "The slot ends every issue description, project content and document content this source writes. Today it shows as a line of literal text."
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "heading",
+        "attrs": {
+          "id": "66715d39-0bc5-491f-8df7-1c0fb34c8529",
+          "level": 2.0
+        },
+        "content": [
+          {
+            "type": "#text",
+            "runs": [
+              {
+                "marks": {},
+                "text": "Acceptance criteria"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "table",
+        "attrs": {
+          "sizing": "fit"
+        },
+        "content": [
+          {
+            "type": "table_row",
+            "attrs": {},
+            "content": [
+              {
+                "type": "table_header",
+                "attrs": {
+                  "colspan": 1.0,
+                  "rowspan": 1.0
+                },
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "attrs": {},
+                    "content": [
+                      {
+                        "type": "#text",
+                        "runs": [
+                          {
+                            "marks": {},
+                            "text": "Check"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "type": "table_header",
+                "attrs": {
+                  "colspan": 1.0,
+                  "rowspan": 1.0
+                },
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "attrs": {},
+                    "content": [
+                      {
+                        "type": "#text",
+                        "runs": [
+                          {
+                            "marks": {},
+                            "text": "Command"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "table_row",
+            "attrs": {},
+            "content": [
+              {
+                "type": "table_cell",
+                "attrs": {
+                  "colspan": 1.0,
+                  "rowspan": 1.0
+                },
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "attrs": {},
+                    "content": [
+                      {
+                        "type": "#text",
+                        "runs": [
+                          {
+                            "marks": {},
+                            "text": "harness"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "type": "table_cell",
+                "attrs": {
+                  "colspan": 1.0,
+                  "rowspan": 1.0
+                },
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "attrs": {},
+                    "content": [
+                      {
+                        "type": "#text",
+                        "runs": [
+                          {
+                            "marks": {
+                              "code": {}
+                            },
+                            "text": "cargo test -p onetaskgraph-linear-e2e --test e2e spike_collapsed_slot"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "table_row",
+            "attrs": {},
+            "content": [
+              {
+                "type": "table_cell",
+                "attrs": {
+                  "colspan": 1.0,
+                  "rowspan": 1.0
+                },
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "attrs": {},
+                    "content": [
+                      {
+                        "type": "#text",
+                        "runs": [
+                          {
+                            "marks": {},
+                            "text": "unchanged write"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "type": "table_cell",
+                "attrs": {
+                  "colspan": 1.0,
+                  "rowspan": 1.0
+                },
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "attrs": {},
+                    "content": [
+                      {
+                        "type": "#text",
+                        "runs": [
+                          {
+                            "marks": {},
+                            "text": "sends no update"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "bullet_list",
+        "attrs": {},
+        "content": [
+          {
+            "type": "list_item",
+            "attrs": {},
+            "content": [
+              {
+                "type": "paragraph",
+                "attrs": {},
+                "content": [
+                  {
+                    "type": "#text",
+                    "runs": [
+                      {
+                        "marks": {},
+                        "text": "The stored tail is byte for byte what was sent."
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "list_item",
+            "attrs": {},
+            "content": [
+              {
+                "type": "paragraph",
+                "attrs": {},
+                "content": [
+                  {
+                    "type": "#text",
+                    "runs": [
+                      {
+                        "marks": {},
+                        "text": "A re-write of the stored form is stored unchanged."
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "paragraph",
+        "attrs": {},
+        "content": [
+          {
+            "type": "#text",
+            "runs": [
+              {
+                "marks": {},
+                "text": "Run "
+              },
+              {
+                "marks": {
+                  "code": {}
+                },
+                "text": "onetaskgraph task show linear:TES2-1"
+              },
+              {
+                "marks": {},
+                "text": " to read it back."
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "collapsible_section",
+        "attrs": {
+          "id": "e1c6fb89-8f6d-46d9-8d08-e99171c4761b",
+          "wasCopiedWhileOpen": null
+        },
+        "content": [
+          {
+            "type": "collapsible_heading",
+            "attrs": {},
+            "content": [
+              {
+                "type": "paragraph",
+                "attrs": {},
+                "content": [
+                  {
+                    "type": "#text",
+                    "runs": [
+                      {
+                        "marks": {},
+                        "text": "Fields"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "bullet_list",
+            "attrs": {},
+            "content": [
+              {
+                "type": "list_item",
+                "attrs": {},
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "attrs": {},
+                    "content": [
+                      {
+                        "type": "#text",
+                        "runs": [
+                          {
+                            "marks": {
+                              "strong": {}
+                            },
+                            "text": "Owner"
+                          },
+                          {
+                            "marks": {},
+                            "text": ": "
+                          },
+                          {
+                            "marks": {
+                              "code": {}
+                            },
+                            "text": "nick"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "type": "list_item",
+                "attrs": {},
+                "content": [
+                  {
+                    "type": "paragraph",
+                    "attrs": {},
+                    "content": [
+                      {
+                        "type": "#text",
+                        "runs": [
+                          {
+                            "marks": {
+                              "strong": {}
+                            },
+                            "text": "Bar"
+                          },
+                          {
+                            "marks": {},
+                            "text": ": "
+                          },
+                          {
+                            "marks": {
+                              "code": {}
+                            },
+                            "text": "design-approval"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "collapsible_section",
+        "attrs": {
+          "id": "447175ef-abd0-4c41-a908-4576e72fc73a",
+          "wasCopiedWhileOpen": null
+        },
+        "content": [
+          {
+            "type": "collapsible_heading",
+            "attrs": {},
+            "content": [
+              {
+                "type": "paragraph",
+                "attrs": {},
+                "content": [
+                  {
+                    "type": "#text",
+                    "runs": [
+                      {
+                        "marks": {},
+                        "text": "onetaskgraph metadata"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "paragraph",
+            "attrs": {},
+            "content": [
+              {
+                "type": "#text",
+                "runs": [
+                  {
+                    "marks": {
+                      "code": {}
+                    },
+                    "text": "onetaskgraph.fields"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "paragraph",
+            "attrs": {},
+            "content": [
+              {
+                "type": "#text",
+                "runs": [
+                  {
+                    "marks": {
+                      "code": {}
+                    },
+                    "text": "{\"onepipeline.acceptance_digests\":[\"sha256:33b562849faef00bf0edc917c339c12d1fb246b012e6bf8c743a14aa2b7f94ae\",\"sha256:0873b8e5644b82a8a1c8d62aab18c8232aa038375236e46c8adb9916480849d0\",\"sha256:3e4bdea70641b7f512d342ea9786778b6a310e5b9c2e7896597fb9d561cb8d5a\",\"sha256:f83afb7bc2cdf00c31d1f696b9120f45f9204958e0d57cbda8223819c7a6488b\",\"sha256:2742c4c9d44f747c45cc529f9a16dc84531d433ba471a3318fc9c036575be96a\",\"sha256:53a1b9b07813972540116bac210d550cf6337b5fecfd6c754b3026fbf5ebf7f4\",\"sha256:723a96441e2459ea2120236ca95fb52cb0ac15bc9600a46a6a33fd3dac6aaec8\",\"sha256:628a5623255d91fe3c7289623c85833716d6fc049b0b6da590bfb2901ea4c749\",\"sha256:56872414ec167b88ff91ad5eb6d3be67ba5b1464b07f86121dcdfde739d9df64\",\"sha256:a25ffa463d4108649f0d4d274c5ee0f8546a4befa04482392faa05afddedcde7\",\"sha256:388c92311285198f1953bdd8f022b7ef1423e17b6e2ec29800e6d4612a108aae\",\"sha256:577d72d617206a2bef7862f0d04839cdfaea32a6cf9a1c353b47daba217e2794\",\"sha256:d7e796c23a07f07ebcd29c38a23f151b21c9dd8a98a6ca261b0e81d2461ef7cf\",\"sha256:03fe3336c8cf49ab358948e225829abed1f8ce26850cffbf6fabf1b5e9b673dc\",\"sha256:4d4b0899ef05d1f4421437389759c18479f6ff70c059f93d3c025b3f06e1f441\",\"sha256:8ba55e72271a1515b49144317275be216d1562a4c473726c5d878355e9844903\",\"sha256:945efe9662b19d4a241097b3195c18c633395f2cbc7f257fe93d56087bfeb877\",\"sha256:ddfbdac4694474425db7fe759a085e87de1e47a13c219e3caa22714fc432e8a5\",\"sha256:8a13f1439bc3730767435ae34bfd8980d513bece31873ad868dc3d4bdb08c9a4\",\"sha256:eebe64a365a6b77a9a26d2ef135ea234c02df2fb87eca95de7ad49f9aadb741b\",\"sha256:38aa2253e44f295005ae555be0d7d4731d3c91c4382a6d1820aa9189c2001842\",\"sha256:8f6c10f0d599034434f0b7532916dc94da4d226934c8bc0e195fb8be4d36505f\",\"sha256:27425d2d73f73a9ac0f02a7b7d88009a3371e0071a989d816eccb4c1f3a19b28\",\"sha256:10dc1f486f9f7e5a2b2f8e67a316ebb8c9e02450a9131a50c75a437ea1e0597a\",\"sha256:1b333e5a15548c13cfb3eeb9f9f62d844544779d34ef5fee56fd3e1807119cc5\",\"sha256:5b50e3af4de6d529425ea580bed1b65fb3a04cde88800f9188aa9d0c2ce1b4d9\"],\"onepipeline.agent_graph\":\"/srv/orchestrator/graphs/plan-task.yaml\",\"onepipeline.id\":\"spike-linear-collapsed-slot\",\"onepipeline.node\":\"spike-linear-collapsed-slot\",\"onepipeline.persona\":\"../personas/implementer.yaml\",\"onetaskgraph.copied_destination_version\":\"sha256:b5c755aaab1038b3d5627bbde7f47ca80c5f5c0481c6d33f04139d07aa1530e7\",\"onetaskgraph.copied_version\":\"md1|78d8b72bbd2bd533b2cd6a4607e8e013cf4b205863b544f0c91580d0cc851fe1\",\"onetaskgraph.copies\":{\"plans\":\"plans:I_kwDOTXCWqs8AAAABe6_SeA\"},\"onetaskgraph.copy_locations\":{\"plans\":{\"id\":\"plans:I_kwDOTXCWqs8AAAABe6_SeA\",\"location\":{\"url\":\"https://github.com/example-org/example-plans/issues/2507\"}}},\"onetaskgraph.create_key\":\"0ddc8121-80b1-509b-9639-ed16e539dd23\",\"onetaskgraph.edges_on_record\":1,\"onetaskgraph.item_kind\":\"task\",\"onetaskgraph.origin\":\"gh:I_kwDOTXCWqs8AAAABe3Kl1w\",\"onetaskgraph.template\":{\"template\":\"onepipeline:plan-task\",\"digest\":\"sha256:ba89a3517c71e94a9f0be7c3bdf1cd1861633f72e9c113429e0629075abd4af3\",\"body_digest\":\"sha256:6cf008555fc83cb134e2030a8818b028e34ea956c074f9fae38611b7bcc8c028\",\"answers_digest\":\"sha256:677fe21b65f4a6cf1d105853d51f4f0a562698aa6374cb4d279d46a99dd3e6a3\"},\"orchestrator.follow-up-sample\":{\"host\":\"lima-hp\",\"owning_runs\":\"User-rulings-bind--manager-rulings-are-challengeable\",\"basis\":\"github.com/example-org/onejudge: e1299b8ac7b4131bf3b7de587dfadda70bf7ba10\\ngithub.com/example-org/onepipeline: 5f7f4611e1a88685dd8846b50d77d06eb50d2f89\",\"drafts\":\"drafts:User-rulings-bind/drafts/20261112T195514Z-let-a-read-only-judge-decline\",\"transcripts\":\"onepipeline transcript User-rulings-bind aio-adopt-ruling-provenance\",\"witnesses\":\"none recorded (the source ticket names no witness)\",\"verified_at\":\"2026-11-13T04:36:44Z\"},\"orchestrator.follow_x_up\":\"snake_x_case and _y_ emphasis-like\",\"orchestrator.home\":\"~/plans/approx ~4 KB\",\"orchestrator.markup\":\"a \\u003cb\\u003etag\\u003c/b\\u003e and a \\u0060tick\\u0060\",\"orchestrator.owner\":\"Zoë Brontë — naïve café résumé\",\"orchestrator.quote\":\"the reviewer said \\\"ship it\\\"\",\"orchestrator.review[0]\":\"accepted [with notes]\"}"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "headings": []
+}

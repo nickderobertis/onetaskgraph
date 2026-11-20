@@ -685,6 +685,24 @@ impl SourceCache {
         }
     }
 
+    /// Take every entry this source holds out of service for every process before a sweep whose
+    /// writes cannot be named until it has listed what it writes — `sources migrate` — or refuse
+    /// it, on the terms of [`Self::retire_before_write`]. Only this store's own entries for this
+    /// remote are removed, as `cache clear` removes them.
+    pub(crate) fn retire_everything_before_writes(&self) -> Result<(), SourceError> {
+        Self::empty(&self.dir, &self.remote)
+            .map(|_| ())
+            .map_err(|error| SourceError::Config {
+                message: format!(
+                    "the cache entries under {} could not be removed ({error}), so nothing was \
+                     sent: once an item changed, another process pinned to an entry's version \
+                     would be served it. Make the cache directory writable, then run the \
+                     command again",
+                    self.dir.display()
+                ),
+            })
+    }
+
     /// Take every `kind` edges entry out of service for every process before a write that can
     /// change edges recorded on other items than the one it names is sent — a relation is
     /// recorded at both of its ends, and a deleted item takes its relations with it — or refuse
