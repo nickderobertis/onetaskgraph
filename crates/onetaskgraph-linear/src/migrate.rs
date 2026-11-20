@@ -17,7 +17,9 @@ use onetaskgraph_plugin_api::{
 use serde_json::{Value, json};
 
 use super::graphql::{DOCUMENTS, ISSUES, PROJECTS};
-use super::{Keep, LinearSource, MAX_PAGE_SIZE, Under400, backend_id, page_next, slot};
+use super::{
+    Keep, LinearSource, MAX_PAGE_SIZE, Under400, backend_id, open_fence_refusal, page_next, slot,
+};
 
 /// The form an item whose comment slot never closes is reported as having been left in.
 const UNREADABLE: &str = "unreadable-comment-slot";
@@ -129,6 +131,15 @@ impl LinearSource {
                         migration
                             .failed
                             .push(MigrationFailure::new(item, error.to_string()));
+                        continue;
+                    }
+                    // Content leaving a fence open would hold the block as its code: the write
+                    // refuses it where the long form is sent, and a dry run says so beforehand.
+                    if dry_run && slot::leaves_fence_open(&raw.unwrap_or_default()[..tail.start]) {
+                        migration.failed.push(MigrationFailure::new(
+                            item,
+                            open_fence_refusal().to_string(),
+                        ));
                         continue;
                     }
                     if dry_run {

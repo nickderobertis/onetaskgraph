@@ -839,6 +839,112 @@ fn a_block_inside_a_code_fence_the_content_leaves_open_is_the_callers_code_and_n
 }
 
 #[test]
+fn a_legacy_slot_after_an_open_fence_reads_as_before_and_is_never_rewritten_into_that_code() {
+    // Written before the block, a comment slot after a fence the content left open: reads still
+    // take it as they always did, but a block written there would be the fence's code.
+    let json = caller().to_string();
+    let above = "Before.\n\n```\nlet x = 1;";
+    let legacy = format!("{above}\n\n<!-- onetaskgraph.metadata `{json}` -->");
+    let setup = Setup::new(held(
+        vec![
+            issue("I-fenced", &legacy),
+            issue(
+                "I-plain",
+                &format!("{CONTENT}\n\n<!-- onetaskgraph.metadata `{json}` -->"),
+            ),
+        ],
+        vec![project("P-fenced", &legacy)],
+        Vec::new(),
+    ));
+    for (kind, id) in [("task", "I-fenced"), ("project", "P-fenced")] {
+        let shown = setup.show("linear", kind, id);
+        assert_eq!(shown["content"], above, "{kind}");
+        assert_eq!(shown["metadata"], caller(), "{kind}");
+    }
+
+    // A metadata write is refused, with nothing sent.
+    let (output, served) = setup.exits(
+        &[
+            "task",
+            "metadata",
+            "set",
+            "linear:I-fenced",
+            "caller.owner",
+            "\"nick\"",
+        ],
+        1,
+    );
+    assert!(
+        stderr(&output).contains("fenced code block open") && stderr(&output).contains("next:"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(mutations(&served).is_empty(), "{:?}", operations(&served));
+
+    // A migration names both fenced items failed — beforehand under a dry run, and on the run
+    // itself, which sends nothing for them — and rewrites the other.
+    let failed = |report: &Value| -> Vec<(String, String)> {
+        let mut failed: Vec<(String, String)> = report["failed"]
+            .as_array()
+            .expect("failed")
+            .iter()
+            .map(|item| {
+                assert!(
+                    item["reason"]
+                        .as_str()
+                        .is_some_and(|why| why.contains("fenced code block open")),
+                    "{item}"
+                );
+                (
+                    item["kind"].as_str().unwrap().to_owned(),
+                    item["id"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect();
+        failed.sort();
+        failed
+    };
+    let expected = vec![
+        ("project".to_owned(), "linear:P-fenced".to_owned()),
+        ("task".to_owned(), "linear:I-fenced".to_owned()),
+    ];
+    let (dry, served) = setup.answer(&["sources", "migrate", "linear", "--dry-run", "--json"], 1);
+    assert!(mutations(&served).is_empty(), "{:?}", operations(&served));
+    assert_eq!(failed(&dry), expected, "{dry}");
+    assert_eq!(dry["rewritten"].as_array().map(Vec::len), Some(1), "{dry}");
+    let (ran, served) = setup.answer(&["sources", "migrate", "linear", "--json"], 1);
+    assert_eq!(failed(&ran), expected, "{ran}");
+    assert_eq!(
+        updates(&served),
+        1,
+        "the plain item alone: {:?}",
+        operations(&served)
+    );
+    assert_eq!(setup.stored("task", "I-fenced"), legacy);
+    assert_eq!(setup.stored("project", "P-fenced"), legacy);
+    agreed_tail(&setup.stored("task", "I-plain"), CONTENT, false);
+}
+
+#[test]
+fn a_fields_section_holding_fenced_section_lines_is_still_the_stores_own() {
+    // A person added a code block holding `+++` lines inside the store's `Fields` section: those
+    // lines are code, so the section still closes where it did and reads go on taking it off.
+    let fields = "+++ Fields\n\n* **Owner**: `nick`\n\n```\n+++ Nested\n+++\n+++\n```\n\n+++";
+    let long_form = format!(
+        "{CONTENT}\n\n{fields}\n\n{BLOCK}`onetaskgraph.fields`\n\n`{}`\n\n+++",
+        caller()
+    );
+    let setup = Setup::new(held(vec![issue("I-1", &long_form)], Vec::new(), Vec::new()));
+    let shown = setup.show("fielded", "task", "I-1");
+    assert_eq!(shown["content"], CONTENT);
+    assert_eq!(shown["metadata"], caller());
+    // And it holds the current form: a migration counts it and sends nothing.
+    let (ran, served) = setup.answer(&["sources", "migrate", "fielded", "--json"], 0);
+    assert!(mutations(&served).is_empty(), "{:?}", operations(&served));
+    assert_eq!(ran["current"], 1, "{ran}");
+}
+
+#[test]
 fn sources_migrate_rewrites_every_legacy_item_once_and_nothing_else() {
     let setup = Setup::new(legacy_workspace());
     let legacy: Vec<(String, String, String)> = legacy_spellings("{}")
