@@ -679,8 +679,12 @@ fn shapes() -> Vec<Shape> {
 }
 
 /// The visible part of a long form a hosted store holds or was sent: what comes before its
-/// metadata slot, without the line breaks that end it.
+/// metadata slot — a board's comment, or Linear's last collapsed block — without the line breaks
+/// that end it.
 fn visible(long_form: &str) -> &str {
+    let long_form = long_form
+        .rsplit_once("\n\n+++ onetaskgraph metadata\n\n")
+        .map_or(long_form, |(above, _)| above);
     long_form
         .split("<!-- onetaskgraph.metadata")
         .next()

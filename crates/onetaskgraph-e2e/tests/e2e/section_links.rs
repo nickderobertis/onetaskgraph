@@ -310,6 +310,10 @@ impl Store {
                 .long_form(landed.collection(), landed.native())
                 .unwrap_or_default(),
         };
+        // A board's slot is a comment; Linear's is the last collapsed block.
+        let raw = raw
+            .rsplit_once("\n\n+++ onetaskgraph metadata\n\n")
+            .map_or(raw.as_str(), |(above, _)| above);
         raw.split("\n\n<!-- onetaskgraph.metadata")
             .next()
             .unwrap_or_default()
