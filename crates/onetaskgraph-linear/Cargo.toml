@@ -20,6 +20,7 @@ serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
 yrs.workspace = true
+pulldown-cmark.workspace = true
 
 [dev-dependencies]
 graphql-parser.workspace = true

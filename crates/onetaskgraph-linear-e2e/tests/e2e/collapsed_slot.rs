@@ -839,6 +839,72 @@ fn a_block_inside_a_code_fence_the_content_leaves_open_is_the_callers_code_and_n
 }
 
 #[test]
+fn a_fence_a_list_item_closes_leaves_the_store_its_block() {
+    // A fence opened and closed inside a list item or a block quote holds no line after it, so
+    // the store's block follows as its own. Each is written as Linear stores it — `* ` bullets,
+    // and a blank line before an item's closing fence — so its repeat compares equal.
+    for content in [
+        "* ```\n  code\n\n  ```\n\nAfter",
+        "1. Step:\n\n   ```sh\n   run it\n   ```\n\nAfter",
+        "> ```\n> quoted\n> ```\n\nAfter",
+    ] {
+        let setup = Setup::empty();
+        std::fs::write(
+            setup.plan.join("tasks/T-1.md"),
+            format!(
+                "---\ntitle: Build it\nstatus: todo\nmetadata: {}\n---\n{content}\n",
+                caller()
+            ),
+        )
+        .expect("the task");
+        let copy = ["task", "copy", "plan:T-1", "--to", "linear", "--json"];
+        let (report, _) = setup.answer(&copy, 0);
+        let id = report["items"][0]["destination"]
+            .as_str()
+            .and_then(|id| id.strip_prefix("linear:"))
+            .unwrap_or_else(|| panic!("landed: {report}"))
+            .to_owned();
+        agreed_tail(&setup.stored("task", &id), content, false);
+        let read = |what: &str| {
+            let shown = setup.show("linear", "task", &id);
+            assert_eq!(shown["content"], content, "{content:?}: {what}");
+            assert_eq!(
+                shown["metadata"]["caller.secret"], SECRET,
+                "{content:?}: {what}"
+            );
+        };
+        read("written");
+        let (_, again) = setup.answer(&copy, 0);
+        assert_eq!(updates(&again), 0, "{content:?}: {:?}", operations(&again));
+        read("repeated");
+    }
+    // As a person types it, with a `- ` bullet: accepted, its block last and its metadata whole —
+    // Linear storing the list as `* `, which is its normalisation and not the store's.
+    let setup = Setup::empty();
+    std::fs::write(
+        setup.plan.join("tasks/T-1.md"),
+        format!(
+            "---\ntitle: Build it\nstatus: todo\nmetadata: {}\n---\n- ```\n  code\n  ```\n\nAfter\n",
+            caller()
+        ),
+    )
+    .expect("the task");
+    let (report, _) = setup.answer(&["task", "copy", "plan:T-1", "--to", "linear", "--json"], 0);
+    let id = report["items"][0]["destination"]
+        .as_str()
+        .and_then(|id| id.strip_prefix("linear:"))
+        .unwrap_or_else(|| panic!("landed: {report}"))
+        .to_owned();
+    let stored = setup.stored("task", &id);
+    let metadata = agreed_tail(&stored, "* ```\n  code\n\n  ```\n\nAfter", false);
+    assert_eq!(metadata["caller.secret"], SECRET, "{stored}");
+    assert_eq!(
+        setup.show("linear", "task", &id)["metadata"]["caller.secret"],
+        SECRET
+    );
+}
+
+#[test]
 fn a_legacy_slot_after_an_open_fence_reads_as_before_and_is_never_rewritten_into_that_code() {
     // Written before the block, a comment slot after a fence the content left open: reads still
     // take it as they always did, but a block written there would be the fence's code.

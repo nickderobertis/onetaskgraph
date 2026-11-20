@@ -245,7 +245,7 @@ fn block_tail(long_form: &str) -> Option<Tail> {
     if summary_start != 0 && !opening[..summary_start].ends_with("\n\n") {
         return None;
     }
-    if leaves_fence_open(&opening[..summary_start]) {
+    if in_code(long_form, summary_start) {
         return None;
     }
     let start = if sentinel {
@@ -278,11 +278,11 @@ fn fields_section_before(text: &str, block_start: usize) -> Option<usize> {
     if lines.last()?.1 != SECTION_CLOSE {
         return None;
     }
-    // A line inside a fenced code block is the caller's code, never a section's opening or close.
-    let mut fence = None;
+    // A line inside a code block is the caller's code, never a section's opening or close.
+    let blocks = code_blocks(above);
     let code: Vec<bool> = lines
         .iter()
-        .map(|&(_, line)| fence_step(&mut fence, line))
+        .map(|&(at, _)| blocks.iter().any(|block| block.contains(&at)))
         .collect();
     let mut depth = 0_usize;
     for (&(at, line), code) in lines.iter().zip(code).rev() {
@@ -302,56 +302,34 @@ fn fields_section_before(text: &str, block_start: usize) -> Option<usize> {
     None
 }
 
-/// Whether `text` leaves a fenced code block open at its end — so a line after it, the store's
-/// block among them, would be stored as that code rather than as a block of its own.
+/// Whether a line written after `text` and a blank line, at the field's left margin — where the
+/// store's block is written — would stand inside a code block: a fence `text` leaves open.
 ///
-/// Linear's editor reads an HTML block as a paragraph of its text, so a fence is the one Markdown
-/// construct that spans blank lines and can hold a line standing at the field's left margin:
-/// a block quote and a list item each end at such a line after a blank one. A fence is opened
-/// as CommonMark opens one — at most three spaces, then three or more backticks with no backtick
-/// after them, or three or more tildes — and closed only by a run of the same character at least
-/// as long with nothing but spaces after it. A fence nested in a list item is counted as though
-/// it stood at the top level, which errs toward refusing a write rather than losing its metadata.
+/// Decided by a CommonMark block parse rather than by lines, so a fence is read in its container:
+/// one a list item or a block quote opens and closes is closed, and one such a container leaves
+/// open ends with it, since a line at the margin after a blank line ends the container. A fence at
+/// the top level left open holds every line after it.
 pub(crate) fn leaves_fence_open(text: &str) -> bool {
-    let mut fence = None;
-    for line in text.split('\n') {
-        fence_step(&mut fence, line);
-    }
-    fence.is_some()
+    let probe = format!("{text}\n\n{BLOCK_OPEN}\n");
+    in_code(&probe, text.len() + 2)
 }
 
-/// Advance the fence state `fence` — the open fence's character and run, or `None` — over one
-/// line, answering whether that line is code: inside a fence, or a fence line itself.
-fn fence_step(fence: &mut Option<(char, usize)>, line: &str) -> bool {
-    let line = line.strip_suffix('\r').unwrap_or(line);
-    let marked = fence_mark(line);
-    match (*fence, marked) {
-        (Some((open, run)), Some((mark, length, rest)))
-            if mark == open && length >= run && rest.trim_matches([' ', '\t']).is_empty() =>
-        {
-            *fence = None;
-            true
-        }
-        (Some(_), _) => true,
-        (None, Some((mark, length, rest))) if mark == '~' || !rest.contains('`') => {
-            *fence = Some((mark, length));
-            true
-        }
-        (None, _) => false,
-    }
+/// Whether byte `at` of `text` lies inside a code block of its CommonMark block structure.
+fn in_code(text: &str, at: usize) -> bool {
+    code_blocks(text).iter().any(|block| block.contains(&at))
 }
 
-/// The fence a line opens or closes with — its character, how many of it, and what follows —
-/// or `None` when it is no fence line: at most three spaces, then three or more backticks or
-/// tildes.
-fn fence_mark(line: &str) -> Option<(char, usize, &str)> {
-    let trimmed = line.trim_start_matches(' ');
-    if line.len() - trimmed.len() > 3 {
-        return None;
-    }
-    let mark = trimmed.chars().next().filter(|c| matches!(c, '`' | '~'))?;
-    let run = trimmed.len() - trimmed.trim_start_matches(mark).len();
-    (run >= 3).then(|| (mark, run, &trimmed[run..]))
+/// The byte ranges of every code block of `text`, fences included, as a CommonMark parse reads
+/// them. Linear's editor shows an HTML block as a paragraph of its text, which the parse does not
+/// model; a fence is the construct that decides where the store's block stands.
+fn code_blocks(text: &str) -> Vec<Range<usize>> {
+    use pulldown_cmark::{Event, Parser, Tag};
+    Parser::new(text)
+        .into_offset_iter()
+        .filter_map(|(event, range)| {
+            matches!(event, Event::Start(Tag::CodeBlock(_))).then_some(range)
+        })
+        .collect()
 }
 
 /// The comment-slot tail of `long_form`, in either spelling, with a legacy `Fields` marker and
@@ -488,6 +466,18 @@ mod tests {
             let field = format!("{open}\ncode\n{close}\n\n{}", block(JSON));
             assert_eq!(read(&field).1, Some(StoredForm::Block), "{open} {close}");
             assert!(!super::leaves_fence_open(&field), "{open} {close}");
+        }
+        // A fence read in its container: one a list item or a block quote closes is closed, and
+        // one it leaves open ends with it at the margin; the old line scan refused all of these.
+        for content in [
+            "- ```\n  code\n  ```\n\nAfter",
+            "1. Step:\n\n   ```sh\n   run it\n   ```",
+            "> ```\n> quoted\n> ```",
+            "- ```\n  never closed",
+        ] {
+            assert!(!super::leaves_fence_open(content), "{content:?}");
+            let field = format!("{content}\n\n{}", block(JSON));
+            assert_eq!(read(&field).1, Some(StoredForm::Block), "{content:?}");
         }
         // A backtick run with a backtick after it opens no fence.
         let field = format!("``` a`b\n\n{}", block(JSON));
