@@ -1090,10 +1090,13 @@ async fn drive_follow_ups(
         );
     }
     let held = raw_description(run, &matching_id).await?;
+    // Stored as the one collapsed block, the code-span payload its only paragraph and nothing
+    // after its close: what spike `spike-linear-collapsed-slot` measured Linear keeping as sent.
     ensure!(
-        held.starts_with("A follow-up the lane searches for.\n\n<!-- onetaskgraph.metadata `")
-            && held.ends_with("` -->"),
-        "the slot did not come back in the one-line code-span spelling: {held:?}"
+        held.starts_with("A follow-up the lane searches for.\n\n+++ onetaskgraph metadata\n\n`")
+            && held.ends_with("`\n\n+++")
+            && !held.contains("<!--"),
+        "the metadata did not come back as the collapsed block: {held:?}"
     );
 
     // The comment the activity search below finds the matching issue by.
@@ -1424,7 +1427,7 @@ async fn drive_follow_ups(
     let after = raw_description(run, &decoy_id).await?;
     let above = |field: &str| {
         field
-            .rfind("<!-- onetaskgraph.metadata")
+            .rfind("+++ onetaskgraph metadata")
             .map(|start| field[..start].to_owned())
     };
     ensure!(

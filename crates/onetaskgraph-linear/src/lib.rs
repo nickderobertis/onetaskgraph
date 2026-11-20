@@ -571,9 +571,11 @@ pub mod live_artifact;
 mod assignees;
 mod batch;
 mod fields;
+mod migrate;
 mod origins;
 mod relations;
 mod shared;
+mod slot;
 
 /// The plugin kind a `linear` source's `plugin:` field names.
 pub const KIND: &str = "linear";
@@ -2372,6 +2374,15 @@ struct Composed {
     relations: Option<Vec<DependencyEdge>>,
 }
 
+/// What [`LinearSource::answer_keeping`] answers with beside the data read above the transport.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Keep {
+    /// Nothing more: every request but `sources migrate`'s listing.
+    Read,
+    /// The data exactly as Linear stored it, before any slot or markup was read out of it.
+    Stored,
+}
+
 /// How [`LinearSource::answer_with`] reads a GraphQL error Linear sends under HTTP 400 that is no
 /// rate limit and no missing item.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -2649,27 +2660,33 @@ impl LinearSource {
         variables: Value,
         under_400: Under400,
     ) -> Result<Result<Value, Refusal>, SourceError> {
-        // Each long form a write sends carries the `Fields` section its slot's metadata shows,
-        // composed — or refused — before anything else about the write happens.
-        let variables =
-            if query.trim_start().starts_with("mutation") && !self.metadata_fields.is_empty() {
-                self.sectioned(variables)?
-            } else {
-                variables
-            };
+        Ok(self
+            .answer_keeping(query, variables, under_400, Keep::Read)
+            .await?
+            .map(|(data, _)| data))
+    }
+
+    /// [`Self::answer_with`], answering beside what is read the data exactly as Linear stored it
+    /// when `keep` asks for it — which `sources migrate` reads each item's stored spelling off.
+    // llmlint: ignore[invalid_states_unrepresentable] As `answer` above: a private transport taking only variables its typed call sites construct.
+    async fn answer_keeping(
+        &self,
+        query: &str,
+        variables: Value,
+        under_400: Under400,
+        keep: Keep,
+    ) -> Result<Result<(Value, Option<Value>), Refusal>, SourceError> {
         // A write may change which items record an origin, so nothing read ahead outlives it.
         if query.trim_start().starts_with("mutation") {
             self.forget_origins_ahead(false);
             self.forget_ahead();
         }
-        // Every body crosses here, so this is the one place the engine's markup is applied: each
-        // one sent is written in it, and each one answered read back out of it.
-        let markup = self.body_markup.get();
+        // Every body crosses here, so this is the one place the engine's markup is applied and
+        // the one place an item's metadata block is set and taken off: each body sent is written
+        // in it, each long form sent ends in the block this source writes now — composed, or
+        // refused, before anything is sent — and each one answered is read back out of both.
         let assigning = assignees::carried(&variables);
-        let variables = match markup {
-            Some(markup) => marked(variables, &|body| markup.written(body)),
-            None => variables,
-        };
+        let variables = self.sent(variables)?;
         let answered = self
             .answer_using(
                 self.client.get_or_init(reqwest::Client::new),
@@ -2678,14 +2695,13 @@ impl LinearSource {
                 under_400,
             )
             .await;
-        let answered = match (answered, markup) {
-            (Ok(Ok(data)), Some(markup)) => Ok(Ok(marked(data, &|body| markup.read(body)))),
-            (answered, _) => answered,
-        };
-        // And each long form answered is read without it, so nothing above here sees it.
         let answered = match answered {
-            Ok(Ok(data)) => Ok(Ok(unsectioned(data))),
-            answered => answered,
+            Ok(Ok(data)) => {
+                let stored = (keep == Keep::Stored).then(|| data.clone());
+                Ok(Ok((self.received(data), stored)))
+            }
+            Ok(Err(refusal)) => Ok(Err(refusal)),
+            Err(error) => Err(error),
         };
         // A write naming an assignee's id that failed may have failed for that id, so the next
         // one resolves the person afresh rather than sending it again.
@@ -2700,7 +2716,7 @@ impl LinearSource {
                 retry_after_seconds,
                 message: None,
             }),
-            Ok(Ok(data)) => {
+            Ok(Ok((data, stored))) => {
                 // Every read and every write that selects a record's editor state says where
                 // its headings are stored, and is the only thing that does.
                 let carried = headings::carried(&data);
@@ -2720,7 +2736,7 @@ impl LinearSource {
                         }
                     }
                 }
-                Ok(Ok(data))
+                Ok(Ok((data, stored)))
             }
             result => result,
         }
@@ -3455,6 +3471,9 @@ impl LinearSource {
         before: Task,
         description: Option<String>,
     ) -> Result<Composed, SourceError> {
+        // An issue whose metadata is held in a spelling this source no longer writes has its
+        // description sent, as the block, by any update that reads it.
+        let superseded = superseded(description.as_deref())?;
         let (visible, held) = metadata_description(description)?;
         let mut slot = held.clone();
         for (key, value) in &update.metadata_set {
@@ -3516,7 +3535,7 @@ impl LinearSource {
             .as_deref()
             .map(|content| onetaskgraph_plugin_api::relinked(content, visible.as_deref(), &slot));
         let content = relinked.as_deref().or(visible.as_deref());
-        if content != visible.as_deref() || slot != held {
+        if content != visible.as_deref() || slot != held || superseded {
             let written = Self::described(content, &slot)?;
             // Checked before anything is sent: content ending in what this source reads as
             // its own slot would read back as metadata rather than as the content it was.
@@ -3790,7 +3809,7 @@ impl LinearSource {
         if metadata.is_empty() {
             return Ok((!visible.is_empty()).then(|| visible.to_owned()));
         }
-        let slot = slot_text(metadata)?;
+        let slot = slot::slot_text(metadata)?;
         Ok(Some(if visible.is_empty() {
             slot
         } else {
@@ -5526,8 +5545,9 @@ impl TaskSource for LinearSource {
         let mut slot = held.clone();
         set_task_list(&mut slot, TaskRef::DELIVERED_BY_KEY, &entries);
         // Compared as JSON rather than as the field's bytes, so a slot already holding the
-        // list is not rewritten for its spelling alone.
-        if slot != held {
+        // list is not rewritten for its spelling alone — but for a spelling this source no
+        // longer writes, which is rewritten as the block.
+        if slot != held || superseded(description.as_deref())? {
             let rewritten = reslotted(description.as_deref(), &slot)?;
             self.write_description_alone(&task.id, rewritten.as_deref())
                 .await?;
@@ -5547,7 +5567,9 @@ impl TaskSource for LinearSource {
             return Ok(None);
         };
         let (_, mut slot) = metadata_description(description.clone())?;
-        if slot.get(key.as_str()) == Some(value) {
+        // A slot already holding the value is written nothing — unless it is held in a spelling
+        // this source no longer writes, which this write rewrites as the block.
+        if slot.get(key.as_str()) == Some(value) && !superseded(description.as_deref())? {
             return Ok(Some(task));
         }
         slot.insert(key.as_str().to_owned(), value.clone());
@@ -5578,7 +5600,9 @@ impl TaskSource for LinearSource {
             return Ok(None);
         };
         let (_, mut slot) = metadata_description(description.clone())?;
-        if slot.get(key.as_str()) == Some(value) {
+        // A slot already holding the value is written nothing — unless it is held in a spelling
+        // this source no longer writes, which this write rewrites as the block.
+        if slot.get(key.as_str()) == Some(value) && !superseded(description.as_deref())? {
             return Ok(Some(project));
         }
         slot.insert(key.as_str().to_owned(), value.clone());
@@ -5612,7 +5636,7 @@ impl TaskSource for LinearSource {
                     return Ok(None);
                 };
                 let (_, mut slot) = metadata_description(description.clone())?;
-                if slot.remove(key.as_str()).is_none() {
+                if slot.remove(key.as_str()).is_none() && !superseded(description.as_deref())? {
                     return Ok(Some(project.version));
                 }
                 let rewritten = reslotted(description.as_deref(), &slot)?;
@@ -5628,7 +5652,7 @@ impl TaskSource for LinearSource {
                     return Ok(None);
                 };
                 let (_, mut slot) = metadata_description(content.clone())?;
-                if slot.remove(key.as_str()).is_none() {
+                if slot.remove(key.as_str()).is_none() && !superseded(content.as_deref())? {
                     return Ok(Some(document.version));
                 }
                 let rewritten = reslotted(content.as_deref(), &slot)?;
@@ -5651,7 +5675,8 @@ impl TaskSource for LinearSource {
             return Ok(None);
         };
         let (_, mut slot) = metadata_description(content.clone())?;
-        if slot.get(key.as_str()) == Some(value) {
+        // As a task's: nothing to write but a superseded spelling of the slot.
+        if slot.get(key.as_str()) == Some(value) && !superseded(content.as_deref())? {
             return Ok(Some(document));
         }
         slot.insert(key.as_str().to_owned(), value.clone());
@@ -5926,6 +5951,14 @@ impl TaskSource for LinearSource {
     /// answer outlives the call that read it but what a copy's batched origin read held, and the
     /// organization id it carried, which this drops too; and no write's answer outlives the
     /// command that wrote it, so the next command already reads each item as a person left it.
+    /// Every issue, project and document holding its metadata in a superseded spelling, sent one
+    /// update writing it as the collapsed block — see the `migrate` module.
+    async fn migrate_stored_forms(
+        &self,
+        dry_run: bool,
+    ) -> Result<onetaskgraph_plugin_api::StoredFormMigration, SourceError> {
+        self.migrate(dry_run).await
+    }
     async fn end_command(&self) -> Result<(), SourceError> {
         self.edges_versions().clear();
         self.forget_ahead();
@@ -6869,7 +6902,7 @@ fn reslotted(
     slot: &std::collections::BTreeMap<String, Value>,
 ) -> Result<Option<String>, SourceError> {
     let held = held.unwrap_or_default();
-    let Some((start, _, _)) = slot_bounds(held)? else {
+    let Some(slot::Tail { start, .. }) = slot::tail(held)? else {
         return LinearSource::described((!held.is_empty()).then_some(held), slot);
     };
     let above = &held[..start];
@@ -6877,7 +6910,7 @@ fn reslotted(
         let visible = content_above(above);
         return Ok((!visible.is_empty()).then(|| visible.to_owned()));
     }
-    Ok(Some(format!("{above}{}", slot_text(slot)?)))
+    Ok(Some(format!("{above}{}", slot::slot_text(slot)?)))
 }
 
 /// The address a new upload's URL is spelled at before it is uploaded, as long as the one
@@ -7794,53 +7827,6 @@ fn optional_str<'a>(v: &'a Value, k: &str) -> Result<Option<&'a str>, SourceErro
     }
 }
 
-/// Linear has no caller-defined fields. The source owns an unobtrusive Markdown comment at the
-/// end of the long-form field, and writes it on one line with the canonical JSON inside a code
-/// span: ``<!-- onetaskgraph.metadata `{…}` -->``. The code span is the one spelling Linear keeps
-/// byte for byte in a description or a document — see the module documentation's ruling on what
-/// Linear does to an HTML comment — and [`slot_json`] escapes the three characters that could
-/// end it early.
-const METADATA_PREFIX: &str = "<!-- onetaskgraph.metadata";
-/// The opening of the slot this source writes.
-const METADATA_OPEN_SPAN: &str = "<!-- onetaskgraph.metadata `";
-/// The close of the slot this source writes.
-const METADATA_CLOSE_SPAN: &str = "` -->";
-/// The opening of the multi-line slot this source wrote before the code span, still read: an
-/// item written then keeps its metadata. Linear normalized its JSON, so a key or a value
-/// Linear rewrote reads back as Linear left it — or, for an array Linear escaped, as a
-/// malformed slot naming itself — and the next write of that item writes the code span.
-const METADATA_OPEN: &str = "<!-- onetaskgraph.metadata\n";
-const METADATA_CLOSE: &str = "\n-->";
-/// The same close as Linear hands that multi-line slot back: it escapes a line opening
-/// `-->`, so the slot reads back with a backslash before its close (observed from the real API
-/// on 2026-09-14 for a document and on 2026-10-02 for an issue's description too).
-const METADATA_CLOSE_ESCAPED: &str = "\n\\-->";
-
-/// One JSON value in the encoding the slot holds it in: compact canonical JSON with `<`, `>`
-/// and `` ` `` escaped as `\u003c`, `\u003e` and `\u0060`.
-///
-/// All three only ever occur inside a JSON string, where the escape means the same character,
-/// so the value parses back exactly; and with them escaped no value can close the code span or
-/// the HTML comment around it. A search phrase is not built with this: `slot_phrase` sends only
-/// a value none of whose characters any encoder escapes, which this leaves as written.
-fn slot_json(value: &impl serde::Serialize) -> Result<String, SourceError> {
-    let encoded = serde_json::to_string(value).map_err(|error| SourceError::Malformed {
-        message: error.to_string(),
-    })?;
-    Ok(encoded
-        .replace('<', "\\u003c")
-        .replace('>', "\\u003e")
-        .replace('`', "\\u0060"))
-}
-
-/// The slot holding exactly `metadata`, as this source writes it.
-fn slot_text(metadata: &std::collections::BTreeMap<String, Value>) -> Result<String, SourceError> {
-    Ok(format!(
-        "{METADATA_OPEN_SPAN}{}{METADATA_CLOSE_SPAN}",
-        slot_json(metadata)?
-    ))
-}
-
 /// The members a body travels under in a request's variables and an answer's data: an issue's
 /// `description`, a project's and a document's `content`, and a comment's `body`.
 const BODY_MEMBERS: [&str; 3] = ["description", "content", "body"];
@@ -7850,176 +7836,130 @@ const BODY_MEMBERS: [&str; 3] = ["description", "content", "body"];
 const LONG_FORM_MEMBERS: [&str; 2] = ["description", "content"];
 
 impl LinearSource {
-    /// `variables` with every long form they carry that ends in a slot holding the `Fields`
-    /// section its metadata shows — or the refusal for a value none can show.
-    fn sectioned(&self, value: Value) -> Result<Value, SourceError> {
-        Ok(match value {
-            Value::Object(object) => Value::Object(
-                object
-                    .into_iter()
-                    .map(|(key, held)| {
-                        let held = match held {
-                            Value::String(body) if LONG_FORM_MEMBERS.contains(&key.as_str()) => {
-                                Value::String(self.with_section(&body)?)
-                            }
-                            other => self.sectioned(other)?,
-                        };
-                        Ok((key, held))
-                    })
-                    .collect::<Result<_, SourceError>>()?,
-            ),
-            Value::Array(items) => Value::Array(
-                items
-                    .into_iter()
-                    .map(|item| self.sectioned(item))
-                    .collect::<Result<_, _>>()?,
-            ),
-            other => other,
+    /// `variables` as a mutation sends them: every body written in the engine's markup, and every
+    /// long form that ends in this source's slot sent with that slot as the block this source
+    /// writes now — after the `Fields` section its metadata shows, when it shows one — whatever
+    /// spelling the long form held it in. Or the refusal of a long form that would be stored ending
+    /// in what a read takes for that block, or of a value no `Fields` section can show.
+    fn sent(&self, value: Value) -> Result<Value, SourceError> {
+        transported(value, &|key, body| {
+            if LONG_FORM_MEMBERS.contains(&key) {
+                self.sent_long_form(body)
+            } else {
+                Ok(self
+                    .body_markup
+                    .get()
+                    .map_or_else(|| body.to_owned(), |markup| markup.written(body)))
+            }
         })
     }
 
-    /// `long_form` with the `Fields` section its slot's metadata shows set between the content
-    /// and the slot — after its marker and a blank line, and before a blank line — in place of
-    /// any it held; unchanged when it ends in no slot.
-    fn with_section(&self, long_form: &str) -> Result<String, SourceError> {
-        let Some((start, encoded_start, encoded_end)) = slot_bounds(long_form)? else {
-            return Ok(long_form.to_owned());
-        };
-        let metadata: std::collections::BTreeMap<String, Value> =
-            serde_json::from_str(&long_form[encoded_start..encoded_end]).map_err(|error| {
-                SourceError::Malformed {
+    /// One long form as it is sent: its content in the engine's markup, then its tail composed
+    /// afresh from the metadata it holds.
+    fn sent_long_form(&self, long_form: &str) -> Result<String, SourceError> {
+        let markup = self.body_markup.get();
+        let written =
+            |text: &str| markup.map_or_else(|| text.to_owned(), |markup| markup.written(text));
+        let Some(tail) = slot::tail(long_form)? else {
+            let sent = written(long_form);
+            // Content holding no metadata, whose authored block the markup writes as one a read
+            // would take for this source's own, would read back as metadata: nothing is sent.
+            if slot::tail(&sent)?.is_some() {
+                return Err(SourceError::Refused {
                     message: format!(
-                        "invalid canonical JSON in Linear onetaskgraph metadata slot: {error}"
+                        "this content ends in an expandable block source {} would read back as \
+                         its own metadata block, so it would not read back as content; next: \
+                         change how the content ends, or give the item metadata",
+                        self.name
                     ),
-                }
-            })?;
-        let mut above = long_form[..start].to_owned();
-        if let Some(at) = fields::marker_at(&above) {
-            above.truncate(at);
-        }
-        let slot = &long_form[start..];
-        let Some(section) = fields::section(&self.metadata_fields, &metadata, &self.name)? else {
-            return Ok(format!("{above}{slot}"));
+                });
+            }
+            return Ok(sent);
         };
-        // The marker stands on a line of its own, so content ending in no line break is set
-        // off from it by the blank line a read of the slot takes off anyway.
-        if !above.is_empty() && !above.ends_with('\n') {
-            above.push_str("\n\n");
+        let metadata = tail.metadata(long_form)?;
+        let mut above = written(&long_form[..tail.start]);
+        // The block is set off by one blank line, which a read takes off as the separator.
+        if !above.is_empty() && !above.ends_with("\n\n") {
+            above.push_str(if above.ends_with('\n') { "\n" } else { "\n\n" });
         }
-        Ok(format!("{above}{}\n\n{section}\n\n{slot}", fields::MARKER))
+        let tail = match fields::section(&self.metadata_fields, &metadata, &self.name)? {
+            Some(section) => slot::tail_with_fields(&section, &metadata)?,
+            None => slot::slot_text(&metadata)?,
+        };
+        Ok(format!("{above}{tail}"))
+    }
+
+    /// `data` as an answer is read above the transport: every body read out of the engine's
+    /// markup, and every long form's tail taken off before the markup reads the rest and set back
+    /// as the read side holds it — no `Fields` section, and the spelling it was stored in kept
+    /// legible — so the block is never read as a caller's own, and never reaches one as content.
+    fn received(&self, data: Value) -> Value {
+        let markup = self.body_markup.get();
+        let read = |text: &str| markup.map_or_else(|| text.to_owned(), |markup| markup.read(text));
+        let answered = transported(data, &|key, body| {
+            if !LONG_FORM_MEMBERS.contains(&key) {
+                return Ok(read(body));
+            }
+            Ok(match slot::tail(body) {
+                Ok(Some(tail)) => format!("{}{}", read(&body[..tail.start]), tail.canonical(body)),
+                // A slot that does not parse is left for the read above to name.
+                _ => read(body),
+            })
+        });
+        answered.unwrap_or_else(|_| unreachable!("reading an answer refuses nothing"))
     }
 }
 
-/// `value` with every long form it carries read without the `Fields` section a source writes
-/// before its slot — whatever the source's configuration, so one written under another reads
-/// the same.
-fn unsectioned(value: Value) -> Value {
-    match value {
-        Value::Object(object) => Value::Object(
-            object
-                .into_iter()
-                .map(|(key, held)| {
-                    let held = match held {
-                        Value::String(body) if LONG_FORM_MEMBERS.contains(&key.as_str()) => {
-                            Value::String(without_section(body))
-                        }
-                        other => unsectioned(other),
-                    };
-                    (key, held)
-                })
-                .collect(),
-        ),
-        Value::Array(items) => Value::Array(items.into_iter().map(unsectioned).collect()),
-        other => other,
-    }
-}
-
-/// `long_form` without the `Fields` section before its slot, from its marker to the slot.
-fn without_section(long_form: String) -> String {
-    let Ok(Some((start, _, _))) = slot_bounds(&long_form) else {
-        return long_form;
-    };
-    match fields::marker_at(&long_form[..start]) {
-        Some(at) => format!("{}{}", &long_form[..at], &long_form[start..]),
-        None => long_form,
-    }
-}
-
-/// `value` with `apply` applied to every string held under one of [`BODY_MEMBERS`], at any depth.
-/// A member holding anything but a string — a filter on a description, say — is walked into and
-/// otherwise left as it is.
-fn marked(value: Value, apply: &dyn Fn(&str) -> String) -> Value {
-    match value {
+/// `value` with `apply` applied to every string held under one of [`BODY_MEMBERS`], at any depth,
+/// given the member's name. A member holding anything but a string — a filter on a description,
+/// say — is walked into and otherwise left as it is.
+fn transported(
+    value: Value,
+    apply: &dyn Fn(&str, &str) -> Result<String, SourceError>,
+) -> Result<Value, SourceError> {
+    Ok(match value {
         Value::Object(object) => Value::Object(
             object
                 .into_iter()
                 .map(|(key, held)| {
                     let held = match held {
                         Value::String(body) if BODY_MEMBERS.contains(&key.as_str()) => {
-                            Value::String(apply(&body))
+                            Value::String(apply(&key, &body)?)
                         }
-                        other => marked(other, apply),
+                        other => transported(other, apply)?,
                     };
-                    (key, held)
+                    Ok((key, held))
                 })
-                .collect(),
+                .collect::<Result<_, SourceError>>()?,
         ),
-        Value::Array(items) => {
-            Value::Array(items.into_iter().map(|item| marked(item, apply)).collect())
-        }
-        other => other,
-    }
-}
-
-/// Where the trailing metadata slot of `description` is: the byte its opening marker starts
-/// at, and the span of the encoded JSON inside it — or `None` when it ends in no slot.
-///
-/// The one place the slot is recognised, in either spelling, so what [`metadata_description`]
-/// reads out and what [`metadata_slot`] keeps for a content write are the same bytes.
-fn slot_bounds(description: &str) -> Result<Option<(usize, usize, usize)>, SourceError> {
-    let Some(start) = description.rfind(METADATA_PREFIX) else {
-        return Ok(None);
-    };
-    let rest = &description[start..];
-    let (encoded_start, close) = if rest.starts_with(METADATA_OPEN_SPAN) {
-        let encoded_start = start + METADATA_OPEN_SPAN.len();
-        (
-            encoded_start,
-            description[encoded_start..]
-                .rfind(METADATA_CLOSE_SPAN)
-                .map(|at| (at, METADATA_CLOSE_SPAN.len())),
-        )
-    } else if rest.starts_with(METADATA_OPEN) {
-        let encoded_start = start + METADATA_OPEN.len();
-        (
-            encoded_start,
-            [METADATA_CLOSE, METADATA_CLOSE_ESCAPED]
+        Value::Array(items) => Value::Array(
+            items
                 .into_iter()
-                .filter_map(|close| {
-                    description[encoded_start..]
-                        .find(close)
-                        .map(|at| (at, close.len()))
-                })
-                .min(),
-        )
-    } else {
-        return Ok(None);
-    };
-    let Some((relative_end, close_len)) = close else {
-        return Err(SourceError::Malformed {
-            message: "unterminated onetaskgraph metadata slot in Linear description".into(),
-        });
-    };
-    let encoded_end = encoded_start + relative_end;
-    if !description[encoded_end + close_len..].trim().is_empty() {
-        return Ok(None);
-    }
-    Ok(Some((start, encoded_start, encoded_end)))
+                .map(|item| transported(item, apply))
+                .collect::<Result<_, _>>()?,
+        ),
+        other => other,
+    })
 }
 
-/// The metadata slot `description` ends in, exactly as it is stored, or `None`.
+/// The metadata slot `description` ends in, as the read side holds it — a block without its
+/// `Fields` section, or a comment slot verbatim — or `None`.
 fn metadata_slot(description: &str) -> Result<Option<&str>, SourceError> {
-    Ok(slot_bounds(description)?.map(|(start, _, _)| &description[start..]))
+    Ok(slot::tail(description)?.map(|tail| &description[tail.start..]))
+}
+
+/// The spelling `description`'s metadata is stored in, or `None` when it ends in no slot.
+fn stored_form(description: Option<&str>) -> Result<Option<slot::StoredForm>, SourceError> {
+    Ok(match description {
+        Some(description) => slot::tail(description)?.map(|tail| tail.form),
+        None => None,
+    })
+}
+
+/// Whether `description` holds its metadata in a spelling this source no longer writes, which a
+/// write counts as a change even when its content and metadata are as they were.
+fn superseded(description: Option<&str>) -> Result<bool, SourceError> {
+    Ok(stored_form(description)?.is_some_and(|form| !form.is_current()))
 }
 
 fn metadata_description(
@@ -8028,18 +7968,11 @@ fn metadata_description(
     let Some(description) = description else {
         return Ok((None, Default::default()));
     };
-    let Some((start, encoded_start, encoded_end)) = slot_bounds(&description)? else {
+    let Some(tail) = slot::tail(&description)? else {
         return Ok((Some(description), Default::default()));
     };
-    let metadata =
-        serde_json::from_str(&description[encoded_start..encoded_end]).map_err(|error| {
-            SourceError::Malformed {
-                message: format!(
-                    "invalid canonical JSON in Linear onetaskgraph metadata slot: {error}"
-                ),
-            }
-        })?;
-    let visible = content_above(&description[..start]);
+    let metadata = tail.metadata(&description)?;
+    let visible = content_above(&description[..tail.start]);
     Ok(((!visible.is_empty()).then(|| visible.to_owned()), metadata))
 }
 
