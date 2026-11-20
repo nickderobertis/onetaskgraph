@@ -275,25 +275,46 @@ report the same edge with the waiting item as `from`, rather than two mirrored o
 | `local-md` | a `metadata:` mapping in the YAML front matter |
 | `in-memory` | as given in its configuration |
 | `github-projects` | canonical JSON in a trailing comment slot at the end of the issue body, for a project issue, a task issue and a document issue alike |
-| `linear` | canonical JSON in a slot the source owns on the item itself |
+| `linear` | canonical JSON in one collapsed block the source owns at the end of the item's own long form |
 
 ### Linear's slot, settled
 
-Linear gives a caller no field of their own, so the source owns a **trailing Markdown
-comment at the end of the item's long form** — an issue's `description`, a project's or a
-document's `content` — on one line, with the canonical JSON inside a code span:
+Linear gives a caller no field of their own, so the source owns **one collapsed block at the
+very end of the item's long form** — an issue's `description`, a project's or a document's
+`content` — set off from the content by one blank line, holding the canonical JSON in one code
+span on a line of its own, with nothing after its closing `+++`:
 
 ```text
 The description a person wrote.
 
-<!-- onetaskgraph.metadata `{"onepipeline.turn_budget":12}` -->
++++ onetaskgraph metadata
+
+`{"onepipeline.turn_budget":12}`
+
++++
 ```
 
-Two properties decided the comment. Every other field the item carries — its title, its
-content, its labels, its state — still round-trips unchanged beside the metadata, because the
-slot is inside a field Linear already treats as free text. And a person opening that issue in
-Linear's own interface still sees their issue rather than a payload, because Linear renders the
-description as Markdown and a Markdown comment does not render.
+Linear stores a `+++ <summary>` … `+++` section as a collapsible section of its editor, and
+opens one collapsed for any reader who has not opened it: a person reading the item sees its
+text and, under it, the one line `onetaskgraph metadata`, which opens to the JSON — one tap away,
+and machine-readable. Spike `spike-linear-collapsed-slot` measured exactly these bytes on an
+issue, a project and a document of team `TES2`: each stored as sent, read back unchanged, and an
+unchanged re-write stored unchanged, Markdown and editor tree alike, a 4,032-byte payload's code
+span kept byte for byte. Every other field the item carries — its title, its content, its labels,
+its state — still round-trips unchanged beside the metadata, because the block is inside a field
+Linear already treats as free text. With no metadata there is no block.
+
+**Linear renders an HTML comment as text, which is why this replaced one.** Earlier releases kept
+the slot in a trailing comment, ``<!-- onetaskgraph.metadata `{…}` -->``, on the reasoning that a
+Markdown comment does not render. Linear's editor does not drop it: it stores it as a visible
+paragraph of its literal characters (`<!-- onetaskgraph.metadata ` unmarked, the JSON marked as
+code, ` -->` unmarked), so every item showed its machine data under its own text. **Reads still
+accept every spelling an earlier release wrote** — that one-line comment, the multi-line comment
+before it (below), and a `Fields` section set off by its comment marker (see "On Linear: one
+collapsed `Fields` section") — so an item written then keeps every key it holds. Its next write,
+even one that changes nothing, sends the one update that writes it as the block, and none after
+it; `onetaskgraph sources migrate <source>` rewrites every one a source still holds at once (see
+"Rewriting the legacy spellings" below).
 
 **A project's long form is its `content`, and that is a breaking change from earlier
 releases.** Linear's schema documents `Project.description` as "the short description of the
@@ -305,15 +326,14 @@ content and no metadata — no origin, no member keys, no recorded far ends — 
 again or migrated by moving its `description` into its `content`. Issues and documents are
 unchanged.
 
-The code span is Linear's doing. Linear normalizes the text *inside* an HTML comment in a
-description or a document as it normalizes prose — observed 2026-10-02: a domain-like key such
-as `caller.live` comes back `[caller.live](<http://caller.live>)`, an array's `[` and `]` come
-back escaped, `\"` loses its backslash, `_y_` becomes `*y*`, and a line opening `-->` comes
-back `\-->` — so JSON written bare there does not survive. Inside a code span on one line every
-byte comes back as written. `<`, `>` and backticks inside a string are written as `\u003c`,
-`\u003e` and `\u0060`, which JSON reads as the same characters, so no value can end the span or
-the comment. A comment's *body* is not normalized: an HTML comment there comes back byte for
-byte in any shape. The source still reads the multi-line slot it wrote before,
+The code span is Linear's doing. Linear normalizes Markdown prose — observed 2026-10-02: a
+domain-like key such as `caller.live` comes back `[caller.live](<http://caller.live>)`, an
+array's `[` and `]` come back escaped, `\"` loses its backslash, `_y_` becomes `*y*`, and a line
+opening `-->` comes back `\-->` — so JSON written bare does not survive. Inside a code span on one
+line every byte comes back as written. `<`, `>` and backticks inside a string are written as
+`\u003c`, `\u003e` and `\u0060`, which JSON reads as the same characters, so no value can end the
+span. A comment's *body* carries no slot. The source still reads the multi-line comment slot it
+wrote before the one-line one,
 
 ```text
 <!-- onetaskgraph.metadata
@@ -321,11 +341,19 @@ byte in any shape. The source still reads the multi-line slot it wrote before,
 -->
 ```
 
-in either close Linear hands it back with, and the next write of that item writes the code span.
+in either close Linear hands it back with.
 
-The read side takes the slot off the visible description, so `content` is what the person
-wrote. Only a comment at the very **end** of the description is a slot; one in the middle
-is visible content and is left alone.
+The read side takes the block off the visible description, so `content` is what the person
+wrote. **The block is told from a caller's own by three conditions together:** it is the last
+top-level block of the field; its first line is exactly `+++ onetaskgraph metadata` and its last
+exactly `+++`; and its body is one line holding a single code span whose text is a JSON object —
+or the line `` `onetaskgraph.fields` ``, a blank line, then such a line (see "On Linear: one
+collapsed `Fields` section"). So a caller's own expandable block of any summary, this one
+included, reads back as itself anywhere but last, and so does one with the same summary and any
+other body. A write is refused before anything is sent only when the field it would store would
+end in what a read takes for this block — content ending in that very block, for an item with no
+metadata to follow it. A legacy comment slot is likewise one only at the very **end** of the
+field; one in the middle is visible content and is left alone.
 
 A task's `delivers` and `delivered_by` live in that same slot, under `onetaskgraph.delivers`
 and `onetaskgraph.delivered_by`, each a JSON list of qualified ids — the shape and the rules
@@ -334,12 +362,32 @@ and `onetaskgraph.delivered_by`, each a JSON list of qualified ids — the shape
 update of the item's long form — an issue's `description`, a project's or a document's
 `content` — that differs from what Linear holds only inside the slot.
 
-**So the slot is one slot in two spellings, and each source writes the one its host keeps byte
-for byte.** Linear writes the code span and reads both. `github-projects` writes and reads the
-multi-line spelling, because GitHub keeps an issue body as it was written and so needs no code
-span. `scripts/check-metadata-slot-encoding.sh` holds every source that keeps a slot to the
-one multi-line spelling, any source that writes the code span to the one code-span spelling,
-and both to the same opening marker, so a third spelling cannot appear in silence.
+**So the comment slot is one slot in two spellings, and each source reads both.**
+`github-projects` writes and reads the multi-line spelling, because GitHub keeps an issue body as
+it was written, renders a comment as nothing, and so needs neither a code span nor a block.
+Linear writes the block and still reads both comment spellings. `scripts/check-metadata-slot-encoding.sh`
+holds every source that keeps a comment slot to the one multi-line spelling, any source that
+spells the code span to the one code-span spelling, and both to the same opening marker, so a
+third comment spelling cannot appear in silence.
+
+#### Rewriting the legacy spellings: `sources migrate`
+
+```text
+onetaskgraph sources migrate <SOURCE> [--dry-run]
+```
+
+lists every issue, project and document of a `linear` source through the reads its queries send,
+and sends one update for each item still holding its metadata in a spelling the source no longer
+writes — `html-comment-slot`, `multi-line-comment-slot` or `fields-comment-marker` — through the
+same composition every other write uses, so its `Fields` section is regenerated and its content
+and metadata read back exactly as before. An item already in the block, or holding no metadata,
+is counted as current and sent nothing, so a second run rewrites nothing. `--dry-run` sends reads
+only and reports what would be rewritten. The report names each item rewritten by kind and
+qualified id with the form it left, the current count, and each item that could not be rewritten
+with why; the command exits 0 when nothing failed and 1 when anything did. A source of any other
+plugin — a folder of Markdown, a board, a plugin served over the stdio protocol — has only ever
+written one form, answers that it has nothing to migrate, and is sent nothing. The machine answer
+is the `StoredFormsMigrated` schema root.
 
 **`github-projects` keeps its slot in the issue body for the same reason plus one of its own:
 length.** A ProjectV2 custom field is only `TEXT`, `NUMBER`, `DATE`,
@@ -354,8 +402,8 @@ field, and dependencies go to `blockedBy` and to sub-issue links.
 
 ### `github-projects` and `linear` can also show a value where a person reads the item
 
-A board filters on its fields and not on an issue's body, and Linear renders neither the slot
-nor any field of a caller's own, so a source can be configured to show chosen metadata values
+A board filters on its fields and not on an issue's body, and Linear shows the metadata block
+collapsed and no field of a caller's own, so a source can be configured to show chosen metadata values
 where a person reading the item sees them — the way a board triaging follow-ups from several
 machines is sliced by the host each came from:
 
@@ -367,11 +415,13 @@ metadata_fields:              # optional; absent or [] shows nothing
 ```
 
 A `github-projects` source writes each value to the board text field `field` names; a `linear`
-source shows them all in one collapsed `Fields` section at the end of the item's description.
+source shows them all in one collapsed `Fields` section at the end of the item's description,
+directly before its metadata block.
 `local-md`, `in-memory` and every other source keep ignoring or refusing the key as they always
 have.
 
-**What is shown is a projection and the slot stays the value's one home.** Every read reports
+**What is shown is a projection and the slot stays the value's one home** — on Linear, the
+metadata block. Every read reports
 metadata from the slot exactly as it would without the entry, and a value a person types into a
 board field or into the section is never read back as metadata.
 
@@ -442,27 +492,38 @@ there: a same-named field of another type is reported as a conflict and left as 
 #### On Linear: one collapsed `Fields` section
 
 Linear has no custom fields. On every write of a task's, a project's or a document's long form,
-a `linear` source writes one store-owned expandable block between the caller's content and the
-metadata slot. In the authored form (README "Expandable blocks"), for an item whose
-`orchestrator.follow-up` record held a host, two runs and a basis, it reads:
+a `linear` source writes one store-owned collapsible section between the caller's content and the
+metadata block, in Linear's own form, and opens the block after it with the paragraph
+`` `onetaskgraph.fields` `` — the record that a `Fields` section stands directly before it, which
+is never a key of the metadata JSON. For an item whose `orchestrator.follow-up` record held a
+host, two runs and a basis, the field ends:
 
 ```text
-<details>
-<summary>Fields</summary>
++++ Fields
 
-- **Host**: `workstation-1`
-- **Owning runs**:
-  - `run-a`
-  - `run-b`
-- **Basis**:
-  - `github.com/acme/widget: 0123456789abcdef0123456789abcdef01234567`
+* **Host**: `workstation-1`
+* **Owning runs**:
+  * `run-a`
+  * `run-b`
+* **Basis**:
+  * `github.com/acme/widget: 0123456789abcdef0123456789abcdef01234567`
 
-</details>
++++
+
++++ onetaskgraph metadata
+
+`onetaskgraph.fields`
+
+`{"orchestrator.follow-up":{…}}`
+
++++
 ```
 
-- The summary is the fixed word `Fields`.
+- The summary is the fixed word `Fields`, and the block's is `onetaskgraph metadata` with or
+  without it.
 - There is one top-level bullet per configured entry, in configuration order: the field name in
-  bold, a colon, then the value.
+  bold, a colon, then the value. Bullets are written `* `, because Linear stores a `- ` bullet as
+  `* ` (measured): writing what Linear stores is what lets an unchanged write send nothing.
 - A string is one code span on the field's line; a string holding a line break gives one nested
   bullet per line.
 - An array gives one nested bullet per element, in order; an object one nested bullet
@@ -471,22 +532,24 @@ metadata slot. In the authored form (README "Expandable blocks"), for an item wh
   a backtick takes a longer backtick fence, as CommonMark specifies, and a line break inside an
   element is the space CommonMark reads it as.
 - An entry with no value, an empty string, an empty array or an empty object gets no bullet, and
-  an item with no bullet gets no section at all.
-- The source writes it in Linear's own `+++ Fields` … `+++` form, the way it writes any authored
-  block, set off by a marker of its own on the line before it — an HTML comment,
-  ``<!-- `onetaskgraph.fields` -->``, which Linear does not render.
+  an item with no bullet gets no section — and its block no sentinel — at all.
+- No HTML comment is written. Earlier releases set the section off by the comment
+  ``<!-- `onetaskgraph.fields` -->`` on the line before it, which Linear renders as text; reads
+  still take a section set off that way off with it, and `sources migrate` reports such an item
+  as `fields-comment-marker`.
 
-**The section is display only.** The slot stays the metadata's one home. Every read gives back
-the caller's content with the section — from its marker to the slot — removed, so a read of
-content is the caller's content and nothing else; a caller's own expandable block of any
-summary, `Fields` included, carries no marker and reads back exactly as before. Every write
-regenerates the section from the slot, so a person's edit to it is overwritten, and an unchanged
-repeat write sends no description update, however Linear normalised the section's text. A write
-sends no request beyond what the same write sends without `metadata_fields`: the section rides
-the description write each write already sends, and `metadata set` rewrites it with the slot
-when a shown value moved. Comments carry no metadata and get no section.
-`onetaskgraph sources fields <linear source>` reports each configured entry as carried in the
-section, none ever missing, and `--apply` changes nothing for them.
+**The section is display only.** The block stays the metadata's one home. Every read gives back
+the caller's content with the section removed — the one `+++ Fields` section standing directly
+before a block that opens with the sentinel, and no other — so a read of content is the caller's
+content and nothing else; a caller's own expandable block of any summary, `Fields` included,
+that no such block follows reads back exactly as before. Every write regenerates the section from
+the metadata, so a person's edit to it is overwritten, and an unchanged repeat write sends no
+description update, however Linear normalised the section's text. A write sends no request beyond
+what the same write sends without `metadata_fields`: the section rides the description write
+each write already sends, and `metadata set` rewrites it with the block when a shown value moved.
+Comments carry no metadata and get no section. `onetaskgraph sources fields <linear source>`
+reports each configured entry as carried in the section, none ever missing, and `--apply`
+changes nothing for them.
 
 <!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] This metadata guide must explain the two fields status occupies; the github-projects loopback tests and shared live journey reconcile the mapping, mutation order, and read-back at the real interface. -->
 For terminal status, those two GitHub fields move together: `done` selects the mapped

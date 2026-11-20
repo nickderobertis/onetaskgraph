@@ -71,8 +71,8 @@
 //!   `"onetaskgraph.origin":"…"` pair beside it; the same description's prose, upper-cased,
 //!   was returned for `containsIgnoreCase` and *not* for `contains`. So a metadata match or an
 //!   origin is sent as its value in quotes, `"<value>"` — the bytes any JSON encoder writes a
-//!   string as, which a slot holding it contains whether it is the code span this source
-//!   writes, the multi-line slot it wrote before, or one a person spaced by hand — and
+//!   string as, which a slot holding it contains whether it is the collapsed block this source
+//!   writes, either comment slot it wrote before, or one a person spaced by hand — and
 //!   confirmed over the parsed slot. A value holding a character an encoder may escape is not
 //!   sent, and the confirmation decides alone.
 //! - **`IssueFilter.title.containsIgnoreCase` and `description.containsIgnoreCase` match
@@ -89,7 +89,7 @@
 //!
 //! ## Ruling: what Linear does to an HTML comment, settled
 //!
-//! A follow-up tool marks what it writes with HTML comments, and this source keeps its own
+//! A follow-up tool marks what it writes with HTML comments, and this source once kept its own
 //! metadata in one, so what survives is a fact this crate records rather than assumes.
 //! Observed on 2026-10-02 against the scratch team `TES`, each written and read back by id,
 //! and asserted again — the probe text and its stored form exactly — by `drive_follow_ups` in
@@ -109,14 +109,21 @@
 //! - **One thing in those two fields comes back byte for byte: a code span.** An HTML comment
 //!   on one line whose payload is inside backticks — ``<!-- probe `{…}` -->`` — came back
 //!   identical with every one of the payloads above inside it, and re-writing what Linear
-//!   handed back changed nothing more. So this source writes its own slot that way (see
-//!   `METADATA_OPEN_SPAN`), and a marker meant to survive an issue's description or a
-//!   document's content belongs in one too.
+//!   handed back changed nothing more. So a payload meant to survive an issue's description or
+//!   a document's content belongs in a code span.
+//! - **But Linear renders an HTML comment in those fields as text.** Its editor stores one as a
+//!   visible paragraph of its literal characters — `<!-- onetaskgraph.metadata ` unmarked, the
+//!   payload marked as code, ` -->` unmarked (spike `spike-linear-collapsed-slot`) — so a slot
+//!   kept in a comment showed every item's machine JSON under its own text. This source
+//!   therefore keeps its metadata in one collapsed block at the end of the long form, the
+//!   payload a code span inside it, and still reads both comment spellings it wrote before:
+//!   see the `slot` module for the bytes, how the block is told from a caller's own, and
+//!   `sources migrate`, which rewrites every item a source still holds in a comment.
 //!
 //! ## Ruling: what Linear stores is read off each write's own answer
 //!
 //! **Document-content contract:** writes send the caller's Markdown plus this source's
-//! code-span metadata slot. Reads return Linear's stored Markdown with that slot and its
+//! collapsed metadata block. Reads return Linear's stored Markdown with that block and its
 //! separator removed; they do not promise the caller's original bytes. `stored_content`
 //! reports the write answer in that same form. Code-span payloads survive unchanged;
 //! prose and HTML-comment payloads may be normalized. The captured response in
@@ -1203,8 +1210,9 @@ pub struct LinearConfig {
     /// and writes one person, or none, as the issue's `assigneeId`.
     assignees: bool,
     /// Caller metadata values this source shows in one collapsed `Fields` section at the end
-    /// of each task's, project's and document's visible description, since Linear has no
-    /// custom fields and never renders the slot the metadata is kept in.
+    /// of each task's, project's and document's description, directly before the collapsed
+    /// block the metadata is kept in, since Linear has no custom fields and shows that block's
+    /// JSON only to a reader who opens it.
     ///
     /// Absent or empty, no section is written. Each entry names the `field` a value is shown
     /// under, a top-level metadata `key` and an optional `path` of object keys walked inside
