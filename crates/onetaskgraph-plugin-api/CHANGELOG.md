@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.19](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-plugin-api-v0.14.18...onetaskgraph-plugin-api-v0.14.19) - 2026-11-20
+
+### Added
+
+- *(linear)* keep item metadata in a collapsed block, and migrate legacy slots ([#4065](https://github.com/nickderobertis/onetaskgraph/pull/4065))
+
 ## [0.14.15](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-plugin-api-v0.14.14...onetaskgraph-plugin-api-v0.14.15) - 2026-11-13
 
 ### Added
