@@ -516,6 +516,11 @@ hosted plugin cannot be a way around them.
 `designator` is not carried either: a source hosted over this protocol answers as the trait's
 default does, and the engine asks it nothing.
 
+`migrate_stored_forms` — `sources migrate`, which rewrites every item a source holds in a stored
+form its plugin no longer writes — is not carried either. A source hosted over this protocol
+answers as the trait's default does, holding nothing to migrate: the engine reports it so, and
+sends the plugin no request for it and no write.
+
 `stored_content` — the content a write's own answer says the backend stores — is not a
 method: it crosses as the `stored_content` member of a content write's result (§4.9, §4.9a,
 §4.12), from a plugin that declared `stored_forms` (§3.16), and the engine reads it exactly as

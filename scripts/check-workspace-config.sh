@@ -144,6 +144,7 @@ SPAWNERS = {
     "sdks/typescript/tests/rendered.test.ts": SDK_TYPESCRIPT_TESTS,
     "sdks/typescript/tests/boundary.test.ts": SDK_TYPESCRIPT_TESTS,
     "sdks/typescript/tests/sweep.test.ts": SDK_TYPESCRIPT_TESTS,
+    "sdks/typescript/tests/migrate.test.ts": SDK_TYPESCRIPT_TESTS,
     "sdks/typescript/tests/attestations.test.ts": SDK_TYPESCRIPT_TESTS,
     "sdks/typescript/tests/review_and_copy_back.test.ts": SDK_TYPESCRIPT_TESTS,
     "sdks/typescript/scripts/test-packed.sh": [("sdk-typescript", "pack")],

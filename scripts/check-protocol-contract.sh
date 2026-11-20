@@ -330,6 +330,10 @@ NOT_METHODS = {
         "not carried: the paragraph after §4's method table says a source over this protocol "
         "answers none, so only its configuration's `public_alias` designates it"
     ),
+    "migrate_stored_forms": (
+        "not carried: the paragraph after §4's method table says a source over this protocol "
+        "holds nothing to migrate, so `sources migrate` sends it nothing"
+    ),
     "stored_content": (
         "not a message: the paragraph after §4's method table says it crosses as the "
         "`stored_content` member of a content write's result, which §4.9 specifies"
