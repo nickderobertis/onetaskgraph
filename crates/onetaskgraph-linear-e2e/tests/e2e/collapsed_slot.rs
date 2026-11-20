@@ -43,8 +43,9 @@ const FIELDS: &str = "+++ Fields\n\n* **Owner**: `nick`\n\n+++";
 /// The opening of the store's block.
 const BLOCK: &str = "+++ onetaskgraph metadata\n\n";
 
-/// A workspace holding `held`, a folder of Markdown `plan`, and two sources over the workspace:
-/// `linear`, configured with no `metadata_fields`, and `fielded`, showing `caller.owner`.
+/// A workspace holding `held`, a folder of Markdown `plan`, and three sources over the workspace:
+/// `linear`, configured with no `metadata_fields`, `fielded`, showing `caller.owner`, and
+/// `scoped`, reading the project `P-in` alone.
 struct Setup {
     sandbox: Sandbox,
     workspace: LinearWorkspace,
@@ -62,6 +63,8 @@ impl Setup {
         });
         let mut fielded = config.clone();
         fielded["metadata_fields"] = json!([{"field": "Owner", "key": "caller.owner"}]);
+        let mut scoped = config.clone();
+        scoped["project"] = json!("P-in");
         workspace.rewrite_markdown_on_write(LinearMarkdown::Measured);
         let plan = sandbox.subdirectory("plan");
         for kind in ["tasks", "projects", "documents"] {
@@ -70,6 +73,7 @@ impl Setup {
         sandbox.project_document(&document(&json!({
             "linear": {"plugin": "linear", "config": config},
             "fielded": {"plugin": "linear", "config": fielded},
+            "scoped": {"plugin": "linear", "config": scoped},
             "plan": {"plugin": "local-md", "config": {"root": plan}},
         })));
         Self {
@@ -857,4 +861,144 @@ fn sources_migrate_rewrites_every_legacy_item_once_and_nothing_else() {
     );
     let (_, served) = setup.run(&["sources", "migrate", "linear"]);
     assert!(mutations(&served).is_empty());
+}
+
+#[test]
+fn sources_migrate_walks_every_page_of_the_items_its_source_is_scoped_to_and_no_other() {
+    let json = caller().to_string();
+    let legacy = |id: &str, project: Option<&str>| {
+        let mut row = issue(
+            id,
+            &format!("{CONTENT}\n\n<!-- onetaskgraph.metadata `{json}` -->"),
+        );
+        if let Some(project) = project {
+            row["project"] = json!(project);
+        }
+        row
+    };
+    // More issues in the scope than one listing page holds, and one of each kind outside it.
+    let mut tasks: Vec<Value> = (0..105)
+        .map(|at| legacy(&format!("I-in-{at:03}"), Some("P-in")))
+        .collect();
+    tasks.push(legacy("I-out", Some("P-out")));
+    tasks.push(legacy("I-none", None));
+    let slotted = format!("{CONTENT}\n\n<!-- onetaskgraph.metadata `{json}` -->");
+    let mut inside = document_row("D-in", &slotted);
+    inside["project"] = json!("P-in");
+    let mut outside = document_row("D-out", &slotted);
+    outside["project"] = json!("P-out");
+    let workspace = held(
+        tasks,
+        vec![project("P-in", &slotted), project("P-out", &slotted)],
+        vec![inside, outside],
+    );
+
+    let setup = Setup::new(workspace.clone());
+    let (ran, served) = setup.answer(&["sources", "migrate", "scoped", "--json"], 0);
+    let listed = operations(&served)
+        .iter()
+        .filter(|root| *root == "issues")
+        .count();
+    assert_eq!(listed, 2, "two pages of issues: {:?}", operations(&served));
+    assert_eq!(
+        updates(&served),
+        107,
+        "105 issues, the project and its document"
+    );
+    let rewritten: Vec<&str> = ran["rewritten"]
+        .as_array()
+        .expect("rewritten")
+        .iter()
+        .filter_map(|item| item["id"].as_str())
+        .collect();
+    assert_eq!(rewritten.len(), 107, "{ran}");
+    for id in [
+        "scoped:P-in",
+        "scoped:D-in",
+        "scoped:I-in-000",
+        "scoped:I-in-104",
+    ] {
+        assert!(rewritten.contains(&id), "{id}: {ran}");
+    }
+    // Nothing outside the scope was listed, counted or written.
+    assert_eq!(ran["current"], 0, "{ran}");
+    for (kind, id) in [
+        ("task", "I-out"),
+        ("task", "I-none"),
+        ("project", "P-out"),
+        ("document", "D-out"),
+    ] {
+        assert!(
+            !rewritten.contains(&format!("scoped:{id}").as_str()),
+            "{id}"
+        );
+        assert_eq!(setup.stored(kind, id), slotted, "{kind} {id} is as it was");
+    }
+    agreed_tail(&setup.stored("task", "I-in-104"), CONTENT, false);
+
+    // A listing Linear refuses part way fails the command, naming the source, and nothing is
+    // reported as done that a later page could have contradicted.
+    let setup = Setup::new(workspace);
+    setup.workspace.refuse_later_pages_of("P-in");
+    let (output, served) = setup.exits(&["sources", "migrate", "scoped", "--dry-run"], 1);
+    assert!(mutations(&served).is_empty(), "a dry run writes nothing");
+    assert!(
+        stderr(&output).contains("scoped") && stderr(&output).contains("refused"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(stdout(&output).is_empty(), "no report: {}", stdout(&output));
+}
+
+#[test]
+fn a_migration_through_the_local_cache_retires_each_item_it_rewrote() {
+    let json = caller().to_string();
+    let slotted = format!("{CONTENT}\n\n<!-- onetaskgraph.metadata `{json}` -->");
+    let mut tasks = vec![issue("I-legacy", &slotted)];
+    tasks[0]["project"] = json!("P-1");
+    let workspace = held(
+        tasks,
+        vec![
+            json!({"id": "P-1", "title": "Engine", "content": "About the engine.",
+                    "status": {"category": "in-progress", "name": "In Progress"},
+                    "labels": []}),
+        ],
+        Vec::new(),
+    );
+    let cached = crate::cache::Cached::new(workspace);
+    let pin = cached
+        .listed("task", "linear:I-legacy")
+        .expect("a listing carries a token");
+    let read = crate::cache::pinned("task", "linear:I-legacy", &pin);
+    let read: Vec<&str> = read.iter().map(String::as_str).collect();
+    let (cold, sent) = cached.ok(&read);
+    assert_eq!(sent.len(), 1, "a cold load");
+    let (_, sent) = cached.ok(&read);
+    assert!(sent.is_empty(), "then a hit");
+
+    // A dry run writes nothing, so it leaves the entry in service.
+    let (dry, _) = cached.ok(&["sources", "migrate", "linear", "--dry-run", "--json"]);
+    assert_eq!(dry["rewritten"].as_array().map(Vec::len), Some(1), "{dry}");
+    let (_, sent) = cached.ok(&read);
+    assert!(sent.is_empty(), "still a hit after a dry run: {sent:?}");
+
+    // A real one rewrites the item, and the entry read at its old version is out of service:
+    // the same pinned read reads Linear again, and answers what it answered before.
+    let (ran, _) = cached.ok(&["sources", "migrate", "linear", "--json"]);
+    assert_eq!(ran["rewritten"].as_array().map(Vec::len), Some(1), "{ran}");
+    let (after, sent) = cached.ok(&read);
+    assert_eq!(sent.len(), 1, "the rewritten item is read again: {sent:?}");
+    assert_eq!(
+        after["items"][0]["item"]["content"],
+        cold["items"][0]["item"]["content"]
+    );
+    assert_eq!(
+        after["items"][0]["item"]["metadata"],
+        cold["items"][0]["item"]["metadata"]
+    );
+    let stored = cached
+        .workspace
+        .long_form("tasks", "I-legacy")
+        .expect("held");
+    agreed_tail(&stored, CONTENT, false);
 }

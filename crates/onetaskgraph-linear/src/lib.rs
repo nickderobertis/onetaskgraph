@@ -5952,13 +5952,6 @@ impl TaskSource for LinearSource {
         self.query_batched(asks).await
     }
 
-    /// The tokens its dependency walks spelled and the items its writes were answered with, and
-    /// nothing else: what this source holds across a command is its [`Vocabulary`] — the team's
-    /// id, its workflow states and the workspace's project statuses — which stays valid in
-    /// normal use and is read afresh when a name misses. No issue, project, document or search
-    /// answer outlives the call that read it but what a copy's batched origin read held, and the
-    /// organization id it carried, which this drops too; and no write's answer outlives the
-    /// command that wrote it, so the next command already reads each item as a person left it.
     /// Every issue, project and document holding its metadata in a superseded spelling, sent one
     /// update writing it as the collapsed block — see the `migrate` module.
     async fn migrate_stored_forms(
@@ -5967,6 +5960,13 @@ impl TaskSource for LinearSource {
     ) -> Result<onetaskgraph_plugin_api::StoredFormMigration, SourceError> {
         self.migrate(dry_run).await
     }
+    /// The tokens its dependency walks spelled and the items its writes were answered with, and
+    /// nothing else: what this source holds across a command is its [`Vocabulary`] — the team's
+    /// id, its workflow states and the workspace's project statuses — which stays valid in
+    /// normal use and is read afresh when a name misses. No issue, project, document or search
+    /// answer outlives the call that read it but what a copy's batched origin read held, and the
+    /// organization id it carried, which this drops too; and no write's answer outlives the
+    /// command that wrote it, so the next command already reads each item as a person left it.
     async fn end_command(&self) -> Result<(), SourceError> {
         self.edges_versions().clear();
         self.forget_ahead();

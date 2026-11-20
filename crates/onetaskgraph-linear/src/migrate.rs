@@ -19,6 +19,9 @@ use serde_json::{Value, json};
 use super::graphql::{DOCUMENTS, ISSUES, PROJECTS};
 use super::{Keep, LinearSource, MAX_PAGE_SIZE, Under400, backend_id, page_next, slot};
 
+/// The form an item whose comment slot never closes is reported as having been left in.
+const UNREADABLE: &str = "unreadable-comment-slot";
+
 impl LinearSource {
     /// See [`TaskSource::migrate_stored_forms`](onetaskgraph_plugin_api::TaskSource::migrate_stored_forms).
     pub(crate) async fn migrate(&self, dry_run: bool) -> Result<StoredFormMigration, SourceError> {
@@ -79,7 +82,14 @@ impl LinearSource {
                 let stored_nodes = stored
                     .get(root)
                     .and_then(|connection| connection.get("nodes"))
-                    .and_then(Value::as_array);
+                    .and_then(Value::as_array)
+                    .filter(|stored| stored.len() == nodes.len())
+                    .ok_or_else(|| SourceError::Malformed {
+                        message: format!(
+                            "the stored form of the {root} listing does not hold one node per \
+                             node read"
+                        ),
+                    })?;
                 for (at, node) in nodes.iter().enumerate() {
                     let id = NativeId(backend_id(node, "id")?.to_owned());
                     if record == MetadataRecord::Document
@@ -92,20 +102,40 @@ impl LinearSource {
                     {
                         continue;
                     }
-                    let raw = stored_nodes
-                        .and_then(|nodes| nodes.get(at))
-                        .and_then(|node| node.get(member))
-                        .and_then(Value::as_str);
-                    let form = match raw.map(slot::tail) {
-                        Some(Ok(Some(tail))) if !tail.form.is_current() => tail.form,
-                        // Current, holding no metadata, or a slot no read can parse — which a
-                        // rewrite cannot carry either, and every read of the item names.
-                        _ => {
-                            migration.current += 1;
+                    let raw = match stored_nodes[at].get(member) {
+                        None | Some(Value::Null) => None,
+                        Some(Value::String(raw)) => Some(raw.as_str()),
+                        Some(_) => {
+                            return Err(SourceError::Malformed {
+                                message: format!("{root}.nodes[{at}].{member} is not a string"),
+                            });
+                        }
+                    };
+                    let tail = match raw.map(slot::tail).transpose() {
+                        Ok(tail) => tail.flatten(),
+                        // A comment slot that opens and never closes: no read gives its metadata
+                        // back, so no rewrite can carry it, and the item is named for a person.
+                        Err(error) => {
+                            migration.failed.push(MigrationFailure::new(
+                                MigratedItem::new(record, id, UNREADABLE),
+                                error.to_string(),
+                            ));
                             continue;
                         }
                     };
-                    let item = MigratedItem::new(record, id.clone(), form.name());
+                    // An item holding no metadata, or holding it in the block, holds the form
+                    // this source writes now.
+                    let Some(tail) = tail.filter(|tail| !tail.form.is_current()) else {
+                        migration.current += 1;
+                        continue;
+                    };
+                    let item = MigratedItem::new(record, id.clone(), tail.form.name());
+                    if let Err(error) = tail.metadata(raw.unwrap_or_default()) {
+                        migration
+                            .failed
+                            .push(MigrationFailure::new(item, error.to_string()));
+                        continue;
+                    }
                     if dry_run {
                         migration.rewritten.push(item);
                         continue;

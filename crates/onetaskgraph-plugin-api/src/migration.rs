@@ -64,7 +64,8 @@ impl MigrationFailure {
 pub struct StoredFormMigration {
     /// Each item rewritten into the current form, or under a dry run each item that would be.
     pub rewritten: Vec<MigratedItem>,
-    /// How many of the items examined already held the current form, and were sent nothing.
+    /// How many of the items examined already held the current form — one holding nothing a
+    /// stored form could spell included — and were sent nothing.
     pub current: u64,
     /// Each item held in a superseded form that was refused or not written.
     pub failed: Vec<MigrationFailure>,

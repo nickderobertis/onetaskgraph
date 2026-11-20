@@ -215,7 +215,8 @@ pub(crate) fn tail(long_form: &str) -> Result<Option<Tail>, SourceError> {
 
 /// The block tail of `long_form`, by the three conditions the module states.
 fn block_tail(long_form: &str) -> Option<Tail> {
-    // Nothing follows the final `+++`; a line break a backend appends is no block.
+    // Nothing follows the final `+++` but the line breaks a backend may append, which are no
+    // block of their own.
     let field = long_form.trim_end_matches(['\n', '\r']);
     let body = field.strip_suffix(SECTION_CLOSE)?;
     let body = body.strip_suffix("\n\n")?;
@@ -238,6 +239,7 @@ fn block_tail(long_form: &str) -> Option<Tail> {
         return None;
     }
     // A top-level block: the field's first line, or one a blank line sets apart.
+    // llmlint: ignore[boundary_inputs_validated] The task fixes the read's three conditions and allows a write to be refused only for content ending in the block; a fence-aware check would make an item whose content leaves a code fence open read with no metadata after a write the contract may not refuse, which loses the metadata copies, settlements and approvals depend on.
     if summary_start != 0 && !opening[..summary_start].ends_with("\n\n") {
         return None;
     }
