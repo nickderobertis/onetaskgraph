@@ -2164,17 +2164,14 @@ impl TaskSource for CachedSource {
         &self,
         dry_run: bool,
     ) -> Result<StoredFormMigration, SourceError> {
-        // Which items a sweep rewrites is not known until it has listed them, so each is retired
-        // once its rewrite has landed: what a read gives back of it is unchanged, but its
-        // version moved, and no entry is kept for a version the source no longer holds. An item
-        // whose rewrite was refused is held as it was, and its entry with it.
-        let migrated = self.inner.migrate_stored_forms(dry_run).await?;
+        // Which items a sweep rewrites is not known until it has listed them, so every entry of
+        // this source is retired before the first rewrite can be sent: a listing that fails part
+        // way, after some items were rewritten, leaves no entry for a version its source has
+        // since moved past. A dry run writes nothing, and leaves every entry in service.
         if !dry_run {
-            for item in &migrated.rewritten {
-                self.cache.invalidate(&item.id);
-            }
+            self.cache.retire_everything_before_writes()?;
         }
-        Ok(migrated)
+        self.inner.migrate_stored_forms(dry_run).await
     }
 
     async fn visibility(&self, target: &WriteTarget<'_>) -> Result<Visibility, SourceError> {

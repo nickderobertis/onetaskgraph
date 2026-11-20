@@ -1099,3 +1099,41 @@ fn a_slot_no_read_can_parse_is_reported_failed_and_the_migration_goes_on() {
     assert_eq!(held("I-bad"), bad);
     agreed_tail(&held("I-good"), CONTENT, false);
 }
+
+#[test]
+fn a_migration_failing_part_way_through_the_cache_leaves_no_entry_of_what_it_rewrote() {
+    let json = caller().to_string();
+    let slotted = format!("{CONTENT}\n\n<!-- onetaskgraph.metadata `{json}` -->");
+    let workspace = held(vec![issue("I-legacy", &slotted)], Vec::new(), Vec::new());
+    let cached = crate::cache::Cached::new(workspace);
+    let pin = cached
+        .listed("task", "linear:I-legacy")
+        .expect("a listing carries a token");
+    let read = crate::cache::pinned("task", "linear:I-legacy", &pin);
+    let read: Vec<&str> = read.iter().map(String::as_str).collect();
+    cached.ok(&read);
+    let (_, sent) = cached.ok(&read);
+    assert!(sent.is_empty(), "a hit");
+    // The issues listed and the legacy one rewritten; then Linear refuses the projects listing.
+    cached.workspace.rate_limit(&[None, None, Some(30)]);
+    let from = cached.workspace.served().len();
+    let output = cached.run(&["sources", "migrate", "linear"]);
+    assert_ne!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(
+        mutations(&cached.workspace.served()[from..]),
+        ["issueUpdate"],
+        "the issue was rewritten before the listing failed"
+    );
+    agreed_tail(
+        &cached
+            .workspace
+            .long_form("tasks", "I-legacy")
+            .expect("held"),
+        CONTENT,
+        false,
+    );
+    // Its entry did not outlive the rewrite: the pinned read reads Linear again.
+    let (after, sent) = cached.ok(&read);
+    assert_eq!(sent.len(), 1, "read again: {sent:?}");
+    assert_eq!(after["items"][0]["item"]["content"], CONTENT);
+}
