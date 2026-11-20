@@ -498,10 +498,14 @@ fn blocks(lines: &[&str], seed: &str) -> Vec<Value> {
                 json!({"type": "bullet_list", "attrs": {}, "content": items})
             });
         } else {
+            // A paragraph runs to a blank line or a section's opening or closing line, and always
+            // takes its own first line — a `+++` no section opened among them — so the walk moves on.
             let start = index;
+            index += 1;
             while index < lines.len()
                 && !lines[index].trim().is_empty()
-                && !lines[index].starts_with("+++")
+                && !lines[index].starts_with("+++ ")
+                && lines[index] != "+++"
             {
                 index += 1;
             }
@@ -725,6 +729,18 @@ mod tests {
                 "{name}: decoded"
             );
         }
+    }
+
+    #[test]
+    fn a_stray_section_line_is_a_paragraph_and_the_walk_ends() {
+        for stray in ["+++", "+++x", "Text\n+++\nMore", "+++ unclosed\n\nbody"] {
+            let tree = node_tree(stray, "stray");
+            assert!(
+                !tree["content"].as_array().expect("content").is_empty(),
+                "{stray:?}"
+            );
+        }
+        assert_eq!(closed_text(&node_tree("+++", "stray")), "+++");
     }
 
     #[test]

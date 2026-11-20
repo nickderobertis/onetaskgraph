@@ -827,7 +827,7 @@ fn sources_migrate_rewrites_every_legacy_item_once_and_nothing_else() {
         .collect();
     assert_eq!(listed(&ran, "rewritten"), rewritten, "{ran}");
     assert_eq!(ran["current"], 3);
-    // The text form says the same.
+    // Every item reads back as it did before, and each rewritten one holds the block.
     for ((kind, id, _), was) in expected.iter().zip(&before) {
         let native = id.trim_start_matches("linear:");
         let shown = setup.show("linear", kind, native);

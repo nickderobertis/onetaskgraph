@@ -93,12 +93,7 @@ impl LinearSource {
                 for (at, node) in nodes.iter().enumerate() {
                     let id = NativeId(backend_id(node, "id")?.to_owned());
                     if record == MetadataRecord::Document
-                        && !self.in_scope(
-                            node.pointer("/project/id")
-                                .and_then(Value::as_str)
-                                .map(|project| NativeId(project.to_owned()))
-                                .as_ref(),
-                        )
+                        && !self.in_scope(filed_under(node, at)?.as_ref())
                     {
                         continue;
                     }
@@ -162,5 +157,21 @@ impl LinearSource {
             }
         }
         Ok(migration)
+    }
+}
+
+/// The project one listed document is filed under — `None` for one filed under none — or the
+/// refusal of a `project` member that is neither `null` nor an object naming a project id.
+fn filed_under(node: &Value, at: usize) -> Result<Option<NativeId>, SourceError> {
+    match node.get("project") {
+        None | Some(Value::Null) => Ok(None),
+        Some(project) => project
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+            .map(|id| Some(NativeId(id.to_owned())))
+            .ok_or_else(|| SourceError::Malformed {
+                message: format!("documents.nodes[{at}].project names no project id"),
+            }),
     }
 }

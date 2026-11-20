@@ -159,7 +159,7 @@ impl Tail {
 }
 
 /// One JSON value in the encoding the slot holds it in: compact canonical JSON with `<`, `>` and
-/// `` ` `` escaped as `<`, `>` and ```.
+/// `` ` `` escaped as `\u003c`, `\u003e` and `\u0060`.
 ///
 /// All three only ever occur inside a JSON string, where the escape means the same character, so
 /// the value parses back exactly; and with them escaped no value can close the code span it
