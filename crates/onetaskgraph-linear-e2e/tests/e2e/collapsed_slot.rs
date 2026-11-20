@@ -840,13 +840,16 @@ fn a_block_inside_a_code_fence_the_content_leaves_open_is_the_callers_code_and_n
 
 #[test]
 fn a_fence_a_list_item_closes_leaves_the_store_its_block() {
-    // A fence opened and closed inside a list item or a block quote holds no line after it, so
-    // the store's block follows as its own. Each is written as Linear stores it — `* ` bullets,
-    // and a blank line before an item's closing fence — so its repeat compares equal.
+    // A fence opened and closed inside a list item or a block quote holds no line after it, and
+    // neither does one an item leaves open, so the store's block follows as its own. Each is
+    // written as Linear stores it — `* ` bullets, and a blank line before an item's closing fence
+    // — so its repeat compares equal.
     for content in [
         "* ```\n  code\n\n  ```\n\nAfter",
         "1. Step:\n\n   ```sh\n   run it\n   ```\n\nAfter",
         "> ```\n> quoted\n> ```\n\nAfter",
+        // Left open, the item's end closes it, so the block after it is still the store's own.
+        "* ```\n  never closed",
     ] {
         let setup = Setup::empty();
         std::fs::write(
@@ -993,21 +996,26 @@ fn a_legacy_slot_after_an_open_fence_reads_as_before_and_is_never_rewritten_into
 
 #[test]
 fn a_fields_section_holding_fenced_section_lines_is_still_the_stores_own() {
-    // A person added a code block holding `+++` lines inside the store's `Fields` section: those
-    // lines are code, so the section still closes where it did and reads go on taking it off.
-    let fields = "+++ Fields\n\n* **Owner**: `nick`\n\n```\n+++ Nested\n+++\n+++\n```\n\n+++";
-    let long_form = format!(
-        "{CONTENT}\n\n{fields}\n\n{BLOCK}`onetaskgraph.fields`\n\n`{}`\n\n+++",
-        caller()
-    );
-    let setup = Setup::new(held(vec![issue("I-1", &long_form)], Vec::new(), Vec::new()));
-    let shown = setup.show("fielded", "task", "I-1");
-    assert_eq!(shown["content"], CONTENT);
-    assert_eq!(shown["metadata"], caller());
-    // And it holds the current form: a migration counts it and sends nothing.
-    let (ran, served) = setup.answer(&["sources", "migrate", "fielded", "--json"], 0);
-    assert!(mutations(&served).is_empty(), "{:?}", operations(&served));
-    assert_eq!(ran["current"], 1, "{ran}");
+    // A person added a code block inside the store's `Fields` section: at the top level holding
+    // `+++` lines, which are code; and in a list item, whose closing fence is no fence opening.
+    // Either way the section still closes where it did and reads go on taking it off.
+    for fields in [
+        "+++ Fields\n\n* **Owner**: `nick`\n\n```\n+++ Nested\n+++\n+++\n```\n\n+++",
+        "+++ Fields\n\n* **Owner**: `nick`\n\n* ```\n  x\n\n  ```\n\n+++",
+    ] {
+        let long_form = format!(
+            "{CONTENT}\n\n{fields}\n\n{BLOCK}`onetaskgraph.fields`\n\n`{}`\n\n+++",
+            caller()
+        );
+        let setup = Setup::new(held(vec![issue("I-1", &long_form)], Vec::new(), Vec::new()));
+        let shown = setup.show("fielded", "task", "I-1");
+        assert_eq!(shown["content"], CONTENT, "{fields:?}");
+        assert_eq!(shown["metadata"], caller(), "{fields:?}");
+        // And it holds the current form: a migration counts it and sends nothing.
+        let (ran, served) = setup.answer(&["sources", "migrate", "fielded", "--json"], 0);
+        assert!(mutations(&served).is_empty(), "{:?}", operations(&served));
+        assert_eq!(ran["current"], 1, "{fields:?}: {ran}");
+    }
 }
 
 #[test]
