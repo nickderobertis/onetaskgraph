@@ -2165,15 +2165,12 @@ impl TaskSource for CachedSource {
         dry_run: bool,
     ) -> Result<StoredFormMigration, SourceError> {
         // Which items a sweep rewrites is not known until it has listed them, so each is retired
-        // once its rewrite is sent: what a read gives back of it is unchanged, but its version
-        // moved, and no entry is kept for a version the source no longer holds.
+        // once its rewrite has landed: what a read gives back of it is unchanged, but its
+        // version moved, and no entry is kept for a version the source no longer holds. An item
+        // whose rewrite was refused is held as it was, and its entry with it.
         let migrated = self.inner.migrate_stored_forms(dry_run).await?;
         if !dry_run {
-            for item in migrated
-                .rewritten
-                .iter()
-                .chain(migrated.failed.iter().map(|f| &f.item))
-            {
+            for item in &migrated.rewritten {
                 self.cache.invalidate(&item.id);
             }
         }

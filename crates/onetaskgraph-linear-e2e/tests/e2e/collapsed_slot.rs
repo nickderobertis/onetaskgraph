@@ -845,8 +845,41 @@ fn sources_migrate_rewrites_every_legacy_item_once_and_nothing_else() {
     assert_eq!(listed(&again, "rewritten"), Vec::new());
     assert_eq!(again["current"], 3 + rewritten.len());
 
-    // Once it is no longer refused, the human form reports it and a third run is clean.
+    // The human form of a refused run names the failure, with its reason.
     let setup = Setup::new(legacy_workspace());
+    setup.workspace.refuse_writes_of(&refused);
+    let (output, _) = setup.exits(&["sources", "migrate", "linear"], 1);
+    let said = stdout(&output);
+    assert!(
+        said.starts_with("linear: 8 rewritten, 3 already current, 1 failed\n"),
+        "{said}"
+    );
+    assert!(
+        said.contains(&format!(
+            "\ndocument linear:{refused} failed (from html-comment-slot): "
+        )),
+        "{said}"
+    );
+
+    // And of a dry run, what would be rewritten, writing nothing.
+    let setup = Setup::new(legacy_workspace());
+    let (output, served) = setup.run(&["sources", "migrate", "linear", "--dry-run"]);
+    let said = stdout(&output);
+    assert!(mutations(&served).is_empty());
+    assert!(
+        said.starts_with(
+            "linear: 9 would be rewritten, 3 already current, 0 failed — nothing written\n"
+        ),
+        "{said}"
+    );
+    assert!(
+        said.contains(
+            "\nproject linear:P-fields-comment-marker would-rewrite (from fields-comment-marker)"
+        ),
+        "{said}"
+    );
+
+    // Once nothing is refused, the human form reports each item and a later run is clean.
     let (output, _) = setup.run(&["sources", "migrate", "linear"]);
     let said = stdout(&output);
     assert!(
@@ -1001,4 +1034,68 @@ fn a_migration_through_the_local_cache_retires_each_item_it_rewrote() {
         .long_form("tasks", "I-legacy")
         .expect("held");
     agreed_tail(&stored, CONTENT, false);
+}
+
+#[test]
+fn a_slot_no_read_can_parse_is_reported_failed_and_the_migration_goes_on() {
+    let json = caller().to_string();
+    let setup = Setup::new(held(
+        vec![
+            // A comment slot that opens and never closes, and one whose JSON does not parse.
+            issue(
+                "I-open",
+                &format!("{CONTENT}\n\n<!-- onetaskgraph.metadata `{json}"),
+            ),
+            issue(
+                "I-bad",
+                &format!("{CONTENT}\n\n<!-- onetaskgraph.metadata `{{\"a\":` -->"),
+            ),
+            issue(
+                "I-good",
+                &format!("{CONTENT}\n\n<!-- onetaskgraph.metadata `{json}` -->"),
+            ),
+        ],
+        Vec::new(),
+        Vec::new(),
+    ));
+    let held = |id: &str| setup.stored("task", id);
+    let (open, bad) = (held("I-open"), held("I-bad"));
+    let (ran, served) = setup.answer(&["sources", "migrate", "linear", "--json"], 1);
+    assert_eq!(
+        updates(&served),
+        1,
+        "the readable item alone: {:?}",
+        operations(&served)
+    );
+    let failed: Vec<(&str, &str)> = ran["failed"]
+        .as_array()
+        .expect("failed")
+        .iter()
+        .map(|item| (item["id"].as_str().unwrap(), item["from"].as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        failed,
+        [
+            ("linear:I-open", "unreadable-comment-slot"),
+            ("linear:I-bad", "html-comment-slot"),
+        ],
+        "{ran}"
+    );
+    for item in ran["failed"].as_array().unwrap() {
+        assert!(
+            item["reason"]
+                .as_str()
+                .is_some_and(|why| why.contains("slot")),
+            "{item}"
+        );
+    }
+    assert_eq!(ran["rewritten"][0]["id"], "linear:I-good", "{ran}");
+    assert_eq!(
+        ran["current"], 0,
+        "neither unreadable item is counted current: {ran}"
+    );
+    // Neither was written: each still holds exactly what it held.
+    assert_eq!(held("I-open"), open);
+    assert_eq!(held("I-bad"), bad);
+    agreed_tail(&held("I-good"), CONTENT, false);
 }
