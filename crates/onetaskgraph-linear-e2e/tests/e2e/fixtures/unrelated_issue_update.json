@@ -5,7 +5,7 @@
       "id": "R-0",
       "input": {
         "title": "Retitled",
-        "description": "A new body.\n\n<!-- onetaskgraph.metadata `{\"caller.note\":\"kept\"}` -->"
+        "description": "A new body.\n\n+++ onetaskgraph metadata\n\n`{\"caller.note\":\"kept\"}`\n\n+++"
       }
     }
   }

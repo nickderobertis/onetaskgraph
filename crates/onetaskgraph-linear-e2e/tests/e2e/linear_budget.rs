@@ -786,8 +786,23 @@ fn settlements(total: usize) -> Vec<usize> {
     spent
 }
 
-/// The text above an item's trailing metadata slot, and the slot's JSON.
+/// The text above an item's trailing metadata slot, and the slot's JSON, in any spelling.
 fn split_slot(field: &str) -> (String, Value) {
+    // The collapsed block this source writes: its payload is the last code span before the close.
+    if let Some(start) = field.rfind("+++ onetaskgraph metadata\n\n") {
+        let body = field[start..]
+            .trim_end_matches('\n')
+            .trim_end_matches("\n\n+++");
+        let encoded = body.rsplit('\n').next().unwrap_or_default();
+        let encoded = encoded
+            .strip_prefix('`')
+            .and_then(|span| span.strip_suffix('`'));
+        return (
+            field[..start].to_owned(),
+            serde_json::from_str(encoded.expect("the block holds one code span"))
+                .expect("the block holds JSON"),
+        );
+    }
     let start = field
         .rfind("<!-- onetaskgraph.metadata")
         .expect("the field ends in a slot");

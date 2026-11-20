@@ -742,7 +742,7 @@ fn issue_and_document_assets_upload_verify_rewrite_and_reuse() {
             .long_form(if kind == "task" { "tasks" } else { "documents" }, dest)
             .unwrap();
         assert!(!raw.contains("](./"));
-        assert!(raw.contains("onetaskgraph.metadata"));
+        assert!(raw.contains("+++ onetaskgraph metadata"));
         let state = journey.workspace.state.lock().unwrap();
         for (index, image) in images.iter().enumerate() {
             let upload = state
@@ -830,7 +830,7 @@ fn asset_stage_failures_and_bounded_virtual_rate_limit_recovery() {
                         .unwrap();
                     assert!(!raw.contains("](./") && raw.contains("![alt 0](http://"));
                     assert!(
-                        raw.contains("onetaskgraph.metadata")
+                        raw.contains("+++ onetaskgraph metadata")
                             && raw.contains("onetaskgraph.assets")
                     );
                     assert!(raw.contains(&asset_sha256(&images[0])));
@@ -1139,7 +1139,7 @@ fn project_home_routed_to_a_member_source_carries_issue_and_document_assets() {
         let raw = journey.workspace.held.long_form(kind, native).unwrap();
         assert!(!raw.contains("](./"));
         assert!(raw.contains("![alt 0](http://"));
-        assert!(raw.contains("onetaskgraph.metadata") && raw.contains("onetaskgraph.assets"));
+        assert!(raw.contains("+++ onetaskgraph metadata") && raw.contains("onetaskgraph.assets"));
         let state = journey.workspace.state.lock().unwrap();
         let upload = state
             .uploads
@@ -4053,7 +4053,9 @@ fn rendering_a_linked_task_with_an_image_asset_keeps_its_links_section_out_of_it
     ]);
     let linked = journey.workspace.held.long_form("tasks", "R-0").unwrap();
     let start = linked.find("## Links\n").expect("the section is rendered");
-    let end = linked.find("<!--").expect("the metadata slot");
+    let end = linked
+        .find("+++ onetaskgraph metadata")
+        .expect("the metadata block");
     let section = linked[start..end].trim_end().to_owned();
 
     let template = inputs.join("picture.md");

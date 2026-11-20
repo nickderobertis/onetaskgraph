@@ -10377,13 +10377,17 @@ fn linear_long_form(v: &Value, far: Vec<Value>) -> String {
     }
 }
 
-/// The one slot a Linear item keeps caller-defined metadata in: an HTML comment appended
-/// to the description, which is what the source reads and what a person never sees.
+/// The one slot a Linear item keeps caller-defined metadata in, as the source writes it now: a
+/// collapsed block after the content holding the metadata in one code span, `<`, `>` and the
+/// backtick escaped as the source escapes them. A journey holding an item in a spelling an
+/// earlier release wrote seeds its long form whole instead.
 fn linear_metadata_slot(content: &str, metadata: &Value) -> String {
-    format!(
-        "{content}\n\n<!-- onetaskgraph.metadata\n{}\n-->",
-        serde_json::to_string(metadata).unwrap()
-    )
+    let json = serde_json::to_string(metadata)
+        .unwrap()
+        .replace('<', "\\u003c")
+        .replace('>', "\\u003e")
+        .replace('`', "\\u0060");
+    format!("{content}\n\n+++ onetaskgraph metadata\n\n`{json}`\n\n+++")
 }
 fn linear_connection(rows: Vec<Value>, vars: &Value) -> Value {
     let start = vars["after"]
