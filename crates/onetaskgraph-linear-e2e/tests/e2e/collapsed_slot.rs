@@ -1137,3 +1137,50 @@ fn a_migration_failing_part_way_through_the_cache_leaves_no_entry_of_what_it_rew
     assert_eq!(sent.len(), 1, "read again: {sent:?}");
     assert_eq!(after["items"][0]["item"]["content"], CONTENT);
 }
+
+#[cfg(unix)]
+#[test]
+fn a_migration_whose_cache_entries_cannot_be_retired_is_refused_before_linear_is_asked() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let json = caller().to_string();
+    let slotted = format!("{CONTENT}\n\n<!-- onetaskgraph.metadata `{json}` -->");
+    let cached = crate::cache::Cached::new(held(
+        vec![issue("I-legacy", &slotted)],
+        Vec::new(),
+        Vec::new(),
+    ));
+    let pin = cached
+        .listed("task", "linear:I-legacy")
+        .expect("a listing carries a token");
+    let read = crate::cache::pinned("task", "linear:I-legacy", &pin);
+    cached.ok(&read.iter().map(String::as_str).collect::<Vec<_>>());
+    // The entry's directory will not let it go.
+    let tasks = cached.dir().expect("a cache").join("tasks");
+    std::fs::set_permissions(&tasks, std::fs::Permissions::from_mode(0o555)).expect("read-only");
+    let probe = tasks.join("probe");
+    if std::fs::write(&probe, "").is_ok() {
+        // Running as a user no directory mode stops — nothing to prove here.
+        std::fs::remove_file(&probe).ok();
+        std::fs::set_permissions(&tasks, std::fs::Permissions::from_mode(0o755)).ok();
+        return;
+    }
+    let before = cached.workspace.served().len();
+    let output = cached.run(&["sources", "migrate", "linear"]);
+    std::fs::set_permissions(&tasks, std::fs::Permissions::from_mode(0o755)).expect("writable");
+    assert_ne!(output.status.code(), Some(0), "the migration is refused");
+    let said = stderr(&output);
+    assert!(
+        said.contains("could not be removed") && said.contains("nothing was sent"),
+        "{said}"
+    );
+    assert_eq!(
+        cached.workspace.served().len(),
+        before,
+        "Linear was asked nothing"
+    );
+    assert_eq!(
+        cached.workspace.long_form("tasks", "I-legacy").as_deref(),
+        Some(slotted.as_str()),
+        "the item holds what it held"
+    );
+}
