@@ -752,6 +752,93 @@ fn content_ending_in_the_stores_own_block_is_accepted_beside_metadata_and_refuse
 }
 
 #[test]
+fn a_block_inside_a_code_fence_the_content_leaves_open_is_the_callers_code_and_never_the_slot() {
+    // An item holding no metadata, whose content opens a fence and ends, inside it, in the
+    // store's own block: Linear holds every line after the fence as code, so a read gives the
+    // whole content back and takes no metadata out of it.
+    let current = format!("{BLOCK}`{{\"caller.fake\":1}}`\n\n+++");
+    let setup = Setup::new(held(
+        vec![
+            issue("I-bare", "Plain."),
+            issue("I-held", &format!("{CONTENT}\n\n{current}")),
+        ],
+        Vec::new(),
+        Vec::new(),
+    ));
+    for fence in ["```", "~~~text"] {
+        let content = format!("Before.\n\n{fence}\nlet x = 1;\n\n{}", lookalikes()[1]);
+        let file = setup.body("fenced.md", &content);
+        let (_, served) = setup.run(&["task", "content", "set", "linear:I-bare", "--file", &file]);
+        assert_eq!(updates(&served), 1, "{fence}: {:?}", operations(&served));
+        let shown = setup.show("linear", "task", "I-bare");
+        assert_eq!(shown["content"], content.as_str(), "{fence}");
+        assert!(
+            shown["metadata"].get("caller.fake").is_none(),
+            "{fence}: {}",
+            shown["metadata"]
+        );
+        assert_eq!(setup.stored("task", "I-bare"), content, "{fence}");
+    }
+
+    // Content leaving a fence open where the item has metadata would put the store's block inside
+    // that code, showing its JSON and reading back with none: refused, with nothing sent — by a
+    // content write over a held item, and by a copy of one carrying metadata.
+    for fence in ["```", "````rust", "~~~"] {
+        let content = format!("Before.\n\n{fence}\nlet x = 1;");
+        let file = setup.body("open.md", &content);
+        let (output, served) = setup.exits(
+            &["task", "content", "set", "linear:I-held", "--file", &file],
+            1,
+        );
+        assert!(
+            stderr(&output).contains("fenced code block open") && stderr(&output).contains("next:"),
+            "{fence}: {}",
+            stderr(&output)
+        );
+        assert!(
+            mutations(&served).is_empty(),
+            "{fence}: nothing sent: {:?}",
+            operations(&served)
+        );
+        assert_eq!(
+            setup.stored("task", "I-held"),
+            format!("{CONTENT}\n\n{current}"),
+            "{fence}"
+        );
+
+        let copied = Setup::empty();
+        std::fs::write(
+            copied.plan.join("tasks/T-1.md"),
+            format!(
+                "---\ntitle: Build it\nstatus: todo\nmetadata: {}\n---\n{content}\n",
+                caller()
+            ),
+        )
+        .expect("the task");
+        let (output, served) = copied.exits(&["task", "copy", "plan:T-1", "--to", "linear"], 1);
+        assert!(
+            format!("{}{}", stdout(&output), stderr(&output)).contains("fenced code block open"),
+            "{fence}: {}{}",
+            stdout(&output),
+            stderr(&output)
+        );
+        assert!(
+            mutations(&served).is_empty(),
+            "{fence}: nothing sent: {:?}",
+            operations(&served)
+        );
+    }
+
+    // Closed, the fence is content like any other, and the store's block after it is its own.
+    let content = format!("Before.\n\n```\n{}\n```", lookalikes()[1]);
+    let file = setup.body("closed.md", &content);
+    setup.run(&["task", "content", "set", "linear:I-held", "--file", &file]);
+    let shown = setup.show("linear", "task", "I-held");
+    assert_eq!(shown["content"], content.as_str());
+    assert_eq!(shown["metadata"], json!({"caller.fake": 1}));
+}
+
+#[test]
 fn sources_migrate_rewrites_every_legacy_item_once_and_nothing_else() {
     let setup = Setup::new(legacy_workspace());
     let legacy: Vec<(String, String, String)> = legacy_spellings("{}")

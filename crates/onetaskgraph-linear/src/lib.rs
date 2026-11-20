@@ -3817,6 +3817,11 @@ impl LinearSource {
         if metadata.is_empty() {
             return Ok((!visible.is_empty()).then(|| visible.to_owned()));
         }
+        // Content leaving a code fence open would hold the block as its code: the item would read
+        // back with no metadata and show the JSON to every reader, so nothing is sent.
+        if slot::leaves_fence_open(visible) {
+            return Err(open_fence_refusal());
+        }
         let slot = slot::slot_text(metadata)?;
         Ok(Some(if visible.is_empty() {
             slot
@@ -5491,6 +5496,7 @@ impl TaskSource for LinearSource {
             None => content.to_owned(),
             Some(slot) if content.is_empty() => slot.clone(),
             // The separator `long_form` writes, so a content write and a copy leave one shape.
+            Some(_) if slot::leaves_fence_open(content) => return Err(open_fence_refusal()),
             Some(slot) => format!("{content}\n\n{slot}"),
         };
         // Checked before anything is sent: content ending in what this source reads as its own
@@ -6918,6 +6924,10 @@ fn reslotted(
         let visible = content_above(above);
         return Ok((!visible.is_empty()).then(|| visible.to_owned()));
     }
+    // A legacy comment slot may stand after a fence its content left open; the block may not.
+    if slot::leaves_fence_open(above) {
+        return Err(open_fence_refusal());
+    }
     Ok(Some(format!("{above}{}", slot::slot_text(slot)?)))
 }
 
@@ -7886,6 +7896,9 @@ impl LinearSource {
         };
         let metadata = tail.metadata(long_form)?;
         let mut above = written(&long_form[..tail.start]);
+        if slot::leaves_fence_open(&above) {
+            return Err(open_fence_refusal());
+        }
         // The block is set off by one blank line, which a read takes off as the separator.
         if !above.is_empty() && !above.ends_with("\n\n") {
             above.push_str(if above.ends_with('\n') { "\n" } else { "\n\n" });
@@ -7948,6 +7961,18 @@ fn transported(
         ),
         other => other,
     })
+}
+
+/// The refusal of content that leaves a fenced code block open where the item has metadata, whose
+/// block would then be stored inside that code.
+fn open_fence_refusal() -> SourceError {
+    SourceError::Refused {
+        message: "this content leaves a fenced code block open, so the metadata block written \
+                  after it would be stored as part of that code and read back as content; next: \
+                  close the fence with a line of the same backticks or tildes at the end of the \
+                  content"
+            .into(),
+    }
 }
 
 /// The metadata slot `description` ends in, as the read side holds it — a block without its

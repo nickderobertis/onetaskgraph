@@ -345,14 +345,16 @@ in either close Linear hands it back with.
 
 The read side takes the block off the visible description, so `content` is what the person
 wrote. **The block is told from a caller's own by three conditions together:** it is the last
-top-level block of the field; its first line is exactly `+++ onetaskgraph metadata` and its last
+top-level block of the field — set off by a blank line, and outside every fenced code block, closed
+or left open, because Linear holds every line after an open fence as code; its first line is exactly `+++ onetaskgraph metadata` and its last
 exactly `+++`; and its body is one line holding a single code span whose text is a JSON object —
 or the line `` `onetaskgraph.fields` ``, a blank line, then such a line (see "On Linear: one
 collapsed `Fields` section"). So a caller's own expandable block of any summary, this one
 included, reads back as itself anywhere but last, and so does one with the same summary and any
 other body. A write is refused before anything is sent only when the field it would store would
 end in what a read takes for this block — content ending in that very block, for an item with no
-metadata to follow it. A legacy comment slot is likewise one only at the very **end** of the
+metadata to follow it — or when its block would stand inside a fence the content leaves open, for
+an item with metadata, which would show the JSON as code and read back with none. A legacy comment slot is likewise one only at the very **end** of the
 field; one in the middle is visible content and is left alone.
 
 A task's `delivers` and `delivered_by` live in that same slot, under `onetaskgraph.delivers`

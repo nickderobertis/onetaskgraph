@@ -30,13 +30,15 @@
 //! source still holds ([`StoredForm`] names each).
 //!
 //! **How the block is told from a caller's own.** [`tail`] takes a block off only when all three
-//! hold: it is the last top-level block of the field; its first line is exactly
+//! hold: it is the last top-level block of the field — set off by a blank line, and outside every
+//! fenced code block, closed or left open ([`leaves_fence_open`]); its first line is exactly
 //! `+++ onetaskgraph metadata` and its last exactly `+++`; and its body is one line holding a single
 //! code span whose text is a JSON object — or the line `` `onetaskgraph.fields` ``, a blank line,
 //! and such a line, when the one `+++ Fields` section directly before it is taken off too. So a
 //! caller's own expandable block of any summary, this one and `Fields` included, reads back as
 //! itself anywhere but last, and a write whose field would end in what a read takes for this block
-//! is refused before it is sent.
+//! is refused before it is sent — and so is a write of an item with metadata whose content leaves a
+//! fence open, which would store the block as that code.
 //!
 //! **In which form.** The block is composed and recognised in Linear's own `+++` form, never in the
 //! authored `<details>` form the engine's markup translates to and from: the transport takes it off
@@ -238,9 +240,12 @@ fn block_tail(long_form: &str) -> Option<Tail> {
     if &opening[summary_start..] != BLOCK_OPEN {
         return None;
     }
-    // A top-level block: the field's first line, or one a blank line sets apart.
-    // llmlint: ignore[boundary_inputs_validated] The task fixes the read's three conditions and allows a write to be refused only for content ending in the block; a fence-aware check would make an item whose content leaves a code fence open read with no metadata after a write the contract may not refuse, which loses the metadata copies, settlements and approvals depend on.
+    // A top-level block: the field's first line, or one a blank line sets apart — and outside
+    // every fenced code block, where the lines would be the caller's code rather than a block.
     if summary_start != 0 && !opening[..summary_start].ends_with("\n\n") {
+        return None;
+    }
+    if leaves_fence_open(&opening[..summary_start]) {
         return None;
     }
     let start = if sentinel {
@@ -273,8 +278,17 @@ fn fields_section_before(text: &str, block_start: usize) -> Option<usize> {
     if lines.last()?.1 != SECTION_CLOSE {
         return None;
     }
+    // A line inside a fenced code block is the caller's code, never a section's opening or close.
+    let mut fence = None;
+    let code: Vec<bool> = lines
+        .iter()
+        .map(|&(_, line)| fence_step(&mut fence, line))
+        .collect();
     let mut depth = 0_usize;
-    for &(at, line) in lines.iter().rev() {
+    for (&(at, line), code) in lines.iter().zip(code).rev() {
+        if code {
+            continue;
+        }
         if line == SECTION_CLOSE {
             depth += 1;
         } else if line.starts_with("+++ ") {
@@ -286,6 +300,58 @@ fn fields_section_before(text: &str, block_start: usize) -> Option<usize> {
         }
     }
     None
+}
+
+/// Whether `text` leaves a fenced code block open at its end — so a line after it, the store's
+/// block among them, would be stored as that code rather than as a block of its own.
+///
+/// Linear's editor reads an HTML block as a paragraph of its text, so a fence is the one Markdown
+/// construct that spans blank lines and can hold a line standing at the field's left margin:
+/// a block quote and a list item each end at such a line after a blank one. A fence is opened
+/// as CommonMark opens one — at most three spaces, then three or more backticks with no backtick
+/// after them, or three or more tildes — and closed only by a run of the same character at least
+/// as long with nothing but spaces after it. A fence nested in a list item is counted as though
+/// it stood at the top level, which errs toward refusing a write rather than losing its metadata.
+pub(crate) fn leaves_fence_open(text: &str) -> bool {
+    let mut fence = None;
+    for line in text.split('\n') {
+        fence_step(&mut fence, line);
+    }
+    fence.is_some()
+}
+
+/// Advance the fence state `fence` — the open fence's character and run, or `None` — over one
+/// line, answering whether that line is code: inside a fence, or a fence line itself.
+fn fence_step(fence: &mut Option<(char, usize)>, line: &str) -> bool {
+    let line = line.strip_suffix('\r').unwrap_or(line);
+    let marked = fence_mark(line);
+    match (*fence, marked) {
+        (Some((open, run)), Some((mark, length, rest)))
+            if mark == open && length >= run && rest.trim_matches([' ', '\t']).is_empty() =>
+        {
+            *fence = None;
+            true
+        }
+        (Some(_), _) => true,
+        (None, Some((mark, length, rest))) if mark == '~' || !rest.contains('`') => {
+            *fence = Some((mark, length));
+            true
+        }
+        (None, _) => false,
+    }
+}
+
+/// The fence a line opens or closes with — its character, how many of it, and what follows —
+/// or `None` when it is no fence line: at most three spaces, then three or more backticks or
+/// tildes.
+fn fence_mark(line: &str) -> Option<(char, usize, &str)> {
+    let trimmed = line.trim_start_matches(' ');
+    if line.len() - trimmed.len() > 3 {
+        return None;
+    }
+    let mark = trimmed.chars().next().filter(|c| matches!(c, '`' | '~'))?;
+    let run = trimmed.len() - trimmed.trim_start_matches(mark).len();
+    (run >= 3).then(|| (mark, run, &trimmed[run..]))
 }
 
 /// The comment-slot tail of `long_form`, in either spelling, with a legacy `Fields` marker and
@@ -397,6 +463,44 @@ mod tests {
         // Another summary.
         let other = "Body.\n\n+++ onetaskgraph metadata!\n\n`{}`\n\n+++";
         assert_eq!(read(other), (other.to_owned(), None));
+    }
+
+    #[test]
+    fn a_block_inside_a_fenced_code_block_is_the_callers_code_and_never_the_slot() {
+        // Left open: every line after the fence is code, the block among them.
+        for fence in ["```", "```rust", "~~~", "  ````", "~~~ a`b"] {
+            let field = format!("Body.\n\n{fence}\nlet x = 1;\n\n{}", block(JSON));
+            assert_eq!(read(&field), (field.clone(), None), "{fence}");
+            assert!(super::leaves_fence_open(&field), "{fence}");
+        }
+        // A shorter run, another character, or text after it closes nothing.
+        for close in ["``", "~~~", "``` x", "    ```"] {
+            let field = format!("```\ncode\n{close}\n\n{}", block(JSON));
+            assert_eq!(read(&field), (field.clone(), None), "{close}");
+        }
+        // Closed, the block after it is the store's again.
+        for (open, close) in [
+            ("```", "```"),
+            ("````", "`````"),
+            ("~~~", "~~~  "),
+            ("```", "```\r"),
+        ] {
+            let field = format!("{open}\ncode\n{close}\n\n{}", block(JSON));
+            assert_eq!(read(&field).1, Some(StoredForm::Block), "{open} {close}");
+            assert!(!super::leaves_fence_open(&field), "{open} {close}");
+        }
+        // A backtick run with a backtick after it opens no fence.
+        let field = format!("``` a`b\n\n{}", block(JSON));
+        assert_eq!(read(&field).1, Some(StoredForm::Block));
+        // A `+++` line inside a fence neither opens nor closes the `Fields` section.
+        let fields = "+++ Fields\n\n* **Owner**: `nick`\n\n```\n+++\n```\n\n+++";
+        let sentinel =
+            format!("+++ onetaskgraph metadata\n\n`onetaskgraph.fields`\n\n`{JSON}`\n\n+++");
+        let field = format!("Body.\n\n{fields}\n\n{sentinel}");
+        assert_eq!(
+            read(&field),
+            ("Body.\n\n".to_owned(), Some(StoredForm::Block))
+        );
     }
 
     #[test]
