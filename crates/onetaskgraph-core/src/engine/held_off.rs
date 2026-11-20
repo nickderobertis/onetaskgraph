@@ -29,8 +29,9 @@ use onetaskgraph_plugin_api::{
     IssueHolding, IssueRef, ItemKind, ItemWrite, Label, Location, MetadataKey, MetadataRecord,
     Metering, NativeId, NewComment, Page, PageRequest, Priority, Project, ProjectQuery,
     ProjectVersionCoverage, SharedClock, SourceError, SourceName, Status, StatusCategory,
-    StatusContradiction, Task, TaskDetailRead, TaskQuery, TaskRef, TaskSource, TaskUpdate,
-    TaskUpdateOutcome, VersionCoverage, Visibility, WriteJournal, WriteSupport, WriteTarget,
+    StatusContradiction, StoredFormMigration, Task, TaskDetailRead, TaskQuery, TaskRef, TaskSource,
+    TaskUpdate, TaskUpdateOutcome, VersionCoverage, Visibility, WriteJournal, WriteSupport,
+    WriteTarget,
 };
 use serde_json::Value;
 
@@ -1091,6 +1092,14 @@ impl TaskSource for HeldOff {
 
     async fn end_command(&self) -> Result<(), SourceError> {
         self.inner.end_command().await
+    }
+
+    async fn migrate_stored_forms(
+        &self,
+        dry_run: bool,
+    ) -> Result<StoredFormMigration, SourceError> {
+        self.refused()?;
+        self.noted(self.inner.migrate_stored_forms(dry_run).await)
     }
 
     async fn visibility(&self, target: &WriteTarget<'_>) -> Result<Visibility, SourceError> {

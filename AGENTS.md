@@ -88,6 +88,7 @@ silence. See the note on `Health` below for the one difference it carries delibe
   `StatusNames`, `StatusName` and `UnmappedStatus`; the image-asset types `Asset`,
   `AssetName`, `AssetContentType`, `AssetPayload`, `AssetUpload`, `AssetUploads`, `AssetWrite`
   and `AssetsWritten`; the clock types `Clock`, `SharedClock` and `WaitCause`; the held-write type `HeldVersion`;
+  the stored-form migration types `StoredFormMigration`, `MigratedItem` and `MigrationFailure`;
   the closure types `IssueRef`,
   `IssueHolding`, `HeldTask`, `Completion`, `ClosedAs`, `StatusContradiction` and
   `ContradictedItem`; the local-cache types

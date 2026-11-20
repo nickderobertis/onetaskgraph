@@ -14,10 +14,10 @@ use crate::{
     DocumentVersionCoverage, IssueHolding, IssueRef, ItemKind, ItemWrite, Label, Location,
     MetadataKey, MetadataRecord, Metering, NativeId, NewComment, Page, PageRequest, Priority,
     Project, ProjectQuery, ProjectVersionCoverage, Repository, SharedClock, SourceError,
-    SourceName, Status, StatusCategory, StatusContradiction, Task, TaskDetailRead, TaskQuery,
-    TaskRef, TaskUpdate, TaskUpdateOutcome, VersionCoverage, Visibility, WriteJournal,
-    WriteSupport, WriteTarget, assetless, commentless, documentless, unwritable, unwritable_field,
-    unwritable_metadata,
+    SourceName, Status, StatusCategory, StatusContradiction, StoredFormMigration, Task,
+    TaskDetailRead, TaskQuery, TaskRef, TaskUpdate, TaskUpdateOutcome, VersionCoverage, Visibility,
+    WriteJournal, WriteSupport, WriteTarget, assetless, commentless, documentless, unwritable,
+    unwritable_field, unwritable_metadata,
 };
 
 /// Whether a source is answering right now.
@@ -2217,6 +2217,32 @@ pub trait TaskSource: Send + Sync {
     /// command on that source's earlier reads.
     async fn end_command(&self) -> Result<(), SourceError> {
         Ok(())
+    }
+
+    /// Rewrite every item of this source whose stored form is one this source no longer writes
+    /// into the form it writes now, changing nothing else about it. Under `dry_run`, send reads only
+    /// and report what would be rewritten.
+    ///
+    /// What a read of each item gives back — its content, its metadata, every other field — is
+    /// the same before and after: only the spelling the backend holds it in moves. An item already
+    /// in the current form is counted in [`StoredFormMigration::current`] and sent nothing, so a
+    /// second sweep rewrites nothing. An item the backend refuses is reported in
+    /// [`StoredFormMigration::failed`] and the sweep goes on to the next.
+    ///
+    /// Defaulted to rewriting nothing, which is the answer of a source that has only ever written
+    /// one form — and of a plugin served over the stdio protocol, which declares no such write and
+    /// is never asked.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`SourceError`] when the source's items could not be listed, so the sweep could
+    /// not say which of them it would have rewritten.
+    async fn migrate_stored_forms(
+        &self,
+        dry_run: bool,
+    ) -> Result<StoredFormMigration, SourceError> {
+        let _ = dry_run;
+        Ok(StoredFormMigration::default())
     }
 
     /// Who can read where `target` lands, read live from the backend.

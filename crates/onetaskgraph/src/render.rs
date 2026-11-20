@@ -1397,6 +1397,61 @@ pub fn sweep(report: &onetaskgraph_core::SweepReport) -> String {
     out
 }
 
+/// What `sources migrate` did: one line for the source and how many items were already current,
+/// then one per item rewritten — or under `--dry-run` that would be — naming the form it left,
+/// and one per item it could not rewrite, with why.
+pub fn migrated(report: &onetaskgraph_core::StoredFormsMigrated) -> String {
+    let mut out = format!(
+        "{}: {} {}, {} already current, {} failed{}",
+        report.source,
+        report.rewritten.len(),
+        if report.dry_run {
+            "would be rewritten"
+        } else {
+            "rewritten"
+        },
+        report.current,
+        report.failed.len(),
+        if report.dry_run {
+            " — nothing written"
+        } else {
+            ""
+        },
+    );
+    let verb = if report.dry_run {
+        "would-rewrite"
+    } else {
+        "rewritten"
+    };
+    for item in &report.rewritten {
+        out.push_str(&format!(
+            "\n{} {} {verb} (from {})",
+            kind_noun(item.kind),
+            item.id,
+            item.from
+        ));
+    }
+    for item in &report.failed {
+        out.push_str(&format!(
+            "\n{} {} failed (from {}): {}",
+            kind_noun(item.kind),
+            item.id,
+            item.from,
+            item.reason
+        ));
+    }
+    out
+}
+
+/// A migrated record's kind, as a line of `sources migrate` names it.
+fn kind_noun(kind: onetaskgraph_core::MigratedKind) -> &'static str {
+    match kind {
+        onetaskgraph_core::MigratedKind::Task => "task",
+        onetaskgraph_core::MigratedKind::Project => "project",
+        onetaskgraph_core::MigratedKind::Document => "document",
+    }
+}
+
 /// What `project create --dry-run` would create, as a person reads it.
 pub fn planned(planned: &onetaskgraph_core::PlannedProject) -> String {
     let mut lines = vec![format!(

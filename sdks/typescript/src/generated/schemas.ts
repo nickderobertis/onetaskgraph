@@ -154,6 +154,7 @@ export type RuntimeSchemaRoot =
   | "StatusMapping"
   | "StatusReconciled"
   | "StatusesReconciled"
+  | "StoredFormsMigrated"
   | "SweepReport"
   | "Task"
   | "TaskAssetNames"
@@ -25680,6 +25681,131 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "type": "string",
             "const": "identity"
           }
+        ]
+      }
+    }
+  },
+  "StoredFormsMigrated": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "StoredFormsMigrated",
+    "description": "What one `sources migrate` did.",
+    "type": "object",
+    "properties": {
+      "source": {
+        "description": "The source migrated.",
+        "$ref": "#/$defs/SourceName"
+      },
+      "dry_run": {
+        "description": "Whether nothing was written: every entry of `rewritten` is one that would be.",
+        "type": "boolean"
+      },
+      "rewritten": {
+        "description": "Each item rewritten into the form its source writes now, in the order the source listed\nit.",
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/MigratedRecord"
+        }
+      },
+      "current": {
+        "description": "How many of the items examined already held the current form, and were sent nothing.",
+        "type": "integer",
+        "format": "uint64",
+        "minimum": 0
+      },
+      "failed": {
+        "description": "Each item left in a superseded form, with why.",
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/MigrationRefused"
+        }
+      }
+    },
+    "required": [
+      "source",
+      "dry_run",
+      "rewritten",
+      "current",
+      "failed"
+    ],
+    "$defs": {
+      "SourceName": {
+        "description": "The name a configuration document gives one configured source.",
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9-]*$"
+      },
+      "MigratedRecord": {
+        "description": "One item a migration rewrote, or under `--dry-run` would rewrite.",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "description": "What kind of record it is.",
+            "$ref": "#/$defs/MigratedKind"
+          },
+          "id": {
+            "description": "Its qualified id.",
+            "$ref": "#/$defs/GlobalId"
+          },
+          "from": {
+            "description": "The superseded stored form it was held in, as its plugin names it.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "id",
+          "from"
+        ]
+      },
+      "MigratedKind": {
+        "description": "Which kind of record a migrated item is.",
+        "oneOf": [
+          {
+            "description": "A task.",
+            "type": "string",
+            "const": "task"
+          },
+          {
+            "description": "A project.",
+            "type": "string",
+            "const": "project"
+          },
+          {
+            "description": "A document.",
+            "type": "string",
+            "const": "document"
+          }
+        ]
+      },
+      "GlobalId": {
+        "description": "One item, qualified by the source it came from.\n\nRendered `<source>:<native>` and parsed by splitting on the **first** colon,\nso a native id may contain colons freely.",
+        "type": "string"
+      },
+      "MigrationRefused": {
+        "description": "One item a migration found in a superseded form and could not rewrite.",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "description": "What kind of record it is.",
+            "$ref": "#/$defs/MigratedKind"
+          },
+          "id": {
+            "description": "Its qualified id.",
+            "$ref": "#/$defs/GlobalId"
+          },
+          "from": {
+            "description": "The superseded stored form it is still held in.",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Why it was not rewritten, as the source said it.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "id",
+          "from",
+          "reason"
         ]
       }
     }

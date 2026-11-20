@@ -51,6 +51,7 @@ import type {
   StatusesReconciled,
   StatusNamesReport,
   StatusOptionsReport,
+  StoredFormsMigrated,
   SweepReport,
   TaskAssetNames,
   TaskAssigneeSet,
@@ -346,6 +347,8 @@ export const commandResponseRoots: Readonly<Record<string, keyof typeof runtimeS
   "sources fields": "FieldsReport",
   "sources route": "SourceRoute",
   "sources sanitize": "SweepReport",
+  // What rewriting one source's items still held in a superseded stored form rewrote.
+  "sources migrate": "StoredFormsMigrated",
   "task list": "QueryResponseOfQualifiedTask",
   "task show": "TaskDetail",
   // One `TaskDetail` per id, in request order.
@@ -468,6 +471,7 @@ const partialResponseCommands = new Set(
       command !== "sources fields" &&
       command !== "sources route" &&
       command !== "sources sanitize" &&
+      command !== "sources migrate" &&
       command !== "project graph" &&
       (!command.startsWith("task comment ") || command === "task comment add-many") &&
       !command.endsWith(" metadata set") &&
@@ -1291,6 +1295,23 @@ export class OnetaskgraphClient {
       args.push("--classification", options.classification);
     }
     return this.run("sources route", args);
+  }
+  // Rewrite every item of `source` still held in a stored form its plugin no longer writes;
+  // `dryRun` reports what would be rewritten and writes nothing. A report naming a failed item
+  // comes back too, on exit 1.
+  sourcesMigrate(source: string, options: { dryRun?: boolean } = {}): Promise<StoredFormsMigrated> {
+    if (typeof source !== "string") {
+      throw new TypeError("sourcesMigrate: source is not a string; next: name a configured source");
+    }
+    if (!isPlainObject(options)) {
+      throw new TypeError(
+        "sourcesMigrate: options is not a plain object; next: pass an options object",
+      );
+    }
+    if (options.dryRun !== undefined && typeof options.dryRun !== "boolean") {
+      throw new TypeError("sourcesMigrate: dryRun is not a boolean; next: pass true or false");
+    }
+    return this.run("sources migrate", [source, ...(options.dryRun ? ["--dry-run"] : [])]);
   }
   // Find the items of `source` already carrying a declared private term and rewrite what the
   // policy's replacements fix; `complete` reads the source whole, `dryRun` writes nothing.
@@ -2393,6 +2414,7 @@ export class OnetaskgraphClient {
         // A check answers its record on exit 3 when it is not valid — void or absent.
         const reporting =
           ((command === "sources sanitize" && (code === 1 || code === 3)) ||
+            (command === "sources migrate" && code === 1) ||
             (command.endsWith(" attestation check") && code === 3)) &&
           !("failure" in (safeParse(stdout) ?? { failure: true }));
         if (

@@ -20,6 +20,8 @@ if TYPE_CHECKING:
 
 REPORTING_EXITS: dict[tuple[str, ...], frozenset[int]] = {
     ("sources", "sanitize"): frozenset({1, 3}),
+    # A migration answers its report on exit 1, when an item could not be rewritten.
+    ("sources", "migrate"): frozenset({1}),
     # A check answers its record on exit 3 when it is not valid — void or absent.
     **{(noun, "attestation", "check"): frozenset({3}) for noun in ("task", "project", "document")},
 }
@@ -129,6 +131,7 @@ PARTIAL_WRITE_COMMANDS: frozenset[tuple[str, ...]] = frozenset(
         ("sources", "fields"),
         ("sources", "status-options"),
         ("sources", "sanitize"),
+        ("sources", "migrate"),
     }
 )
 NOT_PARTIAL_WRITE_COMMANDS: frozenset[tuple[str, ...]] = frozenset(

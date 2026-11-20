@@ -92,6 +92,7 @@ if TYPE_CHECKING:
     from .status_names_report import StatusNamesReport as StatusNamesReport
     from .status_options_report import StatusOptionsReport as StatusOptionsReport
     from .statuses_reconciled import StatusesReconciled as StatusesReconciled
+    from .stored_forms_migrated import StoredFormsMigrated as StoredFormsMigrated
     from .sweep_report import SweepReport as SweepReport
     from .task import Task as Task
     from .task_asset_names import TaskAssetNames as TaskAssetNames
@@ -206,6 +207,7 @@ __all__ = [
     "StatusNamesReport",
     "StatusOptionsReport",
     "StatusesReconciled",
+    "StoredFormsMigrated",
     "SweepReport",
     "Task",
     "TaskAssetNames",
@@ -316,6 +318,7 @@ _MODULES: dict[str, tuple[str, str]] = {
     "StatusNamesReport": ("status_names_report", "StatusNamesReport"),
     "StatusOptionsReport": ("status_options_report", "StatusOptionsReport"),
     "StatusesReconciled": ("statuses_reconciled", "StatusesReconciled"),
+    "StoredFormsMigrated": ("stored_forms_migrated", "StoredFormsMigrated"),
     "SweepReport": ("sweep_report", "SweepReport"),
     "Task": ("task", "Task"),
     "TaskAssetNames": ("task_asset_names", "TaskAssetNames"),

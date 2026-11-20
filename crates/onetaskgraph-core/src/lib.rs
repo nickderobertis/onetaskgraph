@@ -99,6 +99,7 @@ pub use engine::{
     ParentEdge, ParentOutcome, ParentResult, ParentsSet, RELATIONS_SCHEMA_VERSION, ReadLink,
     RelationsItem, TaskRelations,
 };
+pub use engine::{MigratedKind, MigratedRecord, MigrationRefused, StoredFormsMigrated};
 pub use environment::Environment;
 pub use failure::{Failure, FailureClass, FailureDocument, classify};
 pub use global_id::GlobalId;

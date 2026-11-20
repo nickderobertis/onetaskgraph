@@ -109,6 +109,7 @@ from onetaskgraph_sdk import (
     StatusMapping,
     StatusNamesReport,
     StatusOptionsReport,
+    StoredFormsMigrated,
     SweepReport,
     Task,
     TaskAssetNames,
@@ -387,6 +388,9 @@ from onetaskgraph_sdk._generated.models import (
     StatusOptionsReport as ModelsStatusOptionsReport,
 )
 from onetaskgraph_sdk._generated.models import (
+    StoredFormsMigrated as ModelsStoredFormsMigrated,
+)
+from onetaskgraph_sdk._generated.models import (
     SweepReport as ModelsSweepReport,
 )
 from onetaskgraph_sdk._generated.models import (
@@ -567,6 +571,7 @@ FROM_ROOT: dict[str, object] = {
     "StatusNamesReport": StatusNamesReport,
     "StatusOptionsReport": StatusOptionsReport,
     "StatusesReconciled": StatusesReconciled,
+    "StoredFormsMigrated": StoredFormsMigrated,
     "SweepReport": SweepReport,
     "Task": Task,
     "TaskAssetNames": TaskAssetNames,
@@ -679,6 +684,7 @@ FROM_MODELS: dict[str, object] = {
     "StatusNamesReport": ModelsStatusNamesReport,
     "StatusOptionsReport": ModelsStatusOptionsReport,
     "StatusesReconciled": ModelsStatusesReconciled,
+    "StoredFormsMigrated": ModelsStoredFormsMigrated,
     "SweepReport": ModelsSweepReport,
     "Task": ModelsTask,
     "TaskAssetNames": ModelsTaskAssetNames,
@@ -846,6 +852,7 @@ MODEL_CLASSES: dict[str, type[BaseModel]] = {
     "StatusNamesReport": StatusNamesReport,
     "StatusOptionsReport": StatusOptionsReport,
     "StatusesReconciled": StatusesReconciled,
+    "StoredFormsMigrated": StoredFormsMigrated,
     "SweepReport": SweepReport,
     "Task": Task,
     "TaskAssetNames": TaskAssetNames,
@@ -940,6 +947,7 @@ MODELS_MODEL_CLASSES: dict[str, type[BaseModel]] = {
     "StatusNamesReport": ModelsStatusNamesReport,
     "StatusOptionsReport": ModelsStatusOptionsReport,
     "StatusesReconciled": ModelsStatusesReconciled,
+    "StoredFormsMigrated": ModelsStoredFormsMigrated,
     "SweepReport": ModelsSweepReport,
     "Task": ModelsTask,
     "TaskAssetNames": ModelsTaskAssetNames,

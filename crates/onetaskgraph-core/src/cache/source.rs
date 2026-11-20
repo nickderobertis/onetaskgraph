@@ -41,8 +41,8 @@ use onetaskgraph_plugin_api::{
     IssueHolding, IssueRef, ItemKind, ItemWrite, Label, Location, MetadataKey, MetadataRecord,
     Metering, NativeId, NewComment, Page, PageRequest, PartOutcome, Priority, Project,
     ProjectQuery, ProjectVersionCoverage, SourceError, Status, StatusCategory, StatusContradiction,
-    Task, TaskDetailRead, TaskQuery, TaskRef, TaskSource, TaskUpdate, TaskUpdateOutcome,
-    VersionCoverage, Visibility, WriteJournal, WriteSupport, WriteTarget,
+    StoredFormMigration, Task, TaskDetailRead, TaskQuery, TaskRef, TaskSource, TaskUpdate,
+    TaskUpdateOutcome, VersionCoverage, Visibility, WriteJournal, WriteSupport, WriteTarget,
 };
 use serde_json::Value;
 
@@ -2158,6 +2158,26 @@ impl TaskSource for CachedSource {
     async fn end_command(&self) -> Result<(), SourceError> {
         self.cache.end_command();
         self.inner.end_command().await
+    }
+
+    async fn migrate_stored_forms(
+        &self,
+        dry_run: bool,
+    ) -> Result<StoredFormMigration, SourceError> {
+        // Which items a sweep rewrites is not known until it has listed them, so each is retired
+        // once its rewrite is sent: what a read gives back of it is unchanged, but its version
+        // moved, and no entry is kept for a version the source no longer holds.
+        let migrated = self.inner.migrate_stored_forms(dry_run).await?;
+        if !dry_run {
+            for item in migrated
+                .rewritten
+                .iter()
+                .chain(migrated.failed.iter().map(|f| &f.item))
+            {
+                self.cache.invalidate(&item.id);
+            }
+        }
+        Ok(migrated)
     }
 
     async fn visibility(&self, target: &WriteTarget<'_>) -> Result<Visibility, SourceError> {
