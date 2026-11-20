@@ -5125,6 +5125,60 @@ fn held_document(id: &str, content: &str) -> serde_json::Value {
         "archivedAt":null,"project":{"id":"p1"}}})
 }
 
+/// Taking off a key a project or a document does not hold writes nothing — unless its metadata
+/// is held in a comment slot an earlier release wrote, which that one write rewrites as the
+/// collapsed block, its metadata as it was; a repeat over the block reads and writes nothing.
+#[tokio::test]
+async fn removing_an_absent_key_rewrites_a_legacy_slot_once_and_a_current_block_never() {
+    use onetaskgraph_plugin_api::MetadataRecord;
+    let key = MetadataKey::new("caller.absent").unwrap();
+    let legacy = "Prose.\n\n<!-- onetaskgraph.metadata `{\"caller.kept\":1}` -->";
+    let block = "Prose.\n\n+++ onetaskgraph metadata\n\n`{\"caller.kept\":1}`\n\n+++";
+    for record in [MetadataRecord::Project, MetadataRecord::Document] {
+        let (held, updated, update) = match record {
+            MetadataRecord::Project => (
+                held_project("x1", legacy),
+                serde_json::json!({"projectUpdate":{"success":true,
+                    "project":held_project("x1", block)["project"]}}),
+                onetaskgraph_linear::graphql::PROJECT_UPDATE,
+            ),
+            _ => (
+                held_document("x1", legacy),
+                serde_json::json!({"documentUpdate":{"success":true,
+                    "document":held_document("x1", block)["document"]}}),
+                onetaskgraph_linear::graphql::DOCUMENT_UPDATE,
+            ),
+        };
+        let (endpoint, wire) = response_server(vec![held, updated]);
+        writable_source(&endpoint)
+            .remove_record_metadata(record, &"x1".into(), &key)
+            .await
+            .unwrap()
+            .expect("the record is held");
+        let requests: Vec<serde_json::Value> =
+            wire.try_iter().map(|request| sent(&request)).collect();
+        assert_eq!(requests.len(), 2, "{record:?}: {requests:?}");
+        assert_eq!(requests[1]["query"], update, "{record:?}");
+        assert_eq!(
+            requests[1]["variables"],
+            serde_json::json!({"id":"x1","input":{"content":block}}),
+            "{record:?}"
+        );
+
+        let current = match record {
+            MetadataRecord::Project => held_project("x1", block),
+            _ => held_document("x1", block),
+        };
+        let (endpoint, wire) = response_server(vec![current]);
+        writable_source(&endpoint)
+            .remove_record_metadata(record, &"x1".into(), &key)
+            .await
+            .unwrap()
+            .expect("the record is held");
+        assert_eq!(wire.try_iter().count(), 1, "{record:?}: the read alone");
+    }
+}
+
 /// One metadata key of a task, a project and a document is set by one read and one update
 /// carrying the long-form field alone — `description`, `content` and `content` — which
 /// differs from what Linear holds only inside the trailing slot: every byte above it, the
