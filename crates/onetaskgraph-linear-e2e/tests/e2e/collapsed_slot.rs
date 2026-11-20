@@ -908,6 +908,90 @@ fn a_fence_a_list_item_closes_leaves_the_store_its_block() {
 }
 
 #[test]
+fn an_html_comment_left_open_is_text_and_hides_no_fence_after_it() {
+    // Linear shows an HTML comment as a paragraph of its text, so one left open ends at the blank
+    // line like any paragraph, and the fence after it opens: the slot-shaped block is its code.
+    let above = "<!-- caller\n\n```text\n\n";
+    let fenced = format!("{above}{}", lookalikes()[1]);
+    let current = format!("{BLOCK}`{}`\n\n+++", caller());
+    let setup = Setup::new(held(
+        vec![
+            issue("I-bare", "Plain."),
+            issue("I-held", &format!("{CONTENT}\n\n{current}")),
+        ],
+        Vec::new(),
+        Vec::new(),
+    ));
+
+    // No metadata: the whole of it is the caller's content.
+    let file = setup.body("fenced.md", &fenced);
+    let (_, served) = setup.run(&["task", "content", "set", "linear:I-bare", "--file", &file]);
+    assert_eq!(updates(&served), 1, "{:?}", operations(&served));
+    let shown = setup.show("linear", "task", "I-bare");
+    assert_eq!(shown["content"], fenced.as_str());
+    assert!(
+        shown["metadata"].get("caller.fake").is_none(),
+        "{}",
+        shown["metadata"]
+    );
+
+    // Metadata: the fence is open, so the store's block would be its code — refused, nothing sent.
+    let (output, served) = setup.exits(
+        &["task", "content", "set", "linear:I-held", "--file", &file],
+        1,
+    );
+    assert!(
+        stderr(&output).contains("fenced code block open"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(mutations(&served).is_empty(), "{:?}", operations(&served));
+    assert_eq!(
+        setup.stored("task", "I-held"),
+        format!("{CONTENT}\n\n{current}")
+    );
+
+    // Closed, the fence leaves the store its block: a copy with metadata writes it once, reads it
+    // back, and its repeat sends no update. (`task content set` sends its update whatever it
+    // holds, as it always has, so the repeat is a copy's.)
+    let closed = format!("{fenced}\n```");
+    std::fs::write(
+        setup.plan.join("tasks/T-1.md"),
+        format!(
+            "---\ntitle: Build it\nstatus: todo\nmetadata: {}\n---\n{closed}\n",
+            caller()
+        ),
+    )
+    .expect("the task");
+    let copy = ["task", "copy", "plan:T-1", "--to", "linear", "--json"];
+    let (report, served) = setup.answer(&copy, 0);
+    assert!(!mutations(&served).is_empty(), "{:?}", operations(&served));
+    let id = report["items"][0]["destination"]
+        .as_str()
+        .and_then(|id| id.strip_prefix("linear:"))
+        .unwrap_or_else(|| panic!("landed: {report}"))
+        .to_owned();
+    // The caller's content, a blank line, then the store's block and nothing after it.
+    let stored = setup.stored("task", &id);
+    let tail = stored
+        .strip_prefix(&format!("{closed}\n\n{BLOCK}`"))
+        .and_then(|rest| rest.strip_suffix("`\n\n+++"))
+        .unwrap_or_else(|| panic!("the content, then the block: {stored:?}"));
+    let written: Value = serde_json::from_str(tail).expect("the span holds JSON");
+    assert_eq!(written["caller.secret"], SECRET);
+    let read = |what: &str| {
+        let shown = setup.show("linear", "task", &id);
+        assert_eq!(shown["content"], closed.as_str(), "{what}");
+        assert_eq!(shown["metadata"]["caller.secret"], SECRET, "{what}");
+        assert!(shown["metadata"].get("caller.fake").is_none(), "{what}");
+    };
+    read("written");
+    let (_, again) = setup.answer(&copy, 0);
+    assert_eq!(updates(&again), 0, "{:?}", operations(&again));
+    read("repeated");
+}
+
+#[test]
 fn a_legacy_slot_after_an_open_fence_reads_as_before_and_is_never_rewritten_into_that_code() {
     // Written before the block, a comment slot after a fence the content left open: reads still
     // take it as they always did, but a block written there would be the fence's code.

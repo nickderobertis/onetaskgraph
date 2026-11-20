@@ -319,12 +319,17 @@ fn in_code(text: &str, at: usize) -> bool {
     code_blocks(text).iter().any(|block| block.contains(&at))
 }
 
-/// The byte ranges of every code block of `text`, fences included, as a CommonMark parse reads
-/// them. Linear's editor shows an HTML block as a paragraph of its text, which the parse does not
-/// model; a fence is the construct that decides where the store's block stands.
+/// The byte ranges of every code block of `text`, fences included, as Linear's editor reads its
+/// block structure: CommonMark's lists, block quotes and fences, and no HTML block.
+///
+/// Linear shows HTML as a paragraph of its literal text, so a `<!--` left open ends at the next
+/// blank line like any paragraph, where CommonMark would hold every line after it — a fence among
+/// them — as one HTML block. So every `<` is read as a letter before the parse: one byte for one,
+/// keeping every offset, and nothing else of the structure moves, since `<` starts no other block.
 fn code_blocks(text: &str) -> Vec<Range<usize>> {
     use pulldown_cmark::{Event, Parser, Tag};
-    Parser::new(text)
+    let literal = text.replace('<', "x");
+    Parser::new(&literal)
         .into_offset_iter()
         .filter_map(|(event, range)| {
             matches!(event, Event::Start(Tag::CodeBlock(_))).then_some(range)
@@ -479,6 +484,14 @@ mod tests {
             let field = format!("{content}\n\n{}", block(JSON));
             assert_eq!(read(&field).1, Some(StoredForm::Block), "{content:?}");
         }
+        // An HTML comment left open is text, as Linear shows it, and hides no fence after it.
+        for content in ["<!-- caller\n\n```text\n", "<pre>\n\n```", "- <!--\n\n```"] {
+            assert!(super::leaves_fence_open(content), "{content:?}");
+            let field = format!("{content}\n\n{}", block(JSON));
+            assert_eq!(read(&field), (field.clone(), None), "{content:?}");
+        }
+        let closed = format!("<!-- caller\n\n```text\ncode\n```\n\n{}", block(JSON));
+        assert_eq!(read(&closed).1, Some(StoredForm::Block));
         // A backtick run with a backtick after it opens no fence.
         let field = format!("``` a`b\n\n{}", block(JSON));
         assert_eq!(read(&field).1, Some(StoredForm::Block));
