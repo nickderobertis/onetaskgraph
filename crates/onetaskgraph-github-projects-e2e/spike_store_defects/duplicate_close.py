@@ -35,6 +35,7 @@ import sys
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from typing import NewType
 
 from ghlive import (
     GRAPHQL_ENDPOINT,
@@ -71,6 +72,10 @@ CLOSE = """mutation($id:ID!,$dup:ID!){closeIssue(input:{issueId:$id,stateReason:
   duplicateIssueId:$dup}){issue{number state stateReason(enableDuplicate:true)}}}"""
 
 
+IssueNumber = NewType("IssueNumber", int)
+NodeId = NewType("NodeId", str)
+
+
 class Role(enum.StrEnum):
     SURVIVOR = "survivor"
     DUPLICATE = "duplicate"
@@ -79,8 +84,8 @@ class Role(enum.StrEnum):
 @dataclass(frozen=True)
 class CreatedIssue:
     role: Role
-    number: int
-    node_id: str
+    number: IssueNumber
+    node_id: NodeId
 
 
 @dataclass(frozen=True)
@@ -95,7 +100,7 @@ class Schema:
 
 @dataclass(frozen=True)
 class RestState:
-    number: int
+    number: IssueNumber
     state: str
     state_reason: str | None
     html_url: str
@@ -172,13 +177,13 @@ class Client:
             )
         return expect_object(answer.get("data"), f"{phase} data")
 
-    def rest_state(self, number: int) -> RestState:
+    def rest_state(self, number: IssueNumber) -> RestState:
         status, issue = self.rest("GET", f"/issues/{number}")
         if status != 200:
             raise BoundaryError(f"reading issue {number} answered {status}: {issue}")
         reason = issue.get("state_reason")
         return RestState(
-            number=expect_int(issue.get("number"), "number"),
+            number=IssueNumber(expect_int(issue.get("number"), "number")),
             state=expect_str(issue.get("state"), "state"),
             state_reason=None if reason is None else expect_str(reason, "state_reason"),
             html_url=expect_str(issue.get("html_url"), "html_url"),
@@ -254,7 +259,7 @@ def readback_document(schema: Schema) -> str:
 
 
 def read_back(
-    client: Client, schema: Schema, survivor: int, duplicate: int
+    client: Client, schema: Schema, survivor: IssueNumber, duplicate: IssueNumber
 ) -> dict[str, object]:
     variables: dict[str, object] = {
         "owner": client.owner,
@@ -289,8 +294,8 @@ def create(client: Client, role: Role, stamp: str) -> CreatedIssue:
         raise BoundaryError(f"creating the {role} answered {status}: {issue}")
     return CreatedIssue(
         role=role,
-        number=expect_int(issue.get("number"), "number"),
-        node_id=expect_str(issue.get("node_id"), "node_id"),
+        number=IssueNumber(expect_int(issue.get("number"), "number")),
+        node_id=NodeId(expect_str(issue.get("node_id"), "node_id")),
     )
 
 
@@ -377,7 +382,7 @@ def main() -> int:
         schema = introspect(client)
         run = DuplicateCloseRun(repository=args.repository, schema=schema)
         if args.readback_only:
-            survivor_number, duplicate_number = args.readback_only
+            survivor_number, duplicate_number = map(IssueNumber, args.readback_only)
             run.readback_final = read_back(
                 client, schema, survivor_number, duplicate_number
             )
