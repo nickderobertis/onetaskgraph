@@ -305,17 +305,23 @@ def run_binary(args: argparse.Namespace, token: str, capture: bool) -> dict[str,
     if capture:
         result["captured"] = proxy.captured
     else:
+        result["stdout_bytes"] = len(out)
+        if args.out:
+            Path(args.out).with_suffix(".stdout.json").write_bytes(out)
         try:
             listed = json.loads(out)
             items = listed.get("items", [])
             result["listed"] = len(items)
             result["listed_by_status"] = {}
-            for item in items:
-                key = f"{item['status']['category']}:{item['status']['name']}"
+            for entry in items:
+                item = entry.get("item", entry)
+                status = item.get("status") or {}
+                key = f"{status.get('category')}:{status.get('name')}"
                 result["listed_by_status"][key] = result["listed_by_status"].get(key, 0) + 1
-            result["listed_ids"] = sorted(item["id"] for item in items)
-        except (json.JSONDecodeError, KeyError, AttributeError):
+            result["listed_ids"] = sorted(str(e.get("item", e).get("id")) for e in items)
+        except (json.JSONDecodeError, AttributeError) as error:
             result["listed"] = None
+            result["parse_error"] = f"{error}: {out[:300]!r}"
         result["records"] = proxy.records
     return result
 
@@ -365,6 +371,7 @@ def nested_more(node: dict[str, Any]) -> list[str]:
 
 def prototype(args: argparse.Namespace, token: str) -> dict[str, Any]:
     captured = json.loads(Path(args.captured).read_text())
+    captured = captured.get("captured", captured)
     document: str = captured["query"]
     marker = "items(first:$first,after:$after)"
     if marker not in document:
@@ -394,7 +401,7 @@ def prototype(args: argparse.Namespace, token: str) -> dict[str, Any]:
     began = time.monotonic()
     after = None
     stopped = None
-    while True:
+    while not args.probe_only:
         variables["after"] = after
         try:
             answer, record = graphql(document, variables, token, limits, recorder, "open-items")
@@ -450,7 +457,7 @@ def prototype(args: argparse.Namespace, token: str) -> dict[str, Any]:
             "{totalCount}}}}}"
         )
         owner, _, number = args.board.partition("/")
-        for probe in PROBES:
+        for probe in args.probe_query or PROBES:
             try:
                 answer, _record = graphql(
                     count_doc,
@@ -494,6 +501,12 @@ def main() -> int:
     parser.add_argument("--captured", help="the JSON `capture` wrote, for `prototype`")
     parser.add_argument("--item-query", default="is:open")
     parser.add_argument("--probe", action="store_true")
+    parser.add_argument(
+        "--probe-query", action="append", help="a totalCount filter to probe; repeatable"
+    )
+    parser.add_argument(
+        "--probe-only", action="store_true", help="send the probes alone, no item pages"
+    )
     parser.add_argument("--out")
     args = parser.parse_args()
     token = load_token(args.env_file)
