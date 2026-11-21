@@ -1259,3 +1259,239 @@ fn two_sources_of_one_endpoint_with_different_keys_share_no_vocabulary_or_label_
         );
     }
 }
+
+fn no_errors(detail: &Value) -> bool {
+    detail
+        .get("errors")
+        .is_none_or(|errors| errors.as_array().is_some_and(Vec::is_empty))
+}
+
+/// Linear resolves `issue(id:)` by an issue's uuid or by its key and answers with the uuid either
+/// way, so an issue a batch names by its key is that alias's answer. Each id's entry of a
+/// `show-many` by keys, and by a key beside a uuid, is what `task show` of that id answers, and
+/// the batch costs exactly the requests the same batch named by uuids does.
+#[test]
+fn issues_shown_together_by_their_keys_are_each_answered_as_task_show_answers_them() {
+    let team = Team::holding(writable(), false);
+    team.workspace.resolve_identifiers();
+    team.workspace.add_comment("U-1", "A note on U-1.");
+    let key = |id: &str| format!("team:{}", crate::fixtures::linear_identifier(id));
+    let by_uuids = team.ok(&["task", "show-many", "team:U-1", "team:U-2"]);
+    for ids in [
+        vec![key("U-1"), key("U-2")],
+        vec![key("U-1"), "team:U-2".to_owned()],
+    ] {
+        let mut arguments = vec!["task", "show-many"];
+        arguments.extend(ids.iter().map(String::as_str));
+        let ran = team.ok(&arguments);
+        assert_eq!(
+            ran.sent.len(),
+            by_uuids.sent.len(),
+            "the batch by {ids:?} costs what it costs by uuids: {:#?}",
+            ran.sent
+        );
+        let details = ran.json["details"].as_array().expect("details");
+        assert_eq!(details.len(), 2, "{}", ran.json);
+        for (detail, id) in details.iter().zip(&ids) {
+            assert!(no_errors(detail), "{id}: {detail}");
+            assert_eq!(
+                detail["items"].as_array().map(Vec::len),
+                Some(1),
+                "{detail}"
+            );
+            assert_eq!(
+                detail["comments"].as_array().map(Vec::len),
+                Some(usize::from(id.ends_with("U1"))),
+                "{id}: {detail}"
+            );
+            assert_eq!(
+                *detail,
+                team.ok(&["task", "show", id]).json,
+                "{id}: the detail is what `task show` prints, item and comments"
+            );
+        }
+    }
+}
+
+/// A batched update of issues named by their keys reads them back together and writes both, in
+/// exactly the requests the same update named by uuids sends.
+#[test]
+fn issues_updated_together_by_their_keys_are_each_written() {
+    let team = Team::holding(writable(), false);
+    team.workspace.resolve_identifiers();
+    let update = |name: &str, ids: [String; 2], tag: &str| {
+        let input = team.batch(
+            name,
+            &json!({"schema_version": 1, "updates": ids.iter().map(|id| json!({
+                "item": id, "title": format!("Retitled {tag}")
+            })).collect::<Vec<_>>()}),
+        );
+        team.ok(&["task", "update-many", "team", "--input", &input])
+    };
+    let by_uuids = update(
+        "by-uuids.json",
+        ["team:U-1".to_owned(), "team:U-2".to_owned()],
+        "by uuid",
+    );
+    let key = |id: &str| format!("team:{}", crate::fixtures::linear_identifier(id));
+    let ran = update("by-keys.json", [key("U-3"), key("U-4")], "by key");
+    for result in ran.json["results"].as_array().expect("results") {
+        assert_eq!(result["outcome"], "written", "{result}");
+        assert!(result.get("reason").is_none(), "{result}");
+    }
+    assert_eq!(
+        ran.sent.len(),
+        by_uuids.sent.len(),
+        "the update by keys costs what it costs by uuids: {:#?}",
+        ran.sent
+    );
+    for id in ["U-3", "U-4"] {
+        assert_eq!(team.task(&format!("team:{id}"))["title"], "Retitled by key");
+    }
+}
+
+/// A comment batch on issues named by their keys lands every comment on the issue it names, in
+/// exactly the requests the same batch named by uuids sends.
+#[test]
+fn comments_added_together_on_issues_named_by_their_keys_each_land_on_their_issue() {
+    let team = Team::holding(writable(), false);
+    team.workspace.resolve_identifiers();
+    let add = |name: &str, ids: [String; 2], tag: &str| {
+        let input = team.batch(
+            name,
+            &json!({"schema_version": 1, "comments": ids.iter().map(|id| json!({
+                "item": id, "body": format!("A note {tag}.")
+            })).collect::<Vec<_>>()}),
+        );
+        team.ok(&["task", "comment", "add-many", "team", "--input", &input])
+    };
+    let by_uuids = add(
+        "by-uuids.json",
+        ["team:U-1".to_owned(), "team:U-2".to_owned()],
+        "by uuid",
+    );
+    let key = |id: &str| format!("team:{}", crate::fixtures::linear_identifier(id));
+    let ran = add("by-keys.json", [key("U-3"), key("U-4")], "by key");
+    for result in ran.json["results"].as_array().expect("results") {
+        assert_eq!(result["outcome"], "written", "{result}");
+        assert!(result.get("reason").is_none(), "{result}");
+    }
+    assert_eq!(
+        ran.sent.len(),
+        by_uuids.sent.len(),
+        "the comment batch by keys costs what it costs by uuids: {:#?}",
+        ran.sent
+    );
+    for id in ["U-3", "U-4"] {
+        let listed = team.ok(&["task", "comment", "list", &format!("team:{id}")]);
+        let bodies: Vec<&str> = listed.json["comments"]
+            .as_array()
+            .expect("comments")
+            .iter()
+            .map(|comment| comment["body"].as_str().expect("a body"))
+            .collect();
+        assert_eq!(bodies, ["A note by key."], "{id}: {}", listed.json);
+    }
+}
+
+/// An alias a batch by keys asked for one issue and was answered with a third is not that
+/// alias's answer: that id alone fails, naming the id asked for and the issue answered, and the
+/// other id still carries its item.
+#[test]
+fn an_alias_answered_with_another_issue_fails_that_key_alone() {
+    let team = Team::holding(writable(), false);
+    team.workspace.resolve_identifiers();
+    let reads: &'static str = Box::leak(
+        onetaskgraph_linear::graphql::aliased(onetaskgraph_linear::graphql::ISSUE_DETAIL, 2)
+            .into_boxed_str(),
+    );
+    team.workspace.bend_answers(
+        move |operation, _| operation == reads,
+        1,
+        |_, data| {
+            data["a1"]["id"] = json!("U-3");
+            data["a1"]["identifier"] = json!(crate::fixtures::linear_identifier("U-3"));
+        },
+    );
+    let first = crate::fixtures::linear_identifier("U-1");
+    let second = crate::fixtures::linear_identifier("U-2");
+    let ran = team.run(&[
+        "task",
+        "show-many",
+        &format!("team:{first}"),
+        &format!("team:{second}"),
+    ]);
+    assert_ne!(ran.code, Some(0), "{}", ran.json);
+    let details = ran.json["details"].as_array().expect("details");
+    assert_eq!(details[0]["items"][0]["item"]["id"], "U-1", "{}", ran.json);
+    assert!(no_errors(&details[0]), "{}", ran.json);
+    assert_eq!(details[1]["items"], json!([]), "{}", ran.json);
+    let error = &details[1]["errors"][0]["error"];
+    assert_eq!(error["kind"], "malformed", "{}", ran.json);
+    let message = error["message"].as_str().expect("a message");
+    assert!(
+        message.contains(&format!("asking for {second}")) && message.contains("another item, U-3"),
+        "{}",
+        ran.json
+    );
+}
+
+/// A copy's read-ahead of issues named by their keys, through the plugin's own trait: every
+/// answer is taken, in exactly the requests the same read-ahead named by uuids sends, and held
+/// under the key it was asked by, so the later read of each by its key sends nothing.
+#[test]
+fn a_read_ahead_by_keys_is_held_for_the_later_read_of_each_by_its_key() {
+    use onetaskgraph_plugin_api::{MetadataRecord, NativeId};
+    let sandbox = Sandbox::new();
+    let held = json!({"tasks": writable(), "projects": [], "documents": [], "labels": [],
+                      "task_dependencies": [], "project_dependencies": []});
+    let (config, workspace) = linear_workspace(&sandbox, held);
+    workspace.resolve_identifiers();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a runtime");
+    let name = SourceName::new("team").unwrap();
+    let source = || {
+        let secrets = onetaskgraph_core::Secrets::load(onetaskgraph_core::Environment::from_pairs(
+            [("LINEAR_API_KEY", "a-key")],
+        ))
+        .expect("an environment with no credentials file");
+        onetaskgraph_linear::Plugin
+            .build(&name, &config, &secrets)
+            .expect("the Linear source builds")
+    };
+    let read_ahead = |ids: [String; 2]| {
+        let source = source();
+        let records: Vec<(MetadataRecord, NativeId)> = ids
+            .iter()
+            .map(|id| (MetadataRecord::Task, NativeId::from(id.as_str())))
+            .collect();
+        let mark = workspace.served_count();
+        runtime
+            .block_on(source.read_ahead_records_for_copy(&records))
+            .expect("the read-ahead is accepted");
+        let sent = workspace.served_since(mark).len();
+        (source, ids, sent)
+    };
+    let (_, _, by_uuids) = read_ahead(["U-1".to_owned(), "U-2".to_owned()]);
+    let key = crate::fixtures::linear_identifier;
+    let (source, ids, by_keys) = read_ahead([key("U-1"), key("U-2")]);
+    assert_eq!(
+        by_keys, by_uuids,
+        "the read-ahead by keys costs what it costs by uuids"
+    );
+    for (id, uuid) in ids.iter().zip(["U-1", "U-2"]) {
+        let mark = workspace.served_count();
+        let task = runtime
+            .block_on(source.get_task(&NativeId::from(id.as_str())))
+            .expect("the read")
+            .expect("the issue is held");
+        assert_eq!(task.id.0, uuid);
+        assert_eq!(
+            workspace.served_since(mark),
+            Vec::<(String, Value)>::new(),
+            "{id} is served from what the read-ahead held"
+        );
+    }
+}
