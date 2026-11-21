@@ -8870,7 +8870,24 @@ impl GitHubProjectsSource {
                     self.name
                 ),
             })?;
-        if item.status.category == category && item.option.as_deref() == Some(&name) {
+        // The card already shows the target's option. That alone is not the status: an open
+        // issue under a terminal card reads that card's category while GitHub, its
+        // notifications and a search of open issues all say the work is not finished, and a
+        // closed issue under an open column's card reads as its closure. So the write is no
+        // write only where the issue's open or closed state is also what the target needs —
+        // closed, for a reason reading this category, for a terminal one; open for a column.
+        let at_option = item
+            .option
+            .as_deref()
+            .is_some_and(|held| held.eq_ignore_ascii_case(&name));
+        let issue = item.content_kind == ContentKind::Issue;
+        let state_holds = match &target {
+            StatusTarget::Terminal(_, _) => {
+                !issue || (item.closed && closed_category(item.reason.as_deref()) == category)
+            }
+            _ => !issue || !item.closed,
+        };
+        if item.status.category == category && at_option && state_holds {
             return Ok(Some(item.status));
         }
         match &target {
@@ -8879,14 +8896,17 @@ impl GitHubProjectsSource {
                     return Err(self.closes_a_draft(category));
                 }
                 // The option first, so a refused selection leaves an open issue open rather
-                // than closed behind a card that still reads open.
-                self.set_item_field(
-                    board.id.as_str(),
-                    &item.item_id,
-                    &field,
-                    json!({"singleSelectOptionId": option}),
-                )
-                .await?;
+                // than closed behind a card that still reads open. A card already showing it
+                // is sent nothing: only the issue's state is out of line.
+                if !at_option {
+                    self.set_item_field(
+                        board.id.as_str(),
+                        &item.item_id,
+                        &field,
+                        json!({"singleSelectOptionId": option}),
+                    )
+                    .await?;
+                }
                 // An issue already closed in a way that reads as this category keeps its state
                 // and its reason: only its card was out of line, and closing it again would
                 // overwrite a reason — a duplicate's — that says more than this write does.
@@ -8924,13 +8944,15 @@ impl GitHubProjectsSource {
                     .await?;
                     item.closed = false;
                 }
-                self.set_item_field(
-                    board.id.as_str(),
-                    &item.item_id,
-                    &field,
-                    json!({"singleSelectOptionId": option}),
-                )
-                .await?;
+                if !at_option {
+                    self.set_item_field(
+                        board.id.as_str(),
+                        &item.item_id,
+                        &field,
+                        json!({"singleSelectOptionId": option}),
+                    )
+                    .await?;
+                }
                 item.status = self.statuses.status(kind, Some(&name), false, None);
                 item.option = Some(name);
             }

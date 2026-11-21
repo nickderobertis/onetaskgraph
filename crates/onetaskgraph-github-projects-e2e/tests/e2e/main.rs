@@ -69,6 +69,7 @@ mod relations;
 mod sanitize_sweep;
 mod status_complete;
 mod status_reconcile;
+mod status_state;
 mod store_cost;
 mod store_startup;
 mod write_order;
