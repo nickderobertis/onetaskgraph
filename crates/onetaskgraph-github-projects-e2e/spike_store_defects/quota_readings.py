@@ -11,8 +11,8 @@ Each reading names its window by its reset time, because one token was seen answ
 two windows at once. ``--endpoint`` is the GraphQL URL, GitHub's unless given.
 
 Exit status: ``0`` when all three were read; ``1`` when GitHub's answer to one of them was
-not a reading (a refusal, or a missing or malformed figure); ``2`` when the invocation is
-wrong or no token is configured. The readings are printed as JSON on stdout; diagnostics go
+not a reading (a refusal, or a missing or malformed figure); ``2`` when the invocation is wrong, its ``--out`` cannot be written, or no token is
+configured. The readings are printed as JSON on stdout; diagnostics go
 to stderr.
 """
 
@@ -31,6 +31,7 @@ from ghlive import (
     BoundaryError,
     SpikeError,
     Token,
+    check_out,
     decode,
     expect_int,
     expect_object,
@@ -39,6 +40,7 @@ from ghlive import (
     load_token,
     rest_base,
     send,
+    write_out,
 )
 
 
@@ -144,6 +146,12 @@ def main() -> int:
     parser.add_argument("--endpoint", default=GRAPHQL_ENDPOINT)
     parser.add_argument("--out", type=Path)
     args = parser.parse_args()
+    if args.out:
+        try:
+            check_out(args.out)
+        except SpikeError as error:
+            print(f"quota_readings: {error}", file=sys.stderr)
+            return 2
     try:
         token = load_token(args.env_file)
     except SpikeError as error:
@@ -157,7 +165,11 @@ def main() -> int:
     text = json.dumps(asdict(comparison), indent=2)
     print(text)
     if args.out:
-        args.out.write_text(text + "\n", encoding="utf-8")
+        try:
+            write_out(args.out, (text + "\n").encode())
+        except SpikeError as error:
+            print(f"quota_readings: {error}", file=sys.stderr)
+            return 2
     return 0
 
 

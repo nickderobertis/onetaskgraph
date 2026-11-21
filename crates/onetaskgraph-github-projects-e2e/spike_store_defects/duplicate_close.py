@@ -21,8 +21,8 @@ It refuses any repository but the scratch one. Steps:
 Exit status: ``0`` when the duplicate reads back closed as ``DUPLICATE`` of the survivor and
 both issues read back closed (or, with ``--readback-only``, when the read answered); ``1``
 when GitHub refused a step, an answer did not have the shape it reads, a limit stopped it, or
-what GitHub kept differs; ``2`` when the invocation is wrong or no
-token is configured. Once the schema is read, the record is printed as JSON on stdout
+what GitHub kept differs; ``2`` when the invocation is wrong, its
+``--out`` cannot be written, or no token is configured. Once the schema is read, the record is printed as JSON on stdout
 whatever the outcome; diagnostics go to stderr.
 """
 
@@ -45,6 +45,7 @@ from ghlive import (
     SpikeLimits,
     SpikeStop,
     Token,
+    check_out,
     decode,
     expect_int,
     expect_list,
@@ -56,6 +57,7 @@ from ghlive import (
     rate_headers,
     rest_base,
     send,
+    write_out,
 )
 
 SCRATCH = "nickderobertis/onetaskgraph-live-scratch"
@@ -364,6 +366,12 @@ def main() -> int:
         help="write nothing: read two issues back as step 4 does",
     )
     args = parser.parse_args()
+    if args.out:
+        try:
+            check_out(args.out)
+        except SpikeError as error:
+            print(f"duplicate_close: {error}", file=sys.stderr)
+            return 2
     if args.repository.lower() != SCRATCH:
         print(
             f"duplicate_close: refusing {args.repository}; only {SCRATCH} is written",
@@ -447,7 +455,11 @@ def main() -> int:
     text = json.dumps(asdict(run), indent=2)
     print(text)
     if args.out:
-        args.out.write_text(text + "\n", encoding="utf-8")
+        try:
+            write_out(args.out, (text + "\n").encode())
+        except SpikeError as error:
+            print(f"duplicate_close: {error}", file=sys.stderr)
+            return 2
     if run.failure:
         created = ", ".join(f"#{issue.number}" for issue in run.created) or "none"
         print(

@@ -114,6 +114,25 @@ def load_token(env_file: str | None) -> Token:
     return Token(token.strip())
 
 
+class OutputError(SpikeError):
+    """A file the invocation names for output cannot be written: exit 2."""
+
+
+def check_out(path: Path) -> None:
+    """Refuse an output path that could not be written, before anything is measured."""
+    if path.is_dir():
+        raise OutputError(f"{path} is a directory; name a file to write")
+    if not path.parent.is_dir():
+        raise OutputError(f"the directory of {path} does not exist")
+
+
+def write_out(path: Path, data: bytes) -> None:
+    try:
+        path.write_bytes(data)
+    except OSError as error:
+        raise OutputError(f"cannot write {path}: {error}") from error
+
+
 def rest_base(graphql_endpoint: str) -> str:
     """The REST root beside a GraphQL endpoint: GitHub's, or a loopback board's."""
     return graphql_endpoint.removesuffix("/graphql")

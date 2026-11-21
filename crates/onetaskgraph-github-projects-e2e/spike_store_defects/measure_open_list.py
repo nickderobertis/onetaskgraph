@@ -70,6 +70,7 @@ from ghlive import (
     SpikeLimits,
     SpikeStop,
     Token,
+    check_out,
     decode,
     expect_bool,
     expect_int,
@@ -84,6 +85,7 @@ from ghlive import (
     rate_headers,
     rest_base,
     send,
+    write_out,
     writes,
 )
 
@@ -657,7 +659,7 @@ def run_binary(
         run.captured = proxy.captured
         return run
     stdout_path = args.out.with_suffix(".stdout.json")
-    stdout_path.write_bytes(out)
+    write_out(stdout_path, out)
     run.stdout_path = str(stdout_path)
     parse_listing(out, run)
     run.records = proxy.records
@@ -935,8 +937,8 @@ def validate(args: argparse.Namespace) -> None:
         raise InvocationError(f"no binary at {args.binary}; build it with `just` first")
     args.binary = args.binary.resolve()
     args.config_dir = args.config_dir.resolve()
-    if not args.out.parent.is_dir():
-        raise InvocationError(f"the directory of --out {args.out} does not exist")
+    check_out(args.out)
+    check_out(args.out.with_suffix(".stdout.json"))
     if args.mode == Mode.PROTOTYPE and args.captured is None:
         raise InvocationError(
             "--mode prototype needs --captured FILE from --mode capture"
@@ -973,7 +975,11 @@ def main() -> int:
         print(f"measure_open_list: {error}", file=sys.stderr)
         return 2
     document = asdict(result)
-    args.out.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+    try:
+        write_out(args.out, (json.dumps(document, indent=2) + "\n").encode())
+    except SpikeError as error:
+        print(f"measure_open_list: {error}", file=sys.stderr)
+        return 2
     brief = {
         k: v
         for k, v in document.items()
