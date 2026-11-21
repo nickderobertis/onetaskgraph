@@ -38,14 +38,17 @@ Every mode stops at ``--max-points`` and once any reading says GraphQL remaining
 3,000. ``--cap-seconds`` bounds the whole measurement.
 
 Exit status: ``0`` when the measurement completed; ``1`` when it ran but is incomplete (the
-binary failed or timed out, its output did not parse, or a limit, the deadline or an API
-error stopped it); ``2`` when the invocation or an input it names is wrong. One JSON document
+binary failed or timed out, its output did not parse, a limit, the deadline or an API error
+stopped it, or a probe was refused) or when an answer it reads (the binary's ``config show``
+or ``schema``, or the board's) did not have the shape it reads; ``2`` when the invocation, a
+file it names or the token is wrong. One JSON document
 is printed on stdout in every case where a measurement ran; diagnostics go to stderr.
 """
 
 from __future__ import annotations
 
 import argparse
+import enum
 import http.server
 import json
 import os
@@ -85,13 +88,34 @@ from ghlive import (
     send,
 )
 
-CLOSING_CATEGORIES = ("done", "cancelled")
 SOURCE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 ITEMS_MARKER = "items(first:$first,after:$after)"
 
 
 class InvocationError(SpikeError):
     """The invocation, or an input it names, is wrong: exit 2."""
+
+
+class Mode(enum.StrEnum):
+    TODAY = "today"
+    CAPTURE = "capture"
+    PROTOTYPE = "prototype"
+
+
+@dataclass(frozen=True)
+class Categories:
+    """The status categories the binary's own schema names, split by whether they close."""
+
+    open: list[str]
+    closing: list[str]
+
+
+@dataclass(frozen=True)
+class CapturedRequest:
+    """The board-listing request the binary sent, as ``capture`` keeps it."""
+
+    query: str
+    variables: dict[str, object]
 
 
 @dataclass(frozen=True)
@@ -121,12 +145,14 @@ class Summary:
     wall_seconds: float
     requests: int
     points: int
+    # Requests whose answer reported no cost: each is charged one point against the cap.
+    unmetered_requests: int
     phases: dict[str, PhaseSummary]
 
 
 @dataclass
 class BinaryRun:
-    mode: str
+    mode: Mode
     source: str
     board: str
     command: str
@@ -140,11 +166,11 @@ class BinaryRun:
     listed_by_status: dict[str, int] = field(default_factory=dict)
     listed_ids: list[str] = field(default_factory=list)
     parse_error: str | None = None
-    captured: dict[str, object] | None = None
+    captured: CapturedRequest | None = None
     records: list[RequestRecord] = field(default_factory=list)
 
     def complete(self) -> bool:
-        if self.mode == "capture":
+        if self.mode == Mode.CAPTURE:
             return self.captured is not None
         return self.exit == 0 and not self.timed_out and self.listed is not None
 
@@ -165,7 +191,7 @@ class ContentCounts:
 
 @dataclass
 class PrototypeRun:
-    mode: str
+    mode: Mode
     source: str
     board: str
     item_query: str
@@ -229,7 +255,7 @@ class Proxy(http.server.ThreadingHTTPServer):
         self.limits = limits
         self.capture = capture
         self.records: list[RequestRecord] = []
-        self.captured: dict[str, object] | None = None
+        self.captured: CapturedRequest | None = None
         self.lock = threading.Lock()
 
     @property
@@ -292,8 +318,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         try:
             body = decode(self.rfile.read(int(length_header)), "the binary's request")
             document = expect_str(body.get("query"), "the request's query")
-            variables = expect_object(
-                body.get("variables") or {}, "the request's variables"
+            raw = body.get("variables")
+            variables = (
+                {} if raw is None else expect_object(raw, "the request's variables")
             )
         except BoundaryError as error:
             self.refuse("malformed", str(error))
@@ -302,7 +329,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if self.server.capture:
             with self.server.lock:
                 if self.server.captured is None and phase == "board-items":
-                    self.server.captured = {"query": document, "variables": variables}
+                    self.server.captured = CapturedRequest(document, variables)
             self.refuse(phase, "capture: nothing is forwarded")
             return
         if phase == "mutation":
@@ -374,6 +401,7 @@ def summarise(records: list[RequestRecord], seconds: float) -> Summary:
         wall_seconds=round(seconds, 3),
         requests=len(sent),
         points=sum(r.cost or 0 for r in sent),
+        unmetered_requests=sum(1 for r in sent if r.cost is None),
         phases=phases,
     )
 
@@ -402,8 +430,19 @@ def run_json(command: list[str], cwd: Path, env: dict[str, str], what: str) -> o
         raise BoundaryError(f"{what} did not print JSON: {error}") from error
 
 
-def open_categories(binary: Path, root: Path) -> list[str]:
-    """Every status category the binary's own schema names, but the two that close an issue."""
+def schema_consts(roots: dict[str, object], name: str) -> list[str]:
+    schema = expect_object(roots.get(name), f"the {name} schema")
+    return [
+        expect_str(
+            expect_object(variant, f"a {name} variant").get("const"), "its const"
+        )
+        for variant in expect_list(schema.get("oneOf"), f"{name}.oneOf")
+    ]
+
+
+def status_categories(binary: Path, root: Path) -> Categories:
+    """Every status category the binary's schema names, split by its ``ClosedAs``: the
+    categories a closed issue reads as."""
     schema = expect_object(
         run_json(
             [str(binary), "schema"], root, sandbox_env(root), "`onetaskgraph schema`"
@@ -411,18 +450,15 @@ def open_categories(binary: Path, root: Path) -> list[str]:
         "the schema bundle",
     )
     roots = expect_object(schema.get("roots"), "the schema's roots")
-    category = expect_object(roots.get("StatusCategory"), "the StatusCategory schema")
-    names = [
-        expect_str(
-            expect_object(variant, "a StatusCategory variant").get("const"), "its const"
-        )
-        for variant in expect_list(category.get("oneOf"), "StatusCategory.oneOf")
-    ]
-    if not all(closing in names for closing in CLOSING_CATEGORIES):
+    names = schema_consts(roots, "StatusCategory")
+    closing = schema_consts(roots, "ClosedAs")
+    if not closing or not set(closing) <= set(names):
         raise BoundaryError(
-            f"the schema's categories {names} lack {CLOSING_CATEGORIES}"
+            f"ClosedAs {closing} is not a subset of the categories {names}"
         )
-    return [name for name in names if name not in CLOSING_CATEGORIES]
+    return Categories(
+        open=[name for name in names if name not in closing], closing=closing
+    )
 
 
 def source_settings(
@@ -502,15 +538,19 @@ def parse_listing(stdout: bytes, run: BinaryRun) -> None:
 
 
 def run_binary(
-    args: argparse.Namespace, source: SourceSettings, token: Token, root: Path
+    args: argparse.Namespace,
+    source: SourceSettings,
+    categories: Categories,
+    token: Token,
+    root: Path,
 ) -> BinaryRun:
-    capture = args.mode == "capture"
+    capture = args.mode == Mode.CAPTURE
     proxy = Proxy(
         source.endpoint, token, SpikeLimits(max_points=args.max_points), capture
     )
     thread = threading.Thread(target=proxy.serve_forever, daemon=True)
     thread.start()
-    statuses = args.status or open_categories(args.binary, root)
+    statuses = args.status or categories.open
     command = [
         str(args.binary),
         "--output",
@@ -567,17 +607,15 @@ def run_binary(
 
 def status_option(node: dict[str, object]) -> str | None:
     """The ``Status`` option a board item node carries in its own field values."""
-    match node.get("fieldValues"):
-        case {"nodes": list() as values}:
-            for value in values:
-                match value:
-                    case {"name": str() as name, "field": {"name": "Status"}}:
-                        return name
-                    case _:
-                        pass
-            return None
-        case _:
-            return None
+    values = expect_object(node.get("fieldValues"), "an item's fieldValues")
+    for raw in expect_list(values.get("nodes"), "fieldValues.nodes"):
+        value = expect_object(raw, "a field value")
+        match value:
+            case {"field": {"name": "Status"}}:
+                return expect_str(value.get("name"), "the Status option's name")
+            case _:
+                pass
+    return None
 
 
 def nested_more(value: object) -> bool:
@@ -596,11 +634,14 @@ def nested_more(value: object) -> bool:
 def captured_document(path: Path) -> tuple[str, dict[str, object]]:
     try:
         stored = expect_object(json.loads(path.read_text(encoding="utf-8")), str(path))
-    except (OSError, json.JSONDecodeError) as error:
-        raise InvocationError(f"cannot read the capture {path}: {error}") from error
-    stored = expect_object(stored.get("captured", stored), "the captured request")
-    document = expect_str(stored.get("query"), "the captured query")
-    variables = expect_object(stored.get("variables") or {}, "the captured variables")
+        request = expect_object(stored.get("captured"), "the captured request")
+        document = expect_str(request.get("query"), "the captured query")
+        raw = request.get("variables")
+        variables = {} if raw is None else expect_object(raw, "the captured variables")
+    except (OSError, json.JSONDecodeError, BoundaryError) as error:
+        raise InvocationError(
+            f"cannot read the capture {path}: {error}; run --mode capture again"
+        ) from error
     if ITEMS_MARKER not in document or "$after:String," not in document:
         raise InvocationError(
             f"the captured document has no `{ITEMS_MARKER}`; run --mode capture again"
@@ -622,7 +663,10 @@ def board_items(answer: dict[str, object]) -> dict[str, object]:
 
 
 def prototype(
-    args: argparse.Namespace, source: SourceSettings, token: Token
+    args: argparse.Namespace,
+    source: SourceSettings,
+    categories: Categories,
+    token: Token,
 ) -> PrototypeRun:
     document, variables = captured_document(args.captured)
     variables["itemQuery"] = args.item_query
@@ -630,9 +674,9 @@ def prototype(
     records: list[RequestRecord] = []
     named = set(source.task_options.values())
     closing: set[str] | None = {
-        source.task_options[c] for c in CLOSING_CATEGORIES if c in source.task_options
+        source.task_options[c] for c in categories.closing if c in source.task_options
     }
-    if closing is not None and len(closing) < len(CLOSING_CATEGORIES):
+    if closing is not None and len(closing) < len(categories.closing):
         # The rest are the plugin's shipped defaults, which this harness does not restate.
         closing = None
     counts = ContentCounts(open_issue_at_closing_option=None if closing is None else 0)
@@ -670,7 +714,13 @@ def prototype(
             for raw in nodes:
                 node = expect_object(raw, "a board item")
                 counts.items += 1
-                content = expect_object(node.get("content") or {}, "an item's content")
+                # GitHub answers `content: null` for an item the token cannot see.
+                raw_content = node.get("content")
+                content = (
+                    {}
+                    if raw_content is None
+                    else expect_object(raw_content, "an item's content")
+                )
                 option = status_option(node)
                 by_option[option or "<none>"] = by_option.get(option or "<none>", 0) + 1
                 match content:
@@ -678,9 +728,9 @@ def prototype(
                         counts.draft += 1
                     case {"__typename": "Issue", "state": "CLOSED"}:
                         counts.issue_closed += 1
-                    case {"__typename": "Issue", "id": str() as issue_id}:
+                    case {"__typename": "Issue", "state": "OPEN"}:
                         counts.issue_open += 1
-                        ids.append(issue_id)
+                        ids.append(expect_str(content.get("id"), "an issue's id"))
                         if closing is not None and option in closing:
                             counts.open_issue_at_closing_option = (
                                 counts.open_issue_at_closing_option or 0
@@ -689,6 +739,10 @@ def prototype(
                                 examples["open_at_closing"].append(
                                     f"#{content.get('number')} {option}"
                                 )
+                    case {"__typename": "Issue"}:
+                        raise BoundaryError(
+                            f"an issue's state is {content.get('state')!r}, not OPEN or CLOSED"
+                        )
                     case {"__typename": "PullRequest"}:
                         counts.pull_request += 1
                     case _:
@@ -710,7 +764,6 @@ def prototype(
             after = cursor
     except (SpikeStop, BoundaryError) as stop:
         stopped = str(stop)
-    seconds = time.monotonic() - began
     probes: dict[str, int | str] = {}
     count_doc = (
         "query($owner:String!,$number:Int!,$q:String){owner:repositoryOwner(login:$owner)"
@@ -731,16 +784,17 @@ def prototype(
                 "probe",
             )
             errors = answer.get("errors")
-            probes[probe] = (
-                json.dumps(errors)[:300]
-                if errors
-                else expect_int(board_items(answer).get("totalCount"), "totalCount")
+            if errors:
+                raise SpikeStop(f"the probe was refused: {json.dumps(errors)[:300]}")
+            probes[probe] = expect_int(
+                board_items(answer).get("totalCount"), "totalCount"
             )
         except (SpikeStop, BoundaryError) as stop:
             probes[probe] = f"not answered: {stop}"
             stopped = stopped or str(stop)
+    seconds = time.monotonic() - began
     return PrototypeRun(
-        mode="prototype",
+        mode=Mode.PROTOTYPE,
         source=source.name,
         board=f"{source.owner}/{source.number}",
         item_query=args.item_query,
@@ -760,9 +814,7 @@ def parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     parser.add_argument("--config-dir", type=Path, required=True)
     parser.add_argument("--source", required=True)
-    parser.add_argument(
-        "--mode", choices=["today", "capture", "prototype"], required=True
-    )
+    parser.add_argument("--mode", type=Mode, choices=list(Mode), required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument(
         "--binary", type=Path, default=Path("target/debug/onetaskgraph")
@@ -798,7 +850,7 @@ def validate(args: argparse.Namespace) -> None:
     args.config_dir = args.config_dir.resolve()
     if not args.out.parent.is_dir():
         raise InvocationError(f"the directory of --out {args.out} does not exist")
-    if args.mode == "prototype" and args.captured is None:
+    if args.mode == Mode.PROTOTYPE and args.captured is None:
         raise InvocationError(
             "--mode prototype needs --captured FILE from --mode capture"
         )
@@ -814,11 +866,15 @@ def main() -> int:
         with tempfile.TemporaryDirectory(prefix="spike-open-list-") as work:
             root = Path(work)
             source = source_settings(args.binary, args.config_dir, args.source, root)
+            categories = status_categories(args.binary, root)
             result: BinaryRun | PrototypeRun = (
-                prototype(args, source, token)
-                if args.mode == "prototype"
-                else run_binary(args, source, token, root)
+                prototype(args, source, categories, token)
+                if args.mode == Mode.PROTOTYPE
+                else run_binary(args, source, categories, token, root)
             )
+    except BoundaryError as error:
+        print(f"measure_open_list: {error}", file=sys.stderr)
+        return 1
     except SpikeError as error:
         print(f"measure_open_list: {error}", file=sys.stderr)
         return 2

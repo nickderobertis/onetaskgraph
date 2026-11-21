@@ -182,13 +182,20 @@ def meter(answer: dict[str, object], headers: Mapping[str, str]) -> Metering:
     cost = rate.get("cost")
     remaining = rate.get("remaining")
     return Metering(
-        cost=None if cost is None else expect_int(cost, "rateLimit.cost"),
+        cost=None if cost is None else nonnegative(cost, "rateLimit.cost"),
         remaining=None
         if remaining is None
-        else expect_int(remaining, "rateLimit.remaining"),
+        else nonnegative(remaining, "rateLimit.remaining"),
         header_remaining=header_int(headers, "x-ratelimit-remaining"),
         header_reset=header_int(headers, "x-ratelimit-reset"),
     )
+
+
+def nonnegative(value: object, what: str) -> int:
+    number = expect_int(value, what)
+    if number < 0:
+        raise BoundaryError(f"{what} is negative: {number}")
+    return number
 
 
 @dataclass
@@ -209,11 +216,12 @@ class SpikeLimits:
     def charge(self, metering: Metering) -> None:
         """Count a request's cost, and keep the latest reading of the allowance.
 
-        The latest rather than the least: a reading only ever falls within a window, and a
-        window that resets has to be able to admit work again.
+        An answer that reports no cost (a loopback board's, or one GitHub refused) is charged
+        GitHub's minimum of one point, so a missing figure never lets the cap stop counting.
+        The latest reading rather than the least: a reading only ever falls within a window,
+        and a window that resets has to be able to admit work again.
         """
-        if metering.cost is not None:
-            self.spent += metering.cost
+        self.spent += 1 if metering.cost is None else metering.cost
         readings = [
             r for r in (metering.remaining, metering.header_remaining) if r is not None
         ]
@@ -241,7 +249,6 @@ class RequestRecord:
         return asdict(self)
 
 
-# llmlint: ignore[async_typed_clients_at_boundaries] Each step sends one request at a time on purpose: the per-request seconds and the order of the readings are the measurement, so concurrency would corrupt the figures. The client is typed (`HttpResponse`); stdlib `urllib` keeps the harness free of installs on any host.
 def send(
     method: str,
     url: str,
@@ -258,6 +265,7 @@ def send(
     request = urllib.request.Request(url, data=body, method=method, headers=headers)
     began = time.monotonic()
     try:
+        # llmlint: ignore[async_typed_clients_at_boundaries] Each step sends one request at a time on purpose: the per-request seconds and the order of the readings are the measurement, so concurrency would corrupt the figures. The client is typed (`HttpResponse`); stdlib `urllib` keeps the harness free of installs on any host.
         with urllib.request.urlopen(request, timeout=120) as response:
             return HttpResponse(
                 response.status,

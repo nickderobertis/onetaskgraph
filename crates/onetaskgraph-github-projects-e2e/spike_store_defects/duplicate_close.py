@@ -101,18 +101,33 @@ class RestState:
     html_url: str
 
 
+@dataclass(frozen=True)
+class RestClose:
+    """What REST answered to ``PATCH state=closed, state_reason=duplicate``."""
+
+    status: int
+    state: str | None
+    state_reason: str | None
+    message: str | None
+
+
+def optional_str(value: object, what: str) -> str | None:
+    return None if value is None else expect_str(value, what)
+
+
 @dataclass
 class DuplicateCloseRun:
     repository: str
     schema: Schema
     created: list[CreatedIssue] = field(default_factory=list)
     close_answer: object = None
-    rest_close: dict[str, object] = field(default_factory=dict)
+    rest_close: RestClose | None = None
     readback_after_close: object = None
     readback_final: object = None
     final_rest: list[RestState] = field(default_factory=list)
     points: int = 0
-    unmetered_calls: int = 0
+    # GitHub reports no cost for a mutation; each one sent is charged one point to the cap.
+    close_mutations_sent: int = 0
     failure: str | None = None
     records: list[RequestRecord] = field(default_factory=list)
 
@@ -129,6 +144,7 @@ class Client:
         self.token = token
         self.limits = SpikeLimits(max_points=max_points)
         self.records: list[RequestRecord] = []
+        self.mutations_sent = 0
 
     def rest(
         self, method: str, path: str, payload: dict[str, object] | None = None
@@ -272,8 +288,10 @@ def close_as_duplicate(
     client: Client, duplicate: CreatedIssue, survivor: CreatedIssue
 ) -> object:
     # `graphql` meters queries alone, so this one write to the scratch repository is sent
-    # directly; GitHub does not report a mutation's cost, which `unmetered_calls` counts.
+    # directly and charged GitHub's one-point minimum.
     client.limits.admit()
+    client.limits.spent += 1
+    client.mutations_sent += 1
     body = json.dumps(
         {
             "query": CLOSE,
@@ -367,7 +385,6 @@ def main() -> int:
             duplicate = create(client, Role.DUPLICATE, stamp)
             run.created.append(duplicate)
             run.close_answer = close_as_duplicate(client, duplicate, survivor)
-            run.unmetered_calls += 1
             time.sleep(3)
             run.readback_after_close = read_back(
                 client, schema, survivor.number, duplicate.number
@@ -377,12 +394,12 @@ def main() -> int:
                 f"/issues/{survivor.number}",
                 {"state": "closed", "state_reason": "duplicate"},
             )
-            run.rest_close = {
-                "status": status,
-                "state": closed.get("state"),
-                "state_reason": closed.get("state_reason"),
-                "message": closed.get("message"),
-            }
+            run.rest_close = RestClose(
+                status=status,
+                state=optional_str(closed.get("state"), "state"),
+                state_reason=optional_str(closed.get("state_reason"), "state_reason"),
+                message=optional_str(closed.get("message"), "message"),
+            )
             if status >= 300:
                 # REST refused the reason: close the survivor anyway, so nothing is left open.
                 client.rest(
@@ -404,6 +421,7 @@ def main() -> int:
             return 1
         run.failure = str(error)
     run.points = client.limits.spent
+    run.close_mutations_sent = client.mutations_sent
     run.records = client.records
     text = json.dumps(asdict(run), indent=2)
     print(text)
