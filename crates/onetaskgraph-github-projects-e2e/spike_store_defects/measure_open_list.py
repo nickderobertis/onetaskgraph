@@ -62,9 +62,6 @@ import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-# Run as a script from any directory, so the sibling module is found by this file's own
-# directory rather than by the caller's working directory.
-sys.path.insert(0, str(Path(__file__).resolve().parent))
 from ghlive import (
     GRAPHQL_ENDPOINT,
     BoundaryError,
@@ -192,6 +189,22 @@ class ContentCounts:
 
 
 @dataclass
+class Examples:
+    """Up to ten instances of each case a reader would want to look at."""
+
+    unnamed_by_configuration: list[str] = field(default_factory=list)
+    open_at_closing: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class ProbeResult:
+    """One ``totalCount`` probe: the count, or why there is none."""
+
+    total_count: int | None
+    refused: str | None
+
+
+@dataclass
 class PrototypeRun:
     mode: Mode
     source: str
@@ -202,8 +215,8 @@ class PrototypeRun:
     counts: ContentCounts
     by_option: dict[str, int]
     closing_options: list[str] | None
-    examples: dict[str, list[str]]
-    probes: dict[str, int | str]
+    examples: Examples
+    probes: dict[str, ProbeResult]
     issue_ids: list[str]
     records: list[RequestRecord]
 
@@ -665,8 +678,11 @@ def status_option(node: dict[str, object]) -> str | None:
 def nested_more(value: object) -> bool:
     """Whether any connection nested in ``value`` reports another page."""
     match value:
-        case {"pageInfo": {"hasNextPage": True}}:
-            return True
+        case {"pageInfo": info}:
+            more = expect_object(info, "a nested pageInfo").get("hasNextPage")
+            return expect_bool(more, "a nested hasNextPage") or any(
+                nested_more(child) for key, child in value.items() if key != "pageInfo"
+            )
         case dict():
             return any(nested_more(child) for child in value.values())
         case list():
@@ -675,13 +691,40 @@ def nested_more(value: object) -> bool:
             return False
 
 
+def page_size(value: object, what: str) -> int:
+    size = expect_int(value, what)
+    if not 1 <= size <= 100:
+        raise BoundaryError(f"{what} is {size}, outside GitHub's 1 to 100")
+    return size
+
+
+def captured_variables(raw: object) -> dict[str, object]:
+    """The captured request's bindings this harness forwards, each checked; the board's owner
+    and number and the cursor are set from the configured source and the walk instead."""
+    variables = expect_object(raw, "the captured variables")
+    known = {"owner", "number", "first", "after", "nestedFirst", "duplicates"}
+    unknown = sorted(set(variables) - known)
+    if unknown:
+        raise BoundaryError(
+            f"the capture binds variables this harness does not know: {unknown}"
+        )
+    return {
+        "first": page_size(variables.get("first"), "the captured first"),
+        "nestedFirst": page_size(
+            variables.get("nestedFirst"), "the captured nestedFirst"
+        ),
+        "duplicates": expect_bool(
+            variables.get("duplicates"), "the captured duplicates"
+        ),
+    }
+
+
 def captured_document(path: Path) -> tuple[str, dict[str, object]]:
     try:
         stored = expect_object(json.loads(path.read_text(encoding="utf-8")), str(path))
         request = expect_object(stored.get("captured"), "the captured request")
         document = expect_str(request.get("query"), "the captured query")
-        raw = request.get("variables")
-        variables = {} if raw is None else expect_object(raw, "the captured variables")
+        variables = captured_variables(request.get("variables"))
     except (OSError, json.JSONDecodeError, BoundaryError) as error:
         raise InvocationError(
             f"cannot read the capture {path}: {error}; run --mode capture again"
@@ -729,10 +772,7 @@ def prototype(
     counts = ContentCounts(open_issue_at_closing_option=None if closing is None else 0)
     by_option: dict[str, int] = {}
     ids: list[str] = []
-    examples: dict[str, list[str]] = {
-        "unnamed_by_configuration": [],
-        "open_at_closing": [],
-    }
+    examples = Examples()
     deadline: Deadline = args.deadline
     began = time.monotonic()
     after: str | None = None
@@ -781,8 +821,8 @@ def prototype(
                             counts.open_issue_at_closing_option = (
                                 counts.open_issue_at_closing_option or 0
                             ) + 1
-                            if len(examples["open_at_closing"]) < 10:
-                                examples["open_at_closing"].append(
+                            if len(examples.open_at_closing) < 10:
+                                examples.open_at_closing.append(
                                     f"#{expect_int(content.get('number'), 'an issue number')} "
                                     f"{option}"
                                 )
@@ -798,8 +838,8 @@ def prototype(
                     counts.no_status += 1
                 elif option not in named:
                     counts.unnamed_by_configuration += 1
-                    if len(examples["unnamed_by_configuration"]) < 10:
-                        examples["unnamed_by_configuration"].append(option)
+                    if len(examples.unnamed_by_configuration) < 10:
+                        examples.unnamed_by_configuration.append(option)
                 if nested_more(node):
                     counts.nested_follow_ups += 1
             info = expect_object(items.get("pageInfo"), "the items' pageInfo")
@@ -811,7 +851,7 @@ def prototype(
             after = cursor
     except (SpikeStop, BoundaryError) as stop:
         stopped = str(stop)
-    probes: dict[str, int | str] = {}
+    probes: dict[str, ProbeResult] = {}
     count_doc = (
         "query($owner:String!,$number:Int!,$q:String){owner:repositoryOwner(login:$owner)"
         "{... on ProjectV2Owner{projectV2(number:$number){items(first:1,query:$q)"
@@ -832,11 +872,10 @@ def prototype(
             errors = answer.get("errors")
             if errors:
                 raise SpikeStop(f"the probe was refused: {json.dumps(errors)[:300]}")
-            probes[probe] = expect_int(
-                board_items(answer).get("totalCount"), "totalCount"
-            )
+            count = expect_int(board_items(answer).get("totalCount"), "totalCount")
+            probes[probe] = ProbeResult(total_count=count, refused=None)
         except (SpikeStop, BoundaryError) as stop:
-            probes[probe] = f"not answered: {stop}"
+            probes[probe] = ProbeResult(total_count=None, refused=str(stop))
             stopped = stopped or str(stop)
     seconds = time.monotonic() - began
     return PrototypeRun(

@@ -26,9 +26,6 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 
-# Run as a script from any directory, so the sibling module is found by this file's own
-# directory rather than by the caller's working directory.
-sys.path.insert(0, str(Path(__file__).resolve().parent))
 from ghlive import (
     GRAPHQL_ENDPOINT,
     BoundaryError,
