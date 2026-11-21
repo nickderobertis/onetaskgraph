@@ -46,7 +46,8 @@ pub(crate) enum Aliased {
 
 /// `value`, what one alias of an aliased read answered, when it is of `id` — or absent, which
 /// that read answers on its own terms. An item that names another id is not that alias's answer,
-/// so it is never taken for it.
+/// so it is never taken for it. Project and document answers are matched by `id` alone, because
+/// the store names them by no key.
 fn of_asked(value: Value, id: &NativeId, doing: &str) -> Result<Value, SourceError> {
     match value.get("id").and_then(Value::as_str) {
         Some(answered) if answered != id.0 => Err(SourceError::Malformed {
@@ -57,6 +58,16 @@ fn of_asked(value: Value, id: &NativeId, doing: &str) -> Result<Value, SourceErr
         }),
         _ => Ok(value),
     }
+}
+
+/// [`of_asked`] for an issue, which Linear's `issue(id:)` resolves by its uuid or by its key
+/// (`TEAM-101`) and answers with its uuid either way: an answer is the alias's own when its `id`
+/// or its `identifier` is the id asked for.
+fn issue_of_asked(value: Value, id: &NativeId, doing: &str) -> Result<Value, SourceError> {
+    if value.get("identifier").and_then(Value::as_str) == Some(id.0.as_str()) {
+        return Ok(value);
+    }
+    of_asked(value, id, doing)
 }
 
 /// What Linear answered an aliased document with, each alias on its own.
@@ -208,7 +219,7 @@ impl LinearSource {
                         read[*at] = Some(
                             value
                                 .and_then(|value| {
-                                    of_asked(value, &ids[*at], "reading issues together")
+                                    issue_of_asked(value, &ids[*at], "reading issues together")
                                 })
                                 .and_then(|value| {
                                     Ok(optional(&json!({"issue": value}), "issue", |v| {
@@ -1026,7 +1037,7 @@ impl LinearSource {
                 Ok(Aliased::Answered(values)) => {
                     for (at, value) in pending.drain(..).zip(values) {
                         read[at] = Some(
-                            of_asked(value, &ids[at], "reading issues with their comments")
+                            issue_of_asked(value, &ids[at], "reading issues with their comments")
                                 .and_then(|value| self.detail_of(&value, page)),
                         );
                     }
@@ -1125,7 +1136,13 @@ impl LinearSource {
                         .unwrap_or_else(std::sync::PoisonError::into_inner);
                     for ((at, part), value) in owners.into_iter().zip(values) {
                         let (record, id) = pending[at];
-                        let value = of_asked(value, id, "reading a copy's records ahead")?;
+                        let doing = "reading a copy's records ahead";
+                        let value = match record {
+                            MetadataRecord::Task => issue_of_asked(value, id, doing),
+                            MetadataRecord::Project | MetadataRecord::Document => {
+                                of_asked(value, id, doing)
+                            }
+                        }?;
                         let key = (*record, id.clone());
                         if part == 0 {
                             ahead.insert(key, value);
