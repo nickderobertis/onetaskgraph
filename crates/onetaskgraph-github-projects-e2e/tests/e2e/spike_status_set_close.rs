@@ -6,8 +6,8 @@
 //! card alone, so an open issue under a terminal card already "is" the target category and the
 //! write returns before the close is sent. These journeys drive the real binary against the
 //! loopback board and assert what a person asking for the status expects — the issue closed
-//! with the reason the category implies. The two terminal cases FAIL on the code this spike was
-//! cut from (v0.14.20, `9b9520bd`); the open-column case is the control and passes.
+//! with the reason the category implies; the open-column case is the control. Which of them
+//! fail on which commit is the spike report's to record.
 //!
 //! Throwaway: kept on the spike branch so the `store-fixes` node can start from a failing
 //! reproduction, never landed as is.
@@ -36,7 +36,7 @@ impl Setup {
         let sandbox = Sandbox::new();
         let (mut config, board) = github_projects_with_items(&sandbox, items);
         board.with_status_option("OPT-in-progress", "In Progress");
-        // The `followups` board's own mapping, as `ai-orchestrator`'s `onetaskgraph.yaml` sets it.
+        // Every category the journeys write names its option, so no shipped default is in play.
         config["status_mapping"] = json!({"backlog":"Backlog","todo":"Todo",
             "in-progress":"In Progress","queued":"Queued","done":"Done","cancelled":"Cancelled"});
         sandbox.project_document(&document(&json!({
