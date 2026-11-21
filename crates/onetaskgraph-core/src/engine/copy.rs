@@ -3603,6 +3603,7 @@ impl Engine {
                 let mut reads = Vec::new();
                 let mut changed = Vec::new();
                 self.prefetch(request, members, running).await;
+                self.read_members_ahead(request, members).await;
                 for member in members {
                     match self
                         .read_for_copy(request, Level::Task, member, running)
@@ -3716,6 +3717,7 @@ impl Engine {
                 let mut reads = Vec::new();
                 let mut changed = Vec::new();
                 self.prefetch(request, members, running).await;
+                self.read_members_ahead(request, members).await;
                 for member in members {
                     match self
                         .read_for_copy(request, Level::Task, member, running)
@@ -7463,6 +7465,40 @@ impl Engine {
             let _ = source
                 .query_projects_by_origin(&origin.to_string(), &request_for(destination, None))
                 .await;
+        }
+    }
+
+    /// Read a project's members ahead at their own source, for a project copy that reads no
+    /// comment, so each [`Engine::read_for_copy`] of one after it is answered by that read
+    /// rather than sent on its own: one [`TaskSource::read_ahead_for_copy`] per source, which a
+    /// source that listed the project's members whole in this command answers from that
+    /// listing, and one that can batch its reads answers in a batch. Without it a project of
+    /// `n` tasks cost `n` reads by id however few requests its listing took.
+    ///
+    /// Nothing is decided here: a failure holds nothing, and every read it would have answered
+    /// is made as it always was and reports its own failure. A copy reading comments reads its
+    /// members by [`Engine::prefetch`] instead, and a source that reads nothing ahead — a
+    /// folder of Markdown, an in-memory source — is asked nothing it costs.
+    async fn read_members_ahead(&self, request: &CopyRequest, ids: &[GlobalId]) {
+        if reads_comments(request) {
+            return;
+        }
+        let mut by_source: Vec<(SourceName, Vec<NativeId>)> = Vec::new();
+        for id in ids {
+            match by_source.iter_mut().find(|(name, _)| name == &id.source) {
+                Some((_, natives)) => {
+                    if !natives.contains(&id.native) {
+                        natives.push(id.native.clone());
+                    }
+                }
+                None => by_source.push((id.source.clone(), vec![id.native.clone()])),
+            }
+        }
+        for (name, natives) in by_source {
+            let Ok(source) = self.readable(&name) else {
+                continue;
+            };
+            let _ = source.source().read_ahead_for_copy(&natives).await;
         }
     }
 

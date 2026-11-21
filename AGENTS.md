@@ -1630,6 +1630,10 @@ them do; this is the inventory of what is owed, not a status board.
      reports what it left, fails an item Linear refuses with exit 1, rewrites nothing a second
      time and nothing under `--dry-run`; a folder of Markdown and a stdio peer declaring no
      migration are reported as holding nothing to migrate and are sent nothing.
+167. A board project copied back into a folder of Markdown — `--update-fields status --metadata
+     KEY=null`, the board's cache warmed by the copy that put it there and cold — writes the
+     moved statuses, removes the key, keeps every edge and link, and reads no task on its own:
+     every request but the members listing's pages is the same at 3 tasks and at 27.
 
 ## The public boundary
 
