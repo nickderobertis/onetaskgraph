@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.20](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-linear-v0.14.19...onetaskgraph-linear-v0.14.20) - 2026-11-21
+
+### Fixed
+
+- *(linear)* return every issue a batched read asks for by its key ([#4070](https://github.com/nickderobertis/onetaskgraph/pull/4070))
+
 ## [0.14.19](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-linear-v0.14.18...onetaskgraph-linear-v0.14.19) - 2026-11-20
 
 ### Added
