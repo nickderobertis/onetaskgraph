@@ -1260,7 +1260,6 @@ fn two_sources_of_one_endpoint_with_different_keys_share_no_vocabulary_or_label_
     }
 }
 
-/// Whether a `show-many` detail carries no failure.
 fn no_errors(detail: &Value) -> bool {
     detail
         .get("errors")
