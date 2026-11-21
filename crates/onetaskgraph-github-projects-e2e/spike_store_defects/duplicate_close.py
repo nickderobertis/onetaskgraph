@@ -20,8 +20,10 @@ It refuses any repository but the scratch one. Steps:
 
 Exit status: ``0`` when the duplicate reads back closed as ``DUPLICATE`` of the survivor and
 both issues read back closed (or, with ``--readback-only``, when the read answered); ``1``
-when GitHub refused a step or what it kept differs; ``2`` when the invocation is wrong or no
-token is configured. The record is printed as JSON on stdout; diagnostics go to stderr.
+when GitHub refused a step, an answer did not have the shape it reads, a limit stopped it, or
+what GitHub kept differs; ``2`` when the invocation is wrong or no
+token is configured. Once the schema is read, the record is printed as JSON on stdout
+whatever the outcome; diagnostics go to stderr.
 """
 
 from __future__ import annotations
@@ -43,6 +45,7 @@ from ghlive import (
     RequestRecord,
     SpikeError,
     SpikeLimits,
+    SpikeStop,
     Token,
     decode,
     expect_int,
@@ -262,7 +265,17 @@ def read_back(
         "a": survivor,
         "b": duplicate,
     }
-    return client.query(readback_document(schema), variables, "readback")
+    data = client.query(readback_document(schema), variables, "readback")
+    repository = expect_object(data.get("repository"), "the read-back's repository")
+    for alias, number in (("a", survivor), ("b", duplicate)):
+        issue = expect_object(
+            repository.get(alias), f"issue #{number} (null: not found)"
+        )
+        if expect_int(issue.get("number"), f"issue #{number}'s number") != number:
+            raise BoundaryError(f"the read-back answered another issue for #{number}")
+        expect_str(issue.get("state"), f"issue #{number}'s state")
+        expect_object(issue.get("timelineItems"), f"issue #{number}'s timeline")
+    return data
 
 
 def create(client: Client, role: Role, stamp: str) -> CreatedIssue:
@@ -415,7 +428,7 @@ def main() -> int:
                 client.rest_state(n) for n in (survivor.number, duplicate.number)
             ]
             run.failure = landed(run, survivor, duplicate)
-    except BoundaryError as error:
+    except (BoundaryError, SpikeStop) as error:
         if run is None:
             print(f"duplicate_close: {error}", file=sys.stderr)
             return 1

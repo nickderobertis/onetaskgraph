@@ -98,12 +98,19 @@ def from_graphql(token: Token, endpoint: str) -> tuple[Reading, Reading, int]:
         expect_object(answer.get("data"), "data").get("rateLimit"), "rateLimit"
     )
     reset_at = expect_str(rate.get("resetAt"), "rateLimit.resetAt")
+    try:
+        reset_time = datetime.fromisoformat(reset_at)
+    except ValueError as error:
+        raise BoundaryError(f"rateLimit.resetAt is not a time: {reset_at!r}") from error
+    if reset_time.tzinfo is None:
+        # A naive time would be read in the host's zone and misplace the window.
+        raise BoundaryError(f"rateLimit.resetAt names no time zone: {reset_at!r}")
     obj = Reading(
         source="GraphQL rateLimit",
         limit=expect_int(rate.get("limit"), "rateLimit.limit"),
         remaining=expect_int(rate.get("remaining"), "rateLimit.remaining"),
         used=expect_int(rate.get("used"), "rateLimit.used"),
-        reset=int(datetime.fromisoformat(reset_at).timestamp()),
+        reset=int(reset_time.timestamp()),
     )
     lowered = {key.lower(): value for key, value in response.headers.items()}
     figures: dict[str, int] = {}
