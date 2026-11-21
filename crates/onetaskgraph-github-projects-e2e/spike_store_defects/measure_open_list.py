@@ -294,6 +294,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
         )
 
     def do_GET(self) -> None:
+        if self.server.capture:
+            self.refuse(
+                f"rest GET {self.path.split('?')[0]}", "capture: nothing is forwarded"
+            )
+            return
         began = time.time()
         response = send(
             "GET", rest_base(self.server.upstream) + self.path, self.server.token, None
