@@ -13,7 +13,7 @@ runs with this project's other journeys in its `test` target.
 ## Defect 2: the open-item list, one measurement per command
 
     python3 measure_open_list.py --config-dir DIR --source NAME --mode today --out today.json \
-        --binary PATH [--env-file PATH] [--max-points 120] [--cap-seconds 600]
+        --binary PATH [--env-file PATH] [--stop-after-points 120] [--cap-seconds 600]
     python3 measure_open_list.py --config-dir DIR --source NAME --mode capture --out capture.json \
         --binary PATH                                   # forwards nothing, costs nothing
     python3 measure_open_list.py --config-dir DIR --source NAME --mode prototype --out proto.json \

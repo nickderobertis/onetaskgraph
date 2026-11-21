@@ -2,8 +2,9 @@
 
 Every request is recorded the same way and held to the spike's two limits:
 
-- a points cap per step (``SpikeLimits.max_points``), counted from the ``cost`` GitHub
-  itself reports, which is asked for by adding ``spikeRate:rateLimit{...}`` to the
+- a points threshold per step (``SpikeLimits.stop_after_points``): no request is sent once
+  the step's spend has reached it, so the one request in flight can take the spend past it by
+  its own cost. Spend is counted from the ``cost`` GitHub itself reports, which is asked for by adding ``spikeRate:rateLimit{...}`` to the
   top-level selection of each GraphQL document and removed from the answer again;
 - a remaining floor (``SpikeLimits.floor``, 3,000 by the task): once any reading says the
   GraphQL allowance is under it, nothing more is sent.
@@ -16,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.request
@@ -117,9 +119,35 @@ def rest_base(graphql_endpoint: str) -> str:
     return graphql_endpoint.removesuffix("/graphql")
 
 
+def top_level_words(document: str) -> list[str]:
+    """The words of ``document`` outside every selection set and argument list, with GraphQL
+    comments and string literals removed: its definitions' keywords and names."""
+    text = re.sub(r'"""[\s\S]*?"""|"(?:\\.|[^"\\])*"|#[^\n]*', " ", document)
+    words: list[str] = []
+    depth = 0
+    for token in re.findall(r"[A-Za-z_][A-Za-z0-9_]*|[{}()\[\]]", text):
+        match token:
+            case "{" | "(" | "[":
+                depth += 1
+            case "}" | ")" | "]":
+                depth -= 1
+            case _ if depth == 0:
+                words.append(token)
+            case _:
+                pass
+    return words
+
+
+def writes(document: str) -> bool:
+    """Whether ``document`` defines any operation but a query: a mutation or a subscription."""
+    return any(
+        word in {"mutation", "subscription"} for word in top_level_words(document)
+    )
+
+
 def inject_rate(document: str) -> str:
     """``document`` with ``RATE_SELECTION`` added to its operation's top-level selection."""
-    if document.lstrip().startswith("mutation"):
+    if writes(document):
         raise SpikeStop("only queries are metered and sent by this client")
     start = document.find("query")
     if start < 0:
@@ -204,14 +232,16 @@ def nonnegative(value: object, what: str) -> int:
 
 @dataclass
 class SpikeLimits:
-    max_points: int
+    stop_after_points: int
     floor: int = DEFAULT_FLOOR
     spent: int = 0
     latest_remaining: int | None = None
 
     def admit(self) -> None:
-        if self.spent >= self.max_points:
-            raise SpikeStop(f"points cap reached: {self.spent} of {self.max_points}")
+        if self.spent >= self.stop_after_points:
+            raise SpikeStop(
+                f"spend reached the stop threshold: {self.spent} of {self.stop_after_points}"
+            )
         if self.latest_remaining is not None and self.latest_remaining < self.floor:
             raise SpikeStop(
                 f"GraphQL remaining {self.latest_remaining} is under the floor {self.floor}"
@@ -258,6 +288,7 @@ def send(
     url: str,
     token: Token,
     body: bytes | None,
+    timeout: float = 120,
 ) -> HttpResponse:
     headers = {
         "Authorization": f"Bearer {token}",
@@ -270,7 +301,7 @@ def send(
     began = time.monotonic()
     try:
         # llmlint: ignore[async_typed_clients_at_boundaries] Each step sends one request at a time on purpose: the per-request seconds and the order of the readings are the measurement, so concurrency would corrupt the figures. The client is typed (`HttpResponse`); stdlib `urllib` keeps the harness free of installs on any host.
-        with urllib.request.urlopen(request, timeout=120) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             return HttpResponse(
                 response.status,
                 dict(response.headers),
@@ -291,11 +322,12 @@ def graphql(
     limits: SpikeLimits,
     records: list[RequestRecord],
     phase: str,
+    timeout: float = 120,
 ) -> tuple[dict[str, object], RequestRecord]:
     """Send one query, held to ``limits``; answer its validated envelope and its record."""
     limits.admit()
     body = json.dumps({"query": inject_rate(document), "variables": variables}).encode()
-    response = send("POST", endpoint, token, body)
+    response = send("POST", endpoint, token, body, timeout)
     answer = decode(response.body, f"the {phase} answer")
     metering = meter(answer, response.headers)
     limits.charge(metering)

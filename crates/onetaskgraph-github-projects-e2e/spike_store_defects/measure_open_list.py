@@ -3,7 +3,7 @@
 
     python3 measure_open_list.py --config-dir DIR --source NAME --mode MODE --out FILE \
         [--binary target/debug/onetaskgraph] [--env-file PATH] [--status S]... \
-        [--max-points 120] [--cap-seconds 600] [--captured FILE] [--item-query Q] \
+        [--stop-after-points 120] [--cap-seconds 600] [--captured FILE] [--item-query Q] \
         [--probe Q]... [--probe-only]
 
 The source is the one ``onetaskgraph.yaml`` in ``--config-dir`` configures, read through the
@@ -34,7 +34,8 @@ MODE is one of:
     ``--probe Q`` also asks ``totalCount`` under the filter Q, at one point each, and
     ``--probe-only`` sends the probes alone.
 
-Every mode stops at ``--max-points`` and once any reading says GraphQL remaining is under
+Every mode sends nothing more once its spend reaches ``--stop-after-points`` (the request in
+flight may take it past by its own cost) and once any reading says GraphQL remaining is under
 3,000. ``--cap-seconds`` bounds the whole measurement.
 
 Exit status: ``0`` when the measurement completed; ``1`` when it ran but is incomplete (the
@@ -86,6 +87,7 @@ from ghlive import (
     rate_headers,
     rest_base,
     send,
+    writes,
 )
 
 SOURCE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
@@ -210,7 +212,7 @@ class PrototypeRun:
 
 
 def phase_of(document: str) -> str:
-    if document.lstrip().startswith("mutation"):
+    if writes(document):
         return "mutation"
     if "fragment Board on ProjectV2" in document:
         return "board-items"
@@ -546,7 +548,10 @@ def run_binary(
 ) -> BinaryRun:
     capture = args.mode == Mode.CAPTURE
     proxy = Proxy(
-        source.endpoint, token, SpikeLimits(max_points=args.max_points), capture
+        source.endpoint,
+        token,
+        SpikeLimits(stop_after_points=args.stop_after_points),
+        capture,
     )
     thread = threading.Thread(target=proxy.serve_forever, daemon=True)
     thread.start()
@@ -670,7 +675,7 @@ def prototype(
 ) -> PrototypeRun:
     document, variables = captured_document(args.captured)
     variables["itemQuery"] = args.item_query
-    limits = SpikeLimits(max_points=args.max_points)
+    limits = SpikeLimits(stop_after_points=args.stop_after_points)
     records: list[RequestRecord] = []
     named = set(source.task_options.values())
     closing: set[str] | None = {
@@ -703,6 +708,7 @@ def prototype(
                 limits,
                 records,
                 "open-items",
+                timeout=min(120.0, max(1.0, deadline - time.monotonic())),
             )
             if answer.get("errors"):
                 raise SpikeStop(
@@ -737,7 +743,8 @@ def prototype(
                             ) + 1
                             if len(examples["open_at_closing"]) < 10:
                                 examples["open_at_closing"].append(
-                                    f"#{content.get('number')} {option}"
+                                    f"#{expect_int(content.get('number'), 'an issue number')} "
+                                    f"{option}"
                                 )
                     case {"__typename": "Issue"}:
                         raise BoundaryError(
@@ -782,6 +789,7 @@ def prototype(
                 limits,
                 records,
                 "probe",
+                timeout=min(120.0, max(1.0, deadline - time.monotonic())),
             )
             errors = answer.get("errors")
             if errors:
@@ -823,7 +831,7 @@ def parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--status", action="append", help="a category to list; repeatable"
     )
-    parser.add_argument("--max-points", type=positive, default=120)
+    parser.add_argument("--stop-after-points", type=positive, default=120)
     parser.add_argument("--cap-seconds", type=positive, default=600)
     parser.add_argument("--captured", type=Path, help="the JSON `capture` wrote")
     parser.add_argument("--item-query", default="is:open")

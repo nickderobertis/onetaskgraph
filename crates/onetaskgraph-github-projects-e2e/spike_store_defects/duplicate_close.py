@@ -2,7 +2,7 @@
 """Close one throwaway issue as a duplicate of another, read back what GitHub kept, close both.
 
     python3 duplicate_close.py --repository nickderobertis/onetaskgraph-live-scratch \
-        [--env-file PATH] [--endpoint URL] [--max-points 30] [--out FILE] \
+        [--env-file PATH] [--endpoint URL] [--stop-after-points 30] [--out FILE] \
         [--readback-only SURVIVOR DUPLICATE]
 
 It refuses any repository but the scratch one. Steps:
@@ -139,13 +139,13 @@ class Client:
     """The scratch repository, through REST and through metered GraphQL."""
 
     def __init__(
-        self, endpoint: str, owner: str, name: str, token: Token, max_points: int
+        self, endpoint: str, owner: str, name: str, token: Token, stop_after_points: int
     ):
         self.endpoint = endpoint
         self.owner = owner
         self.name = name
         self.token = token
-        self.limits = SpikeLimits(max_points=max_points)
+        self.limits = SpikeLimits(stop_after_points=stop_after_points)
         self.records: list[RequestRecord] = []
         self.mutations_sent = 0
 
@@ -352,7 +352,7 @@ def main() -> int:
     parser.add_argument("--repository", required=True)
     parser.add_argument("--env-file")
     parser.add_argument("--endpoint", default=GRAPHQL_ENDPOINT)
-    parser.add_argument("--max-points", type=positive, default=30)
+    parser.add_argument("--stop-after-points", type=positive, default=30)
     parser.add_argument("--out", type=Path)
     parser.add_argument(
         "--readback-only",
@@ -374,7 +374,7 @@ def main() -> int:
         print(f"duplicate_close: {error}", file=sys.stderr)
         return 2
     owner, _, name = args.repository.partition("/")
-    client = Client(args.endpoint, owner, name, token, args.max_points)
+    client = Client(args.endpoint, owner, name, token, args.stop_after_points)
     run: DuplicateCloseRun | None = None
     try:
         schema = introspect(client)
@@ -428,6 +428,12 @@ def main() -> int:
                 client.rest_state(n) for n in (survivor.number, duplicate.number)
             ]
             run.failure = landed(run, survivor, duplicate)
+            if run.rest_close.status >= 300:
+                run.failure = (
+                    f"REST refused the comparison close ({run.rest_close.status}: "
+                    f"{run.rest_close.message}); the survivor was closed as not planned"
+                    + (f"; also {run.failure}" if run.failure else "")
+                )
     except (BoundaryError, SpikeStop) as error:
         if run is None:
             print(f"duplicate_close: {error}", file=sys.stderr)
