@@ -418,10 +418,38 @@ def sandbox_env(root: Path) -> dict[str, str]:
     return env
 
 
-def run_json(command: list[str], cwd: Path, env: dict[str, str], what: str) -> object:
-    done = subprocess.run(
-        command, cwd=cwd, env=env, capture_output=True, timeout=120, check=False
-    )
+@dataclass(frozen=True)
+class Deadline:
+    """``--cap-seconds`` from the moment the command starts, over every step it takes."""
+
+    at: float
+
+    def remaining(self) -> float:
+        left = self.at - time.monotonic()
+        if left <= 0:
+            raise SpikeStop("the --cap-seconds deadline was reached")
+        return left
+
+    def request_timeout(self) -> float:
+        return min(120.0, self.remaining())
+
+
+def run_json(
+    command: list[str], cwd: Path, env: dict[str, str], what: str, deadline: Deadline
+) -> object:
+    try:
+        done = subprocess.run(
+            command,
+            cwd=cwd,
+            env=env,
+            capture_output=True,
+            timeout=deadline.remaining(),
+            check=False,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise SpikeStop(
+            f"{what} did not finish before the --cap-seconds deadline"
+        ) from error
     if done.returncode != 0:
         raise InvocationError(
             f"{what} exited {done.returncode}: {done.stderr.decode('utf-8', 'replace')[-600:]}"
@@ -442,12 +470,16 @@ def schema_consts(roots: dict[str, object], name: str) -> list[str]:
     ]
 
 
-def status_categories(binary: Path, root: Path) -> Categories:
+def status_categories(binary: Path, root: Path, deadline: Deadline) -> Categories:
     """Every status category the binary's schema names, split by its ``ClosedAs``: the
     categories a closed issue reads as."""
     schema = expect_object(
         run_json(
-            [str(binary), "schema"], root, sandbox_env(root), "`onetaskgraph schema`"
+            [str(binary), "schema"],
+            root,
+            sandbox_env(root),
+            "`onetaskgraph schema`",
+            deadline,
         ),
         "the schema bundle",
     )
@@ -464,7 +496,7 @@ def status_categories(binary: Path, root: Path) -> Categories:
 
 
 def source_settings(
-    binary: Path, config_dir: Path, name: str, root: Path
+    binary: Path, config_dir: Path, name: str, root: Path, deadline: Deadline
 ) -> SourceSettings:
     """The measured source, as the binary's ``config show`` resolves it in ``config_dir``."""
     shown = expect_object(
@@ -473,6 +505,7 @@ def source_settings(
             config_dir,
             sandbox_env(root),
             "`onetaskgraph config show`",
+            deadline,
         ),
         "config show",
     )
@@ -571,6 +604,7 @@ def run_binary(
     for status in statuses:
         command += ["--status", status]
     env = {**sandbox_env(root), source.token_env: token}
+    timeout = args.deadline.remaining()
     began = time.monotonic()
     process = subprocess.Popen(
         command,
@@ -581,7 +615,7 @@ def run_binary(
     )
     timed_out = False
     try:
-        out, err = process.communicate(timeout=args.cap_seconds)
+        out, err = process.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
         timed_out = True
         process.kill()
@@ -675,6 +709,9 @@ def prototype(
 ) -> PrototypeRun:
     document, variables = captured_document(args.captured)
     variables["itemQuery"] = args.item_query
+    # The configured source is what is measured, whichever board the capture came from.
+    variables["owner"] = source.owner
+    variables["number"] = source.number
     limits = SpikeLimits(stop_after_points=args.stop_after_points)
     records: list[RequestRecord] = []
     named = set(source.task_options.values())
@@ -691,14 +728,12 @@ def prototype(
         "unnamed_by_configuration": [],
         "open_at_closing": [],
     }
-    deadline = time.monotonic() + args.cap_seconds
+    deadline: Deadline = args.deadline
     began = time.monotonic()
     after: str | None = None
     stopped: str | None = None
     try:
         while not args.probe_only:
-            if time.monotonic() > deadline:
-                raise SpikeStop(f"the {args.cap_seconds} s cap was reached")
             variables["after"] = after
             answer, record = graphql(
                 source.endpoint,
@@ -708,7 +743,7 @@ def prototype(
                 limits,
                 records,
                 "open-items",
-                timeout=min(120.0, max(1.0, deadline - time.monotonic())),
+                timeout=deadline.request_timeout(),
             )
             if answer.get("errors"):
                 raise SpikeStop(
@@ -779,8 +814,6 @@ def prototype(
     )
     for probe in args.probe:
         try:
-            if time.monotonic() > deadline:
-                raise SpikeStop(f"the {args.cap_seconds} s cap was reached")
             answer, _record = graphql(
                 source.endpoint,
                 count_doc,
@@ -789,7 +822,7 @@ def prototype(
                 limits,
                 records,
                 "probe",
-                timeout=min(120.0, max(1.0, deadline - time.monotonic())),
+                timeout=deadline.request_timeout(),
             )
             errors = answer.get("errors")
             if errors:
@@ -862,25 +895,32 @@ def validate(args: argparse.Namespace) -> None:
         raise InvocationError(
             "--mode prototype needs --captured FILE from --mode capture"
         )
+    if args.mode != Mode.PROTOTYPE and (args.probe or args.probe_only):
+        raise InvocationError(
+            "--probe and --probe-only apply to --mode prototype alone"
+        )
     if args.probe_only and not args.probe:
         raise InvocationError("--probe-only needs at least one --probe")
 
 
 def main() -> int:
     args = parser().parse_args()
+    args.deadline = Deadline(time.monotonic() + args.cap_seconds)
     try:
         validate(args)
         token = load_token(args.env_file)
         with tempfile.TemporaryDirectory(prefix="spike-open-list-") as work:
             root = Path(work)
-            source = source_settings(args.binary, args.config_dir, args.source, root)
-            categories = status_categories(args.binary, root)
+            source = source_settings(
+                args.binary, args.config_dir, args.source, root, args.deadline
+            )
+            categories = status_categories(args.binary, root, args.deadline)
             result: BinaryRun | PrototypeRun = (
                 prototype(args, source, categories, token)
                 if args.mode == Mode.PROTOTYPE
                 else run_binary(args, source, categories, token, root)
             )
-    except BoundaryError as error:
+    except (BoundaryError, SpikeStop) as error:
         print(f"measure_open_list: {error}", file=sys.stderr)
         return 1
     except SpikeError as error:
