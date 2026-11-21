@@ -97,7 +97,11 @@ def load_token(env_file: str | None) -> Token:
     """
     token = os.environ.get("GH_PROJECTS_TOKEN", "")
     if not token and env_file:
-        for line in Path(env_file).read_text(encoding="utf-8").splitlines():
+        try:
+            lines = Path(env_file).read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeDecodeError) as error:
+            raise SpikeError(f"cannot read --env-file {env_file}: {error}") from error
+        for line in lines:
             name, _, value = line.partition("=")
             if name.strip() == "GH_PROJECTS_TOKEN":
                 token = value.strip().strip('"').strip("'")

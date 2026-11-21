@@ -78,6 +78,32 @@ impl Setup {
         serde_json::from_str(&text).expect("the harness writes JSON")
     }
 
+    /// The status categories `onetaskgraph schema` names that no closure reads as: every
+    /// `StatusCategory` but those its `ClosedAs` lists.
+    fn open_categories(&self) -> Vec<String> {
+        let output = self
+            .sandbox
+            .command()
+            .arg("schema")
+            .assert()
+            .get_output()
+            .clone();
+        let schema: Value = serde_json::from_str(&stdout(&output)).expect("the schema bundle");
+        let consts = |root: &str| -> Vec<String> {
+            schema["roots"][root]["oneOf"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{root} is an enum"))
+                .iter()
+                .map(|variant| variant["const"].as_str().expect("a const").to_owned())
+                .collect()
+        };
+        let closing = consts("ClosedAs");
+        consts("StatusCategory")
+            .into_iter()
+            .filter(|category| !closing.contains(category))
+            .collect()
+    }
+
     /// The ids the binary lists itself for the same question, run directly.
     fn listed_directly(&self, statuses: &[&str]) -> Vec<String> {
         let mut arguments = vec!["--json", "task", "list", "--all", "--source", "board"];
@@ -122,24 +148,18 @@ fn a_today_measurement_keeps_the_binarys_stdout_and_parses_the_rows_it_lists() {
     assert_eq!(measured["parse_error"], Value::Null);
     assert!(measured["stdout_bytes"].as_u64().unwrap_or(0) > 0);
 
-    // The harness asked for every open category the binary's schema names.
-    let open = [
-        "draft",
-        "backlog",
-        "todo",
-        "queued",
-        "in-progress",
-        "unknown",
-    ];
-    for status in open {
-        assert!(
-            measured["command"]
-                .as_str()
-                .expect("a command")
-                .contains(&format!("--status {status}")),
-            "{measured:#}"
-        );
-    }
+    // Exactly the categories the binary's schema does not close, in its own order.
+    let open = setup.open_categories();
+    let asked: Vec<&str> = measured["command"]
+        .as_str()
+        .expect("a command")
+        .split(' ')
+        .collect::<Vec<_>>()
+        .windows(2)
+        .filter(|pair| pair[0] == "--status")
+        .map(|pair| pair[1])
+        .collect();
+    assert_eq!(asked, open, "{measured:#}");
     let mut ids: Vec<String> = measured["listed_ids"]
         .as_array()
         .expect("ids")
@@ -147,6 +167,7 @@ fn a_today_measurement_keeps_the_binarys_stdout_and_parses_the_rows_it_lists() {
         .map(|id| id.as_str().expect("an id").to_owned())
         .collect();
     ids.sort();
+    let open: Vec<&str> = open.iter().map(String::as_str).collect();
     assert_eq!(ids, setup.listed_directly(&open));
     assert!(ids.contains(&"board:H-1".to_owned()) && ids.contains(&"board:H-2".to_owned()));
     assert!(
@@ -259,4 +280,30 @@ fn a_capture_then_a_prototype_reads_the_open_items_with_the_binarys_own_document
     let open = measured["counts"]["issue_open"].as_u64().expect("a count");
     assert!(open >= 3, "H-1, H-2 and H-4 are open: {measured:#}");
     assert_eq!(measured["summary"]["requests"], json!(sent.len()));
+}
+
+#[test]
+fn an_env_file_that_cannot_be_read_is_an_invocation_error() {
+    let setup = Setup::new();
+    let missing = setup.sandbox.project().join("no-such.env");
+    let mut command = setup.sandbox.subprocess("python3");
+    let output = command
+        .arg(harness())
+        .arg("--config-dir")
+        .arg(setup.sandbox.project())
+        .args(["--source", "board", "--mode", "today", "--out"])
+        .arg(&setup.out)
+        .arg("--binary")
+        .arg(onetaskgraph_e2e_support::binary())
+        .arg("--env-file")
+        .arg(&missing)
+        .output()
+        .expect("python3 runs the harness");
+    assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("cannot read --env-file"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(!setup.out.exists());
 }
