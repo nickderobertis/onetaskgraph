@@ -469,9 +469,11 @@ def run_json(
             f"{what} did not finish before the --cap-seconds deadline"
         ) from error
     if done.returncode != 0:
-        raise InvocationError(
-            f"{what} exited {done.returncode}: {done.stderr.decode('utf-8', 'replace')[-600:]}"
-        )
+        stderr = done.stderr.decode("utf-8", "replace")[-600:]
+        # The binary's own exit 2 is an invocation it refused (a malformed configuration
+        # among them); any other failure is a run that did not complete.
+        failure = InvocationError if done.returncode == 2 else BoundaryError
+        raise failure(f"{what} exited {done.returncode}: {stderr}")
     try:
         return json.loads(done.stdout)
     except json.JSONDecodeError as error:

@@ -109,10 +109,9 @@ def from_graphql(token: Token, endpoint: str) -> tuple[Reading, Reading, int]:
         used=expect_int(rate.get("used"), "rateLimit.used"),
         reset=int(reset_time.timestamp()),
     )
-    lowered = {key.lower(): value for key, value in response.headers.items()}
     figures: dict[str, int] = {}
     for name in ("limit", "remaining", "used", "reset"):
-        value = header_int(lowered, f"x-ratelimit-{name}")
+        value = header_int(response.headers, f"x-ratelimit-{name}")
         if value is None:
             raise BoundaryError(
                 f"the rateLimit call carried no x-ratelimit-{name} header"

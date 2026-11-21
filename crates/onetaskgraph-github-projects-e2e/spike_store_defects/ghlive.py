@@ -178,6 +178,8 @@ def rate_headers(headers: Mapping[str, str]) -> dict[str, str]:
 
 @dataclass(frozen=True)
 class HttpResponse:
+    """One answer, its header names lowercased: HTTP header names are case-insensitive."""
+
     status: int
     headers: dict[str, str]
     body: bytes
@@ -192,6 +194,10 @@ class Metering:
     remaining: int | None
     header_remaining: int | None
     header_reset: int | None
+
+
+def lowercase(headers: Mapping[str, str]) -> dict[str, str]:
+    return {key.lower(): value for key, value in headers.items()}
 
 
 def header_int(headers: Mapping[str, str], name: str) -> int | None:
@@ -304,13 +310,13 @@ def send(
         with urllib.request.urlopen(request, timeout=timeout) as response:
             return HttpResponse(
                 response.status,
-                dict(response.headers),
+                lowercase(response.headers),
                 response.read(),
                 time.monotonic() - began,
             )
     except urllib.error.HTTPError as error:
         return HttpResponse(
-            error.code, dict(error.headers), error.read(), time.monotonic() - began
+            error.code, lowercase(error.headers), error.read(), time.monotonic() - began
         )
 
 
