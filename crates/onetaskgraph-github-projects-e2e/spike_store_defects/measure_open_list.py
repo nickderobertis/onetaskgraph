@@ -60,8 +60,8 @@ import tempfile
 import threading
 import time
 from dataclasses import asdict, dataclass, field
-from typing import NewType
 from pathlib import Path
+from typing import NewType
 
 from ghlive import (
     GRAPHQL_ENDPOINT,
