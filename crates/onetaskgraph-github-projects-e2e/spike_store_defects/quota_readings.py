@@ -85,7 +85,16 @@ def from_rate_limit(token: Token, endpoint: str) -> Reading:
     )
 
 
-def from_graphql(token: Token, endpoint: str) -> tuple[Reading, Reading, int]:
+@dataclass(frozen=True)
+class GraphqlReadings:
+    """The two readings one ``rateLimit`` call gives, and what that call cost."""
+
+    rate_limit_object: Reading
+    call_headers: Reading
+    cost: int
+
+
+def from_graphql(token: Token, endpoint: str) -> GraphqlReadings:
     document = "query{rateLimit{limit remaining used resetAt cost}}"
     response = send("POST", endpoint, token, json.dumps({"query": document}).encode())
     if response.status != 200:
@@ -120,20 +129,24 @@ def from_graphql(token: Token, endpoint: str) -> tuple[Reading, Reading, int]:
             )
         figures[name] = value
     headers = Reading(source="GraphQL call headers", **figures)
-    return obj, headers, expect_int(rate.get("cost"), "rateLimit.cost")
+    return GraphqlReadings(
+        rate_limit_object=obj,
+        call_headers=headers,
+        cost=expect_int(rate.get("cost"), "rateLimit.cost"),
+    )
 
 
 def compare(token: Token, endpoint: str) -> Comparison:
     began = time.time()
     rest = from_rate_limit(token, endpoint)
-    obj, headers, cost = from_graphql(token, endpoint)
-    readings = [rest, obj, headers]
+    graphql = from_graphql(token, endpoint)
+    readings = [rest, graphql.rate_limit_object, graphql.call_headers]
     remaining = [reading.remaining for reading in readings]
     return Comparison(
         started=began,
         span_seconds=round(time.time() - began, 3),
         readings=readings,
-        rateLimit_cost=cost,
+        rateLimit_cost=graphql.cost,
         limits_agree=len({reading.limit for reading in readings}) == 1,
         windows=sorted({reading.reset for reading in readings}),
         remaining_spread=max(remaining) - min(remaining),

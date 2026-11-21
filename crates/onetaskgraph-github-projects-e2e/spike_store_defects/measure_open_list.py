@@ -60,6 +60,7 @@ import tempfile
 import threading
 import time
 from dataclasses import asdict, dataclass, field
+from typing import NewType
 from pathlib import Path
 
 from ghlive import (
@@ -91,6 +92,12 @@ from ghlive import (
 
 SOURCE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 ITEMS_MARKER = "items(first:$first,after:$after)"
+
+
+# A task's id as the binary lists it, `<source>:<native id>`.
+QualifiedId = NewType("QualifiedId", str)
+# An issue's GraphQL node id, as the board answers it.
+IssueNodeId = NewType("IssueNodeId", str)
 
 
 class InvocationError(SpikeError):
@@ -165,7 +172,7 @@ class BinaryRun:
     stdout_bytes: int = 0
     listed: int | None = None
     listed_by_status: dict[str, int] = field(default_factory=dict)
-    listed_ids: list[str] = field(default_factory=list)
+    listed_ids: list[QualifiedId] = field(default_factory=list)
     parse_error: str | None = None
     captured: CapturedRequest | None = None
     records: list[RequestRecord] = field(default_factory=list)
@@ -219,7 +226,7 @@ class PrototypeRun:
     closing_options: list[str] | None
     examples: Examples
     probes: dict[str, ProbeResult]
-    issue_ids: list[str]
+    issue_ids: list[IssueNodeId]
     records: list[RequestRecord]
 
     def complete(self) -> bool:
@@ -575,7 +582,7 @@ def parse_listing(stdout: bytes, run: BinaryRun) -> None:
         listing = expect_object(json.loads(stdout), "the listing")
         rows = expect_list(listing.get("items"), "the listing's items")
         by_status: dict[str, int] = {}
-        ids: list[str] = []
+        ids: list[QualifiedId] = []
         for row in rows:
             entry = expect_object(row, "a listed row")
             item = expect_object(entry.get("item"), "a row's item")
@@ -585,7 +592,7 @@ def parse_listing(stdout: bytes, run: BinaryRun) -> None:
                 f"{expect_str(status.get('name'), 'a status name')}"
             )
             by_status[key] = by_status.get(key, 0) + 1
-            ids.append(expect_str(entry.get("id"), "a row's id"))
+            ids.append(QualifiedId(expect_str(entry.get("id"), "a row's id")))
     except (json.JSONDecodeError, BoundaryError) as error:
         run.parse_error = f"{error}: {stdout[:300]!r}"
         return
@@ -775,7 +782,7 @@ def prototype(
         closing = None
     counts = ContentCounts(open_issue_at_closing_option=None if closing is None else 0)
     by_option: dict[str, int] = {}
-    ids: list[str] = []
+    ids: list[IssueNodeId] = []
     examples = Examples()
     deadline: Deadline = args.deadline
     began = time.monotonic()
@@ -820,7 +827,9 @@ def prototype(
                         counts.issue_closed += 1
                     case {"__typename": "Issue", "state": "OPEN"}:
                         counts.issue_open += 1
-                        ids.append(expect_str(content.get("id"), "an issue's id"))
+                        ids.append(
+                            IssueNodeId(expect_str(content.get("id"), "an issue's id"))
+                        )
                         if closing is not None and option in closing:
                             counts.open_issue_at_closing_option = (
                                 counts.open_issue_at_closing_option or 0
