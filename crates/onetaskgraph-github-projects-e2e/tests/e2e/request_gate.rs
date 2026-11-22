@@ -223,6 +223,18 @@ fn the_gate_is_asked_before_every_request_of_an_update_many_and_a_comment_add_ma
         );
     }
     assert!(asked.iter().any(|(request, _)| request.content_creating));
+    // And each is priced as GitHub's published rules price the request the board received, at
+    // the page sizes it bound.
+    for ((request, _), (query, variables)) in asked.iter().zip(&served) {
+        let mut bound = onetaskgraph_github_projects::largest_page_sizes();
+        for (name, value) in variables.as_object().into_iter().flatten() {
+            if let Some(size) = value.as_u64().and_then(|size| u32::try_from(size).ok()) {
+                bound.insert(name.clone(), size);
+            }
+        }
+        let priced = onetaskgraph_github_projects::point_cost(query, &bound).expect("priced");
+        assert_eq!(request.cost_hint, Some(priced), "{query}");
+    }
     // Every response's own reading, each window with its own reset, never merged.
     let told = gate.told.lock().unwrap().clone();
     assert_eq!(told.len(), served.len(), "one reading per response");

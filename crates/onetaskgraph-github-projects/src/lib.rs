@@ -993,7 +993,7 @@ fn token_variables(mut variables: Value) -> Value {
 }
 
 /// What a caller's request gate is told of one GraphQL request: it draws on GitHub's `graphql`
-/// resource, it creates content exactly when it creates an issue, a board draft or a comment,
+/// resource, it creates content exactly when it creates an issue or a comment,
 /// and it costs what GitHub's published rules price it at under the page sizes it binds.
 fn gated_graphql(document: &str, variables: &Value) -> onetaskgraph_plugin_api::GatedRequest {
     onetaskgraph_plugin_api::GatedRequest {

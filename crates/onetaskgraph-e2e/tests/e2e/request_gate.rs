@@ -10,7 +10,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use onetaskgraph_core::{Engine, UpdateBatch};
+use onetaskgraph_core::{CommentBatch, Engine, UpdateBatch};
 use onetaskgraph_plugin_api::{GatedRequest, QuotaReading, RequestGate, SourceError, SourceName};
 use serde_json::{Value, json};
 
@@ -251,6 +251,76 @@ fn the_engine_asks_once_before_each_method_it_sends_a_stdio_peer_and_stops_at_a_
                     (1..=5).map(|at| at <= written).collect::<Vec<_>>()
                 );
             }
+        }
+    }
+}
+
+/// A comment added to each of the first two tasks.
+fn comments(source: &str) -> CommentBatch {
+    serde_json::from_value(json!({"schema_version": 1, "comments": [
+        {"item": format!("{source}:T-1"), "body": "first note"},
+        {"item": format!("{source}:T-2"), "body": "second note"},
+    ]}))
+    .expect("a batch")
+}
+
+#[test]
+fn a_comment_add_is_asked_as_content_creating_and_an_update_is_not() {
+    for hosted_peer in [false, true] {
+        let sandbox = Sandbox::new();
+        let root = folder(&sandbox);
+        let log = sandbox.subdirectory("peer").join("sent.log");
+        let (name, config) = if hosted_peer {
+            ("peer", hosted(&root, &log))
+        } else {
+            (
+                "plan",
+                json!({"plugin": "local-md", "config": {"root": root}}),
+            )
+        };
+        sandbox.project_document(&document(&json!({ name: config })));
+        let gate = Recording::new(None);
+        let engine = engine(&sandbox).with_request_gate(gate.clone());
+        let source = SourceName::new(name).unwrap();
+        let runtime = runtime();
+        runtime
+            .block_on(engine.update_tasks(&source, &updates(name)))
+            .expect("the batch runs");
+        let updating = gate.asked.lock().unwrap().len();
+        runtime
+            .block_on(engine.add_comments(&source, &comments(name)))
+            .expect("the comments are added");
+        let asked = gate.asked.lock().unwrap().clone();
+        assert!(
+            asked[..updating]
+                .iter()
+                .all(|request| !request.content_creating),
+            "{name}: an update creates nothing: {asked:?}"
+        );
+        let adding = &asked[updating..];
+        // A folder asks once per comment it writes; a peer once per method, `add_comment` among
+        // them, and exactly those are content-creating.
+        let created = adding
+            .iter()
+            .filter(|request| request.content_creating)
+            .count();
+        assert_eq!(created, 2, "{name}: {adding:?}");
+        if hosted_peer {
+            let methods: Vec<String> = sent(&log).into_iter().skip(updating).collect();
+            for (request, method) in adding.iter().zip(&methods) {
+                assert_eq!(
+                    request.content_creating,
+                    method == "add_comment",
+                    "{method}"
+                );
+            }
+        } else {
+            assert!(adding.iter().all(|request| request.content_creating));
+        }
+        assert!(adding.iter().all(|request| request.cost_hint.is_none()));
+        for n in 1..=2 {
+            let file = std::fs::read_to_string(root.join(format!("tasks/T-{n}.md"))).unwrap();
+            assert!(file.contains("note"), "{name}: T-{n}: {file}");
         }
     }
 }
