@@ -177,7 +177,17 @@ fn a_rate_limit_read_github_refuses_fails_the_command_naming_why() {
             r#"{"message":"Bad credentials"}"#,
             "rejected source board's credential",
         ),
+        (
+            403,
+            r#"{"message":"Resource not accessible by personal access token"}"#,
+            "credential reading GET /rate_limit with HTTP 403",
+        ),
         (500, r#"{"message":"boom"}"#, "GitHub answered HTTP 500"),
+        (
+            200,
+            "<html>unicorn</html>",
+            "could not read its token's rate limits from GET /rate_limit",
+        ),
         (
             200,
             r#"{"rate":{"limit":5000}}"#,
