@@ -212,6 +212,7 @@ the source can do natively, and what configuration it is being built with.
 | `write_checks` | boolean | Whether this plugin answers `check_task_write`. Optional; see §3.14. |
 | `project_status` | boolean | Whether this plugin answers `set_project_status`. Optional; see §3.15. |
 | `stored_forms` | boolean | Whether this plugin answers `stored_status`, and says in a content write's result what its backend stores. Optional; see §3.16. |
+| `quota` | boolean | Whether this plugin answers `quota`. Optional; see §3.17. |
 
 An `initialize` that fails answers with an `error` envelope, ordinarily
 `{"kind": "config"}` for a `config` block this plugin cannot use, or
@@ -431,6 +432,14 @@ write, as it did before the member existed. Omitted when `false`.
 The member no longer means the plugin answers `stored_form`: that method is retired (§4.25),
 the engine never sends it, and a plugin still answering it is unaffected.
 
+### 3.17 `quota`
+
+Optional, and absent means `false`: a plugin that can say what its backend reports is left of
+the rate-limit windows its credential is metered by answers `quota: true`, and is then sent
+`quota` (§4.26) whenever a caller asks the engine for the source's reading. One that does not
+is never sent the method, and the engine answers for it that it has no reading — exactly what a
+plugin with nothing to report says. Omitted when `false`.
+
 ## 4. The methods
 
 One method per trait method, named after it. Each is given below as its `params` and
@@ -477,6 +486,7 @@ its `result`; the JSON shape of every contract type in them is what
 | `status_contradictions` | `TaskSource::status_contradictions` |
 | `issue_holdings` | `TaskSource::issue_holdings` |
 | `stored_status` | `TaskSource::stored_status` |
+| `quota` | `TaskSource::quota` |
 
 `kind`, `capabilities` and `writes` are not methods of their own: all three are settled
 by the handshake, and the engine reads capabilities once per connection.
@@ -2396,6 +2406,27 @@ converges. The engine never sends it: what a backend stores is read off each con
 own `stored_content` (§4.9). A plugin that still answers it is unaffected — it is simply never
 asked.
 
+### 4.26 `quota`
+
+Sent only to a plugin that answered `quota: true` at the handshake (§3.17), and never to one
+that did not. It takes no parameters, and changes nothing.
+
+```json
+{ "id": "29", "method": "quota", "params": {} }
+{ "id": "29", "result": { "readings": [
+  { "resource": "requests", "limit": 1500, "remaining": 1480, "used": 20,
+    "resets_at": "2026-11-22T00:22:07Z" },
+  { "resource": "complexity", "limit": 250000, "remaining": 200000, "used": 50000,
+    "resets_at": "2026-11-22T01:08:36Z" } ] } }
+```
+
+`readings` is a `Vec<QuotaReading>`: one `QuotaReading` per rate-limit window, each as the
+backend reported it and never merged with another: `resource` is the backend's own name for what is metered, `limit`
+the whole window, `remaining` what is left of it, `used` what the credential had spent of it —
+everything sharing the credential, not only this plugin — and `resets_at` when it comes back, a
+UTC timestamp. An empty list is a plugin with nothing to report. The engine asks afresh each
+time and keeps nothing; what a reading means is the caller's to decide.
+
 ## 5. The error envelope
 
 `error` carries a `SourceError` whole. It is internally tagged on `kind`, and every
@@ -2521,6 +2552,10 @@ held by `crates/onetaskgraph-core/tests/fixtures/stored-forms-wire.json`.
 §3.9 were added **without** a bump, as the methods of §4.18 were: the first reaches only a
 plugin that declared `priority` `"native"`, and the second only one that answered
 `content_updates: true`, neither of which a plugin written before them can have done.
+
+`quota` (§4.26) and the `quota` member of §3.17 were added **without** a bump, on the terms of
+§3.14: the method reaches only a plugin that answered `quota: true`, which a plugin written before
+them cannot have done, and such a plugin is answered as reporting no reading and sent nothing.
 
 `metering` (§4.14) and the `meters` member of §3.4 were added **without** a bump, for the
 same reason the documents were: the engine sends `metering` only to a plugin that answered

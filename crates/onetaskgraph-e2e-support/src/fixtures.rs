@@ -1173,6 +1173,9 @@ struct GitHubBoard {
     refusing_after: Vec<(&'static str, usize)>,
     /// The `retry-after` the next request is refused `429 Too Many Requests` with, once.
     rate_limit_next: Option<u64>,
+    /// What each `GET /rate_limit` answers, in turn: the next is taken off the front, and once
+    /// none is left the last is answered again — [`GitHubBoardFields::serve_rate_limits`].
+    rate_limits: std::collections::VecDeque<Value>,
     /// Items this board replaces after answering that many requests naming them by id — with
     /// another item, or with nothing — so a journey can let a command read one and then find it
     /// changed or gone.
@@ -1805,6 +1808,15 @@ impl GitHubBoardFields {
             .unwrap()
             .replacing
             .push((id.to_owned(), answered, replacement));
+    }
+
+    /// Answer each `GET /rate_limit` with the next of `answers`, in turn, and every one after
+    /// the last with the last — each a whole answer, `{"resources": {...}, "rate": {...}}`, as
+    /// GitHub gives it. Every read is recorded among [`Self::documents`] as `GET /rate_limit`.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board's own answer to `GET /rate_limit`, which only its server loop here answers, as `rate_limit_next` beside it controls the next request's refusal; the suites asserting what `sources quota` reports are what drive it.
+    pub fn serve_rate_limits(&self, answers: Vec<Value>) {
+        assert!(!answers.is_empty(), "at least one answer to serve");
+        self.board.lock().unwrap().rate_limits = answers.into();
     }
 
     /// Refuse the next request `429 Too Many Requests`, naming a reset `retry_after` seconds
@@ -3746,6 +3758,17 @@ pub fn github_projects_with_board_failing(
 /// The id of the one draft item [`github_projects_with_draft`] adds to the shared board.
 pub const GITHUB_DRAFT_TASK: &str = "DRAFT-1";
 
+/// What the loopback board answers `GET /rate_limit` with until a journey says otherwise:
+/// GitHub's shape, with a little of each allowance spent.
+#[must_use]
+pub fn default_rate_limits() -> Value {
+    json!({"resources": {
+        "core": {"limit": 5000, "used": 1, "remaining": 4999, "reset": 1_795_306_927},
+        "graphql": {"limit": 5000, "used": 3, "remaining": 4997, "reset": 1_795_306_927},
+        "search": {"limit": 30, "used": 0, "remaining": 30, "reset": 1_795_303_387},
+    }, "rate": {"limit": 5000, "used": 1, "remaining": 4999, "reset": 1_795_306_927}})
+}
+
 /// The shared board plus one **draft** item, [`GITHUB_DRAFT_TASK`], filed under no project.
 ///
 /// A draft is a task of a board and not an issue, so `task show` reports it and every comment
@@ -3987,6 +4010,7 @@ fn github_projects_board_at(
         refusing: Vec::new(),
         refusing_after: Vec::new(),
         rate_limit_next: None,
+        rate_limits: std::collections::VecDeque::from([default_rate_limits()]),
         replacing: Vec::new(),
         blocked_by: github_blockers(),
         counted_types: Vec::new(),
@@ -4097,6 +4121,26 @@ fn github_projects_board_at(
     let attached = Arc::clone(&board);
     let mut answer = move |sent: &loopback::Request| -> Option<String> {
         let (line, request, token) = http_request_parts(sent);
+        // What the token has left of each rate-limit window, as `GET /rate_limit` answers it.
+        if line.starts_with("GET /rate_limit ") || line == "GET /rate_limit" {
+            let body = {
+                let mut served = board.lock().unwrap();
+                served.documents.push("GET /rate_limit".to_owned());
+                served.variables.push(Value::Null);
+                served.tokens.push(token.clone());
+                served.arrivals.push(std::time::Instant::now());
+                let answer = if served.rate_limits.len() > 1 {
+                    served.rate_limits.pop_front()
+                } else {
+                    served.rate_limits.front().cloned()
+                };
+                answer.expect("an answer to serve").to_string()
+            };
+            return Some(format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            ));
+        }
         // The one REST read a write to a source declared private sends: the visibility of
         // the repository an issue lives in. Recorded beside the GraphQL documents, so a
         // journey counting what a write spent counts it too.
@@ -6615,6 +6659,7 @@ pub fn linear_workspace_failing(
         late_bends: Arc::new(Mutex::new(Vec::new())),
         limits: Arc::new(Mutex::new(std::collections::VecDeque::new())),
         lost: Arc::new(Mutex::new(Vec::new())),
+        headers: Arc::new(Mutex::new(std::collections::VecDeque::new())),
     };
     let config = linear_serve(sandbox, workspace.clone(), None, failing);
     (config, workspace)
@@ -6780,7 +6825,13 @@ pub struct LinearWorkspace {
     limits: Arc<Mutex<std::collections::VecDeque<Option<u64>>>>,
     /// The operations whose next request is applied and then answered `502`, once each.
     lost: Arc<Mutex<Vec<&'static str>>>,
+    /// The headers each of the next answers carries beside its own, in order — an answer
+    /// after the script carries none: [`LinearWorkspace::answer_with_headers`].
+    headers: Arc<Mutex<std::collections::VecDeque<LinearHeaders>>>,
 }
+
+/// The headers one answer of the loopback Linear carries beside its own, by name and value.
+type LinearHeaders = Vec<(String, String)>;
 
 impl LinearWorkspace {
     /// Apply the next request of `operation` — a GraphQL document, as the plugin sends it — and
@@ -6788,6 +6839,14 @@ impl LinearWorkspace {
     // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback Linear's own answers, which only its server loop here answers: like `rate_limit` below it can only be a method of this handle, and a suite of one plugin could not add it from outside.
     pub fn lose_answer_once(&self, operation: &'static str) {
         self.lost.lock().unwrap().push(operation);
+    }
+
+    /// Carry `script`'s headers on each of the next answers, in order — Linear's
+    /// `x-ratelimit-*` among them, as every response of Linear's carries its allowance — and no
+    /// extra header on any answer after the script.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback Linear's own answers, which only its server loop here writes: like `rate_limit` below it can only be a method of this handle, and the Linear suite's quota and gate journeys are what drive it.
+    pub fn answer_with_headers(&self, script: Vec<LinearHeaders>) {
+        self.headers.lock().unwrap().extend(script);
     }
 
     /// Answer each of the next requests by `script`, in order: `Some(wait)` is refused
@@ -7527,6 +7586,7 @@ fn linear_server_over(
         late_bends: Arc::new(Mutex::new(Vec::new())),
         limits: Arc::new(Mutex::new(std::collections::VecDeque::new())),
         lost: Arc::new(Mutex::new(Vec::new())),
+        headers: Arc::new(Mutex::new(std::collections::VecDeque::new())),
     };
     linear_serve(sandbox, workspace, recorded, failing)
 }
@@ -7844,9 +7904,18 @@ fn linear_serve(
             }
             linear_derive_relations(&mut workspace.state.lock().unwrap());
             let text = serde_json::to_string(&response).unwrap();
+            let extra: String = workspace
+                .headers
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(name, value)| format!("{name}: {value}\r\n"))
+                .collect();
             let _ = write!(
                 stream,
-                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{text}",
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n{extra}Content-Length: {}\r\nConnection: close\r\n\r\n{text}",
                 text.len()
             );
         }

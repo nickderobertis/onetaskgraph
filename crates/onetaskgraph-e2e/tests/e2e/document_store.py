@@ -18,10 +18,12 @@ implementation of it back to itself. `python3` is already what every guard under
 `workspace:lint` runs on all three platforms, so it costs the gate no new dependency.
 
 Its settings, handed over in the `initialize` request (§3), are
-`{"store": <path>, "documents": "native"|"unsupported", "log": <path>}` — the last two
-optional. `documents` lets a journey configure a peer that says it has none, and `log`
-appends the name of every method this source is asked for, which is how a journey proves a
-refusal happened *before* anything was read.
+`{"store": <path>, "documents": "native"|"unsupported", "log": <path>, "quota": [<reading>]}`
+— all but the first optional. `documents` lets a journey configure a peer that says it has
+none, and `log` appends the name of every method this source is asked for, which is how a
+journey proves a refusal happened *before* anything was read. `quota`, when given, is
+declared at the handshake (§3.17) and is what the `quota` method answers (§4.26); a peer
+configured without it says nothing about quota, as one written before there was any does.
 """
 
 # llmlint: ignore-file[modern_domain_modeling] This peer is a transcription of
@@ -490,6 +492,9 @@ def dispatch(settings, method, params):
         raise Refusal(
             refused("this store cannot say what it would keep of that %s" % what)
         )
+    # Asked only of a source whose settings carry `quota`, which is what its handshake declares.
+    if method == "quota":
+        return {"readings": settings["quota"]}
     if method in ("write_task", "write_project", "delete_task", "delete_project"):
         raise Refusal(refused("the %s plugin cannot be written" % KIND))
     raise Refusal(
@@ -519,13 +524,14 @@ def initialize(params):
         or settings.get("documents", "native") not in ("native", "unsupported")
         or not isinstance(settings.get("log", ""), str)
         or settings.get("stored_forms", "undeclared") not in ("undeclared", "refused")
+        or not isinstance(settings.get("quota", []), list)
     ):
         raise Refusal(
             {
                 "kind": "config",
                 "message": 'this source\'s settings must be {"store": <path>, "documents": '
                 '"native"|"unsupported", "log": <path>, "stored_forms": '
-                '"undeclared"|"refused"}, the last three optional',
+                '"undeclared"|"refused", "quota": [<reading>]}, the last four optional',
             }
         )
     note(settings, "initialize")
@@ -537,6 +543,8 @@ def initialize(params):
     }
     if settings.get("stored_forms") == "refused":
         result["stored_forms"] = True
+    if "quota" in settings:
+        result["quota"] = True
     return settings, result
 
 

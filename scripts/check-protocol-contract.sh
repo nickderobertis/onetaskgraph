@@ -448,6 +448,7 @@ METHOD_SECTIONS = {
     "status_contradictions": "### 4.23 `status_contradictions`",
     "issue_holdings": "### 4.24 `issue_holdings`",
     "stored_status": "### 4.25 `stored_status`",
+    "quota": "### 4.26 `quota`",
 }
 
 ENUM_SECTIONS = {

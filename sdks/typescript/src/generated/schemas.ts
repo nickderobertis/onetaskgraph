@@ -125,6 +125,7 @@ export type RuntimeSchemaRoot =
   | "QueryResponseOfQualifiedProject"
   | "QueryResponseOfQualifiedTask"
   | "QueryResponseOfSearchHit"
+  | "QuotaReading"
   | "ReadLink"
   | "ReconcileOutcome"
   | "Regenerated"
@@ -146,6 +147,7 @@ export type RuntimeSchemaRoot =
   | "SourceListings"
   | "SourceName"
   | "SourcePlan"
+  | "SourceQuota"
   | "SourceRoute"
   | "SourceVisibility"
   | "Status"
@@ -21659,6 +21661,48 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
       }
     }
   },
+  "QuotaReading": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "QuotaReading",
+    "description": "What one response — or one read of the backend's own allowance endpoint — said about one\nrate-limit window of the backend.\n\n**One window, never merged.** A credential may be metered by several windows of the same\nresource at once — GitHub was measured answering one token from two concurrent GraphQL\nwindows, each with its own reset, while `GET /rate_limit` reported only one of them — so a\nsource reports each reading as the response that carried it said it, with its own\n[`resets_at`](Self::resets_at). Choosing the least of several is the caller's.",
+    "type": "object",
+    "properties": {
+      "resource": {
+        "description": "The backend's own name for what is metered — GitHub's resource names (`graphql`,\n`core`, `search` and so on), Linear's `requests` and `complexity`.",
+        "type": "string"
+      },
+      "limit": {
+        "description": "The whole allowance of the window.",
+        "type": "integer",
+        "format": "uint64",
+        "minimum": 0
+      },
+      "remaining": {
+        "description": "What was left of it when the backend answered.",
+        "type": "integer",
+        "format": "uint64",
+        "minimum": 0
+      },
+      "used": {
+        "description": "What the credential had spent of it — everything that shares the credential, not only\nthis source.",
+        "type": "integer",
+        "format": "uint64",
+        "minimum": 0
+      },
+      "resets_at": {
+        "description": "When the window resets and the allowance comes back.",
+        "type": "string",
+        "format": "date-time"
+      }
+    },
+    "required": [
+      "resource",
+      "limit",
+      "remaining",
+      "used",
+      "resets_at"
+    ]
+  },
   "ReadLink": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "ReadLink",
@@ -24291,6 +24335,76 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "type": "string",
             "const": "reverse-dependencies"
           }
+        ]
+      }
+    }
+  },
+  "SourceQuota": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "SourceQuota",
+    "description": "What `sources quota` answers: every rate-limit window one source's backend reported, each\nas it reported it.\n\nA source with nothing to report — a folder of Markdown, an in-memory source, a stdio\nplugin whose handshake does not declare `quota` — answers no resources at all.",
+    "type": "object",
+    "properties": {
+      "source": {
+        "description": "The source asked.",
+        "$ref": "#/$defs/SourceName"
+      },
+      "resources": {
+        "description": "One reading per window, never merged with another; choosing the least is the caller's.",
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/QuotaReading"
+        }
+      }
+    },
+    "required": [
+      "source",
+      "resources"
+    ],
+    "$defs": {
+      "SourceName": {
+        "description": "The name a configuration document gives one configured source.",
+        "type": "string",
+        "pattern": "^[a-z0-9][a-z0-9-]*$"
+      },
+      "QuotaReading": {
+        "description": "What one response — or one read of the backend's own allowance endpoint — said about one\nrate-limit window of the backend.\n\n**One window, never merged.** A credential may be metered by several windows of the same\nresource at once — GitHub was measured answering one token from two concurrent GraphQL\nwindows, each with its own reset, while `GET /rate_limit` reported only one of them — so a\nsource reports each reading as the response that carried it said it, with its own\n[`resets_at`](Self::resets_at). Choosing the least of several is the caller's.",
+        "type": "object",
+        "properties": {
+          "resource": {
+            "description": "The backend's own name for what is metered — GitHub's resource names (`graphql`,\n`core`, `search` and so on), Linear's `requests` and `complexity`.",
+            "type": "string"
+          },
+          "limit": {
+            "description": "The whole allowance of the window.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "remaining": {
+            "description": "What was left of it when the backend answered.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "used": {
+            "description": "What the credential had spent of it — everything that shares the credential, not only\nthis source.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "resets_at": {
+            "description": "When the window resets and the allowance comes back.",
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "resource",
+          "limit",
+          "remaining",
+          "used",
+          "resets_at"
         ]
       }
     }

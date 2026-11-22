@@ -46,6 +46,7 @@ import type {
   RenderedTemplate,
   SanitizeDryRun,
   SourceListings,
+  SourceQuota,
   SourceRoute,
   StatusCategory,
   StatusesReconciled,
@@ -349,6 +350,8 @@ export const commandResponseRoots: Readonly<Record<string, keyof typeof runtimeS
   "sources sanitize": "SweepReport",
   // What rewriting one source's items still held in a superseded stored form rewrote.
   "sources migrate": "StoredFormsMigrated",
+  // What one source's backend says is left of each rate-limit window, as it reported it.
+  "sources quota": "SourceQuota",
   "task list": "QueryResponseOfQualifiedTask",
   "task show": "TaskDetail",
   // One `TaskDetail` per id, in request order.
@@ -472,6 +475,7 @@ const partialResponseCommands = new Set(
       command !== "sources route" &&
       command !== "sources sanitize" &&
       command !== "sources migrate" &&
+      command !== "sources quota" &&
       command !== "project graph" &&
       (!command.startsWith("task comment ") || command === "task comment add-many") &&
       !command.endsWith(" metadata set") &&
@@ -1312,6 +1316,15 @@ export class OnetaskgraphClient {
       throw new TypeError("sourcesMigrate: dryRun is not a boolean; next: pass true or false");
     }
     return this.run("sources migrate", [source, ...(options.dryRun ? ["--dry-run"] : [])]);
+  }
+  // What `source`'s backend says is left of each rate-limit window it meters the source's
+  // credential by, one reading per window as the backend reported it; a source with nothing to
+  // report answers none. What the reading means is the caller's to decide.
+  sourcesQuota(source: string): Promise<SourceQuota> {
+    if (typeof source !== "string") {
+      throw new TypeError("sourcesQuota: source is not a string; next: name a configured source");
+    }
+    return this.run("sources quota", [source]);
   }
   // Find the items of `source` already carrying a declared private term and rewrite what the
   // policy's replacements fix; `complete` reads the source whole, `dryRun` writes nothing.

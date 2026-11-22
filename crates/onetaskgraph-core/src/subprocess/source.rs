@@ -34,7 +34,7 @@ use super::wire::{
     DocumentWriteParams, EditCommentParams, EngineIdentity, HoldingsParams, HoldingsResult,
     IdParams, InitializeParams, InitializeResult, LabelParams, MetadataParams, MeteringResult,
     PROTOCOL_VERSION, PriorityParams, PriorityResult, ProjectQueryParams, ProjectResult,
-    ProjectWriteParams, Request, StatusParams, StatusResult, StoredStatusParams,
+    ProjectWriteParams, QuotaResult, Request, StatusParams, StatusResult, StoredStatusParams,
     StoredStatusResult, TaskAssetWriteParams, TaskDetailParams, TaskDetailResult, TaskQueryParams,
     TaskResult, TaskWriteParams, UpdateParams, UpdateResult, WriteResult,
     after_the_first_vocabulary, knows_every_category, spelled, vocabulary,
@@ -104,6 +104,11 @@ pub struct SubprocessSource {
     /// A plugin that said nothing is never sent the method and is reported as not metering,
     /// which is what §3.4 makes an absent member mean.
     meters: bool,
+    /// Whether the plugin said it answers `quota` (§3.17), read at the same handshake.
+    ///
+    /// A plugin that said nothing is never sent the method and is answered as reporting no
+    /// reading, which is what §3.17 makes an absent member mean.
+    quota: bool,
     /// Whether the plugin's handshake listed every status category this build knows (§3.5).
     ///
     /// A plugin that listed none was written against the first vocabulary, and is never
@@ -394,6 +399,7 @@ impl SubprocessSource {
             write_checks,
             project_status,
             stored_forms,
+            quota,
         } = match result {
             Ok(result) => result,
             Err(error) => return Err(with_diagnostics(error, &mut peer)),
@@ -420,6 +426,7 @@ impl SubprocessSource {
             capabilities,
             writes: writes.unwrap_or(WriteSupport::Unsupported),
             meters,
+            quota,
             knows_every_category: knows_every_category(statuses.as_deref()),
             task_updates,
             metadata_updates,
@@ -1526,6 +1533,15 @@ impl TaskSource for SubprocessSource {
         }
         let result: MeteringResult = self.ask("metering", json!({})).await?;
         Ok(result.metering)
+    }
+
+    async fn quota(&self) -> Result<Vec<onetaskgraph_plugin_api::QuotaReading>, SourceError> {
+        // A plugin that did not declare `quota` is never sent it (§3.17): it reports nothing.
+        if !self.quota {
+            return Ok(Vec::new());
+        }
+        let result: QuotaResult = self.ask("quota", json!({})).await?;
+        Ok(result.readings)
     }
 
     async fn end_command(&self) -> Result<(), SourceError> {

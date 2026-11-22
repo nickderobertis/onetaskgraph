@@ -1090,6 +1090,14 @@ impl TaskSource for HeldOff {
         self.noted(self.inner.metering().await)
     }
 
+    // Forwarded even before the reset: a quota reading is what tells a caller how long the
+    // hold has left to run, and a backend's own allowance read spends nothing of the
+    // allowance it reports — so holding it off would cost the caller the one answer it needs
+    // and save the backend nothing.
+    async fn quota(&self) -> Result<Vec<onetaskgraph_plugin_api::QuotaReading>, SourceError> {
+        self.inner.quota().await
+    }
+
     async fn end_command(&self) -> Result<(), SourceError> {
         self.inner.end_command().await
     }

@@ -580,6 +580,7 @@ mod batch;
 mod fields;
 mod migrate;
 mod origins;
+mod quota;
 mod relations;
 mod shared;
 mod slot;
@@ -942,6 +943,21 @@ pub mod graphql {
     /// takes a `hash` instead — and a variable has to be exactly its argument's type.
     pub const COMMENT: &str =
         "query($id:String){ comment(id:$id){ id body archivedAt issue{id} } }";
+    /// Whether `document` creates content — an issue, a project, a document or a comment —
+    /// which is what a caller's request gate is told of each request.
+    #[must_use]
+    pub fn creates_content(document: &str) -> bool {
+        document.trim_start().starts_with("mutation")
+            && [
+                "issueCreate(",
+                "projectCreate(",
+                "documentCreate(",
+                "commentCreate(",
+            ]
+            .iter()
+            .any(|root| document.contains(root))
+    }
+
     /// Add a comment to an issue.
     pub const COMMENT_CREATE: &str = "mutation($input:CommentCreateInput!){ commentCreate(input:$input){success comment{id body url createdAt updatedAt user{displayName}}} }";
     /// Replace a comment's body.
@@ -2000,6 +2016,9 @@ struct LinearSource {
     locations: std::sync::Mutex<std::collections::HashMap<(MetadataRecord, NativeId), String>>,
     /// The ids Linear's editor gave each record's headings, as the latest answer this instance
     /// read or wrote it with carried them — what [`TaskSource::stored_headings`] answers.
+    /// What the last response this source received said about each rate-limit window, as
+    /// [`quota::header_readings`] reads it; empty before its first. See [`quota`].
+    quota: std::sync::Mutex<Vec<onetaskgraph_plugin_api::QuotaReading>>,
     headings: std::sync::Mutex<
         std::collections::HashMap<
             (MetadataRecord, NativeId),
@@ -2091,6 +2110,7 @@ impl LinearSource {
             ahead: std::sync::Mutex::new(std::collections::HashMap::new()),
             edges_ahead: std::sync::Mutex::new(std::collections::HashMap::new()),
             locations: std::sync::Mutex::new(std::collections::HashMap::new()),
+            quota: std::sync::Mutex::new(Vec::new()),
             headings: std::sync::Mutex::new(std::collections::HashMap::new()),
             body_markup: std::sync::OnceLock::new(),
             answered: std::sync::Mutex::new(std::collections::HashMap::new()),
@@ -2750,6 +2770,17 @@ impl LinearSource {
         }
     }
 
+    /// Hold what one response said about each rate-limit window as the source's answer to
+    /// [`TaskSource::quota`], and tell the gate of the call in progress.
+    pub(crate) fn received_quota(&self, headers: &reqwest::header::HeaderMap) {
+        let readings = quota::header_readings(headers);
+        <dyn onetaskgraph_plugin_api::RequestGate>::after(&readings);
+        *self
+            .quota
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = readings;
+    }
+
     async fn answer_using(
         &self,
         client: &reqwest::Client,
@@ -2778,6 +2809,16 @@ impl LinearSource {
         } else {
             std::borrow::Cow::Borrowed(query)
         };
+        // Asked immediately before the request leaves, whatever it is: a caller pacing its
+        // own floor inside one call waits or stops here.
+        <dyn onetaskgraph_plugin_api::RequestGate>::before(
+            &onetaskgraph_plugin_api::GatedRequest {
+                resource: "requests".to_owned(),
+                content_creating: graphql::creates_content(&query),
+                cost_hint: None,
+            },
+        )
+        .await?;
         let response = client
             .post(&self.endpoint.0)
             .header("Authorization", self.key.expose_secret())
@@ -2787,6 +2828,7 @@ impl LinearSource {
             .map_err(|e| SourceError::Unavailable {
                 message: with_causes(&e),
             })?;
+        self.received_quota(response.headers());
         let status = response.status();
         let retry = reset_wait(response.headers()).map(|wait| {
             wait.as_secs()
@@ -5966,6 +6008,19 @@ impl TaskSource for LinearSource {
     ) -> Result<onetaskgraph_plugin_api::StoredFormMigration, SourceError> {
         self.migrate(dry_run).await
     }
+
+    /// What the last response this source received said about each rate-limit window, held
+    /// as it came and never merged — empty before its first. No request is sent for it, so it
+    /// spends nothing of Linear's allowance and is kept across a command's end, as the
+    /// allowance it describes is not anybody's work. See the `quota` module.
+    async fn quota(&self) -> Result<Vec<onetaskgraph_plugin_api::QuotaReading>, SourceError> {
+        Ok(self
+            .quota
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone())
+    }
+
     /// The tokens its dependency walks spelled and the items its writes were answered with, and
     /// nothing else: what this source holds across a command is its [`Vocabulary`] — the team's
     /// id, its workflow states and the workspace's project statuses — which stays valid in

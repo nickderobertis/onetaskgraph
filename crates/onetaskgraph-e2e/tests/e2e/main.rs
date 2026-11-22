@@ -199,6 +199,9 @@ mod metadata;
 mod migrate;
 mod multi_source;
 mod no_persistence;
+// `sources quota` on a folder of Markdown and the Python stdio peer, with and without `quota` in
+// its handshake — no credential and no network.
+mod quota;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Not expensive, and there is no
 // narrower edge for it: every journey here drives the binary against the shared rows — folders
 // of Markdown, in-memory sources, the loopback Linear workspace and GitHub board, and the

@@ -668,6 +668,7 @@ mod expected;
 pub use expected::{CONTEXT_VERSION, WHOLE_MEMBERS, context_shapes};
 mod pacing;
 mod projection;
+mod quota;
 mod relations;
 mod visibility;
 
@@ -16623,6 +16624,13 @@ impl TaskSource for GitHubProjectsSource {
     /// the two cannot count one request two ways.
     async fn metering(&self) -> Result<Option<Metering>, SourceError> {
         Ok(Some(self.ledger.snapshot().metering()))
+    }
+
+    /// One `GET /rate_limit` at this source's endpoint, every resource it reports, asked
+    /// afresh each time and counted in nothing [`metering`](TaskSource::metering) reports:
+    /// GitHub documents the endpoint as free. See [`quota`].
+    async fn quota(&self) -> Result<Vec<onetaskgraph_plugin_api::QuotaReading>, SourceError> {
+        self.rate_limits().await
     }
 
     /// Drop every item, search answer and board read this source holds, so the next command

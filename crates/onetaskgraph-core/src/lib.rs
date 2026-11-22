@@ -82,9 +82,10 @@ pub use engine::{
     Paging, PriorityCondition, PriorityGuard, ProjectGraph, ProjectGraphRequest, ProjectRequest,
     ProjectSelector, ProjectStatusSet, PublicProjection, PublicProjections, Qualified,
     QualifiedEdge, QualifiedEndpoint, ReconcileOutcome, SearchHit, SearchKind, SearchRequest,
-    SourceListing, SourceState, Spent, StatusCondition, StatusPolicy, StatusReconciled,
-    StatusesReconciled, TaskAssetNames, TaskAssetsError, TaskContentSet, TaskDetail, TaskDetails,
-    TaskPrioritySet, TaskRequest, TaskStatusSet, TaskUpdated, UpdateFields, graph_label, settled,
+    SourceListing, SourceQuota, SourceState, Spent, StatusCondition, StatusPolicy,
+    StatusReconciled, StatusesReconciled, TaskAssetNames, TaskAssetsError, TaskContentSet,
+    TaskDetail, TaskDetails, TaskPrioritySet, TaskRequest, TaskStatusSet, TaskUpdated,
+    UpdateFields, graph_label, settled,
 };
 pub use engine::{
     DocumentCreate, ProjectCreate, Regenerated, Regeneration, RenderRequest, RenderTemplate,

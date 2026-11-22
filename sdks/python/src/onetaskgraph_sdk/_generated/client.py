@@ -54,6 +54,7 @@ if TYPE_CHECKING:
         SanitizeDryRun,
         SourceListing,
         SourceName,
+        SourceQuota,
         SourceRoute,
         StatusCategory,
         StatusesReconciled,
@@ -101,6 +102,7 @@ POSITIONALS: dict[tuple[str, ...], tuple[str, ...]] = {
     ("search",): ("text",),
     ("sources", "fields"): ("source",),
     ("sources", "migrate"): ("source",),
+    ("sources", "quota"): ("source",),
     ("sources", "route"): ("source",),
     ("sources", "sanitize"): ("source",),
     ("sources", "status-options"): ("source",),
@@ -3012,6 +3014,69 @@ class GeneratedClient:
             source=source,
             default_sources=default_sources,
             dry_run=dry_run,
+            page_size=page_size,
+            reject=reject,
+            replace=replace,
+            sanitize_dry_run=sanitize_dry_run,
+            set=set,
+        )
+
+    @overload
+    async def sources_quota(
+        self,
+        source: SourceName | str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[False] | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> SourceQuota: ...
+
+    @overload
+    async def sources_quota(
+        self,
+        source: SourceName | str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: Literal[True],
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> SourceQuota | SanitizeDryRun: ...
+
+    @overload
+    async def sources_quota(
+        self,
+        source: SourceName | str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> SourceQuota | SanitizeDryRun: ...
+
+    async def sources_quota(
+        self,
+        source: SourceName | str,
+        *,
+        default_sources: list[str] | tuple[str, ...] | None = None,
+        page_size: int | None = None,
+        reject: list[str] | tuple[str, ...] | None = None,
+        replace: list[str] | tuple[str, ...] | None = None,
+        sanitize_dry_run: bool | None = None,
+        set: list[str] | tuple[str, ...] | None = None,
+    ) -> SourceQuota | SanitizeDryRun:
+        """Run ``onetaskgraph sources quota``."""
+        return await self._invoke(
+            ["sources", "quota"],
+            _models.SourceQuota | _models.SanitizeDryRun,
+            source=source,
+            default_sources=default_sources,
             page_size=page_size,
             reject=reject,
             replace=replace,

@@ -102,6 +102,7 @@ from onetaskgraph_sdk import (
     SourceFailure,
     SourceListing,
     SourceName,
+    SourceQuota,
     SourceRoute,
     SourceVisibility,
     StatusCategory,
@@ -367,6 +368,9 @@ from onetaskgraph_sdk._generated.models import (
     SourceName as ModelsSourceName,
 )
 from onetaskgraph_sdk._generated.models import (
+    SourceQuota as ModelsSourceQuota,
+)
+from onetaskgraph_sdk._generated.models import (
     SourceRoute as ModelsSourceRoute,
 )
 from onetaskgraph_sdk._generated.models import (
@@ -564,6 +568,7 @@ FROM_ROOT: dict[str, object] = {
     "SourceFailure": SourceFailure,
     "SourceListing": SourceListing,
     "SourceName": SourceName,
+    "SourceQuota": SourceQuota,
     "SourceRoute": SourceRoute,
     "SourceVisibility": SourceVisibility,
     "StatusCategory": StatusCategory,
@@ -677,6 +682,7 @@ FROM_MODELS: dict[str, object] = {
     "SourceFailure": ModelsSourceFailure,
     "SourceListing": ModelsSourceListing,
     "SourceName": ModelsSourceName,
+    "SourceQuota": ModelsSourceQuota,
     "SourceRoute": ModelsSourceRoute,
     "SourceVisibility": ModelsSourceVisibility,
     "StatusCategory": ModelsStatusCategory,
@@ -847,6 +853,7 @@ MODEL_CLASSES: dict[str, type[BaseModel]] = {
     "SourceFailure": SourceFailure,
     "SourceListing": SourceListing,
     "SourceName": SourceName,
+    "SourceQuota": SourceQuota,
     "SourceRoute": SourceRoute,
     "StatusMapping": StatusMapping,
     "StatusNamesReport": StatusNamesReport,
@@ -942,6 +949,7 @@ MODELS_MODEL_CLASSES: dict[str, type[BaseModel]] = {
     "SourceFailure": ModelsSourceFailure,
     "SourceListing": ModelsSourceListing,
     "SourceName": ModelsSourceName,
+    "SourceQuota": ModelsSourceQuota,
     "SourceRoute": ModelsSourceRoute,
     "StatusMapping": ModelsStatusMapping,
     "StatusNamesReport": ModelsStatusNamesReport,

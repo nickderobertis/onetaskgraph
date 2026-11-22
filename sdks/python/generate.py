@@ -95,6 +95,8 @@ RESPONSE_ROOTS = {
     "sources_sanitize": "SweepReport",
     # What one migration of a source's superseded stored forms rewrote, and could not.
     "sources_migrate": "StoredFormsMigrated",
+    # What one source's backend says is left of each rate-limit window, as it reported it.
+    "sources_quota": "SourceQuota",
     "config_show": "EffectiveConfig",
     # What emptying the local cache of one source, or of every source, emptied.
     "cache_clear": "CacheCleared",
@@ -991,7 +993,7 @@ def operands(command: tuple[str, ...]) -> tuple[str, ...]:
     match command:
         case ("search",):
             return ("text",)
-        case ("sources", "status-options" | "fields" | "route" | "sanitize" | "migrate"):
+        case ("sources", "status-options" | "fields" | "route" | "sanitize" | "migrate" | "quota"):
             return ("source",)
         case ("task" | "document", "copy") | ("task", "show-many" | "locate" | "relations"):
             return ("ids",)

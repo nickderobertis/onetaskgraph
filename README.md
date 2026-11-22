@@ -76,6 +76,9 @@ onetaskgraph sources migrate <SOURCE> [--dry-run] [--json]
 # Rewrites every item of SOURCE still held in a stored form its plugin no longer writes — on a
 # Linear source, metadata in an HTML comment Linear shows as text — into the collapsed block it
 # writes now, changing nothing a read gives back. See "Rewriting a source's stored forms" below.
+onetaskgraph sources quota <SOURCE> [--json]
+# What SOURCE's backend says is left of each rate-limit window its credential is metered by,
+# one row per window as the backend reported it. See "A source's quota" below.
 
 onetaskgraph task list [--source S]... [--label L]... [--not-label L]...
                        [--status S]... [--not-status S]...
@@ -3344,6 +3347,29 @@ served over the stdio protocol included, has nothing to migrate and is sent noth
 
 `from` names the form an item left: `html-comment-slot`, `multi-line-comment-slot` or
 `fields-comment-marker`. Exit 0 when nothing failed, and 1 when any item could not be rewritten.
+
+**A source's quota: `onetaskgraph sources quota <SOURCE> [--json]`.** What the source's backend
+says is left of each rate-limit window it meters the source's credential by — everything that
+shares the credential included, not only this store — one reading per window, each as the
+backend reported it and never merged with another: a GitHub token can be metered by two windows
+of one resource at once, each with its own reset. A GitHub board sends one `GET /rate_limit` at
+its configured endpoint, which GitHub documents as free, and reports every resource it names; a
+Linear source answers what its last response's `x-ratelimit-*` headers said, which in a fresh
+process is nothing; a folder of Markdown, an in-memory source and a stdio plugin whose handshake
+does not declare `quota` answer none. A source behind the store's cache asks its backend every
+time. The store reports the reading; deciding what it means — a floor to keep, a pause to take —
+is the caller's. A program linking the engine reads the same through `Engine::quota`.
+
+```json
+{"source": "board", "resources": [
+  {"resource": "core", "limit": 5000, "remaining": 4988, "used": 12,
+   "resets_at": "2026-11-22T00:22:07Z"},
+  {"resource": "graphql", "limit": 5000, "remaining": 4589, "used": 411,
+   "resets_at": "2026-11-22T01:08:36Z"}]}
+```
+
+Exit 0 with the readings, and non-zero naming the source when it is not configured or the
+reading could not be taken.
 
 **A task owns its classification.** Who may read a task is its own declaration and every
 repository it names, and nothing else: all-public repositories leave it public unless it says

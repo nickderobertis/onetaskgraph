@@ -63,6 +63,7 @@ mod plan_reads;
 mod plan_writes;
 mod private_home;
 mod project_status;
+mod quota;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] The github-points-per-relation-batch workload must run in this crate's `test` target, whose saved telemetry its reporter reads and whose `budgets` target judges it, as every budget of this crate does (`follow_up_cycle`, `store_cost`); it is loopback-only and under a second long.
 mod relation_batch;
 mod relations;

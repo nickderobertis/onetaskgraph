@@ -348,6 +348,24 @@ pub enum SourcesCommand {
     /// each named with why.
     // llmlint: ignore[new_command_or_client_gets_its_own_project] This subcommand belongs to the existing binary and engine projects, has no independent executable or package, and affected selection already selects both.
     Migrate(MigrateArgs),
+    /// Report what the source's backend says is left of each rate-limit window it meters the
+    /// source's credential by — one row per window, each as the backend reported it.
+    ///
+    /// Asked afresh every time, a cached source's included, and costs nothing a source
+    /// meters: a GitHub board reads `GET /rate_limit`, a Linear source answers what its last
+    /// response's headers said, and a source with nothing to report — a folder of Markdown, a
+    /// stdio plugin whose handshake does not declare `quota` — answers no resources. The store
+    /// reports the reading; what it means is the caller's to decide.
+    // llmlint: ignore[new_command_or_client_gets_its_own_project] This subcommand belongs to the existing binary and engine projects, has no independent executable or package, and affected selection already selects both.
+    Quota(QuotaArgs),
+}
+
+/// `onetaskgraph sources quota`.
+#[derive(Debug, Args)]
+pub struct QuotaArgs {
+    /// The configured source to ask.
+    // llmlint: ignore[invalid_states_unrepresentable] Clap collects this token as text so an unknown name is refused naming the configured ones; the command converts it to a `SourceName` before any lookup.
+    pub source: String,
 }
 
 /// `onetaskgraph sources migrate`.

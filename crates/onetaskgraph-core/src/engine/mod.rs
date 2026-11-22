@@ -43,6 +43,7 @@ pub use migrate::{MigratedKind, MigratedRecord, MigrationRefused, StoredFormsMig
 mod narrow;
 mod plan_graph;
 mod projection;
+mod quota;
 pub(crate) mod relations;
 mod rendered;
 mod resume;
@@ -120,6 +121,7 @@ pub use local::ProjectSelector;
 pub use metadata::MetadataSet;
 pub use narrow::{GuardOutcome, PriorityGuard, TaskContentSet, TaskPrioritySet};
 pub use plan_graph::{PlanCreated, PlanMember, PlannedMember, PlannedProject};
+pub use quota::SourceQuota;
 pub use relations::{
     LinkBatch, LinkItem, LinkOp, LinkOutcome, LinkResult, LinksWritten, OtherEnd, ParentBatch,
     ParentEdge, ParentOutcome, ParentResult, ParentsSet, RELATIONS_SCHEMA_VERSION, ReadLink,

@@ -422,6 +422,25 @@ async fn run_inner(
         }
 
         Command::Sources {
+            command: SourcesCommand::Quota(args),
+        } => {
+            let Some(source) = usable_source(&args.source, loaded) else {
+                return Ok(EXIT_USAGE);
+            };
+            let resources = engine(loaded)
+                .quota(&source)
+                .await
+                .map_err(|error| Failure::from(&error))?;
+            let answer = onetaskgraph_core::SourceQuota { source, resources };
+            let rendered = match loaded.config.output() {
+                OutputFormat::Text => render::quota(&answer),
+                OutputFormat::Json => json(&answer, "the quota reading")?,
+            };
+            emit(out, rendered.trim_end(), "the quota reading")?;
+            Ok(EXIT_OK)
+        }
+
+        Command::Sources {
             command: SourcesCommand::Route(args),
         } => {
             // Configuration alone: no engine is built, so no source is constructed or asked.
@@ -3064,6 +3083,7 @@ mod tests {
                 "sources route",
                 "sources sanitize",
                 "sources migrate",
+                "sources quota",
                 "task list",
                 "task show",
                 "task show-many",

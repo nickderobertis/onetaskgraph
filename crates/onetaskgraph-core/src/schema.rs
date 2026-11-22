@@ -40,9 +40,9 @@ use crate::{
     FailureClass, FailureDocument, GlobalId, IssueCompleted, IssuesCompleted, LocateReport,
     MetadataSet, PageToken, Predicate, ProjectGraph, ProjectStatusSet, PublicProjections,
     Qualified, QualifiedEdge, QualifiedEndpoint, QueryPlan, QueryResponse, ReconcileOutcome,
-    Regenerated, SearchHit, SearchKind, SourceFailure, SourceListing, SourcePlan, StatusReconciled,
-    StatusesReconciled, TaskAssetNames, TaskContentSet, TaskDetail, TaskDetails, TaskPrioritySet,
-    TaskStatusSet, TaskUpdated, TemplateAnswers,
+    Regenerated, SearchHit, SearchKind, SourceFailure, SourceListing, SourcePlan, SourceQuota,
+    StatusReconciled, StatusesReconciled, TaskAssetNames, TaskContentSet, TaskDetail, TaskDetails,
+    TaskPrioritySet, TaskStatusSet, TaskUpdated, TemplateAnswers,
 };
 
 /// The bundle's own version, bumped whenever any root's schema changes — added, removed,
@@ -58,7 +58,7 @@ use crate::{
 /// that it moves whenever [`schema_bundle`] below emits a different document. The golden
 /// that holds it to that is `PUBLISHED_BUNDLES` in `tests/engine.rs`, which records every
 /// root's schema by digest from this version on.
-pub const SCHEMA_BUNDLE_VERSION: u32 = 67;
+pub const SCHEMA_BUNDLE_VERSION: u32 = 68;
 
 /// The same typed envelope the command line serializes, keeping the payload's root name.
 pub(crate) fn write_answer_schema<T: schemars::JsonSchema>() -> Schema {
@@ -150,6 +150,12 @@ pub fn schema_bundle() -> Value {
     roots.insert("SearchHit", schema_for!(SearchHit));
     roots.insert("SourceListing", schema_for!(SourceListing));
     roots.insert("SourceListings", schema_for!(Vec<SourceListing>));
+    // What `sources quota` answers, and the one reading inside it a caller acts on by name.
+    roots.insert("SourceQuota", schema_for!(SourceQuota));
+    roots.insert(
+        "QuotaReading",
+        schema_for!(onetaskgraph_plugin_api::QuotaReading),
+    );
     roots.insert(
         "QueryResponseOfQualifiedTask",
         schema_for!(QueryResponse<Qualified<Task>>),
