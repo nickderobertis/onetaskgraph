@@ -72,8 +72,13 @@ fn run(sandbox: &Sandbox, arguments: &[&str]) -> Value {
 }
 
 /// A plan of `tasks` tasks authored in a folder declared private and copied onto the board, as
-/// the host copies one there.
+/// the host copies one there, each task depending on the one before it.
 fn copied(tasks: usize) -> Copied {
+    copied_with(tasks, &|n| if n > 1 { vec![n - 1] } else { Vec::new() })
+}
+
+/// [`copied`], with task `n` depending on each task `blockers(n)` names.
+fn copied_with(tasks: usize, blockers: &dyn Fn(usize) -> Vec<usize>) -> Copied {
     let sandbox = Sandbox::new();
     let (config, board) = github_projects_with_items(&sandbox, Vec::new());
     let root = sandbox.subdirectory("authoring");
@@ -88,10 +93,11 @@ fn copied(tasks: usize) -> Copied {
     )
     .expect("the project");
     for n in 1..=tasks {
-        let depends = if n > 1 {
-            format!("depends_on: [T-{}]\n", n - 1)
-        } else {
+        let named: Vec<String> = blockers(n).iter().map(|k| format!("T-{k}")).collect();
+        let depends = if named.is_empty() {
             String::new()
+        } else {
+            format!("depends_on: [{}]\n", named.join(", "))
         };
         std::fs::write(
             root.join(format!("tasks/T-{n}.md")),
@@ -345,4 +351,286 @@ fn measure_github_project_copy_back_requests() {
     )
     .expect("the telemetry file");
     eprintln!("{BUDGET}: {value} requests; {detail}");
+}
+
+/// The edges `project graph` draws of the folder's plan, sorted.
+fn graph_edges(sandbox: &Sandbox) -> Vec<(String, String)> {
+    let graph = run(
+        sandbox,
+        &["project", "graph", "authoring:P", "--format", "json"],
+    );
+    let mut edges: Vec<(String, String)> = graph["edges"]
+        .as_array()
+        .expect("the edges")
+        .iter()
+        .map(|edge| {
+            (
+                edge["from"].as_str().expect("an id").to_owned(),
+                edge["to"].as_str().expect("an id").to_owned(),
+            )
+        })
+        .collect();
+    edges.sort();
+    edges
+}
+
+/// Every file of the plan's folder, by path, as its bytes stand.
+fn folder(sandbox: &Sandbox) -> BTreeMap<PathBuf, Vec<u8>> {
+    let mut files = BTreeMap::new();
+    let mut pending = vec![sandbox.subdirectory("authoring")];
+    while let Some(directory) = pending.pop() {
+        for entry in std::fs::read_dir(&directory).expect("the folder") {
+            let path = entry.expect("an entry").path();
+            if path.is_dir() {
+                pending.push(path);
+            } else {
+                files.insert(path.clone(), std::fs::read(&path).expect("a file"));
+            }
+        }
+    }
+    files
+}
+
+/// More blockers than a members listing carries of one task (`$nestedFirst`, 50), so the copy
+/// back's read ahead of the members has that one task to read in a batch rather than from the
+/// listing — the one request a read ahead sends in a copy back, which these journeys refuse.
+const BLOCKERS: usize = 51;
+/// The task blocked by every other.
+const HUB: usize = BLOCKERS + 1;
+
+/// A plan whose last task depends on each of the [`BLOCKERS`] before it, copied onto the board
+/// with its cache then emptied, and two cards — a blocker and the hub — moved to `Done`.
+fn hub_plan() -> Copied {
+    let copied = copied_with(HUB, &|n| {
+        if n == HUB {
+            (1..=BLOCKERS).collect()
+        } else {
+            Vec::new()
+        }
+    });
+    for n in [1, HUB] {
+        copied
+            .board
+            .move_card(&copied.tasks[&format!("T-{n}")], "Done");
+    }
+    // Cold, so what is read ahead is decided by the listing alone.
+    std::fs::remove_dir_all(&copied.cache).expect("the cache emptied");
+    copied
+}
+
+/// The substring of the batched read a copy reads ahead with, and of no other document.
+const READ_AHEAD: &str = "$children:Boolean!";
+/// The substring of a read of one issue by id, and of no other document.
+const ONE_ISSUE: &str =
+    "query($id:ID!,$first:Int!,$nestedFirst:Int!,$boardItems:Int!,$duplicates:Boolean!";
+
+fn copy_back_arguments(copied: &Copied) -> Vec<String> {
+    [
+        "project",
+        "copy",
+        &copied.project,
+        "--to",
+        "authoring",
+        "--update-fields",
+        "status",
+        "--metadata",
+        &format!("{KEY}=null"),
+        "--json",
+    ]
+    .map(str::to_owned)
+    .to_vec()
+}
+
+/// The ids each request of `sent` carrying `fragment` asked about, in order.
+fn asked(sent: &[(String, Value)], fragment: &str) -> Vec<Value> {
+    sent.iter()
+        .filter(|(document, _)| document.contains(fragment))
+        .map(|(_, variables)| variables["id"].clone())
+        .collect()
+}
+
+#[test]
+fn the_markers_each_name_one_document() {
+    for fragment in [READ_AHEAD, ONE_ISSUE] {
+        let naming: Vec<&str> = graphql::DOCUMENTS
+            .iter()
+            .filter(|(document, _)| document.contains(fragment))
+            .map(|(_, name)| *name)
+            .collect();
+        assert_eq!(naming.len(), 1, "{fragment}: {naming:?}");
+    }
+}
+
+#[test]
+fn a_refused_read_ahead_of_a_projects_members_falls_back_to_reading_each_and_lands_the_same() {
+    let hub_of = |copied: &Copied| json!(copied.tasks[&format!("T-{HUB}")]);
+    // Unrefused, the hub — the one member its listing did not carry whole — is read ahead in a
+    // batch and never read on its own.
+    let plain = hub_plan();
+    let mark = plain.board.served_count();
+    let arguments = copy_back_arguments(&plain);
+    let arguments: Vec<&str> = arguments.iter().map(String::as_str).collect();
+    run(&plain.sandbox, &arguments);
+    let sent = plain.board.served_since(mark);
+    assert_eq!(
+        sent.iter()
+            .filter(|(document, _)| document.contains(READ_AHEAD))
+            .count(),
+        1,
+        "the members not carried whole are read ahead in one batch"
+    );
+    assert!(
+        !asked(&sent, ONE_ISSUE).contains(&hub_of(&plain)),
+        "a member read ahead is not read again on its own"
+    );
+    let expected = folder(&plain.sandbox);
+
+    // Refused, the read ahead holds nothing, and the hub is read on its own instead: the copy
+    // still lands exactly what it lands unrefused.
+    let refused = hub_plan();
+    refused.board.refuse_once(READ_AHEAD);
+    let mark = refused.board.served_count();
+    let arguments = copy_back_arguments(&refused);
+    let arguments: Vec<&str> = arguments.iter().map(String::as_str).collect();
+    let back = run(&refused.sandbox, &arguments);
+    let sent = refused.board.served_since(mark);
+    assert_eq!(
+        sent.iter()
+            .filter(|(document, _)| document.contains(READ_AHEAD))
+            .count(),
+        1,
+        "the read ahead was sent once, and refused"
+    );
+    assert_eq!(
+        asked(&sent, ONE_ISSUE)
+            .iter()
+            .filter(|id| **id == hub_of(&refused))
+            .count(),
+        1,
+        "the member the refused read ahead would have answered is read on its own, once"
+    );
+    assert!(sent.iter().all(|(document, _)| !is_mutation(document)));
+    for item in back["items"].as_array().expect("the copy's items") {
+        assert_ne!(item["action"], "created", "{item}");
+        assert_ne!(item["action"], "failed", "{item}");
+    }
+    // The same bytes in every file as the unrefused copy wrote, but for the board ids each
+    // link names, which differ between the two boards.
+    let landed = folder(&refused.sandbox);
+    assert_eq!(
+        landed.len(),
+        expected.len(),
+        "the same files as the unrefused copy"
+    );
+    let relink = |copied: &Copied, text: String| {
+        let mut text = text.replace(&copied.project, "board:PROJECT");
+        for (task, id) in &copied.tasks {
+            text = text.replace(id.as_str(), &format!("BOARD-{task}"));
+        }
+        text
+    };
+    let normalised = |copied: &Copied, files: &BTreeMap<PathBuf, Vec<u8>>| {
+        let root = copied.sandbox.subdirectory("authoring");
+        files
+            .iter()
+            .map(|(path, bytes)| {
+                (
+                    path.strip_prefix(&root)
+                        .expect("under the folder")
+                        .to_owned(),
+                    relink(copied, String::from_utf8(bytes.clone()).expect("text")),
+                )
+            })
+            .collect::<BTreeMap<_, _>>()
+    };
+    assert_eq!(
+        normalised(&refused, &landed),
+        normalised(&plain, &expected),
+        "a refused read ahead changes nothing the copy writes"
+    );
+    // And what it wrote is what a copy back owes: the moved statuses, the key removed, the
+    // links kept, and every edge as authored.
+    let listed = run(
+        &refused.sandbox,
+        &[
+            "task",
+            "list",
+            "--project",
+            "authoring:P",
+            "--all",
+            "--json",
+        ],
+    );
+    let listed = listed["items"].as_array().expect("the tasks");
+    assert_eq!(listed.len(), HUB, "no task was imported twice");
+    for listed in listed {
+        let task = &listed["item"];
+        let id = task["id"].as_str().expect("an id");
+        let status = if id == "T-1" || id == format!("T-{HUB}") {
+            "done"
+        } else {
+            "todo"
+        };
+        assert_eq!(task["status"]["category"], status, "{id}: {task}");
+        assert!(task["metadata"].get(KEY).is_none(), "{id}: {task}");
+        assert_eq!(
+            task["metadata"]["onetaskgraph.copies"]["board"],
+            json!(format!("board:{}", refused.tasks[id])),
+            "{id}: {task}"
+        );
+    }
+    let mut authored: Vec<(String, String)> = (1..=BLOCKERS)
+        .map(|k| (format!("authoring:T-{k}"), format!("authoring:T-{HUB}")))
+        .collect();
+    authored.sort();
+    assert_eq!(graph_edges(&refused.sandbox), authored);
+}
+
+#[test]
+fn a_member_whose_read_ahead_and_own_read_are_both_refused_fails_the_copy_writing_nothing() {
+    // Where the hub's own read falls among the copy's reads of one issue once its read ahead is
+    // refused, as a copy of the same plan with only that refused sends them.
+    let probe = hub_plan();
+    probe.board.refuse_once(READ_AHEAD);
+    let mark = probe.board.served_count();
+    let arguments = copy_back_arguments(&probe);
+    let arguments: Vec<&str> = arguments.iter().map(String::as_str).collect();
+    run(&probe.sandbox, &arguments);
+    let at = asked(&probe.board.served_since(mark), ONE_ISSUE)
+        .iter()
+        .position(|id| *id == json!(probe.tasks[&format!("T-{HUB}")]))
+        .expect("the hub is read on its own");
+    let copied = hub_plan();
+    let before = folder(&copied.sandbox);
+    copied.board.refuse_once(READ_AHEAD);
+    copied.board.refuse_after(ONE_ISSUE, at);
+    let mark = copied.board.served_count();
+    let arguments = copy_back_arguments(&copied);
+    let output = copied
+        .sandbox
+        .command()
+        .args(&arguments)
+        .write_stdin("")
+        .assert()
+        .get_output()
+        .clone();
+    let sent = copied.board.served_since(mark);
+    assert_eq!(
+        asked(&sent, ONE_ISSUE).get(at),
+        Some(&json!(copied.tasks[&format!("T-{HUB}")])),
+        "the refused read of one issue was the hub's"
+    );
+    assert_ne!(output.status.code(), Some(0), "{}", stdout(&output));
+    let error = stderr(&output);
+    assert!(
+        error.contains("board") && error.contains(ONE_ISSUE),
+        "the failure names the source and GitHub's refusal of the hub's own read, not the \
+         refused read ahead: {error}"
+    );
+    assert!(sent.iter().all(|(document, _)| !is_mutation(document)));
+    assert_eq!(
+        folder(&copied.sandbox),
+        before,
+        "a copy that could not read its members writes nothing"
+    );
 }
