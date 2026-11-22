@@ -632,6 +632,7 @@ impl SubprocessSource {
         record: MetadataRecord,
         params: Value,
     ) -> Result<AssetsWritten, SourceError> {
+        gated(method).await?;
         let mut result = self.connection.call(method, params).await?;
         let stored = stored_content(method, &mut result)?;
         let written: AssetsWritten =
@@ -650,6 +651,7 @@ impl SubprocessSource {
         method: &str,
         params: Value,
     ) -> Result<T, SourceError> {
+        gated(method).await?;
         let result = self.connection.call(method, params).await?;
         serde_json::from_value(result).map_err(|error| SourceError::Malformed {
             message: format!(
@@ -657,6 +659,18 @@ impl SubprocessSource {
             ),
         })
     }
+}
+
+/// Ask a caller's request gate, if the call in progress has one, before `method` is sent to
+/// the plugin: once per method, whatever the plugin then sends its own backend, which only the
+/// plugin can see. A peer reports no reading to tell the gate after one.
+async fn gated(method: &str) -> Result<(), SourceError> {
+    <dyn onetaskgraph_plugin_api::RequestGate>::before(&onetaskgraph_plugin_api::GatedRequest {
+        resource: "stdio".to_owned(),
+        content_creating: matches!(method, "add_comment" | "write_comment_copy"),
+        cost_hint: None,
+    })
+    .await
 }
 
 /// Take the `stored_content` member out of a content write's `result` (§4.9): a string, or

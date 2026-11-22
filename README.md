@@ -3371,6 +3371,22 @@ is the caller's. A program linking the engine reads the same through `Engine::qu
 Exit 0 with the readings, and non-zero naming the source when it is not configured or the
 reading could not be taken.
 
+**Pacing between the requests of one call: `Engine::with_request_gate`.** A reading taken before
+a call of hundreds of requests cannot keep a caller's floor inside it, so a program linking the
+engine installs a `RequestGate`, and every source asks it before each request it sends —
+`before_request` with the `resource` the request draws on, whether it creates content (an issue,
+a comment) and a `cost_hint` where the source can price it — and tells it each response's own
+readings through `after_response`. A GitHub board asks before every HTTP request, reads, writes,
+retries and the quota read alike; a Linear source before each request, with its rate-limit
+headers after; a folder of Markdown before each record it writes, naming it `local`; and the
+engine before each method it sends a stdio plugin. The store holds no policy. A wait — the gate
+not yet answering — holds that source's next request and nothing else. A refusal makes the
+source send nothing more in that call: an item whose requests all landed answers as it would
+have, the item in flight as a failure part way through it, and every later item of a batch
+answers with the refusal, nothing sent for it — so sending only the items not answered written
+lands them, and nothing is written twice. With no gate installed, every source sends exactly
+what it sends without one.
+
 **A task owns its classification.** Who may read a task is its own declaration and every
 repository it names, and nothing else: all-public repositories leave it public unless it says
 `private`, and any private or unknown one makes it private. The project it is filed under never

@@ -2164,6 +2164,9 @@ pub struct Engine {
     /// This engine's own name for the copy attempts it makes, recorded on every intent to
     /// create it takes, so an intent another process holds is told from its own.
     attempt: copy::intent::Attempt,
+    /// The request gate a caller installed with [`Engine::with_request_gate`], shared with
+    /// every source's hold-off wrapper; empty until one is.
+    request_gate: GateCell,
 }
 
 /// One operation's hold on every source's visibility reads, released when dropped — on every
@@ -2227,10 +2230,23 @@ fn with_body_markup(source: ResolvedSource) -> ResolvedSource {
 
 /// `source`, sent nothing between a rate limit it answers and the reset that limit names, on
 /// `clock`.
-fn held_off(source: ResolvedSource, clock: &SharedClock) -> ResolvedSource {
+fn held_off(source: ResolvedSource, clock: &SharedClock, gate: &GateCell) -> ResolvedSource {
     let name = source.name().clone();
-    source.wrapped(|inner| Box::new(held_off::HeldOff::new(name, inner, clock.clone())))
+    source.wrapped(|inner| {
+        Box::new(held_off::HeldOff::new(
+            name,
+            inner,
+            clock.clone(),
+            std::sync::Arc::clone(gate),
+        ))
+    })
 }
+
+/// Where the engine keeps the request gate a caller installs, shared with every source's
+/// [`held_off::HeldOff`] so a gate installed after the sources were assembled reaches each.
+pub(crate) type GateCell = std::sync::Arc<
+    std::sync::RwLock<Option<std::sync::Arc<dyn onetaskgraph_plugin_api::RequestGate>>>,
+>;
 
 impl Engine {
     /// Build every source a configuration names.
@@ -2317,12 +2333,15 @@ impl Engine {
         selection: Vec<SourceName>,
         clock: &SharedClock,
     ) -> Self {
+        let request_gate = GateCell::default();
         let sources = sources
             .into_iter()
             .map(|source| match source {
-                ConfiguredSource::Ready(source) => {
-                    ConfiguredSource::Ready(held_off(with_body_markup(source), clock))
-                }
+                ConfiguredSource::Ready(source) => ConfiguredSource::Ready(held_off(
+                    with_body_markup(source),
+                    clock,
+                    &request_gate,
+                )),
                 unavailable @ ConfiguredSource::Unavailable(_) => unavailable,
             })
             .collect();
@@ -2339,7 +2358,34 @@ impl Engine {
             clock: clock.clone(),
             creates: BTreeMap::new(),
             attempt: copy::intent::attempt(),
+            request_gate,
         }
+    }
+
+    /// The same engine, every request each source sends asked of `gate` first, and every
+    /// response's rate-limit readings told to it — installed for the length of each call the
+    /// engine makes to a source, the way the engine installs a
+    /// [`WriteGuard`](onetaskgraph_plugin_api::WriteGuard), so it reaches every source this
+    /// engine holds and nothing else.
+    ///
+    /// The gate holds the caller's policy and the store holds none. **A wait** — its
+    /// `before_request` not yet returned — holds that source's next request and nothing else:
+    /// another source, and another call to this engine, go on. **A refusal** makes the source
+    /// send nothing more in that call: every item of a batch whose requests all landed answers
+    /// as it does today, the item in flight answers as a failure part way through it does,
+    /// and every later item answers with the refusal, nothing sent for it — so re-sending only
+    /// the items not answered written lands them, and nothing is sent twice. With no gate
+    /// installed, every source sends exactly the requests it sends without one.
+    #[must_use]
+    pub fn with_request_gate(
+        self,
+        gate: std::sync::Arc<dyn onetaskgraph_plugin_api::RequestGate>,
+    ) -> Self {
+        *self
+            .request_gate
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(gate);
+        self
     }
 
     fn with_incomplete(mut self, incomplete: std::collections::BTreeSet<SourceName>) -> Self {

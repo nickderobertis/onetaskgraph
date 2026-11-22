@@ -992,6 +992,26 @@ fn token_variables(mut variables: Value) -> Value {
     variables
 }
 
+/// What a caller's request gate is told of one GraphQL request: it draws on GitHub's `graphql`
+/// resource, it creates content exactly when it creates an issue, a board draft or a comment,
+/// and it costs what GitHub's published rules price it at under the page sizes it binds.
+fn gated_graphql(document: &str, variables: &Value) -> onetaskgraph_plugin_api::GatedRequest {
+    onetaskgraph_plugin_api::GatedRequest {
+        resource: "graphql".to_owned(),
+        content_creating: creates_content(document),
+        cost_hint: point_cost(document, &accounting::bindings(variables)).ok(),
+    }
+}
+
+/// Whether `document` creates content GitHub's secondary limits meter as such: an issue, a
+/// board draft or a comment.
+fn creates_content(document: &str) -> bool {
+    is_mutation(document)
+        && ["createIssue(", "addProjectV2DraftIssue(", "addComment("]
+            .iter()
+            .any(|root| document.contains(root))
+}
+
 /// The input members a mutation names the issue or board item it writes by.
 const WRITTEN_NAMES: [&str; 4] = ["id", "issueId", "subjectId", "itemId"];
 
@@ -6283,6 +6303,16 @@ impl GitHubProjectsSource {
                 self.paced(ticket, mutation);
                 return Err(refused);
             }
+            // And of a caller's request gate, before every request this source sends — a retry
+            // as its own — so a caller pacing its own floor inside one call waits or stops here.
+            if let Err(refused) = <dyn onetaskgraph_plugin_api::RequestGate>::before(
+                &gated_graphql(query, &variables),
+            )
+            .await
+            {
+                self.paced(ticket, mutation);
+                return Err(refused);
+            }
             let attempt = self.send_once(query, &variables, waits + 1).await;
             self.paced(ticket, mutation);
             let remaining = self.pacing.retry_budget.saturating_sub(waited);
@@ -6527,6 +6557,8 @@ impl GitHubProjectsSource {
                 .and_then(|value| value.to_str().ok())
                 .map(str::to_owned)
         });
+        // Each response's own reading, as it gave it: never merged with another window's.
+        <dyn onetaskgraph_plugin_api::RequestGate>::after(&quota::header_readings(limits));
         // Exactly `0` is exhaustion and everything else — a count, an empty value, bytes
         // that are not text at all — is "not known to be exhausted". This never makes a
         // response a refusal on its own: it says which limiter a refusal is attributed to

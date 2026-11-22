@@ -43,6 +43,7 @@ mod plan_road;
 mod project_create;
 mod quota;
 mod relations;
+mod request_gate;
 mod store_cost;
 mod stored_digest;
 mod telemetry;

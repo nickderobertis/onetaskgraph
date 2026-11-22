@@ -1176,6 +1176,11 @@ struct GitHubBoard {
     /// What each `GET /rate_limit` answers, in turn: the next is taken off the front, and once
     /// none is left the last is answered again — [`GitHubBoardFields::serve_rate_limits`].
     rate_limits: std::collections::VecDeque<Value>,
+    /// The rate-limit windows each GraphQL answer's `x-ratelimit-*` headers name, in turn,
+    /// cycling — none when empty: [`GitHubBoardFields::answer_from_windows`].
+    windows: Vec<Value>,
+    /// How many GraphQL answers have carried a window's headers.
+    windows_served: usize,
     /// Items this board replaces after answering that many requests naming them by id — with
     /// another item, or with nothing — so a journey can let a command read one and then find it
     /// changed or gone.
@@ -1817,6 +1822,17 @@ impl GitHubBoardFields {
     pub fn serve_rate_limits(&self, answers: Vec<Value>) {
         assert!(!answers.is_empty(), "at least one answer to serve");
         self.board.lock().unwrap().rate_limits = answers.into();
+    }
+
+    /// Carry one of `windows` on each GraphQL answer, in turn and cycling, as its
+    /// `x-ratelimit-limit`, `-remaining`, `-used`, `-reset` and `-resource` headers — each a
+    /// `{"resource", "limit", "remaining", "used", "reset"}`. Two windows of one resource
+    /// interleave as GitHub was measured answering one token from two concurrent windows.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board's own answer headers, which only its server loop here writes, as `serve_rate_limits` beside it controls `GET /rate_limit`; the request-gate journeys of the GitHub Projects suite are what drive it.
+    pub fn answer_from_windows(&self, windows: Vec<Value>) {
+        let mut board = self.board.lock().unwrap();
+        board.windows = windows;
+        board.windows_served = 0;
     }
 
     /// Refuse the next request `429 Too Many Requests`, naming a reset `retry_after` seconds
@@ -4011,6 +4027,8 @@ fn github_projects_board_at(
         refusing_after: Vec::new(),
         rate_limit_next: None,
         rate_limits: std::collections::VecDeque::from([default_rate_limits()]),
+        windows: Vec::new(),
+        windows_served: 0,
         replacing: Vec::new(),
         blocked_by: github_blockers(),
         counted_types: Vec::new(),
@@ -4398,8 +4416,26 @@ fn github_projects_board_at(
             .served_at()
             .map(|at| format!("Date: {at}\r\n"))
             .unwrap_or_default();
+        let window = {
+            let mut held = board.lock().unwrap();
+            if held.windows.is_empty() {
+                String::new()
+            } else {
+                let window = held.windows[held.windows_served % held.windows.len()].clone();
+                held.windows_served += 1;
+                format!(
+                    "x-ratelimit-limit: {}\r\nx-ratelimit-remaining: {}\r\nx-ratelimit-used: {}\r\n\
+                     x-ratelimit-reset: {}\r\nx-ratelimit-resource: {}\r\n",
+                    window["limit"],
+                    window["remaining"],
+                    window["used"],
+                    window["reset"],
+                    window["resource"].as_str().unwrap_or_default()
+                )
+            }
+        };
         Some(format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n{date}Content-Length: {}\r\n\r\n{body}",
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n{date}{window}Content-Length: {}\r\n\r\n{body}",
             body.len()
         ))
     };
