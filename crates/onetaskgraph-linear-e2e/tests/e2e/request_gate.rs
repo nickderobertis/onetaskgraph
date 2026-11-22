@@ -14,6 +14,10 @@ use crate::cache::dataset;
 use crate::common::Sandbox;
 use crate::fixtures::{LinearWorkspace, document, linear_workspace};
 
+/// What [`RequestGate::before_request`] answers, as `#[async_trait]` spells it.
+pub(crate) type GateFuture<'future> =
+    std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), SourceError>> + Send + 'future>>;
+
 /// A gate recording each ask with how many requests the workspace had received, refusing its
 /// `refuse_at`th ask when one is named.
 struct Recording {
@@ -23,17 +27,28 @@ struct Recording {
     refuse_at: Option<usize>,
 }
 
-#[async_trait::async_trait]
+// Spelled as `#[async_trait]` expands it, so this crate needs no dependency of its own for the
+// macro: a new `Cargo.lock` entry is a global selection input that runs every project's tests.
 impl RequestGate for Recording {
-    async fn before_request(&self, request: &GatedRequest) -> Result<(), SourceError> {
+    fn before_request<'gate, 'request, 'future>(
+        &'gate self,
+        request: &'request GatedRequest,
+    ) -> GateFuture<'future>
+    where
+        'gate: 'future,
+        'request: 'future,
+        Self: 'future,
+    {
         let mut asked = self.asked.lock().unwrap();
         asked.push((request.clone(), self.workspace.served_count()));
-        if self.refuse_at == Some(asked.len()) {
-            return Err(SourceError::Refused {
+        let answer = if self.refuse_at == Some(asked.len()) {
+            Err(SourceError::Refused {
                 message: format!("the caller's gate refused request {}", asked.len()),
-            });
-        }
-        Ok(())
+            })
+        } else {
+            Ok(())
+        };
+        Box::pin(std::future::ready(answer))
     }
 
     fn after_response(&self, readings: &[QuotaReading]) {

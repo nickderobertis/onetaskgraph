@@ -4114,19 +4114,26 @@ struct UploadGate {
     refusing: bool,
 }
 
-#[async_trait::async_trait]
+// Spelled by hand, as `request_gate.rs` explains.
 impl onetaskgraph_plugin_api::RequestGate for UploadGate {
-    async fn before_request(
-        &self,
-        request: &onetaskgraph_plugin_api::GatedRequest,
-    ) -> Result<(), onetaskgraph_plugin_api::SourceError> {
+    fn before_request<'gate, 'request, 'future>(
+        &'gate self,
+        request: &'request onetaskgraph_plugin_api::GatedRequest,
+    ) -> super::request_gate::GateFuture<'future>
+    where
+        'gate: 'future,
+        'request: 'future,
+        Self: 'future,
+    {
         self.asked.lock().unwrap().push(request.clone());
-        if self.refusing && request.resource == "uploads" {
-            return Err(onetaskgraph_plugin_api::SourceError::Refused {
+        let answer = if self.refusing && request.resource == "uploads" {
+            Err(onetaskgraph_plugin_api::SourceError::Refused {
                 message: "the caller's gate refused the upload".into(),
-            });
-        }
-        Ok(())
+            })
+        } else {
+            Ok(())
+        };
+        Box::pin(std::future::ready(answer))
     }
 
     fn after_response(&self, _readings: &[onetaskgraph_plugin_api::QuotaReading]) {}
