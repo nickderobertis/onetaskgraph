@@ -252,7 +252,7 @@ impl LinearSource {
                 // And of a caller's request gate, as every request this source sends is: the
                 // upload goes to Linear's signed storage URL, which no API window meters, so it
                 // is named as its own resource.
-                if let Err(refused) = <dyn onetaskgraph_plugin_api::RequestGate>::before(
+                let admitted = match <dyn onetaskgraph_plugin_api::RequestGate>::before(
                     &onetaskgraph_plugin_api::GatedRequest {
                         resource: "uploads".to_owned(),
                         content_creating: true,
@@ -261,8 +261,9 @@ impl LinearSource {
                 )
                 .await
                 {
-                    return Err(failure(asset, Stage::Put, &refused.to_string()));
-                }
+                    Ok(admitted) => admitted,
+                    Err(refused) => return Err(failure(asset, Stage::Put, &refused.to_string())),
+                };
                 let mut request = client
                     .put(upload.upload_url.0.clone())
                     .header("Content-Type", asset.content_type.as_str())
@@ -275,6 +276,9 @@ impl LinearSource {
                     .send()
                     .await
                     .map_err(|error| failure(asset, Stage::Put, &super::with_causes(&error)))?;
+                // The upload's answer is its status alone, read; ended before any wait for a
+                // retry, which is asked for as a request of its own.
+                admitted.end();
                 if response.status().as_u16() == 429 {
                     self.wait_asset(
                         asset,

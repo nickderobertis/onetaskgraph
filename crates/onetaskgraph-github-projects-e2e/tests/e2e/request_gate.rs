@@ -1,7 +1,9 @@
 //! A caller's request gate over a GitHub board, through the engine the binary links: installed
 //! with `Engine::with_request_gate`, asked before every request the board receives — reads,
 //! writes, a retry as its own request and `Engine::quota`'s `GET /rate_limit` — and told every
-//! response's own rate-limit reading, never merged with another window's.
+//! response's own rate-limit reading, never merged with another window's — and told each
+//! request it admitted ended exactly once, whether it was answered with readings or without,
+//! failed in transport before any header, or was dropped in flight, and never one it refused.
 //!
 //! A wait holds that source's next request and nothing else; a refusal makes the source send
 //! nothing more in that call, so every earlier item of a batch answers written, every later one
@@ -56,6 +58,7 @@ struct Recording {
     board: GitHubBoardFields,
     asked: Mutex<Vec<(GatedRequest, usize)>>,
     told: Mutex<Vec<QuotaReading>>,
+    ended: Mutex<usize>,
     at: Option<At>,
 }
 
@@ -65,12 +68,17 @@ impl Recording {
             board: board.clone(),
             asked: Mutex::new(Vec::new()),
             told: Mutex::new(Vec::new()),
+            ended: Mutex::new(0),
             at,
         })
     }
 
     fn asked(&self) -> Vec<(GatedRequest, usize)> {
         self.asked.lock().unwrap().clone()
+    }
+
+    fn ended(&self) -> usize {
+        *self.ended.lock().unwrap()
     }
 }
 
@@ -106,6 +114,10 @@ impl RequestGate for Recording {
     fn after_response(&self, readings: &[QuotaReading]) {
         self.told.lock().unwrap().extend_from_slice(readings);
     }
+
+    fn request_ended(&self) {
+        *self.ended.lock().unwrap() += 1;
+    }
 }
 
 struct Setup {
@@ -116,10 +128,28 @@ struct Setup {
 impl Setup {
     /// A board holding `tickets` tickets, every answer carrying one of [`windows`] in turn.
     fn new(tickets: usize) -> Self {
+        let setup = Self::without_readings(tickets);
+        setup.board.answer_from_windows(windows());
+        setup
+    }
+
+    /// A board holding `tickets` tickets whose answers carry no rate-limit header at all.
+    fn without_readings(tickets: usize) -> Self {
         let sandbox = Sandbox::new();
         let (config, board) =
             github_projects_with_items(&sandbox, (0..tickets).map(|n| issue(&ticket(n))).collect());
-        board.answer_from_windows(windows());
+        sandbox.project_document(&document(&json!({
+            "board": {"plugin":"github-projects","config":config},
+        })));
+        Self { sandbox, board }
+    }
+
+    /// The same, its source sent to `endpoint` instead of the board.
+    fn at_endpoint(tickets: usize, endpoint: &str) -> Self {
+        let sandbox = Sandbox::new();
+        let (mut config, board) =
+            github_projects_with_items(&sandbox, (0..tickets).map(|n| issue(&ticket(n))).collect());
+        config["endpoint"] = json!(endpoint);
         sandbox.project_document(&document(&json!({
             "board": {"plugin":"github-projects","config":config},
         })));
@@ -672,4 +702,105 @@ fn a_private_board_s_repository_visibility_read_is_asked_and_its_refusal_sends_i
             assert!(reads >= 1);
         }
     }
+}
+
+fn ticket_id(n: usize) -> GlobalId {
+    GlobalId {
+        source: board(),
+        native: NativeId(ticket(n)),
+    }
+}
+
+#[test]
+fn every_request_answered_with_readings_or_without_ends_once_and_a_refused_one_never() {
+    let runtime = runtime();
+    for (what, setup) in [
+        ("with readings", Setup::new(5)),
+        ("without readings", Setup::without_readings(5)),
+    ] {
+        let gate = Recording::new(&setup.board, None);
+        let engine = setup.engine().with_request_gate(gate.clone());
+        let answer = runtime
+            .block_on(engine.update_tasks(&board(), &updates(0..5)))
+            .expect("the batch runs");
+        assert!(outcomes(&answer).iter().all(|outcome| outcome == "written"));
+        runtime.block_on(engine.quota(&board())).expect("a reading");
+        let asked = gate.asked().len();
+        // The batch's reads and writes and the quota read, at the least.
+        assert!(asked >= 3, "{what}: {asked}");
+        assert_eq!(asked, setup.board.documents().len(), "{what}");
+        assert_eq!(gate.ended(), asked, "{what}: one end per admitted request");
+        let told = gate.told.lock().unwrap().len();
+        if what == "with readings" {
+            assert!(told >= asked - 1, "{what}: {told}");
+        } else {
+            assert_eq!(told, 0, "{what}: no reading was told");
+        }
+    }
+
+    // Refused at the second ask: one admitted and ended, the second never ended.
+    let setup = Setup::new(5);
+    let gate = Recording::new(&setup.board, Some(At::Refuse(2)));
+    let engine = setup.engine().with_request_gate(gate.clone());
+    runtime
+        .block_on(engine.update_tasks(&board(), &updates(0..5)))
+        .expect("the batch answers each item");
+    assert_eq!(gate.asked().len(), 2);
+    assert_eq!(setup.board.served_count(), 1);
+    assert_eq!(gate.ended(), 1, "the refused request is never ended");
+}
+
+#[test]
+fn a_request_failing_in_transport_before_any_header_ends_once() {
+    // A port nothing listens on: the connection is refused before any byte of an answer.
+    let unbound = std::net::TcpListener::bind("127.0.0.1:0").expect("a port");
+    let endpoint = format!("http://{}/graphql", unbound.local_addr().unwrap());
+    drop(unbound);
+    let setup = Setup::at_endpoint(1, &endpoint);
+    let gate = Recording::new(&setup.board, None);
+    let engine = setup.engine().with_request_gate(gate.clone());
+    let runtime = runtime();
+    let answer = runtime.block_on(engine.task(&ticket_id(0)));
+    let said = match answer {
+        Ok(response) => serde_json::to_value(&response).unwrap()["errors"].to_string(),
+        Err(error) => error.to_string(),
+    };
+    assert!(said.contains("request failed"), "{said}");
+    let quota = runtime.block_on(engine.quota(&board()));
+    assert!(quota.is_err(), "the quota read fails in transport too");
+    let asked = gate.asked().len();
+    assert!(
+        asked >= 2,
+        "the read and the quota read were asked: {asked}"
+    );
+    assert_eq!(gate.ended(), asked, "each failed request ended once");
+    assert!(gate.told.lock().unwrap().is_empty());
+}
+
+#[test]
+fn a_request_dropped_while_in_flight_ends_once() {
+    // A listener that takes the request and never answers it.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a port");
+    let endpoint = format!("http://{}/graphql", listener.local_addr().unwrap());
+    let (accepted, on_accept) = tokio::sync::oneshot::channel::<()>();
+    std::thread::spawn(move || {
+        let (stream, _) = listener.accept().expect("the request's connection");
+        let _ = accepted.send(());
+        // Held open, unanswered, until the test process ends.
+        std::thread::sleep(Duration::from_secs(600));
+        drop(stream);
+    });
+    let setup = Setup::at_endpoint(1, &endpoint);
+    let gate = Recording::new(&setup.board, None);
+    let engine = setup.engine().with_request_gate(gate.clone());
+    let id = ticket_id(0);
+    runtime().block_on(async {
+        tokio::select! {
+            answer = engine.task(&id) => panic!("the request was answered: {answer:?}"),
+            accepted = on_accept => accepted.expect("the request reached the listener"),
+        }
+        // The read's future is dropped here, its request in flight.
+    });
+    assert_eq!(gate.asked().len(), 1);
+    assert_eq!(gate.ended(), 1, "the dropped request ended once");
 }

@@ -294,7 +294,9 @@ impl GitHubProjectsSource {
             let ticket = self.pace(charge, mutation).await;
             // A caller's request gate is asked before each attempt, as before every request this
             // source sends: an upload creates content, and draws on the REST allowance.
-            if let Err(refused) = <dyn onetaskgraph_plugin_api::RequestGate>::before(
+            // Held until the body is read, or the attempt fails, and ended before any wait for
+            // a retry, which is asked for as a request of its own.
+            let admitted = match <dyn onetaskgraph_plugin_api::RequestGate>::before(
                 &onetaskgraph_plugin_api::GatedRequest {
                     resource: "core".to_owned(),
                     content_creating: mutation,
@@ -303,9 +305,12 @@ impl GitHubProjectsSource {
             )
             .await
             {
-                self.paced(ticket, mutation);
-                return Err(refused);
-            }
+                Ok(admitted) => admitted,
+                Err(refused) => {
+                    self.paced(ticket, mutation);
+                    return Err(refused);
+                }
+            };
             let response = self
                 .asset_client()?
                 .execute(request.try_clone().ok_or_else(|| SourceError::Refused {
@@ -396,6 +401,7 @@ impl GitHubProjectsSource {
                     });
                 }
             };
+            admitted.end();
             let body = String::from_utf8_lossy(&bytes);
             let limiter = Limiter::classify(status, exhausted, &body);
             let outcome = if limiter.is_some() {

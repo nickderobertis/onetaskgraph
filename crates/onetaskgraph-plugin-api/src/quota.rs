@@ -9,8 +9,10 @@
 //! A reading taken before a call of hundreds of requests cannot keep a caller's floor inside
 //! it, so a caller that needs to pace inside one installs a [`RequestGate`]. A source asks it,
 //! through [`<dyn RequestGate>::before`], immediately before each request it sends — reads,
-//! writes, retries and a quota read alike — and tells it, through
-//! [`<dyn RequestGate>::after`], what each response said is left. Like
+//! writes, retries and a quota read alike — tells it, through
+//! [`<dyn RequestGate>::after`], what each response said is left, and holds the
+//! [`AdmittedRequest`] that ask answered until the request is over, whose drop tells the gate
+//! so through [`RequestGate::request_ended`]. Like
 //! [`WriteGuard`](crate::WriteGuard) the gate is task-local, installed by the engine for the
 //! length of each call it makes to a source: a source that never asks — every one that
 //! predates this — sends exactly what it sent, and one that asks outside a gated call is
@@ -82,6 +84,14 @@ tokio::task_local! {
 /// while the engine is being built, before `Engine::with_request_gate` can install a gate, and
 /// it costs no backend quota. Every method sent a peer after the gate is installed is asked of
 /// it first.
+///
+/// **Every admitted request ends, exactly once.** For each `before_request` that answered `Ok`
+/// the gate is told [`request_ended`](Self::request_ended) once, whatever became of the
+/// request — answered with readings or without, failed in transport before any header arrived,
+/// a write to a source's own files, or its future dropped mid-flight by a cancellation or by a
+/// sibling failing beside it. A request `before_request` refused is never ended, and neither is
+/// one whose `before_request` future was itself dropped before it answered: a gate that takes
+/// something inside `before_request` gives it back on its own drop path there.
 #[async_trait::async_trait]
 pub trait RequestGate: Send + Sync {
     /// Answer whether `request` may be sent now — after as long a wait as the caller's policy
@@ -94,6 +104,47 @@ pub trait RequestGate: Send + Sync {
 
     /// What the response to a request said about each window it named.
     fn after_response(&self, readings: &[QuotaReading]);
+
+    /// One request this gate admitted is over: nothing more of it will be sent or read, so a
+    /// gate may treat this as proof that it is no longer in flight — a slot it keeps per
+    /// request in flight can be given back. Delivered exactly once per admitted request, after
+    /// any [`after_response`](Self::after_response) its response carried, and never for a
+    /// request `before_request` refused. A gate that keeps no such count needs nothing here.
+    fn request_ended(&self) {}
+}
+
+/// A request a [`RequestGate`] admitted, held by the source for as long as the request is in
+/// flight: dropping it — on every exit, a cancelled or failed one included — tells the gate the
+/// request is over through [`RequestGate::request_ended`], exactly once.
+///
+/// Bind it (`let admitted = …`) and drop it once the response has been read, or the request
+/// failed; never hold it across a wait before a retry or across another request's ask, since a
+/// gate admitting one request at a time would then wait on itself.
+#[must_use = "dropping the admission at once tells the gate the request is over before it is sent"]
+pub struct AdmittedRequest {
+    gate: Option<Arc<dyn RequestGate>>,
+}
+
+impl AdmittedRequest {
+    /// End the request now, rather than when the admission goes out of scope.
+    pub fn end(self) {}
+}
+
+impl std::fmt::Debug for AdmittedRequest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AdmittedRequest")
+            .field("gated", &self.gate.is_some())
+            .finish()
+    }
+}
+
+impl Drop for AdmittedRequest {
+    fn drop(&mut self) {
+        if let Some(gate) = self.gate.take() {
+            gate.request_ended();
+        }
+    }
 }
 
 impl dyn RequestGate {
@@ -111,15 +162,21 @@ impl dyn RequestGate {
     }
 
     /// Ask the gate of the call in progress, if any, whether `request` may be sent now — a
-    /// source calls this immediately before sending each request.
+    /// source calls this immediately before sending each request, and holds the answer until
+    /// the request is over: see [`AdmittedRequest`]. The admission ends at the gate that
+    /// admitted it, wherever it is dropped.
     ///
     /// # Errors
     ///
-    /// The gate's refusal; with no gate installed, never.
-    pub async fn before(request: &GatedRequest) -> Result<(), SourceError> {
+    /// The gate's refusal, which admits nothing and is never ended; with no gate installed,
+    /// never.
+    pub async fn before(request: &GatedRequest) -> Result<AdmittedRequest, SourceError> {
         match Self::current() {
-            Some(gate) => gate.before_request(request).await,
-            None => Ok(()),
+            Some(gate) => {
+                gate.before_request(request).await?;
+                Ok(AdmittedRequest { gate: Some(gate) })
+            }
+            None => Ok(AdmittedRequest { gate: None }),
         }
     }
 
@@ -145,7 +202,23 @@ mod tests {
     struct Recording {
         asked: Mutex<Vec<GatedRequest>>,
         told: Mutex<Vec<QuotaReading>>,
+        ended: Mutex<usize>,
         refuse_at: usize,
+    }
+
+    impl Recording {
+        fn refusing_at(refuse_at: usize) -> Arc<Self> {
+            Arc::new(Self {
+                asked: Mutex::new(Vec::new()),
+                told: Mutex::new(Vec::new()),
+                ended: Mutex::new(0),
+                refuse_at,
+            })
+        }
+
+        fn ended(&self) -> usize {
+            *self.ended.lock().unwrap()
+        }
     }
 
     #[async_trait::async_trait]
@@ -163,6 +236,10 @@ mod tests {
 
         fn after_response(&self, readings: &[QuotaReading]) {
             self.told.lock().unwrap().extend_from_slice(readings);
+        }
+
+        fn request_ended(&self) {
+            *self.ended.lock().unwrap() += 1;
         }
     }
 
@@ -193,17 +270,15 @@ mod tests {
 
     #[tokio::test]
     async fn inside_a_scope_the_gate_is_asked_told_and_its_refusal_is_answered() {
-        let gate = Arc::new(Recording {
-            asked: Mutex::new(Vec::new()),
-            told: Mutex::new(Vec::new()),
-            refuse_at: 2,
-        });
+        let gate = Recording::refusing_at(2);
         let installed: Arc<dyn RequestGate> = gate.clone();
         let (first, second) = <dyn RequestGate>::scope(installed, async {
-            let first = <dyn RequestGate>::before(&request("graphql")).await;
+            let first = <dyn RequestGate>::before(&request("graphql"))
+                .await
+                .map(drop);
             <dyn RequestGate>::after(&[reading()]);
             <dyn RequestGate>::after(&[]);
-            let second = <dyn RequestGate>::before(&request("core")).await;
+            let second = <dyn RequestGate>::before(&request("core")).await.map(drop);
             (first, second)
         })
         .await;
@@ -214,14 +289,53 @@ mod tests {
                 message: "the gate refused".into()
             })
         );
+        // The admitted request ended once; the refused one was never admitted, so never ends.
+        assert_eq!(gate.ended(), 1);
         assert_eq!(
             *gate.asked.lock().unwrap(),
             [request("graphql"), request("core")]
         );
         assert_eq!(*gate.told.lock().unwrap(), [reading()]);
-        // Outside the scope, nothing is asked.
+        // Outside the scope, nothing is asked and nothing ends.
         assert!(<dyn RequestGate>::before(&request("graphql")).await.is_ok());
         assert_eq!(gate.asked.lock().unwrap().len(), 2);
+        assert_eq!(gate.ended(), 1);
+    }
+
+    #[tokio::test]
+    async fn an_admission_ends_once_when_dropped_and_only_then_at_the_gate_that_admitted_it() {
+        let gate = Recording::refusing_at(usize::MAX);
+        let installed: Arc<dyn RequestGate> = gate.clone();
+        let admitted = <dyn RequestGate>::scope(installed, async {
+            <dyn RequestGate>::before(&request("graphql")).await
+        })
+        .await
+        .expect("admitted");
+        // Still in flight while the source holds it, though its scope is over.
+        assert_eq!(gate.ended(), 0);
+        admitted.end();
+        assert_eq!(gate.ended(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_request_future_dropped_in_flight_ends_its_admission_once() {
+        let gate = Recording::refusing_at(usize::MAX);
+        let installed: Arc<dyn RequestGate> = gate.clone();
+        let (started, mut start) = tokio::sync::oneshot::channel::<()>();
+        let in_flight = <dyn RequestGate>::scope(installed, async move {
+            let _admitted = <dyn RequestGate>::before(&request("graphql")).await?;
+            drop(started);
+            // A response that never comes: the future is dropped while it waits.
+            std::future::pending::<()>().await;
+            Ok::<(), SourceError>(())
+        });
+        let in_flight = tokio::spawn(in_flight);
+        // The sender is dropped once the request was admitted and is in flight.
+        assert!((&mut start).await.is_err());
+        assert_eq!(gate.ended(), 0);
+        in_flight.abort();
+        assert!(in_flight.await.unwrap_err().is_cancelled());
+        assert_eq!(gate.ended(), 1);
     }
 
     #[test]

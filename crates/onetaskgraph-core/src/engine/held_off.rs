@@ -215,6 +215,10 @@ impl onetaskgraph_plugin_api::RequestGate for Latched {
     fn after_response(&self, readings: &[onetaskgraph_plugin_api::QuotaReading]) {
         self.gate.after_response(readings);
     }
+
+    fn request_ended(&self) {
+        self.gate.request_ended();
+    }
 }
 
 #[async_trait::async_trait]
