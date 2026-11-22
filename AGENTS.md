@@ -1632,6 +1632,30 @@ them do; this is the inventory of what is owed, not a status board.
      reports what it left, fails an item Linear refuses with exit 1, rewrites nothing a second
      time and nothing under `--dry-run`; a folder of Markdown and a stdio peer declaring no
      migration are reported as holding nothing to migrate and are sent nothing.
+167. A status write on a GitHub board — `task status set`, `task update`, `update-many`, a
+     settlement through the linked engine, and a source with its cache on — leaves each issue
+     open or closed as its status requires: an open issue under a terminal card is closed, a
+     closed one whose target is an open column reopened, one closed as completed under a
+     `Cancelled` card closed again as not planned, and a card already at its option sent no write.
+168. A task listing naming every open category reads a GitHub board through its own `is:open`
+     item filter alone and answers exactly what the whole board's walk answers filtered in
+     process — drafts, an unmapped option and open issues under terminal cards included — with
+     no page of the unfiltered board and no issue search; its cost is
+     `github-open-board-list-requests`.
+169. `sources quota` answers every resource a board's `GET /rate_limit` returns, asked afresh
+     with its cache on; a Linear source's last response's headers, nothing in a fresh process;
+     nothing for a folder of Markdown or a stdio peer not declaring `quota`, which is never sent
+     it; and a declaring peer's readings; `Engine::quota` answers the same.
+170. A task closed as a duplicate — `task status set … cancelled --duplicate-of`, `task update
+     --duplicate-of`, an `update-many` entry — reads `cancelled` with its `duplicate` link at both
+     ends: on a board through one `closeIssue` as `DUPLICATE` naming the survivor, on Linear
+     through its duplicate relation; another status, a survivor in another backend, the task
+     itself and a stdio peer not declaring `duplicate_closes` are refused, writing nothing.
+171. A caller's request gate (`Engine::with_request_gate`) is asked before every request a
+     board, a Linear source, a folder's record write and a stdio peer's method send, and told
+     each response's own readings, two windows of one resource apart; a wait holds only its
+     source, on the simulated clock; a refusal stops the call, every later item answering it,
+     and a second call of those items lands them without writing any twice.
 
 ## The public boundary
 
