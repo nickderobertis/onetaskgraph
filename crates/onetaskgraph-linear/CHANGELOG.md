@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.1](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-linear-v0.15.0...onetaskgraph-linear-v0.15.1) - 2026-11-22
+
+### Added
+
+- tell the request gate when every admitted request ends, answered, failed or dropped ([#4080](https://github.com/nickderobertis/onetaskgraph/pull/4080))
+
 ## [0.15.0](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-linear-v0.14.21...onetaskgraph-linear-v0.15.0) - 2026-11-22
 
 ### Added
