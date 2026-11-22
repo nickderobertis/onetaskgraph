@@ -40,6 +40,8 @@ test("sourcesQuota answers a folder's empty reading and refuses an unknown sourc
   expect(await client.sourcesQuota("plan")).toEqual({ source: "plan", resources: [] });
   const refused = await client.sourcesQuota("elsewhere").catch((error: unknown) => error);
   expect(refused).toBeInstanceOf(OnetaskgraphExecutionError);
+  // Deliberately outside the declared type, as a JavaScript caller's value reaches it untyped:
+  // the SDK's own check at the boundary is what refuses it, before the binary is started.
   expect(() => client.sourcesQuota(7 as unknown as string)).toThrow(TypeError);
 });
 
@@ -56,6 +58,7 @@ test("taskStatusSet with duplicateOf closes the task cancelled with its duplicat
     .catch((error: unknown) => error);
   expect(refused).toBeInstanceOf(OnetaskgraphExecutionError);
   expect(readFileSync(resolve(plan, "tasks", "T-2.md"), "utf8")).toBe(before);
+  // Deliberately outside the declared type, as above: a survivor that reached the SDK untyped.
   expect(() =>
     client.taskStatusSet("plan:T-1", "cancelled", { duplicateOf: 7 as unknown as string }),
   ).toThrow(TypeError);
