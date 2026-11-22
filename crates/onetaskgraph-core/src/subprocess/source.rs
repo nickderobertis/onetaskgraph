@@ -1202,6 +1202,23 @@ impl TaskSource for SubprocessSource {
         // member would drop it in silence: an update naming it is made the way every peer
         // takes it, by rewriting the task whole.
         if !self.targeted_updates || update.repositories.is_some() {
+            // A whole-task write has no member for a duplicate close, so a peer would be handed
+            // a plain `cancelled` and the decision dropped (§2.1): it is refused by name instead.
+            if let Some(survivor) = &update.duplicate_of {
+                return Err(SourceError::Refused {
+                    message: format!(
+                        "the {} plugin takes this update as a whole-task write, which cannot \
+                         carry `duplicate_of` ({survivor}){}; next: close the task as a \
+                         duplicate in an update of its own",
+                        self.kind,
+                        if self.targeted_updates {
+                            " beside `repositories`"
+                        } else {
+                            ", because its handshake does not declare `targeted_updates`"
+                        }
+                    ),
+                });
+            }
             return update.rewrite(self, id).await;
         }
         // The same guards a `write_task` of the updated task would pass, before anything is

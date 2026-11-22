@@ -34,8 +34,12 @@ impl Setup {
             "---\ntitle: Elsewhere\nstatus: todo\n---\nIn another backend.\n",
         )
         .unwrap();
-        let (mut config, board) =
-            github_projects_with_items(&sandbox, ["U-1", "U-2", "U-3", "K-9"].map(issue).to_vec());
+        let mut items = ["U-1", "U-2", "U-3", "K-9"].map(issue).to_vec();
+        let mut draft = issue("SKETCH-1");
+        draft["type"] = json!("DraftIssue");
+        draft["repo"] = Value::Null;
+        items.push(draft);
+        let (mut config, board) = github_projects_with_items(&sandbox, items);
         config["status_mapping"] = json!({"cancelled": "Cancelled", "done": "Done"});
         sandbox.project_document(&document(&json!({
             "board": {"plugin":"github-projects","config":config},
@@ -242,6 +246,26 @@ fn every_refusal_of_a_duplicate_close_writes_nothing() {
         (
             vec!["task", "update", "board:U-1", "--duplicate-of", "board:U-1"],
             "itself",
+        ),
+        (
+            vec![
+                "task",
+                "update",
+                "board:U-1",
+                "--duplicate-of",
+                "board:SKETCH-1",
+            ],
+            "board draft",
+        ),
+        (
+            vec![
+                "task",
+                "update",
+                "board:U-1",
+                "--duplicate-of",
+                "board:U-404",
+            ],
+            "holds no such issue",
         ),
     ] {
         let output = setup.run(&arguments, None);

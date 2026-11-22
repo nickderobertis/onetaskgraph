@@ -450,8 +450,10 @@ duplicate where its backend can say so, and records the typed `duplicate` link i
 `onetaskgraph.links` itself, because the relation calls the engine records that link through
 for an in-process source are not carried by this protocol. One that does not is never sent
 `duplicate_of`: an update naming it is refused by name before anything is sent, rather than
-handed a member §2.1 would have it drop, leaving a plain `cancelled`. This build's own host
-does not declare it. Omitted when `false`.
+handed a member §2.1 would have it drop, leaving a plain `cancelled`. So is one an engine would
+send a declaring plugin as a whole-task write — an update naming `repositories`, or any update to
+a plugin that does not declare `targeted_updates` — because `write_task` has no member for it.
+This build's own host does not declare it. Omitted when `false`.
 
 ## 4. The methods
 

@@ -6914,6 +6914,15 @@ impl LinearWorkspace {
         self.lost.lock().unwrap().push(operation);
     }
 
+    /// Refuse from now on a duplicate relation the workspace already holds, in the shape Linear
+    /// refuses an entity a record already holds (`Entity <kind> … already exists.`), rather than
+    /// answering it as created. Linear's answer to a repeated duplicate relation was not
+    /// observed, so the plugin is proven against both.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback Linear's own answers, which only its responder here answers: like `lose_answer_once` above it can only be a method of this handle.
+    pub fn refuse_repeated_duplicate(&self) {
+        self.state.lock().unwrap()["_linear_refuse_repeated_duplicate"] = json!(true);
+    }
+
     /// Every duplicate relation the workspace holds, as `(duplicate, survivor)`.
     #[must_use]
     pub fn duplicates(&self) -> Vec<(String, String)> {
@@ -9881,6 +9890,7 @@ fn linear_write_relation(
     // A duplicate relation is no dependency: Linear keeps it beside them and moves the issue it
     // marks to `Duplicate`, which a later status write moves on from.
     if !project && wire == "duplicate" {
+        let refuse_repeat = data["_linear_refuse_repeated_duplicate"] == json!(true);
         let marked = json!({"from": input.get(near_key).ok_or("missing near id")?,
                             "to": input.get(far_key).ok_or("missing far id")?});
         let duplicates = data
@@ -9890,7 +9900,11 @@ fn linear_write_relation(
             .or_insert_with(|| json!([]))
             .as_array_mut()
             .ok_or("fixture duplicates are not an array")?;
-        if !duplicates.contains(&marked) {
+        if duplicates.contains(&marked) {
+            if refuse_repeat {
+                return Err("Entity IssueRelation already exists.");
+            }
+        } else {
             duplicates.push(marked);
         }
         return Ok(json!({"issueRelationCreate":{"success":true,"issueRelation":{"id":"IR-D"}}}));

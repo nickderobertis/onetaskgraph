@@ -300,24 +300,9 @@ fn split(answer: &Value, n: usize) -> (Vec<usize>, Vec<usize>, Vec<usize>) {
 #[test]
 fn a_refusal_at_the_thirtieth_request_stops_the_call_and_a_second_call_lands_the_rest() {
     // The update-many of 100 and then the comment add-many of 60, as one caller sends them
-    // through one engine: the requests counted across both, measured ungated first so the
-    // refusal falls inside them.
+    // through one engine, the 30th request of the two refused: the update-many answering every
+    // item written and the comments answering some refused is what places it inside the second.
     let runtime = runtime();
-    let measured = Setup::new(100);
-    let engine = measured.engine();
-    runtime
-        .block_on(engine.update_tasks(&board(), &updates(0..100)))
-        .expect("the batch runs");
-    let updating = measured.board.served_count();
-    runtime
-        .block_on(engine.add_comments(&board(), &comments()))
-        .expect("the comments are added");
-    let total = measured.board.served_count();
-    assert!(
-        updating < 30 && total >= 30,
-        "{updating} then {total} requests"
-    );
-
     let setup = Setup::new(100);
     let gate = Recording::new(&setup.board, Some(At::Refuse(30)));
     let engine = setup.engine().with_request_gate(gate.clone());
@@ -367,7 +352,7 @@ fn a_refusal_at_the_thirtieth_request_stops_the_call_and_a_second_call_lands_the
         assert_eq!(landed(n), 1, "note {n}");
     }
     eprintln!(
-        "refused at request 30 of {total}: {} comments written, {} refused",
+        "refused at request 30: {} comments written, {} refused",
         written.len(),
         refused.len()
     );

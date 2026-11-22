@@ -172,3 +172,35 @@ fn an_update_many_entry_closes_an_issue_as_a_duplicate_beside_an_ordinary_update
     let renamed = setup.ok(&["--json", "task", "show", "linear:L-1"]);
     assert_eq!(renamed["items"][0]["item"]["title"], "Groomed");
 }
+
+#[test]
+fn a_repeated_close_succeeds_whether_linear_answers_the_held_relation_created_or_refused() {
+    let setup = Setup::new();
+    let arguments = [
+        "--json",
+        "task",
+        "status",
+        "set",
+        "linear:L-3",
+        "cancelled",
+        "--duplicate-of",
+        "linear:L-2",
+    ];
+    setup.ok(&arguments);
+    // Answered as created, then refused as a relation Linear already holds.
+    setup.ok(&arguments);
+    setup.workspace.refuse_repeated_duplicate();
+    let answer = setup.ok(&arguments);
+    assert_eq!(answer["status"]["category"], "cancelled", "{answer:#}");
+    assert_eq!(
+        setup.workspace.duplicates(),
+        [("L-3".to_owned(), "L-2".to_owned())],
+        "one relation"
+    );
+    let relations = setup.ok(&["task", "relations", "linear:L-3", "--json"]);
+    assert_eq!(
+        relations["items"][0]["links"].as_array().unwrap().len(),
+        1,
+        "{relations:#}"
+    );
+}

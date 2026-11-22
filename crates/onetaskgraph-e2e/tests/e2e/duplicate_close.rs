@@ -266,7 +266,8 @@ fn a_close_whose_link_cannot_be_recorded_says_so_and_a_repeat_records_it() {
 }
 
 #[test]
-fn a_stdio_peer_declaring_duplicate_closes_is_sent_the_field_and_records_its_own_link() {
+fn a_stdio_peer_declaring_duplicate_closes_is_sent_the_field_and_the_engine_writes_no_link_for_it()
+{
     let sandbox = Sandbox::new();
     let root = folder(&sandbox);
     let log = sandbox.subdirectory("peer").join("sent.log");
@@ -306,4 +307,45 @@ fn a_stdio_peer_declaring_duplicate_closes_is_sent_the_field_and_records_its_own
             read(&root, id)
         );
     }
+}
+
+#[test]
+fn a_declaring_peer_s_duplicate_close_beside_repositories_is_refused_before_anything_is_sent() {
+    let sandbox = Sandbox::new();
+    let root = folder(&sandbox);
+    let log = sandbox.subdirectory("peer").join("sent.log");
+    let mut peer = crate::request_gate::hosted(&root, &log);
+    let args = peer["config"]["args"].as_array_mut().unwrap();
+    args.insert(2, json!("duplicate_closes"));
+    args.insert(2, json!("--declare"));
+    sandbox.project_document(&document(&json!({ "peer": peer })));
+    let before = read(&root, "T-1");
+    // An update naming `repositories` is sent to a peer as a whole-task write, which has no
+    // member for the close.
+    let output = sandbox
+        .command()
+        .args([
+            "task",
+            "update",
+            "peer:T-1",
+            "--repository",
+            "github.com/nickderobertis/onetaskgraph",
+            "--duplicate-of",
+            "peer:T-2",
+        ])
+        .assert()
+        .get_output()
+        .clone();
+    assert_ne!(output.status.code(), Some(0));
+    assert!(
+        stderr(&output).contains("whole-task write") && stderr(&output).contains("peer:T-2"),
+        "{}",
+        stderr(&output)
+    );
+    assert_eq!(read(&root, "T-1"), before, "nothing was written");
+    let sent = std::fs::read_to_string(&log).unwrap_or_default();
+    assert!(
+        sent.lines().all(|method| method == "initialize"),
+        "the peer was sent nothing: {sent}"
+    );
 }
