@@ -276,26 +276,27 @@ impl LinearSource {
                     .send()
                     .await
                     .map_err(|error| failure(asset, Stage::Put, &super::with_causes(&error)))?;
-                // The upload's answer is its status alone, read; ended before any wait for a
+                // The upload's answer is its status and its reset alone. The response is read to
+                // its end and dropped before the request is ended — and so before any wait for a
                 // retry, which is asked for as a request of its own.
+                let status = response.status();
+                let reset = super::reset_wait(response.headers());
+                // A body that cannot be read changes nothing the status already said.
+                let _ = response.bytes().await;
                 admitted.end();
-                if response.status().as_u16() == 429 {
+                if status.as_u16() == 429 {
                     self.wait_asset(
                         asset,
                         Stage::Put,
-                        &format!("HTTP {}", response.status()),
-                        super::reset_wait(response.headers()),
+                        &format!("HTTP {status}"),
+                        reset,
                         &mut waited,
                     )
                     .await?;
                     continue;
                 }
-                if !response.status().is_success() {
-                    return Err(failure(
-                        asset,
-                        Stage::Put,
-                        &format!("HTTP {}", response.status()),
-                    ));
+                if !status.is_success() {
+                    return Err(failure(asset, Stage::Put, &format!("HTTP {status}")));
                 }
                 break;
             }

@@ -58,6 +58,8 @@ struct State {
     hint: Option<&'static str>,
     network_time: Duration,
     refused_names: std::collections::BTreeSet<String>,
+    /// How many refused `PUT`s under the `slow-body-PUT` fault had sent their whole answer.
+    slow_bodies_sent: usize,
 }
 
 pub(crate) struct Workspace {
@@ -371,6 +373,29 @@ fn serve(
                 return After::KeepOpen;
             }
         }
+    }
+    if let Some(status) = refusal
+        && stage == "PUT"
+        && fault == Some("slow-body-PUT")
+    {
+        // The refusal's headers and the first half of its body at once, and the rest only after
+        // a pause: a client that ends the request on the headers alone does so while this
+        // answer is still arriving. The count moves before the last byte is written, so a
+        // client that has read the whole body always sees it moved.
+        let body = b"storage refused this upload for now; retry after the reset";
+        let (first, rest) = body.split_at(body.len() / 2);
+        write!(
+            stream,
+            "HTTP/1.1 {status} Fixture\r\nContent-Length: {}\r\nRetry-After: 2\r\nConnection: keep-alive\r\n\r\n",
+            body.len()
+        )
+        .unwrap();
+        stream.write_all(first).unwrap();
+        stream.flush().unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        state.lock().unwrap().slow_bodies_sent += 1;
+        stream.write_all(rest).unwrap();
+        return After::KeepOpen;
     }
     if let Some(status) = refusal {
         let body = if stage == "mutation" && fault != Some("mutation-http429") {
@@ -4221,4 +4246,117 @@ fn a_request_gate_is_asked_before_each_asset_upload_and_its_refusal_uploads_noth
             assert_eq!(uploaded, images.len());
         }
     }
+}
+
+/// A request gate recording, at each end of an upload it admitted, how many slow refusals the
+/// storage had finished sending.
+struct UploadEnds {
+    state: Arc<Mutex<State>>,
+    current: Mutex<Option<String>>,
+    ends: Mutex<Vec<usize>>,
+}
+
+// Spelled by hand, as `request_gate.rs` explains.
+impl onetaskgraph_plugin_api::RequestGate for UploadEnds {
+    fn before_request<'gate, 'request, 'future>(
+        &'gate self,
+        request: &'request onetaskgraph_plugin_api::GatedRequest,
+    ) -> super::request_gate::GateFuture<'future>
+    where
+        'gate: 'future,
+        'request: 'future,
+        Self: 'future,
+    {
+        *self.current.lock().unwrap() = Some(request.resource.clone());
+        Box::pin(std::future::ready(Ok(())))
+    }
+
+    fn after_response(&self, _readings: &[onetaskgraph_plugin_api::QuotaReading]) {}
+
+    fn request_ended(&self) {
+        if self.current.lock().unwrap().take().as_deref() == Some("uploads") {
+            let sent = self.state.lock().unwrap().slow_bodies_sent;
+            self.ends.lock().unwrap().push(sent);
+        }
+    }
+}
+
+#[test]
+fn an_upload_refused_429_is_ended_only_once_its_answer_is_read_and_before_its_retry() {
+    let journey = Journey::new();
+    let (id, images) = journey.create("task", 1);
+    {
+        let mut state = journey.workspace.state.lock().unwrap();
+        state.fail = Some(("PUT", 1, 429));
+        state.fault = Some("slow-body-PUT");
+    }
+    let environment = onetaskgraph_core::Environment::from_pairs([
+        (
+            "XDG_CONFIG_HOME",
+            journey.sandbox.config_home().to_string_lossy().into_owned(),
+        ),
+        ("LINEAR_API_KEY", "fixture-key".to_owned()),
+    ]);
+    let loaded = onetaskgraph_core::config::load(
+        &journey.sandbox.project(),
+        &environment,
+        &onetaskgraph_core::config::Layer::default(),
+    )
+    .expect("the configuration loads");
+    let gate = Arc::new(UploadEnds {
+        state: journey.workspace.state.clone(),
+        current: Mutex::new(None),
+        ends: Mutex::new(Vec::new()),
+    });
+    let attached = onetaskgraph_core::process_clock(&onetaskgraph_core::Environment::from_pairs(
+        journey.workspace.clock.client_env(0),
+    ))
+    .expect("the clock attaches");
+    let engine =
+        onetaskgraph_core::Engine::build_with_clock(&loaded.config, &loaded.secrets, &attached)
+            .with_request_gate(gate.clone());
+    let request = onetaskgraph_core::CopyRequest {
+        items: onetaskgraph_core::CopyItems::new(vec![id.parse().unwrap()]).unwrap(),
+        scope: onetaskgraph_core::CopyScope::Tasks,
+        destination: onetaskgraph_plugin_api::SourceName::new("dest").unwrap(),
+        target_task: None,
+        match_by: None,
+        recreate: false,
+        create: false,
+        dry_run: false,
+        comments: false,
+        no_link: false,
+        expect: None,
+        status_policy: onetaskgraph_core::StatusPolicy::Source,
+        statuses: Vec::new(),
+        conditions: Default::default(),
+    };
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(engine.copy(&request))
+        .expect("the copy lands after the retry");
+    // The refused upload ended after its whole answer had arrived — never on its headers while
+    // the rest was still coming — and its retry, sent after the wait, ended once more.
+    let ends = gate.ends.lock().unwrap().clone();
+    assert_eq!(
+        ends.len(),
+        images.len() + 1,
+        "each upload and the retry end once: {ends:?}"
+    );
+    assert_eq!(
+        ends[0], 1,
+        "the refused upload ended before its answer was read: {ends:?}"
+    );
+    let uploaded = journey
+        .workspace
+        .state
+        .lock()
+        .unwrap()
+        .uploads
+        .values()
+        .filter(|upload| !upload.bytes.is_empty())
+        .count();
+    assert_eq!(uploaded, images.len());
 }

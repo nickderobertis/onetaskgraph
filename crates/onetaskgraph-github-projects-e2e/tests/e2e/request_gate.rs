@@ -804,3 +804,72 @@ fn a_request_dropped_while_in_flight_ends_once() {
     assert_eq!(gate.asked().len(), 1);
     assert_eq!(gate.ended(), 1, "the dropped request ended once");
 }
+
+#[test]
+fn a_repository_visibility_read_failing_in_transport_ends_once() {
+    use onetaskgraph_e2e_support::loopback::{self, After, Upstream};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let sandbox = Sandbox::new();
+    let (mut config, github) = github_projects_with_items(&sandbox, vec![issue(&ticket(1))]);
+    // In front of the board: every request forwarded but a repository read, whose connection
+    // is closed with nothing answered — a transport failure before any header.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a port");
+    let board_address: std::net::SocketAddr = config["endpoint"]
+        .as_str()
+        .and_then(|endpoint| endpoint.strip_prefix("http://"))
+        .and_then(|rest| rest.split('/').next())
+        .and_then(|address| address.parse().ok())
+        .expect("the board's address");
+    config["endpoint"] = json!(format!("http://{}/graphql", listener.local_addr().unwrap()));
+    let dropped = Arc::new(AtomicUsize::new(0));
+    let counted = Arc::clone(&dropped);
+    loopback::serve_each(listener, move || {
+        let mut upstream = Upstream::new(board_address);
+        let counted = Arc::clone(&counted);
+        move |sent: &loopback::Request, stream: &mut std::net::TcpStream| {
+            use std::io::Write;
+            if sent.line().starts_with("GET /repos/") {
+                counted.fetch_add(1, Ordering::SeqCst);
+                return After::Close;
+            }
+            let response = upstream.forward(&sent.bytes());
+            if response.is_empty() {
+                return After::Close;
+            }
+            stream.write_all(&response).expect("the answer is relayed");
+            After::KeepOpen
+        }
+    });
+    sandbox.project_document(&document(&json!({
+        "board": {"plugin":"github-projects","config":config,"visibility":"private"},
+    })));
+    let setup = Setup {
+        sandbox,
+        board: github,
+    };
+    let gate = Recording::new(&setup.board, None);
+    let engine = setup.engine().with_request_gate(gate.clone());
+    let written = runtime().block_on(engine.set_task_status(
+        &ticket_id(1),
+        onetaskgraph_plugin_api::StatusCategory::InProgress,
+    ));
+    let said = written
+        .expect_err("an unreadable visibility refuses the write")
+        .to_string();
+    assert!(said.contains("could not read whether repository"), "{said}");
+    assert!(
+        dropped.load(Ordering::SeqCst) >= 1,
+        "the repository was read"
+    );
+    let asked = gate.asked();
+    assert!(
+        asked.iter().any(|(request, _)| request.resource == "core"),
+        "the repository read was asked about: {asked:?}"
+    );
+    assert_eq!(
+        gate.ended(),
+        asked.len(),
+        "every admitted request ended once, the failed repository read among them"
+    );
+    assert_eq!(setup.board.status(&ticket(1)).as_deref(), Some("Todo"));
+}
