@@ -95,6 +95,8 @@ RESPONSE_ROOTS = {
     "sources_sanitize": "SweepReport",
     # What one migration of a source's superseded stored forms rewrote, and could not.
     "sources_migrate": "StoredFormsMigrated",
+    # What one source's backend says is left of each rate-limit window, as it reported it.
+    "sources_quota": "SourceQuota",
     "config_show": "EffectiveConfig",
     # What emptying the local cache of one source, or of every source, emptied.
     "cache_clear": "CacheCleared",
@@ -258,6 +260,8 @@ OPTION_TYPES = {
     "commented_since": "str",
     "origin": "GlobalId | str",
     "target_task": "GlobalId | str",
+    # The survivor a duplicate close names, qualified.
+    "duplicate_of": "GlobalId | str",
     # A source's own id for the item a `task locate` names as the one task's counterpart.
     "target_native": "str",
     "dry_run": "bool",
@@ -380,6 +384,7 @@ OPTION_PLACEHOLDERS = {
     "commented_since": "RFC3339",
     "origin": "SOURCE:ID",
     "target_task": "QUALIFIED-ID",
+    "duplicate_of": "ID",
     "target_native": "NATIVE-ID",
     "dry_run": None,
     "exclude": "KEY",
@@ -991,7 +996,7 @@ def operands(command: tuple[str, ...]) -> tuple[str, ...]:
     match command:
         case ("search",):
             return ("text",)
-        case ("sources", "status-options" | "fields" | "route" | "sanitize" | "migrate"):
+        case ("sources", "status-options" | "fields" | "route" | "sanitize" | "migrate" | "quota"):
             return ("source",)
         case ("task" | "document", "copy") | ("task", "show-many" | "locate" | "relations"):
             return ("ids",)

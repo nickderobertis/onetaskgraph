@@ -330,9 +330,12 @@ impl LinearSource {
         let mut wanted: Vec<usize> = Vec::new();
         let mut later: Vec<usize> = Vec::new();
         for at in (0..updates.len()).filter(|at| answers[*at].is_none()) {
-            if wanted
-                .iter()
-                .any(|earlier| updates[*earlier].id == updates[at].id)
+            // A duplicate close sends Linear's duplicate relation before its status, which an
+            // aliased `issueUpdate` cannot hold, so it is made after the batch on its own.
+            if updates[at].update.duplicate_of.is_some()
+                || wanted
+                    .iter()
+                    .any(|earlier| updates[*earlier].id == updates[at].id)
             {
                 later.push(at);
             } else {

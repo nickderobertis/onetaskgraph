@@ -580,6 +580,7 @@ mod batch;
 mod fields;
 mod migrate;
 mod origins;
+mod quota;
 mod relations;
 mod shared;
 mod slot;
@@ -942,6 +943,24 @@ pub mod graphql {
     /// takes a `hash` instead — and a variable has to be exactly its argument's type.
     pub const COMMENT: &str =
         "query($id:String){ comment(id:$id){ id body archivedAt issue{id} } }";
+    /// Whether `document` creates content — an issue, a project, a document or a comment —
+    /// which is what a caller's request gate is told of each request.
+    /// `every_mutation_root_sent_is_classified_and_creates_content_agrees` classifies every
+    /// mutation root this crate's source sends, so one added later fails there until it is said
+    /// whether it creates content.
+    #[must_use]
+    pub fn creates_content(document: &str) -> bool {
+        document.trim_start().starts_with("mutation")
+            && [
+                "issueCreate(",
+                "projectCreate(",
+                "documentCreate(",
+                "commentCreate(",
+            ]
+            .iter()
+            .any(|root| document.contains(root))
+    }
+
     /// Add a comment to an issue.
     pub const COMMENT_CREATE: &str = "mutation($input:CommentCreateInput!){ commentCreate(input:$input){success comment{id body url createdAt updatedAt user{displayName}}} }";
     /// Replace a comment's body.
@@ -1998,6 +2017,9 @@ struct LinearSource {
     /// [`TaskSource::written_location`] answers, so a copy records where it landed an item it
     /// created without reading it.
     locations: std::sync::Mutex<std::collections::HashMap<(MetadataRecord, NativeId), String>>,
+    /// What the last response this source received said about each rate-limit window, as
+    /// [`quota::header_readings`] reads it; empty before its first. See [`quota`].
+    quota: std::sync::Mutex<Vec<onetaskgraph_plugin_api::QuotaReading>>,
     /// The ids Linear's editor gave each record's headings, as the latest answer this instance
     /// read or wrote it with carried them — what [`TaskSource::stored_headings`] answers.
     headings: std::sync::Mutex<
@@ -2091,6 +2113,7 @@ impl LinearSource {
             ahead: std::sync::Mutex::new(std::collections::HashMap::new()),
             edges_ahead: std::sync::Mutex::new(std::collections::HashMap::new()),
             locations: std::sync::Mutex::new(std::collections::HashMap::new()),
+            quota: std::sync::Mutex::new(Vec::new()),
             headings: std::sync::Mutex::new(std::collections::HashMap::new()),
             body_markup: std::sync::OnceLock::new(),
             answered: std::sync::Mutex::new(std::collections::HashMap::new()),
@@ -2750,6 +2773,17 @@ impl LinearSource {
         }
     }
 
+    /// Hold what one response said about each rate-limit window as the source's answer to
+    /// [`TaskSource::quota`], and tell the gate of the call in progress.
+    pub(crate) fn received_quota(&self, headers: &reqwest::header::HeaderMap) {
+        let readings = quota::header_readings(headers);
+        <dyn onetaskgraph_plugin_api::RequestGate>::after(&readings);
+        *self
+            .quota
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = readings;
+    }
+
     async fn answer_using(
         &self,
         client: &reqwest::Client,
@@ -2778,6 +2812,16 @@ impl LinearSource {
         } else {
             std::borrow::Cow::Borrowed(query)
         };
+        // Asked immediately before the request leaves, whatever it is: a caller pacing its
+        // own floor inside one call waits or stops here.
+        <dyn onetaskgraph_plugin_api::RequestGate>::before(
+            &onetaskgraph_plugin_api::GatedRequest {
+                resource: "requests".to_owned(),
+                content_creating: graphql::creates_content(&query),
+                cost_hint: None,
+            },
+        )
+        .await?;
         let response = client
             .post(&self.endpoint.0)
             .header("Authorization", self.key.expose_secret())
@@ -2787,6 +2831,7 @@ impl LinearSource {
             .map_err(|e| SourceError::Unavailable {
                 message: with_causes(&e),
             })?;
+        self.received_quota(response.headers());
         let status = response.status();
         let retry = reset_wait(response.headers()).map(|wait| {
             wait.as_secs()
@@ -3594,6 +3639,9 @@ impl LinearSource {
         id: &NativeId,
         update: &TaskUpdate,
     ) -> Result<Option<TaskUpdateOutcome>, SourceError> {
+        if let Some(survivor) = &update.duplicate_of {
+            return Box::pin(self.closed_as_duplicate(id, update, survivor)).await;
+        }
         self.update_checked(id, update)?;
         if let Some(status) = update.status.as_ref().filter(|_| {
             TaskUpdate {
@@ -3621,6 +3669,103 @@ impl LinearSource {
         };
         let composed = self.compose_update(update, before, description).await?;
         self.send_composed(id, update, composed).await
+    }
+
+    /// A duplicate close: Linear's own duplicate relation from `id` to `survivor`, an issue of
+    /// this source, then the rest of the update with the `cancelled` it implies — written after
+    /// the relation, because Linear moves an issue it marks a duplicate to `Duplicate`, and the
+    /// status written after it is what a read then reports. Refused naming both, before any
+    /// request, for a survivor of another source or the issue itself.
+    async fn closed_as_duplicate(
+        &self,
+        id: &NativeId,
+        update: &TaskUpdate,
+        survivor: &TaskRef,
+    ) -> Result<Option<TaskUpdateOutcome>, SourceError> {
+        let closing = TaskUpdate {
+            status: update.effective_status(),
+            duplicate_of: None,
+            ..update.clone()
+        };
+        self.update_checked(id, &closing)?;
+        update.consistent()?;
+        let (source, native) = survivor.parts(self.name.as_str());
+        let refused = |why: &str| SourceError::Refused {
+            message: format!(
+                "{} cannot be closed as a duplicate of {survivor}: {why}; next: name an issue of \
+                 source {} as the survivor",
+                TaskRef::qualified(&self.name, id),
+                self.name
+            ),
+        };
+        if source != self.name.as_str() {
+            return Err(refused("it is not an issue of this Linear source"));
+        }
+        if native == id.0 {
+            return Err(refused("an issue cannot be a duplicate of itself"));
+        }
+        let created = self
+            .send(
+                graphql::ISSUE_RELATION_CREATE,
+                json!({"input":{"issueId":id.0,"relatedIssueId":native,"type":"duplicate"}}),
+            )
+            .await
+            .and_then(|data| {
+                mutation_payload(&data, MutationRoot::IssueRelationCreate).map(|_| ())
+            });
+        // A create Linear refuses or answers unsuccessful is accepted only when the relation it
+        // asked for is the one the issue holds — a repeated close — read back rather than
+        // inferred from the refusal's words.
+        if let Err(error) = created
+            && !self.holds_duplicate_relation(id, native).await?
+        {
+            return Err(error);
+        }
+        let Some(mut outcome) = Box::pin(self.targeted_update(id, &closing)).await? else {
+            return Ok(None);
+        };
+        outcome.written.insert(UpdatedField::DuplicateOf);
+        Ok(Some(outcome))
+    }
+
+    /// Whether issue `id` holds Linear's duplicate relation to `survivor`, read across every
+    /// page of its own relations.
+    async fn holds_duplicate_relation(
+        &self,
+        id: &NativeId,
+        survivor: &str,
+    ) -> Result<bool, SourceError> {
+        let mut cursor: Option<String> = None;
+        loop {
+            let data = self
+                .send(
+                    graphql::ISSUE_DEPENDS_ON,
+                    json!({"id":id.0,"first":MAX_PAGE_SIZE,"after":cursor}),
+                )
+                .await?;
+            let relations = data
+                .get("issue")
+                .and_then(|issue| issue.get("relations"))
+                .ok_or_else(|| SourceError::Malformed {
+                    message: format!("issue {id} answered no relations"),
+                })?;
+            let nodes = relations
+                .get("nodes")
+                .and_then(Value::as_array)
+                .ok_or_else(|| SourceError::Malformed {
+                    message: "missing relation nodes".into(),
+                })?;
+            if nodes.iter().any(|node| {
+                node.get("type").and_then(Value::as_str) == Some("duplicate")
+                    && node.pointer("/relatedIssue/id").and_then(Value::as_str) == Some(survivor)
+            }) {
+                return Ok(true);
+            }
+            match page_next(relations)? {
+                Some(next) => cursor = Some(next.0),
+                None => return Ok(false),
+            }
+        }
     }
 
     /// Refuse, before any request, an update that contradicts itself, a `delivers` list naming
@@ -5966,6 +6111,19 @@ impl TaskSource for LinearSource {
     ) -> Result<onetaskgraph_plugin_api::StoredFormMigration, SourceError> {
         self.migrate(dry_run).await
     }
+
+    /// What the last response this source received said about each rate-limit window, held
+    /// as it came and never merged — empty before its first. No request is sent for it, so it
+    /// spends nothing of Linear's allowance and is kept across a command's end, as the
+    /// allowance it describes is not anybody's work. See the `quota` module.
+    async fn quota(&self) -> Result<Vec<onetaskgraph_plugin_api::QuotaReading>, SourceError> {
+        Ok(self
+            .quota
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone())
+    }
+
     /// The tokens its dependency walks spelled and the items its writes were answered with, and
     /// nothing else: what this source holds across a command is its [`Vocabulary`] — the team's
     /// id, its workflow states and the workspace's project statuses — which stays valid in
@@ -7764,6 +7922,14 @@ fn relation_page(
         })?;
     let mut items = Vec::new();
     for n in nodes {
+        // A duplicate relation is Linear's record of a duplicate close, kept beside an issue's
+        // dependencies and no dependency of its own: the store's typed `duplicate` link is what
+        // reports it.
+        if root == DependencyRoot::Issue
+            && n.get("type").and_then(Value::as_str) == Some("duplicate")
+        {
+            continue;
+        }
         let other = n
             .get(if direction == Direction::DependsOn {
                 "relatedIssue"

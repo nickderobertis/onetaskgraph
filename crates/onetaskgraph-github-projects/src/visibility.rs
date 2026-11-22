@@ -241,6 +241,14 @@ impl GitHubProjectsSource {
                 repository.slug()
             ),
         };
+        <dyn onetaskgraph_plugin_api::RequestGate>::before(
+            &onetaskgraph_plugin_api::GatedRequest {
+                resource: "core".to_owned(),
+                content_creating: false,
+                cost_hint: Some(1),
+            },
+        )
+        .await?;
         let response = self
             .client()?
             .get(url)
@@ -267,6 +275,7 @@ impl GitHubProjectsSource {
                 .and_then(|value| value.to_str().ok())
                 .map(str::to_owned)
         });
+        <dyn onetaskgraph_plugin_api::RequestGate>::after(&crate::quota::header_readings(&limits));
         let body = response.bytes().await;
         self.ledger
             .record(accounting::Request::rest(endpoint).finished(

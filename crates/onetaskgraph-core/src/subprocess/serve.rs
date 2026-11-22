@@ -287,6 +287,13 @@ async fn initialize(
                 // build declares through its own rewrite or the contract's identity, and says
                 // after a write where its backend answered with it.
                 stored_forms: true,
+                // And a quota reading, which this host forwards to whichever plugin it serves:
+                // one with nothing to report answers empty, as the contract's default does.
+                quota: true,
+                // But not a duplicate close: the plugin it serves closes one natively and the
+                // engine records its typed link through the relation calls, which this protocol
+                // does not carry, so the link would be lost (§3.18).
+                duplicate_closes: false,
             };
             *source = Some(Hosted {
                 source: built,
@@ -698,6 +705,11 @@ async fn dispatch(
             }))
         }
         "metering" => encode(json!({ "metering": source.metering().await? })),
+        "quota" => {
+            // As `end_command`: no parameters, but an object all the same (§1, §2.1).
+            let _: serde_json::Map<String, Value> = decode(method, params)?;
+            encode(json!({ "readings": source.quota().await? }))
+        }
         "end_command" => {
             // It takes no parameters, but §1 still makes them an object: anything else is
             // refused before the source drops anything, and members in one are ignored (§2.1).

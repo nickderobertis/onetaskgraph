@@ -4106,3 +4106,119 @@ fn rendering_a_linked_task_with_an_image_asset_keeps_its_links_section_out_of_it
                 "other_end": "present"}])
     );
 }
+
+/// A request gate that records every request it is asked about, and refuses each that uploads
+/// an asset when `refusing` says so.
+struct UploadGate {
+    asked: Mutex<Vec<onetaskgraph_plugin_api::GatedRequest>>,
+    refusing: bool,
+}
+
+// Spelled by hand, as `request_gate.rs` explains.
+impl onetaskgraph_plugin_api::RequestGate for UploadGate {
+    fn before_request<'gate, 'request, 'future>(
+        &'gate self,
+        request: &'request onetaskgraph_plugin_api::GatedRequest,
+    ) -> super::request_gate::GateFuture<'future>
+    where
+        'gate: 'future,
+        'request: 'future,
+        Self: 'future,
+    {
+        self.asked.lock().unwrap().push(request.clone());
+        let answer = if self.refusing && request.resource == "uploads" {
+            Err(onetaskgraph_plugin_api::SourceError::Refused {
+                message: "the caller's gate refused the upload".into(),
+            })
+        } else {
+            Ok(())
+        };
+        Box::pin(std::future::ready(answer))
+    }
+
+    fn after_response(&self, _readings: &[onetaskgraph_plugin_api::QuotaReading]) {}
+}
+
+#[test]
+fn a_request_gate_is_asked_before_each_asset_upload_and_its_refusal_uploads_nothing() {
+    for refusing in [false, true] {
+        let journey = Journey::new();
+        let (id, images) = journey.create("task", 1);
+        let environment = onetaskgraph_core::Environment::from_pairs([
+            (
+                "XDG_CONFIG_HOME",
+                journey.sandbox.config_home().to_string_lossy().into_owned(),
+            ),
+            ("LINEAR_API_KEY", "fixture-key".to_owned()),
+        ]);
+        let loaded = onetaskgraph_core::config::load(
+            &journey.sandbox.project(),
+            &environment,
+            &onetaskgraph_core::config::Layer::default(),
+        )
+        .expect("the configuration loads");
+        let gate = Arc::new(UploadGate {
+            asked: Mutex::new(Vec::new()),
+            refusing,
+        });
+        // The workspace answers on its simulated clock, so the engine attaches to it as the
+        // binary does.
+        let attached = onetaskgraph_core::process_clock(
+            &onetaskgraph_core::Environment::from_pairs(journey.workspace.clock.client_env(0)),
+        )
+        .expect("the clock attaches");
+        let engine =
+            onetaskgraph_core::Engine::build_with_clock(&loaded.config, &loaded.secrets, &attached)
+                .with_request_gate(gate.clone());
+        let request = onetaskgraph_core::CopyRequest {
+            items: onetaskgraph_core::CopyItems::new(vec![id.parse().unwrap()]).unwrap(),
+            scope: onetaskgraph_core::CopyScope::Tasks,
+            destination: onetaskgraph_plugin_api::SourceName::new("dest").unwrap(),
+            target_task: None,
+            match_by: None,
+            recreate: false,
+            create: false,
+            dry_run: false,
+            comments: false,
+            no_link: false,
+            expect: None,
+            status_policy: onetaskgraph_core::StatusPolicy::Source,
+            statuses: Vec::new(),
+            conditions: Default::default(),
+        };
+        let copied = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(engine.copy(&request));
+        let asked = gate.asked.lock().unwrap().clone();
+        let uploads: Vec<_> = asked
+            .iter()
+            .filter(|request| request.resource == "uploads")
+            .collect();
+        assert!(!uploads.is_empty(), "the upload was asked about: {asked:?}");
+        assert!(uploads.iter().all(|request| request.content_creating));
+        // Linear registers an upload at `fileUpload` and receives its bytes at the signed PUT,
+        // which is the request the gate is asked about: what counts is the bytes that arrived.
+        let uploaded = journey
+            .workspace
+            .state
+            .lock()
+            .unwrap()
+            .uploads
+            .values()
+            .filter(|upload| !upload.bytes.is_empty())
+            .count();
+        if refusing {
+            let said = match &copied {
+                Ok(report) => serde_json::to_string(report).unwrap(),
+                Err(error) => error.to_string(),
+            };
+            assert!(said.contains("refused the upload"), "{said}");
+            assert_eq!(uploaded, 0, "no asset's bytes were sent");
+        } else {
+            copied.expect("the copy lands");
+            assert_eq!(uploaded, images.len());
+        }
+    }
+}

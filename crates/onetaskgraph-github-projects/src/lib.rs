@@ -668,6 +668,7 @@ mod expected;
 pub use expected::{CONTEXT_VERSION, WHOLE_MEMBERS, context_shapes};
 mod pacing;
 mod projection;
+mod quota;
 mod relations;
 mod visibility;
 
@@ -989,6 +990,130 @@ fn token_variables(mut variables: Value) -> Value {
         object.insert("duplicates".to_owned(), json!(true));
     }
     variables
+}
+
+/// What a caller's request gate is told of one GraphQL request: it draws on GitHub's `graphql`
+/// resource, it creates content exactly when it creates an issue or a comment,
+/// and it costs what GitHub's published rules price it at under the page sizes it binds.
+fn gated_graphql(document: &str, variables: &Value) -> onetaskgraph_plugin_api::GatedRequest {
+    onetaskgraph_plugin_api::GatedRequest {
+        resource: "graphql".to_owned(),
+        content_creating: creates_content(document),
+        cost_hint: point_cost(document, &accounting::bindings(variables)).ok(),
+    }
+}
+
+/// Whether `document` creates content GitHub's secondary limits meter as such: an issue or a
+/// comment. `creates_content_tests` classifies every mutation root `graphql::DOCUMENTS` sends,
+/// so a root added later fails there until it is said whether it creates content.
+fn creates_content(document: &str) -> bool {
+    is_mutation(document)
+        && ["createIssue(", "addComment("]
+            .iter()
+            .any(|root| document.contains(root))
+}
+
+#[cfg(test)]
+mod creates_content_tests {
+    use super::{creates_content, graphql};
+    use std::collections::BTreeMap;
+
+    /// Every root field a mutation document selects at its top level, aliases resolved.
+    fn roots(document: &str) -> Vec<String> {
+        let body = &document[document.find('{').expect("a selection set") + 1..];
+        let (mut braces, mut parens, mut roots) = (0_usize, 0_usize, Vec::new());
+        let mut chars = body.char_indices().peekable();
+        while let Some((at, c)) = chars.next() {
+            match c {
+                '{' => braces += 1,
+                '}' if braces == 0 => break,
+                '}' => braces -= 1,
+                '(' => parens += 1,
+                ')' => parens -= 1,
+                // A directive's name is no field.
+                '@' => {
+                    while chars
+                        .peek()
+                        .is_some_and(|&(_, n)| n.is_ascii_alphanumeric() || n == '_')
+                    {
+                        chars.next();
+                    }
+                }
+                c if braces == 0 && parens == 0 && (c.is_ascii_alphabetic() || c == '_') => {
+                    let mut end = at + c.len_utf8();
+                    while let Some(&(next, n)) = chars.peek() {
+                        if !(n.is_ascii_alphanumeric() || n == '_') {
+                            break;
+                        }
+                        end = next + n.len_utf8();
+                        chars.next();
+                    }
+                    let rest = body[end..].trim_start();
+                    // An alias names the root after its colon, which this loop reads next.
+                    if !rest.starts_with(':') {
+                        roots.push(body[at..end].to_owned());
+                    }
+                }
+                _ => {}
+            }
+        }
+        roots
+    }
+
+    #[test]
+    fn every_mutation_root_sent_is_classified_and_creates_content_agrees() {
+        // Whether each root creates an issue or a comment: what GitHub's
+        // secondary limits meter as content creation.
+        let classified = BTreeMap::from([
+            ("addBlockedBy", false),
+            ("addComment", true),
+            ("addProjectV2ItemById", false),
+            ("addRelatesTo", false),
+            ("addSubIssue", false),
+            ("clearProjectV2ItemFieldValue", false),
+            ("closeIssue", false),
+            ("createIssue", true),
+            ("createProjectV2Field", false),
+            ("deleteIssue", false),
+            ("deleteIssueComment", false),
+            ("removeBlockedBy", false),
+            ("removeRelatesTo", false),
+            ("removeSubIssue", false),
+            ("updateIssue", false),
+            ("updateIssueComment", false),
+            ("updateProjectV2DraftIssue", false),
+            ("updateProjectV2Field", false),
+            ("updateProjectV2ItemFieldValue", false),
+        ]);
+        let (mut seen, mut unclassified) = (BTreeMap::new(), std::collections::BTreeSet::new());
+        for (document, _) in graphql::DOCUMENTS {
+            if !super::is_mutation(document) {
+                assert!(!creates_content(document), "a query: {document}");
+                continue;
+            }
+            let roots = roots(document);
+            assert!(!roots.is_empty(), "no root read: {document}");
+            for root in &roots {
+                match classified.get(root.as_str()) {
+                    Some(&creates) => _ = seen.insert(root.clone(), creates),
+                    None => _ = unclassified.insert(root.clone()),
+                }
+            }
+            let expected = roots
+                .iter()
+                .any(|root| classified.get(root.as_str()) == Some(&true));
+            assert_eq!(creates_content(document), expected, "{document}");
+        }
+        assert!(
+            unclassified.is_empty(),
+            "say whether each of these mutation roots creates content: {unclassified:?}"
+        );
+        let unsent: Vec<_> = classified
+            .keys()
+            .filter(|root| !seen.contains_key(**root))
+            .collect();
+        assert!(unsent.is_empty(), "classified but never sent: {unsent:?}");
+    }
 }
 
 /// The input members a mutation names the issue or board item it writes by.
@@ -1408,6 +1533,40 @@ pub mod graphql {
     }"#
     );
 
+    /// Every open item of the board, drafts included, by the board's own field filter — what a
+    /// task listing whose every status category is open reads, and nothing else of the board.
+    ///
+    /// **`ProjectV2.items(query:)` narrowed by `$filter`**, which this source binds to
+    /// `is:open` alone. GitHub's filter reads the issue's state, not its card, so it answers
+    /// every open issue whatever column its card sits in — an open issue under a terminal card,
+    /// and one under an option no mapping names, among them — and every draft, which has no
+    /// state and is never closed; measured on the real board by `spike-store-defects`, it read
+    /// 466 open items in five requests where the whole board's walk and its issue search took
+    /// thirty-one. Each item's category is still confirmed in process from its own node, so a
+    /// filter that let a closed item through would cost a read and keep nothing it should not.
+    ///
+    /// The board's own id and field definitions ride along, as [`CLOSED_ITEMS`] carries them,
+    /// so a status write after it needs no read of the board's fields. The root is aliased
+    /// `openItems`, so nothing counting the board's whole reads counts this one among them.
+    pub const OPEN_ITEMS: &str = concat!(
+        r#"query($owner:String!,$number:Int!,$first:Int!,$after:String,$filter:String!,$nestedFirst:Int!,$duplicates:Boolean!"#,
+        relationship_events_variable!(),
+        r#"){
+      openItems:repositoryOwner(login:$owner){
+        ... on ProjectV2Owner{projectV2(number:$number){id
+          fields(first:$nestedFirst){nodes{
+            ... on ProjectV2SingleSelectField{__typename id name options{id name}}
+            ... on ProjectV2Field{__typename id name dataType}
+          }pageInfo{hasNextPage}}
+          items(first:$first,after:$after,query:$filter){nodes{id updatedAt "#,
+        board_item_values!(),
+        board_item_content!(),
+        r#"} pageInfo{hasNextPage endCursor}}
+        }}
+      }
+    }"#
+    );
+
     /// One alias of [`ISSUES_BY_REFERENCE`]: the issue `$owner<n>/$name<n>#$number<n>` names.
     macro_rules! reference_alias {
         ($n:literal) => {
@@ -1653,6 +1812,12 @@ pub mod graphql {
     /// Updates an issue's visible fields and its open or closed state in one call.
     pub const UPDATE_ISSUE: &str =
         r#"mutation($input:UpdateIssueInput!){updateIssue(input:$input){issue{id}}}"#;
+    /// Closes one issue for a reason, the survivor it is a duplicate of included — the one way
+    /// GitHub records a duplicate's link: `updateIssue`'s `stateInput` carries no survivor, and
+    /// the REST `state_reason=duplicate` is accepted and records none, both measured by
+    /// `spike-store-defects`.
+    pub const CLOSE_ISSUE: &str =
+        r#"mutation($input:CloseIssueInput!){closeIssue(input:$input){issue{id}}}"#;
     /// Updates an existing draft's user-visible fields.
     pub const UPDATE_DRAFT: &str = r#"mutation($input:UpdateProjectV2DraftIssueInput!){updateProjectV2DraftIssue(input:$input){draftIssue{id}}}"#;
     /// Updates a text or single-select value on one project item.
@@ -2747,7 +2912,7 @@ pub mod graphql {
     /// `documents_are_all_inventoried` reads this file back and fails naming any `pub
     /// const` here that this list omits, so the two cannot part — which is the same guard
     /// `CATEGORIES` carries, in the one shape available to a set of `&str` constants.
-    pub const DOCUMENTS: [(&str, &str); 69] = [
+    pub const DOCUMENTS: [(&str, &str); 71] = [
         (USER_IDS, "looking up the people an assignee write names"),
         (
             ISSUE_RELATIONS,
@@ -2782,6 +2947,8 @@ pub mod graphql {
         ),
         (ORIGIN_LOOKUP, "looking up the items copied from one origin"),
         (CLOSED_ITEMS, "reading the board's closed items"),
+        (OPEN_ITEMS, "reading the board's open items"),
+        (CLOSE_ISSUE, "closing an issue as a duplicate"),
         (
             ISSUES_BY_REFERENCE,
             "reading a batch of issues by their references",
@@ -6247,6 +6414,16 @@ impl GitHubProjectsSource {
                 self.paced(ticket, mutation);
                 return Err(refused);
             }
+            // And of a caller's request gate, before every request this source sends — a retry
+            // as its own — so a caller pacing its own floor inside one call waits or stops here.
+            if let Err(refused) = <dyn onetaskgraph_plugin_api::RequestGate>::before(
+                &gated_graphql(query, &variables),
+            )
+            .await
+            {
+                self.paced(ticket, mutation);
+                return Err(refused);
+            }
             let attempt = self.send_once(query, &variables, waits + 1).await;
             self.paced(ticket, mutation);
             let remaining = self.pacing.retry_budget.saturating_sub(waited);
@@ -6491,6 +6668,8 @@ impl GitHubProjectsSource {
                 .and_then(|value| value.to_str().ok())
                 .map(str::to_owned)
         });
+        // Each response's own reading, as it gave it: never merged with another window's.
+        <dyn onetaskgraph_plugin_api::RequestGate>::after(&quota::header_readings(limits));
         // Exactly `0` is exhaustion and everything else — a count, an empty value, bytes
         // that are not text at all — is "not known to be exhausted". This never makes a
         // response a refusal on its own: it says which limiter a refusal is attributed to
@@ -8239,6 +8418,100 @@ impl GitHubProjectsSource {
         Ok(board)
     }
 
+    /// Every open item of this board, drafts included, read through the board's own `is:open`
+    /// filter page by page — never its unfiltered `items`, and with no issue search beside it —
+    /// held for the command under [`OPEN_ITEMS_KEY`] on the terms every narrowed answer is
+    /// held on, and completed with this process's own writes each time it is given.
+    ///
+    /// What a task listing whose every status category is open reads: an item is open exactly
+    /// when GitHub's filter answers it, so the categories are still confirmed in process from
+    /// each item's own node, and the answer is the whole board's filtered to the same
+    /// categories — an open issue under a terminal card read as its card, a draft and an item
+    /// under an option no mapping names included.
+    async fn open_items(&self) -> Result<Vec<Resolved>, SourceError> {
+        let key = OPEN_ITEMS_KEY.to_owned();
+        let cached = self.narrowed_cache()?.get(&key).cloned();
+        let mut found = match cached {
+            Some(found) => found,
+            None => {
+                let found = self.read_open_items().await?;
+                self.narrowed_cache()?.insert(key, found.clone());
+                found
+            }
+        };
+        // Every item this process wrote, drafts included: the filter answers drafts, so an
+        // own draft is as much an answer as an own issue. Its category is confirmed below like
+        // any other's, so one this process closed is left out there.
+        let own: Vec<Resolved> = self
+            .created()?
+            .iter()
+            .chain(self.updated()?.iter())
+            .cloned()
+            .collect();
+        for own in own {
+            match found.iter_mut().find(|read| read.id == own.id) {
+                Some(read) => *read = own,
+                None => found.push(own),
+            }
+        }
+        Ok(found)
+    }
+
+    /// Every page of [`graphql::OPEN_ITEMS`], resolved; the board's own fields are held for
+    /// the writes that follow, as a reconcile holds them.
+    async fn read_open_items(&self) -> Result<Vec<Resolved>, SourceError> {
+        let mut after: Option<String> = None;
+        let mut found = Vec::new();
+        loop {
+            let data = self
+                .graphql(
+                    graphql::OPEN_ITEMS,
+                    json!({"owner":self.owner,"number":self.project_number,
+                           "first":MAX_PAGE_SIZE,"after":after,"filter":OPEN_QUALIFIER,
+                           "nestedFirst":NESTED_PAGE_SIZE,"duplicates":true}),
+                )
+                .await?;
+            let board = data
+                .pointer("/openItems/projectV2")
+                .filter(|value| !value.is_null())
+                .ok_or_else(|| SourceError::Refused {
+                    message: format!(
+                        "GitHub project {}/{} was not found or is not visible to the token",
+                        self.owner, self.project_number
+                    ),
+                })?;
+            *self.fields_cache()? = Some(BoardFields {
+                id: BoardId::parse(required_str(board, "id")?)?,
+                fields: board.get("fields").cloned().unwrap_or(Value::Null),
+            });
+            let items = board.get("items").ok_or_else(|| SourceError::Malformed {
+                message: "GitHub project open items are missing".into(),
+            })?;
+            for item in items
+                .get("nodes")
+                .and_then(Value::as_array)
+                .ok_or_else(|| SourceError::Malformed {
+                    message: "GitHub project items.nodes is not an array".into(),
+                })?
+            {
+                if let Some(resolved) = self.resolve(item)? {
+                    found.push(resolved);
+                }
+            }
+            let info = items
+                .get("pageInfo")
+                .ok_or_else(|| SourceError::Malformed {
+                    message: "GitHub project items have no pageInfo".into(),
+                })?;
+            if !required_bool(info, "hasNextPage")? {
+                return Ok(found);
+            }
+            let next = required_str(info, "endCursor")?;
+            validate_cursor_progress(after.as_deref(), next)?;
+            after = Some(next.to_owned());
+        }
+    }
+
     /// This process's own view of the board, or the refusal a poisoned lock is.
     fn board_cache(&self) -> Result<std::sync::MutexGuard<'_, Option<Board>>, SourceError> {
         self.board_cache
@@ -8870,7 +9143,24 @@ impl GitHubProjectsSource {
                     self.name
                 ),
             })?;
-        if item.status.category == category && item.option.as_deref() == Some(&name) {
+        // The card already shows the target's option. That alone is not the status: an open
+        // issue under a terminal card reads that card's category while GitHub, its
+        // notifications and a search of open issues all say the work is not finished, and a
+        // closed issue under an open column's card reads as its closure. So the write is no
+        // write only where the issue's open or closed state is also what the target needs —
+        // closed, for a reason reading this category, for a terminal one; open for a column.
+        let at_option = item
+            .option
+            .as_deref()
+            .is_some_and(|held| held.eq_ignore_ascii_case(&name));
+        let issue = item.content_kind == ContentKind::Issue;
+        let state_holds = match &target {
+            StatusTarget::Terminal(_, _) => {
+                !issue || (item.closed && closed_category(item.reason.as_deref()) == category)
+            }
+            _ => !issue || !item.closed,
+        };
+        if item.status.category == category && at_option && state_holds {
             return Ok(Some(item.status));
         }
         match &target {
@@ -8879,14 +9169,17 @@ impl GitHubProjectsSource {
                     return Err(self.closes_a_draft(category));
                 }
                 // The option first, so a refused selection leaves an open issue open rather
-                // than closed behind a card that still reads open.
-                self.set_item_field(
-                    board.id.as_str(),
-                    &item.item_id,
-                    &field,
-                    json!({"singleSelectOptionId": option}),
-                )
-                .await?;
+                // than closed behind a card that still reads open. A card already showing it
+                // is sent nothing: only the issue's state is out of line.
+                if !at_option {
+                    self.set_item_field(
+                        board.id.as_str(),
+                        &item.item_id,
+                        &field,
+                        json!({"singleSelectOptionId": option}),
+                    )
+                    .await?;
+                }
                 // An issue already closed in a way that reads as this category keeps its state
                 // and its reason: only its card was out of line, and closing it again would
                 // overwrite a reason — a duplicate's — that says more than this write does.
@@ -8924,13 +9217,15 @@ impl GitHubProjectsSource {
                     .await?;
                     item.closed = false;
                 }
-                self.set_item_field(
-                    board.id.as_str(),
-                    &item.item_id,
-                    &field,
-                    json!({"singleSelectOptionId": option}),
-                )
-                .await?;
+                if !at_option {
+                    self.set_item_field(
+                        board.id.as_str(),
+                        &item.item_id,
+                        &field,
+                        json!({"singleSelectOptionId": option}),
+                    )
+                    .await?;
+                }
                 item.status = self.statuses.status(kind, Some(&name), false, None);
                 item.option = Some(name);
             }
@@ -9494,6 +9789,12 @@ impl GitHubProjectsSource {
         // Everything this source can refuse without reading the item is refused first, in the
         // words a whole write of the same fields is refused with.
         update.consistent()?;
+        // A duplicate close is the `cancelled` it implies where it names no status.
+        let closing = update.duplicate_of.as_ref().map(|_| TaskUpdate {
+            status: update.effective_status(),
+            ..update.clone()
+        });
+        let update = closing.as_ref().unwrap_or(update);
         if update.assignees.is_some() && !self.assignees {
             return Err(onetaskgraph_plugin_api::unwritable_field(KIND, "assignees"));
         }
@@ -9540,6 +9841,12 @@ impl GitHubProjectsSource {
             return Ok(None);
         };
         let before = item.task()?;
+        // The issue a duplicate close names as its survivor, refused naming both before anything
+        // is written when it is not an issue of this board's own.
+        let survivor = match &update.duplicate_of {
+            Some(survivor) => Some(self.duplicate_survivor(id, &item, survivor).await?),
+            None => None,
+        };
         // The people it is to be assigned to, by node id, when they are not exactly whom it
         // holds: looked up — unless this process already has — and refused for a login GitHub
         // does not know, before anything is sent.
@@ -9575,21 +9882,24 @@ impl GitHubProjectsSource {
             if terminal && item.content_kind == ContentKind::DraftIssue {
                 return Err(self.closes_a_draft(status.category));
             }
-            let landed = match &target {
-                StatusTarget::Terminal(_, reason) => {
-                    self.statuses
-                        .status(ItemKind::Task, Some(&name), true, Some(reason.reason()))
-                }
-                _ => self
-                    .statuses
-                    .status(ItemKind::Task, Some(&name), false, None),
+            // A duplicate close lands closed as `DUPLICATE`, which reads `cancelled` as not
+            // planned does; an issue already closed as one is not closed again.
+            let reason = match (&target, &survivor) {
+                (StatusTarget::Terminal(_, _), Some(_)) => Some(DUPLICATE_REASON),
+                (StatusTarget::Terminal(_, reason), None) => Some(reason.reason()),
+                _ => None,
             };
+            let landed = self
+                .statuses
+                .status(ItemKind::Task, Some(&name), terminal, reason);
             let option_moves = item
                 .option
                 .as_deref()
                 .is_none_or(|held| !held.eq_ignore_ascii_case(&name));
             let state_moves = item.content_kind == ContentKind::Issue
-                && (item.closed != terminal || (terminal && item.status != landed));
+                && (item.closed != terminal
+                    || (terminal && item.status != landed)
+                    || (survivor.is_some() && item.reason.as_deref() != Some(DUPLICATE_REASON)));
             if let Some(moves) = Moves::of(option_moves, state_moves) {
                 status_move = Some(StatusMove {
                     board: board.id,
@@ -9792,9 +10102,18 @@ impl GitHubProjectsSource {
         if body != held {
             fields.insert("body".to_owned(), json!(body));
         }
-        if let Some(moving) = status_move.as_ref().filter(|moving| moving.moves.state()) {
+        // A duplicate's closure is `closeIssue`'s, sent after this update: `stateInput` names
+        // no survivor.
+        if let Some(moving) = status_move
+            .as_ref()
+            .filter(|moving| moving.moves.state() && survivor.is_none())
+        {
             fields.insert("stateInput".to_owned(), state_input(Some(&moving.target)));
         }
+        let closes_as_duplicate = status_move
+            .as_ref()
+            .is_some_and(|moving| moving.moves.state())
+            && survivor.is_some();
         // The assignees ride the same mutation: replacing whoever the issue holds, in the one
         // `updateIssue` this update already ends with — or as the one it sends for them alone.
         if let Some(ids) = &assignee_ids {
@@ -9856,8 +10175,11 @@ impl GitHubProjectsSource {
                 .await?;
         }
         // Whether anything is sent: what the version answered has to come after.
-        let sends =
-            option_selected || !board_writes.is_empty() || !clears.is_empty() || !fields.is_empty();
+        let sends = option_selected
+            || !board_writes.is_empty()
+            || !clears.is_empty()
+            || !fields.is_empty()
+            || closes_as_duplicate;
         let mut blocked_by_moved = false;
         if let Some((native, _)) = &edges
             && item.content_kind == ContentKind::Issue
@@ -9873,6 +10195,17 @@ impl GitHubProjectsSource {
         if !fields.is_empty() {
             self.update_content(item.content_kind, &item.id, Value::Object(fields))
                 .await?;
+        }
+        // Last, the duplicate's closure, with the survivor GitHub links it to: the card already
+        // shows the `cancelled` option, so a refusal here leaves an open issue at a terminal
+        // card, which the next write of the same status closes.
+        if let (true, Some(survivor)) = (closes_as_duplicate, &survivor) {
+            self.graphql(
+                graphql::CLOSE_ISSUE,
+                json!({"input":{"issueId":item.id.0,"stateReason":DUPLICATE_REASON,
+                                "duplicateIssueId":survivor.0}}),
+            )
+            .await?;
         }
 
         // The `blockedBy` this item was read with is what the write just changed, so it is no
@@ -9897,6 +10230,15 @@ impl GitHubProjectsSource {
         if let Some(moving) = status_move {
             item.closed = matches!(moving.target, StatusTarget::Terminal(_, _))
                 && item.content_kind == ContentKind::Issue;
+            if moving.moves.state() {
+                item.reason = match &moving.target {
+                    StatusTarget::Terminal(_, _) if survivor.is_some() => {
+                        Some(DUPLICATE_REASON.to_owned())
+                    }
+                    StatusTarget::Terminal(_, reason) => Some(reason.reason().to_owned()),
+                    _ => None,
+                };
+            }
             item.status = moving.landed;
             item.option = Some(moving.name);
         }
@@ -9916,6 +10258,9 @@ impl GitHubProjectsSource {
         if blocked_by_moved || recorded_moves {
             written.insert(UpdatedField::DependsOn);
         }
+        if closes_as_duplicate {
+            written.insert(UpdatedField::DuplicateOf);
+        }
         if sends || blocked_by_moved {
             // The token the item was read at is not the one it holds now. A batch of updates
             // holding this one's writes back reads every task it wrote once they are sent.
@@ -9931,6 +10276,43 @@ impl GitHubProjectsSource {
             written,
             delivers_before: before.delivers,
         }))
+    }
+
+    /// The issue `survivor` names, the one a duplicate close of `id` links GitHub's closure to:
+    /// refused, naming both, when it is not an issue of this board's own source — a task of
+    /// another source, a board draft, an item this board does not hold — or is `id` itself.
+    async fn duplicate_survivor(
+        &self,
+        id: &NativeId,
+        item: &Resolved,
+        survivor: &TaskRef,
+    ) -> Result<NativeId, SourceError> {
+        let refused = |why: String| SourceError::Refused {
+            message: format!(
+                "{} cannot be closed as a duplicate of {survivor}: {why}; next: name an issue of \
+                 source {} as the survivor",
+                TaskRef::qualified(&self.name, id),
+                self.name
+            ),
+        };
+        let (source, native) = survivor.parts(self.name.as_str());
+        if source != self.name.as_str() {
+            return Err(refused(format!(
+                "it is not a GitHub issue of source {}, which GitHub links a duplicate to",
+                self.name
+            )));
+        }
+        let native = NativeId(native.to_owned());
+        if native == *id || native == item.id {
+            return Err(refused("a task cannot be a duplicate of itself".to_owned()));
+        }
+        match self.bound_item(&native).await? {
+            Some(held) if held.content_kind == ContentKind::Issue => Ok(held.id),
+            Some(_) => Err(refused(
+                "it is a board draft, which is no issue GitHub can link a duplicate to".to_owned(),
+            )),
+            None => Err(refused(format!("source {} holds no such issue", self.name))),
+        }
     }
 
     /// The change token the task `id` holds after the writes a targeted update just sent: the
@@ -13455,6 +13837,22 @@ fn open_only(query: &TaskQuery) -> bool {
         })
 }
 
+/// Whether every status category `query` keeps is one only an open item reads as — `draft`,
+/// `backlog`, `todo`, `queued`, `in-progress` and `unknown` — so a listing of it can read the
+/// board's open items alone.
+///
+/// `unknown` is among them here though [`open_only`] leaves it out: a closed issue reads
+/// `unknown` only for a closure reason GitHub never records on a closed issue (see
+/// [`closed_category`]), so an open-only read of the board loses nothing a whole one keeps,
+/// while an issue search, which [`open_only`] narrows, keeps its own rule.
+fn open_items_only(query: &TaskQuery) -> bool {
+    !query.statuses.is_empty()
+        && query
+            .statuses
+            .iter()
+            .all(|category| !matches!(category, StatusCategory::Done | StatusCategory::Cancelled))
+}
+
 /// What a task query is narrowed by beside a board-scoped issue search's scope — its comment
 /// activity and its text and metadata, with `is:open` when [`open_only`] — or `None` for a query
 /// carrying none of those, which no narrowed search answers.
@@ -14364,6 +14762,10 @@ const FAR_ENDS_UNCOVERED: &str = "a github item's change token does not attest a
 /// categories an open issue reads as narrows a board-scoped search with.
 const OPEN_QUALIFIER: &str = "is:open";
 
+/// What the board's open items are held under among the narrowed answers of one command — a
+/// key no [`Narrowing`], each `origin …` or `search …`, can spell.
+const OPEN_ITEMS_KEY: &str = "items is:open";
+
 /// The board filter `task status reconcile` reads the board through: closed items alone.
 const CLOSED_FILTER: &str = "is:closed";
 
@@ -15154,6 +15556,11 @@ impl TaskSource for GitHubProjectsSource {
                     // The board's own items list every draft; only the search half, which
                     // completes them with issues they lag behind on, is narrowed — a closed
                     // issue that half leaves out is at no category the filter keeps.
+                    // Every category it keeps reads only off an open item, so it reads the
+                    // board's open items alone, through the board's own filter.
+                    (None, None) if open_items_only(query) => {
+                        (self.open_items().await?, &query.project)
+                    }
                     (None, None) if open_only => (
                         self.board_completed_by(Some(OPEN_QUALIFIER)).await?.items,
                         &query.project,
@@ -16449,6 +16856,13 @@ impl TaskSource for GitHubProjectsSource {
         Ok(Some(self.ledger.snapshot().metering()))
     }
 
+    /// One `GET /rate_limit` at this source's endpoint, every resource it reports, asked
+    /// afresh each time and counted in nothing [`metering`](TaskSource::metering) reports:
+    /// GitHub documents the endpoint as free. See [`quota`].
+    async fn quota(&self) -> Result<Vec<onetaskgraph_plugin_api::QuotaReading>, SourceError> {
+        self.rate_limits().await
+    }
+
     /// Drop every item, search answer and board read this source holds, so the next command
     /// reads the board as a person has since left it.
     ///
@@ -16759,6 +17173,9 @@ fn related_kind(value: &Value, meaning: SubIssues) -> Result<ItemKind, SourceErr
         ItemKind::Task
     })
 }
+
+/// The reason GitHub records an issue closed as a duplicate of another under.
+const DUPLICATE_REASON: &str = "DUPLICATE";
 
 /// The `stateInput` that closes an issue for `reason`.
 fn closed_input(reason: ClosedState) -> Value {

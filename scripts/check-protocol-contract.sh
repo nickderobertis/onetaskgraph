@@ -448,6 +448,7 @@ METHOD_SECTIONS = {
     "status_contradictions": "### 4.23 `status_contradictions`",
     "issue_holdings": "### 4.24 `issue_holdings`",
     "stored_status": "### 4.25 `stored_status`",
+    "quota": "### 4.26 `quota`",
 }
 
 ENUM_SECTIONS = {
@@ -1385,6 +1386,8 @@ PAYLOAD_EXAMPLES = (
         "StatusContradiction",
         "issue.rs",
     ),
+    ("### 4.26 `quota`", "quota", "result", (), "QuotaResult", "wire"),
+    ("### 4.26 `quota`", "quota", "result", ("readings", 0), "QuotaReading", "quota.rs"),
     ("### 4.24 `issue_holdings`", "issue_holdings", "params", (), "HoldingsParams", "wire"),
     ("### 4.24 `issue_holdings`", "issue_holdings", "result", (), "HoldingsResult", "wire"),
     (

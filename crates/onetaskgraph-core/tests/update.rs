@@ -449,6 +449,7 @@ async fn an_update_the_task_already_holds_writes_nothing_and_says_so() {
             }]),
             repositories: Some(before.repositories.clone()),
             assignees: None,
+            duplicate_of: None,
         };
         let answer = store.update(&update).await.expect("an answer");
         assert!(answer.written.is_empty(), "{kind:?}: {:?}", answer.written);

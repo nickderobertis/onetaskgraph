@@ -1082,6 +1082,7 @@ test("taskUpdate sends exactly the flags the binary's task update reports, no mo
         ifVersion: "md1|v",
         repositories: ["github.com/example-org/widget"],
         whenPriority: ["none", "low"],
+        duplicateOf: "work:T-4",
       }),
       ...taskUpdateFlags({ delivers: [], dependsOn: [], termScope: [], repositories: [] }),
     ].filter((argument) => argument.startsWith("--")),

@@ -1470,6 +1470,7 @@ impl TaskSource for LocalMdSource {
         self.edges(WorkKind::Project, id, d, p)
     }
     async fn write_task(&self, write: &ItemWrite<Task>) -> Result<NativeId, SourceError> {
+        record_gate(false).await?;
         self.held(write.target.as_ref(), async {
             self.write_task_with(write, None)
         })
@@ -1525,6 +1526,7 @@ impl TaskSource for LocalMdSource {
         id: &NativeId,
         key: &MetadataKey,
     ) -> Result<Option<Option<String>>, SourceError> {
+        record_gate(false).await?;
         self.held(
             (record == onetaskgraph_plugin_api::MetadataRecord::Task).then_some(id),
             async {
@@ -1677,6 +1679,7 @@ impl TaskSource for LocalMdSource {
         write: &ItemWrite<Task>,
         answers: &BTreeMap<String, serde_json::Value>,
     ) -> Result<NativeId, SourceError> {
+        record_gate(false).await?;
         self.held(write.target.as_ref(), async {
             self.write_task_with(write, Some(answers))
         })
@@ -1687,6 +1690,7 @@ impl TaskSource for LocalMdSource {
     /// provenance — a copy over it, a status written by one — and drops it with the provenance
     /// otherwise; see `docs/local-md.md`.
     async fn write_project(&self, write: &ItemWrite<Project>) -> Result<NativeId, SourceError> {
+        record_gate(false).await?;
         self.write_project_with(write, None)
     }
     /// A project written with the answers it was rendered from stored after its content, on
@@ -1696,6 +1700,7 @@ impl TaskSource for LocalMdSource {
         write: &ItemWrite<Project>,
         answers: &BTreeMap<String, serde_json::Value>,
     ) -> Result<NativeId, SourceError> {
+        record_gate(false).await?;
         self.write_project_with(write, Some(answers))
     }
     /// One file under `documents/`, on exactly the terms a task lands under `tasks/`.
@@ -1705,6 +1710,7 @@ impl TaskSource for LocalMdSource {
     /// carry an edge and no status to disagree with this folder's mapping.
     // llmlint: ignore[boundary_inputs_validated] `ItemWrite` carries `depends_on` for all three kinds and the frozen contract says nothing about a document's being empty, so a non-empty one is not an input this plugin may rule on. `in-memory`, the reference implementation of this method, ignores it for the same recorded reason; refusing here would make this the one source that rejects a call every other source accepts, which is a change to the contract rather than to this plugin and is its owner's to make.
     async fn write_document(&self, write: &ItemWrite<Document>) -> Result<NativeId, SourceError> {
+        record_gate(false).await?;
         self.write_document_with(write, None)
     }
     /// A document written with the answers it was rendered from, on the terms of
@@ -1714,6 +1720,7 @@ impl TaskSource for LocalMdSource {
         write: &ItemWrite<Document>,
         answers: &BTreeMap<String, serde_json::Value>,
     ) -> Result<NativeId, SourceError> {
+        record_gate(false).await?;
         self.write_document_with(write, Some(answers))
     }
     /// Rewrite the one `status:` entry of the task's front matter, and nothing else.
@@ -1728,6 +1735,7 @@ impl TaskSource for LocalMdSource {
         id: &NativeId,
         category: StatusCategory,
     ) -> Result<Option<Status>, SourceError> {
+        record_gate(false).await?;
         self.held(Some(id), async {
             self.set_status(WorkKind::Task, id, category)
         })
@@ -1741,6 +1749,7 @@ impl TaskSource for LocalMdSource {
         id: &NativeId,
         category: StatusCategory,
     ) -> Result<Option<Status>, SourceError> {
+        record_gate(false).await?;
         self.set_status(WorkKind::Project, id, category)
     }
 
@@ -1808,6 +1817,7 @@ impl TaskSource for LocalMdSource {
         id: &NativeId,
         priority: Priority,
     ) -> Result<Option<Priority>, SourceError> {
+        record_gate(false).await?;
         self.held(Some(id), async {
             let Some(path) = self.locate(Kind::Task, id)? else {
                 return Ok(None);
@@ -1841,6 +1851,7 @@ impl TaskSource for LocalMdSource {
         id: &NativeId,
         content: &str,
     ) -> Result<Option<()>, SourceError> {
+        record_gate(false).await?;
         self.held(Some(id), async {
             let Some(path) = self.locate(Kind::Task, id)? else {
                 return Ok(None);
@@ -1857,6 +1868,7 @@ impl TaskSource for LocalMdSource {
         id: &NativeId,
         delivered_by: &[TaskRef],
     ) -> Result<Option<()>, SourceError> {
+        record_gate(false).await?;
         self.held(Some(id), async {
             self.representable_list("delivered_by", id, delivered_by)?;
             let Some(path) = self.locate(Kind::Task, id)? else {
@@ -1880,6 +1892,7 @@ impl TaskSource for LocalMdSource {
         key: &MetadataKey,
         value: &serde_json::Value,
     ) -> Result<Option<Task>, SourceError> {
+        record_gate(false).await?;
         self.held(Some(id), async {
             // Compared without the file's change token, which any edit moves, and answered with
             // the token of the file as it was written.
@@ -2031,6 +2044,7 @@ impl TaskSource for LocalMdSource {
                     ),
                 });
             }
+            record_gate(false).await?;
             replace_atomically(&path, &edited)?;
             let after = task(self.parse(WorkKind::Task, &path)?);
             let before = as_read(before);
@@ -2054,6 +2068,7 @@ impl TaskSource for LocalMdSource {
         key: &MetadataKey,
         value: &serde_json::Value,
     ) -> Result<Option<Project>, SourceError> {
+        record_gate(false).await?;
         self.set_metadata(
             Kind::Project,
             id,
@@ -2072,6 +2087,7 @@ impl TaskSource for LocalMdSource {
         key: &MetadataKey,
         value: &serde_json::Value,
     ) -> Result<Option<Document>, SourceError> {
+        record_gate(false).await?;
         self.set_metadata(
             Kind::Document,
             id,
@@ -2112,6 +2128,7 @@ impl TaskSource for LocalMdSource {
         answers: Option<&BTreeMap<String, serde_json::Value>>,
         assets: &AssetWrite,
     ) -> Result<AssetsWritten, SourceError> {
+        record_gate(false).await?;
         self.held(write.target.as_ref(), async {
             let files = self.asset_files(Kind::Task, write.target.as_ref(), assets)?;
             let before = self.snapshot(Kind::Task, write.target.as_ref())?;
@@ -2132,6 +2149,7 @@ impl TaskSource for LocalMdSource {
         answers: Option<&BTreeMap<String, serde_json::Value>>,
         assets: &AssetWrite,
     ) -> Result<AssetsWritten, SourceError> {
+        record_gate(false).await?;
         let files = self.asset_files(Kind::Document, write.target.as_ref(), assets)?;
         let before = self.snapshot(Kind::Document, write.target.as_ref())?;
         let id = self.write_document_with(write, answers)?;
@@ -2151,6 +2169,7 @@ impl TaskSource for LocalMdSource {
         answers: &BTreeMap<String, serde_json::Value>,
         assets: &AssetWrite,
     ) -> Result<Option<AssetsWritten>, SourceError> {
+        record_gate(false).await?;
         self.held(Some(id), async {
             let files = self.asset_files(Kind::Task, Some(id), assets)?;
             let before = self.snapshot(Kind::Task, Some(id))?;
@@ -2179,6 +2198,7 @@ impl TaskSource for LocalMdSource {
         answers: &BTreeMap<String, serde_json::Value>,
         assets: &AssetWrite,
     ) -> Result<Option<AssetsWritten>, SourceError> {
+        record_gate(false).await?;
         let files = self.asset_files(Kind::Document, Some(id), assets)?;
         let before = self.snapshot(Kind::Document, Some(id))?;
         if self
@@ -2195,12 +2215,15 @@ impl TaskSource for LocalMdSource {
         }))
     }
     async fn delete_task(&self, id: &NativeId) -> Result<(), SourceError> {
+        record_gate(false).await?;
         self.delete_entry(Kind::Task, id)
     }
     async fn delete_project(&self, id: &NativeId) -> Result<(), SourceError> {
+        record_gate(false).await?;
         self.delete_entry(Kind::Project, id)
     }
     async fn delete_document(&self, id: &NativeId) -> Result<(), SourceError> {
+        record_gate(false).await?;
         self.delete_entry(Kind::Document, id)
     }
     /// Every item this source writes is a file of its own, which holds its answers block.
@@ -2237,6 +2260,7 @@ impl TaskSource for LocalMdSource {
         provenance: &serde_json::Value,
         answers: &BTreeMap<String, serde_json::Value>,
     ) -> Result<Option<()>, SourceError> {
+        record_gate(false).await?;
         self.held(Some(id), async {
             // A rendering replaces the content, and keeps the task's `## Links` section.
             let content = &match self.locate(Kind::Task, id)? {
@@ -2285,6 +2309,7 @@ impl TaskSource for LocalMdSource {
         provenance: &serde_json::Value,
         answers: &BTreeMap<String, serde_json::Value>,
     ) -> Result<Option<()>, SourceError> {
+        record_gate(false).await?;
         self.set_rendering(
             Kind::Document,
             id,
@@ -2312,6 +2337,7 @@ impl TaskSource for LocalMdSource {
         provenance: &serde_json::Value,
         answers: &BTreeMap<String, serde_json::Value>,
     ) -> Result<Option<()>, SourceError> {
+        record_gate(false).await?;
         self.set_rendering(
             Kind::Project,
             id,
@@ -2356,6 +2382,7 @@ impl TaskSource for LocalMdSource {
         task: &NativeId,
         comment: &NewComment,
     ) -> Result<Option<Comment>, SourceError> {
+        record_gate(true).await?;
         self.held(Some(task), async {
             if let Some(author) = &comment.author {
                 representable_author(author)?;
@@ -2386,6 +2413,7 @@ impl TaskSource for LocalMdSource {
         comment: &NativeId,
         body: &CommentBody,
     ) -> Result<Option<Comment>, SourceError> {
+        record_gate(false).await?;
         self.held(Some(task), async {
             representable_body(body)?;
             let Some(mut file) = self.task_file(task)? else {
@@ -2407,6 +2435,7 @@ impl TaskSource for LocalMdSource {
         task: &NativeId,
         comment: &NativeId,
     ) -> Result<Option<NativeId>, SourceError> {
+        record_gate(false).await?;
         self.held(Some(task), async {
             let Some(mut file) = self.task_file(task)? else {
                 return Ok(None);
@@ -2432,6 +2461,7 @@ impl TaskSource for LocalMdSource {
         existing: Option<&NativeId>,
         copy: &CommentCopy,
     ) -> Result<Option<Comment>, SourceError> {
+        record_gate(true).await?;
         self.held(Some(task), async {
             if let Some(author) = &copy.origin.author {
                 representable_author(author)?;
@@ -5076,6 +5106,18 @@ fn compact(value: &serde_json::Value) -> String {
 struct Held {
     text: String,
     assets: Vec<(AssetName, Vec<u8>)>,
+}
+
+/// Ask a caller's request gate, if the call in progress has one, before a record is written:
+/// a folder of Markdown is metered by nothing, so it names its writes `local` and is told no
+/// reading after one. `creating` is whether the write creates content — a comment.
+async fn record_gate(creating: bool) -> Result<(), SourceError> {
+    <dyn onetaskgraph_plugin_api::RequestGate>::before(&onetaskgraph_plugin_api::GatedRequest {
+        resource: "local".to_owned(),
+        content_creating: creating,
+        cost_hint: None,
+    })
+    .await
 }
 
 /// Write `text` at `path` — replacing the file there, or creating one where there is none —

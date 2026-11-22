@@ -345,6 +345,22 @@ budgets:
     unit: points
     direction: max
     threshold: 12
+  # llmlint: ignore[budgets_track_product_owner_outcomes] Not the allowance `github-live-session-points` holds: that budget prices one whole credentialed session in points, while this one counts the requests of one open-items listing, offline at a fixed 2,038-item workload, which the secondary limiter meters per request and which is the wait a grooming pass sees. The store-fixes task names this budget and this file as the proof that the listing reads only open items.
+  - id: github-open-board-list-requests
+    description: >-
+      An inner measure of the minutes a grooming pass waits to list a board's open items and the
+      shared points it spends on the real board, which no check may spend: the GraphQL requests
+      one `task list` naming every open status (`draft`, `backlog`, `todo`, `queued`,
+      `in-progress`, `unknown`) sends a generated loopback board of 2,038 items, 562 of them open,
+      from invocation to answer. Its detail gives the requests of each phase — item pages, and any
+      field read or completion search — and their points and simulated seconds.
+    labels: [github]
+    measure: reported
+    # llmlint: ignore[budget_commands_measure_directly] Every budget of this file selects its own report-only entry in `budget_runner`, the harness-runner convention this crate's budgets landed with; this one reads only the telemetry `open_list.rs` recorded during the crate's test run, refuses a recording of another workload or a figure that is not its phases' requests added up, and hands the figure to onebudgetspec, which alone judges it.
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_open_list", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-github-projects-e2e"]
+    unit: requests
+    direction: max
+    threshold: 7
   - id: github-project-copy-back-requests
     description: >-
       The GitHub GraphQL requests one copy back of a 27-task board project to a folder of

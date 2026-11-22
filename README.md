@@ -76,6 +76,9 @@ onetaskgraph sources migrate <SOURCE> [--dry-run] [--json]
 # Rewrites every item of SOURCE still held in a stored form its plugin no longer writes — on a
 # Linear source, metadata in an HTML comment Linear shows as text — into the collapsed block it
 # writes now, changing nothing a read gives back. See "Rewriting a source's stored forms" below.
+onetaskgraph sources quota <SOURCE> [--json]
+# What SOURCE's backend says is left of each rate-limit window its credential is metered by,
+# one row per window as the backend reported it. See "A source's quota" below.
 
 onetaskgraph task list [--source S]... [--label L]... [--not-label L]...
                        [--status S]... [--not-status S]...
@@ -115,6 +118,7 @@ onetaskgraph task comment edit   <ID> <COMMENT-ID> [--body-file PATH] [--expect 
 onetaskgraph task comment delete <ID> <COMMENT-ID> [--expect VERSION]
 onetaskgraph task status set <ID> draft|backlog|todo|queued|in-progress|done|cancelled|unknown
                              [--expect VERSION] [--if-version VERSION]
+                             [--duplicate-of ID]  # beside `cancelled` alone; see below
 onetaskgraph task status reconcile --source <SOURCE> [--dry-run]
 onetaskgraph task status complete --issue <OWNER/NAME#N>... [--source <SOURCE>]... [--dry-run]
 onetaskgraph task priority set <ID> none|urgent|high|medium|low [--expect VERSION]
@@ -131,6 +135,7 @@ onetaskgraph task update <ID> [--title TITLE] [--body-file PATH]
                          [--delivers ID... | --no-delivers] [--depends-on ID... | --no-depends-on]
                          [--repository ORIGIN... | --no-repositories]
                          [--when-priority PRIORITY]...  # every field, only over these
+                         [--duplicate-of ID]  # closes it cancelled, a duplicate of ID
                          [--expect VERSION] [--if-version VERSION]
                          [--term-scope REPOSITORY... | --term-scope-empty]
 onetaskgraph task create <SOURCE> --project P --title TITLE
@@ -3344,6 +3349,58 @@ served over the stdio protocol included, has nothing to migrate and is sent noth
 
 `from` names the form an item left: `html-comment-slot`, `multi-line-comment-slot` or
 `fields-comment-marker`. Exit 0 when nothing failed, and 1 when any item could not be rewritten.
+
+**Closing a task as a duplicate: `task status set <ID> cancelled --duplicate-of <ID>`,
+`task update <ID> --duplicate-of <ID>`, or an `update-many` entry's `duplicate_of`.** A caller
+that has decided two tasks are the same work closes the one as a duplicate of the other, the
+survivor, a task of the same source. It leaves the task `cancelled` — `--duplicate-of` beside any
+other status is refused, writing nothing — natively a duplicate where the backend can say so,
+and records the typed `duplicate` link at both ends, which `task relations` reads. On a GitHub
+board that is one `closeIssue` with `stateReason: DUPLICATE` naming the survivor's issue, beside
+the card's `cancelled` option, refused naming both when the survivor is not an issue of the
+board; on Linear, Linear's own duplicate relation, then the `cancelled` state the mapping names;
+on a folder of Markdown, `cancelled` and the link. A survivor in another source is refused, and so
+is a stdio plugin whose handshake does not declare `duplicate_closes`, before anything is sent. A
+repeat closes nothing again. The store never decides on its own that two tasks are one.
+
+**A source's quota: `onetaskgraph sources quota <SOURCE> [--json]`.** What the source's backend
+says is left of each rate-limit window it meters the source's credential by — everything that
+shares the credential included, not only this store — one reading per window, each as the
+backend reported it and never merged with another: a GitHub token can be metered by two windows
+of one resource at once, each with its own reset. A GitHub board sends one `GET /rate_limit` at
+its configured endpoint, which GitHub documents as free, and reports every resource it names; a
+Linear source answers what its last response's `x-ratelimit-*` headers said, which in a fresh
+process is nothing; a folder of Markdown, an in-memory source and a stdio plugin whose handshake
+does not declare `quota` answer none. A source behind the store's cache asks its backend every
+time. The store reports the reading; deciding what it means — a floor to keep, a pause to take —
+is the caller's. A program linking the engine reads the same through `Engine::quota`.
+
+```json
+{"source": "board", "resources": [
+  {"resource": "core", "limit": 5000, "remaining": 4988, "used": 12,
+   "resets_at": "2026-11-22T00:22:07Z"},
+  {"resource": "graphql", "limit": 5000, "remaining": 4589, "used": 411,
+   "resets_at": "2026-11-22T01:08:36Z"}]}
+```
+
+Exit 0 with the readings, and non-zero naming the source when it is not configured or the
+reading could not be taken.
+
+**Pacing between the requests of one call: `Engine::with_request_gate`.** A reading taken before
+a call of hundreds of requests cannot keep a caller's floor inside it, so a program linking the
+engine installs a `RequestGate`, and every source asks it before each request it sends —
+`before_request` with the `resource` the request draws on, whether it creates content (an issue,
+a comment) and a `cost_hint` where the source can price it — and tells it each response's own
+readings through `after_response`. A GitHub board asks before every HTTP request, reads, writes,
+retries and the quota read alike; a Linear source before each request, with its rate-limit
+headers after; a folder of Markdown before each record it writes, naming it `local`; and the
+engine before each method it sends a stdio plugin. The store holds no policy. A wait — the gate
+not yet answering — holds that source's next request and nothing else. A refusal makes the
+source send nothing more in that call: an item whose requests all landed answers as it would
+have, the item in flight as a failure part way through it, and every later item of a batch
+answers with the refusal, nothing sent for it — so sending only the items not answered written
+lands them, and nothing is written twice. With no gate installed, every source sends exactly
+what it sends without one.
 
 **A task owns its classification.** Who may read a task is its own declaration and every
 repository it names, and nothing else: all-public repositories leave it public unless it says

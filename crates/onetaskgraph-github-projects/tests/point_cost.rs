@@ -54,6 +54,7 @@ const PRICES: &[(&str, u64)] = &[
     (graphql::ORIGIN_LOOKUP, 1),
     // llmlint: ignore-block[tests_hold_no_nonfunctional_thresholds] As at `SUB_ISSUES` above: the price is the instrument, not a threshold. `task status reconcile` reads the board's closed items and `task status complete` reads issues by reference, and the sweep below refuses any document in `graphql::DOCUMENTS` without a recorded price; the second's one point per fifty references is what the `github-landing-closure-points` budget's figure rests on, and onebudgetspec judges that budget.
     (graphql::CLOSED_ITEMS, 2),
+    (graphql::OPEN_ITEMS, 2),
     (graphql::ISSUES_BY_REFERENCE, 1),
     // llmlint: ignore-end[tests_hold_no_nonfunctional_thresholds]
     (graphql::BOARD_FIELDS, 1),
@@ -67,6 +68,7 @@ const PRICES: &[(&str, u64)] = &[
     (graphql::ISSUE_DEPENDED_ON_BY, 1),
     // llmlint: ignore-end[tests_hold_no_nonfunctional_thresholds]
     (graphql::CREATE_ISSUE, 1),
+    (graphql::CLOSE_ISSUE, 1),
     // llmlint: ignore-block[tests_hold_no_nonfunctional_thresholds] As at `SUB_ISSUES` above: the price is the instrument, not a threshold. These are the documents a copy now reads its origins and writes its created items with, and the sweep below refuses any document in `graphql::DOCUMENTS` without a recorded price; what a plan copy spends is the `github-plan-copy-points-*` budgets', judged by onebudgetspec.
     (graphql::ORIGIN_LOOKUPS, 1),
     // GitHub's own dry run, beside the model's: `docs/measurements/board-copy-gaps-2026-10-24/coalesced-members-dry-run`.
@@ -402,6 +404,7 @@ const OPTED_PRICES: &[(&str, u64)] = &[
     (graphql::BOARD, 4),
     (graphql::BOARD_WITH_COMMENTS, 6),
     (graphql::CLOSED_ITEMS, 4),
+    (graphql::OPEN_ITEMS, 4),
     (graphql::ISSUE_DETAILS, 2),
     (graphql::ISSUE_COPY_DETAILS, 2),
     (graphql::SEARCH_BATCH, 28),

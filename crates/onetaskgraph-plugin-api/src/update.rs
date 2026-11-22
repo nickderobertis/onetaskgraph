@@ -74,6 +74,17 @@ pub struct TaskUpdate {
     // llmlint: ignore[invalid_states_unrepresentable] The same list `Task::assignees` reads, so `applied_to` and `changed` compare one shape and a source checks its write's answer against what it asked for; the one-person rule is the engine's, refused before any source is asked.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assignees: Option<Vec<String>>,
+    /// Close the task as a duplicate of this one, the survivor — a decision its caller made,
+    /// which the store never makes on its own. Valid only beside a `cancelled` status, or with
+    /// no status named, when it implies `cancelled`; any other status is refused by
+    /// [`consistent`](Self::consistent), writing nothing.
+    ///
+    /// A source closes it natively where its backend can — GitHub's duplicate closure, Linear's
+    /// duplicate relation — and every source records the typed `duplicate` link in the task's
+    /// metadata, so a later read reports it `cancelled` with that link.
+    // llmlint: ignore[invalid_states_unrepresentable] `duplicate_of: Option<TaskRef>` beside `status` is the shape the store-fixes contract fixes by name and type, which onefollowup and onepipeline build against; the one state it can express that is no update — a duplicate close beside a status other than `cancelled` — is refused by `consistent` before any source is read or written, in one wording every source and the engine share, as `metadata_set` beside `metadata_remove` is above.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duplicate_of: Option<TaskRef>,
 }
 
 impl TaskUpdate {
@@ -90,6 +101,7 @@ impl TaskUpdate {
             && self.depends_on.is_none()
             && self.repositories.is_none()
             && self.assignees.is_none()
+            && self.duplicate_of.is_none()
     }
 
     /// Whether this update names `field`, which is the only way a source may report it written.
@@ -107,6 +119,21 @@ impl TaskUpdate {
             UpdatedField::DependsOn => self.depends_on.is_some(),
             UpdatedField::Repositories => self.repositories.is_some(),
             UpdatedField::Assignees => self.assignees.is_some(),
+            UpdatedField::DuplicateOf => self.duplicate_of.is_some(),
+        }
+    }
+
+    /// The status this update writes: the one it names, or `cancelled` for an update closing
+    /// the task as a duplicate that names none.
+    #[must_use]
+    pub fn effective_status(&self) -> Option<Status> {
+        match (&self.status, &self.duplicate_of) {
+            (Some(status), _) => Some(status.clone()),
+            (None, Some(_)) => Some(Status {
+                category: crate::StatusCategory::Cancelled,
+                name: "cancelled".to_owned(),
+            }),
+            (None, None) => None,
         }
     }
 
@@ -128,8 +155,21 @@ impl TaskUpdate {
     ///
     /// # Errors
     ///
-    /// Returns [`SourceError::Refused`] naming every such key.
+    /// Returns [`SourceError::Refused`] naming every such key, and for an update closing the
+    /// task as a duplicate beside a status other than `cancelled`.
     pub fn consistent(&self) -> Result<(), SourceError> {
+        if let (Some(survivor), Some(status)) = (&self.duplicate_of, &self.status)
+            && status.category != crate::StatusCategory::Cancelled
+        {
+            return Err(SourceError::Refused {
+                message: format!(
+                    "this update closes the task as a duplicate of {survivor}, which leaves it \
+                     cancelled, and names the status {:?} beside it; next: name `cancelled`, or \
+                     no status at all",
+                    status.name
+                ),
+            });
+        }
         let both = self.contradictions();
         if both.is_empty() {
             return Ok(());
@@ -339,6 +379,9 @@ pub enum UpdatedField {
     Repositories,
     /// [`TaskUpdate::assignees`].
     Assignees,
+    /// [`TaskUpdate::duplicate_of`]: the task was closed as a duplicate, natively or by the
+    /// link the store records.
+    DuplicateOf,
 }
 
 /// What a source answers a [`TaskUpdate`] of a task it holds with.

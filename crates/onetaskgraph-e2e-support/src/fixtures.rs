@@ -1173,6 +1173,16 @@ struct GitHubBoard {
     refusing_after: Vec<(&'static str, usize)>,
     /// The `retry-after` the next request is refused `429 Too Many Requests` with, once.
     rate_limit_next: Option<u64>,
+    /// What each `GET /rate_limit` answers, in turn: the next is taken off the front, and once
+    /// none is left the last is answered again — [`GitHubBoardFields::serve_rate_limits`].
+    rate_limits: std::collections::VecDeque<Value>,
+    /// The status and body the next `GET /rate_limit` is answered with instead, once.
+    rate_limit_refusal: Option<(u16, String)>,
+    /// The rate-limit windows each GraphQL answer's `x-ratelimit-*` headers name, in turn,
+    /// cycling — none when empty: [`GitHubBoardFields::answer_from_windows`].
+    windows: Vec<Value>,
+    /// How many GraphQL answers have carried a window's headers.
+    windows_served: usize,
     /// Items this board replaces after answering that many requests naming them by id — with
     /// another item, or with nothing — so a journey can let a command read one and then find it
     /// changed or gone.
@@ -1807,6 +1817,33 @@ impl GitHubBoardFields {
             .push((id.to_owned(), answered, replacement));
     }
 
+    /// Answer each `GET /rate_limit` with the next of `answers`, in turn, and every one after
+    /// the last with the last — each a whole answer, `{"resources": {...}, "rate": {...}}`, as
+    /// GitHub gives it. Every read is recorded among [`Self::documents`] as `GET /rate_limit`.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board's own answer to `GET /rate_limit`, which only its server loop here answers, as `rate_limit_next` beside it controls the next request's refusal; the suites asserting what `sources quota` reports are what drive it.
+    pub fn serve_rate_limits(&self, answers: Vec<Value>) {
+        assert!(!answers.is_empty(), "at least one answer to serve");
+        self.board.lock().unwrap().rate_limits = answers.into();
+    }
+
+    /// Answer the next `GET /rate_limit` with `status` and `body` in place of a reading, once —
+    /// a rejected credential, a failure, or an answer that does not read as rate limits.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board's own answer to `GET /rate_limit`, which only its server loop here answers, as `serve_rate_limits` beside it is; the GitHub Projects quota journeys are what drive it.
+    pub fn refuse_rate_limit_read(&self, status: u16, body: &str) {
+        self.board.lock().unwrap().rate_limit_refusal = Some((status, body.to_owned()));
+    }
+
+    /// Carry one of `windows` on each GraphQL answer, in turn and cycling, as its
+    /// `x-ratelimit-limit`, `-remaining`, `-used`, `-reset` and `-resource` headers — each a
+    /// `{"resource", "limit", "remaining", "used", "reset"}`. Two windows of one resource
+    /// interleave as GitHub was measured answering one token from two concurrent windows.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board's own answer headers, which only its server loop here writes, as `serve_rate_limits` beside it controls `GET /rate_limit`; the request-gate journeys of the GitHub Projects suite are what drive it.
+    pub fn answer_from_windows(&self, windows: Vec<Value>) {
+        let mut board = self.board.lock().unwrap();
+        board.windows = windows;
+        board.windows_served = 0;
+    }
+
     /// Refuse the next request `429 Too Many Requests`, naming a reset `retry_after` seconds
     /// ahead, as GitHub's primary limit does; every request after it is answered as before.
     // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board's own answer to its next request, which only its server loop here answers: that state is private to the loopback, so a suite can set it only through this handle, as `block`, `edit_body` and `refuse_once` set the rest; the GitHub Projects and Linear suites are what drive it.
@@ -2383,6 +2420,18 @@ impl GitHubBoardFields {
         item["state"] = json!("CLOSED");
         item["reason"] = reason.map_or(Value::Null, |reason| json!(reason));
         board.touch_issue(&json!(id));
+    }
+
+    /// The issue `id` was closed as a duplicate of, as GitHub records it — `None` for one closed
+    /// otherwise, or open.
+    #[must_use]
+    pub fn duplicate_of(&self, id: &str) -> Option<String> {
+        let board = self.board.lock().unwrap();
+        board
+            .items
+            .iter()
+            .find(|item| item["id"] == json!(id))
+            .and_then(|item| item["duplicate_of"].as_str().map(str::to_owned))
     }
 
     /// One issue's `state` and the reason it was closed with, as GitHub holds them.
@@ -3481,6 +3530,39 @@ impl GitHubBoard {
             "items":{"nodes":nodes,"pageInfo":{"hasNextPage":more,"endCursor":cursor}}}}})
     }
 
+    /// The open items of this board, as its own `is:open` filter answers — every open issue,
+    /// whatever its card says, and every draft, which has no state and is never closed.
+    fn open_items(&self, variables: &Value) -> Value {
+        assert_eq!(variables["owner"], "fixture-owner");
+        assert_eq!(variables["number"], 7);
+        assert_eq!(
+            variables["filter"], "is:open",
+            "a listing of open categories reads the board through its open filter alone"
+        );
+        let offset = match &variables["after"] {
+            Value::Null => 0,
+            Value::String(cursor) => cursor.parse::<usize>().expect("numeric after cursor"),
+            other => panic!("GraphQL after must be null or a numeric string: {other}"),
+        };
+        let first = usize::try_from(variables["first"].as_u64().expect("GraphQL first"))
+            .expect("GraphQL first fits usize");
+        let visible = self.items.len().saturating_sub(self.lagging_reads);
+        let open: Vec<&Value> = self.items[..visible]
+            .iter()
+            .filter(|item| Self::on_board(item))
+            .filter(|item| Self::is_draft(item) || item["state"] != "CLOSED")
+            .collect();
+        let end = (offset + first).min(open.len());
+        let tallies = self.tallies();
+        let nodes: Vec<Value> = open[offset.min(end)..end]
+            .iter()
+            .map(|item| self.rendered_counted(item, Some(&tallies)))
+            .collect();
+        json!({"openItems":{"projectV2":{"id":"PVT-board","fields":self.fields(),
+            "items":{"nodes":nodes,"pageInfo":{"hasNextPage":end < open.len(),
+                                                "endCursor":end.to_string()}}}}})
+    }
+
     /// Each reference of a batch read by reference, answered as GitHub answers one: the issue
     /// that repository holds under that number, or `null` beside a `NOT_FOUND` error naming the
     /// alias — its first slot bent once as [`ReferenceFault`] says, when one is armed.
@@ -3712,6 +3794,17 @@ pub fn github_projects_with_board_failing(
 
 /// The id of the one draft item [`github_projects_with_draft`] adds to the shared board.
 pub const GITHUB_DRAFT_TASK: &str = "DRAFT-1";
+
+/// What the loopback board answers `GET /rate_limit` with until a journey says otherwise:
+/// GitHub's shape, with a little of each allowance spent.
+#[must_use]
+pub fn default_rate_limits() -> Value {
+    json!({"resources": {
+        "core": {"limit": 5000, "used": 1, "remaining": 4999, "reset": 1_795_306_927},
+        "graphql": {"limit": 5000, "used": 3, "remaining": 4997, "reset": 1_795_306_927},
+        "search": {"limit": 30, "used": 0, "remaining": 30, "reset": 1_795_303_387},
+    }, "rate": {"limit": 5000, "used": 1, "remaining": 4999, "reset": 1_795_306_927}})
+}
 
 /// The shared board plus one **draft** item, [`GITHUB_DRAFT_TASK`], filed under no project.
 ///
@@ -3954,6 +4047,10 @@ fn github_projects_board_at(
         refusing: Vec::new(),
         refusing_after: Vec::new(),
         rate_limit_next: None,
+        rate_limits: std::collections::VecDeque::from([default_rate_limits()]),
+        rate_limit_refusal: None,
+        windows: Vec::new(),
+        windows_served: 0,
         replacing: Vec::new(),
         blocked_by: github_blockers(),
         counted_types: Vec::new(),
@@ -4064,6 +4161,31 @@ fn github_projects_board_at(
     let attached = Arc::clone(&board);
     let mut answer = move |sent: &loopback::Request| -> Option<String> {
         let (line, request, token) = http_request_parts(sent);
+        // What the token has left of each rate-limit window, as `GET /rate_limit` answers it.
+        if line.starts_with("GET /rate_limit ") || line == "GET /rate_limit" {
+            let (status, body) = {
+                let mut served = board.lock().unwrap();
+                served.documents.push("GET /rate_limit".to_owned());
+                served.variables.push(Value::Null);
+                served.tokens.push(token.clone());
+                served.arrivals.push(std::time::Instant::now());
+                if let Some(refused) = served.rate_limit_refusal.take() {
+                    refused
+                } else {
+                    let answer = if served.rate_limits.len() > 1 {
+                        served.rate_limits.pop_front()
+                    } else {
+                        served.rate_limits.front().cloned()
+                    };
+                    (200, answer.expect("an answer to serve").to_string())
+                }
+            };
+            return Some(format!(
+                "HTTP/1.1 {status} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                if status == 200 { "OK" } else { "Refused" },
+                body.len()
+            ));
+        }
         // The one REST read a write to a source declared private sends: the visibility of
         // the repository an issue lives in. Recorded beside the GraphQL documents, so a
         // journey counting what a write spent counts it too.
@@ -4321,8 +4443,26 @@ fn github_projects_board_at(
             .served_at()
             .map(|at| format!("Date: {at}\r\n"))
             .unwrap_or_default();
+        let window = {
+            let mut held = board.lock().unwrap();
+            if held.windows.is_empty() {
+                String::new()
+            } else {
+                let window = held.windows[held.windows_served % held.windows.len()].clone();
+                held.windows_served += 1;
+                format!(
+                    "x-ratelimit-limit: {}\r\nx-ratelimit-remaining: {}\r\nx-ratelimit-used: {}\r\n\
+                     x-ratelimit-reset: {}\r\nx-ratelimit-resource: {}\r\n",
+                    window["limit"],
+                    window["remaining"],
+                    window["used"],
+                    window["reset"],
+                    window["resource"].as_str().unwrap_or_default()
+                )
+            }
+        };
         Some(format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n{date}Content-Length: {}\r\n\r\n{body}",
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n{date}{window}Content-Length: {}\r\n\r\n{body}",
             body.len()
         ))
     };
@@ -5638,6 +5778,16 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         board.items.push(item);
         return json!({"addProjectV2ItemById":{"item":{"id":id}}});
     }
+    // A close as GitHub records it, a duplicate's included: its state, its reason, and the
+    // issue it is a duplicate of.
+    if query.contains("closeIssue(input:$input)") {
+        let held = board.find(&input["issueId"]);
+        held["state"] = json!("CLOSED");
+        held["reason"] = input["stateReason"].clone();
+        held["duplicate_of"] = input["duplicateIssueId"].clone();
+        board.touch_issue(&input["issueId"]);
+        return json!({"closeIssue":{"issue":{"id":input["issueId"]}}});
+    }
     if query.contains("updateIssue(input:$input)") {
         let held = board.find(&input["id"]);
         if let Some(title) = input["title"].as_str() {
@@ -6040,6 +6190,9 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
     if query == onetaskgraph_github_projects::graphql::CLOSED_ITEMS {
         return board.closed_items(variables);
     }
+    if query == onetaskgraph_github_projects::graphql::OPEN_ITEMS {
+        return board.open_items(variables);
+    }
     if query == onetaskgraph_github_projects::graphql::ISSUES_BY_REFERENCE {
         return board.issues_by_reference(variables);
     }
@@ -6352,6 +6505,11 @@ impl IssueSearch {
     /// this loopback what it costs GitHub, nothing a copy's simulated time does not already
     /// charge, rather than a word list of every item's body.
     fn admits(&self, title: &str, body: &str) -> bool {
+        // No phrase admits every issue, and splitting each body into words to learn that is
+        // what made an unnarrowed sweep of a board of thousands cost a second a page.
+        if self.phrases.is_empty() {
+            return true;
+        }
         let words = |field: &str, searched: bool| {
             (searched
                 && (self.phrases.is_empty()
@@ -6579,6 +6737,7 @@ pub fn linear_workspace_failing(
         late_bends: Arc::new(Mutex::new(Vec::new())),
         limits: Arc::new(Mutex::new(std::collections::VecDeque::new())),
         lost: Arc::new(Mutex::new(Vec::new())),
+        headers: Arc::new(Mutex::new(std::collections::VecDeque::new())),
     };
     let config = linear_serve(sandbox, workspace.clone(), None, failing);
     (config, workspace)
@@ -6744,7 +6903,13 @@ pub struct LinearWorkspace {
     limits: Arc<Mutex<std::collections::VecDeque<Option<u64>>>>,
     /// The operations whose next request is applied and then answered `502`, once each.
     lost: Arc<Mutex<Vec<&'static str>>>,
+    /// The headers each of the next answers carries beside its own, in order — an answer
+    /// after the script carries none: [`LinearWorkspace::answer_with_headers`].
+    headers: Arc<Mutex<std::collections::VecDeque<LinearHeaders>>>,
 }
+
+/// The headers one answer of the loopback Linear carries beside its own, by name and value.
+type LinearHeaders = Vec<(String, String)>;
 
 impl LinearWorkspace {
     /// Apply the next request of `operation` — a GraphQL document, as the plugin sends it — and
@@ -6752,6 +6917,39 @@ impl LinearWorkspace {
     // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback Linear's own answers, which only its server loop here answers: like `rate_limit` below it can only be a method of this handle, and a suite of one plugin could not add it from outside.
     pub fn lose_answer_once(&self, operation: &'static str) {
         self.lost.lock().unwrap().push(operation);
+    }
+
+    /// Refuse from now on a duplicate relation the workspace already holds, in the shape Linear
+    /// refuses an entity a record already holds (`Entity <kind> … already exists.`), rather than
+    /// answering it as created. Linear's answer to a repeated duplicate relation was not
+    /// observed, so the plugin is proven against both.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback Linear's own answers, which only its responder here answers: like `lose_answer_once` above it can only be a method of this handle.
+    pub fn refuse_repeated_duplicate(&self) {
+        self.state.lock().unwrap()["_linear_refuse_repeated_duplicate"] = json!(true);
+    }
+
+    /// Every duplicate relation the workspace holds, as `(duplicate, survivor)`.
+    #[must_use]
+    pub fn duplicates(&self) -> Vec<(String, String)> {
+        self.state.lock().unwrap()["duplicates"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|marked| {
+                (
+                    marked["from"].as_str().unwrap_or_default().to_owned(),
+                    marked["to"].as_str().unwrap_or_default().to_owned(),
+                )
+            })
+            .collect()
+    }
+
+    /// Carry `script`'s headers on each of the next answers, in order — Linear's
+    /// `x-ratelimit-*` among them, as every response of Linear's carries its allowance — and no
+    /// extra header on any answer after the script.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback Linear's own answers, which only its server loop here writes: like `rate_limit` below it can only be a method of this handle, and the Linear suite's quota and gate journeys are what drive it.
+    pub fn answer_with_headers(&self, script: Vec<LinearHeaders>) {
+        self.headers.lock().unwrap().extend(script);
     }
 
     /// Answer each of the next requests by `script`, in order: `Some(wait)` is refused
@@ -7491,6 +7689,7 @@ fn linear_server_over(
         late_bends: Arc::new(Mutex::new(Vec::new())),
         limits: Arc::new(Mutex::new(std::collections::VecDeque::new())),
         lost: Arc::new(Mutex::new(Vec::new())),
+        headers: Arc::new(Mutex::new(std::collections::VecDeque::new())),
     };
     linear_serve(sandbox, workspace, recorded, failing)
 }
@@ -7808,9 +8007,18 @@ fn linear_serve(
             }
             linear_derive_relations(&mut workspace.state.lock().unwrap());
             let text = serde_json::to_string(&response).unwrap();
+            let extra: String = workspace
+                .headers
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|(name, value)| format!("{name}: {value}\r\n"))
+                .collect();
             let _ = write!(
                 stream,
-                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{text}",
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n{extra}Content-Length: {}\r\nConnection: close\r\n\r\n{text}",
                 text.len()
             );
         }
@@ -9684,6 +9892,28 @@ fn linear_write_relation(
     // `type must be one of the following values: dependency`, so this responder refuses it
     // too — the plugin now says so itself before the write, and a fixture that took the
     // value anyway would be the one place that never noticed if it stopped.
+    // A duplicate relation is no dependency: Linear keeps it beside them and moves the issue it
+    // marks to `Duplicate`, which a later status write moves on from.
+    if !project && wire == "duplicate" {
+        let refuse_repeat = data["_linear_refuse_repeated_duplicate"] == json!(true);
+        let marked = json!({"from": input.get(near_key).ok_or("missing near id")?,
+                            "to": input.get(far_key).ok_or("missing far id")?});
+        let duplicates = data
+            .as_object_mut()
+            .ok_or("fixture data is not an object")?
+            .entry("duplicates")
+            .or_insert_with(|| json!([]))
+            .as_array_mut()
+            .ok_or("fixture duplicates are not an array")?;
+        if duplicates.contains(&marked) {
+            if refuse_repeat {
+                return Err("Entity IssueRelation already exists.");
+            }
+        } else {
+            duplicates.push(marked);
+        }
+        return Ok(json!({"issueRelationCreate":{"success":true,"issueRelation":{"id":"IR-D"}}}));
+    }
     let kind = match (project, wire) {
         (true, "dependency") | (false, "blocks") => "blocks",
         (false, "related") => "related",
@@ -10607,6 +10837,26 @@ fn linear_relations(
         .filter(|(_,e)| e["to"] == id && e["from"].is_string())
         .map(|(index,e)| json!({"id":format!("relation:{index}"),"type":wire(&e["kind"]),(suffix.to_ascii_lowercase()):{"id":e["from"]}}))
         .collect::<Vec<_>>();
+    // Linear lists an issue's duplicate relation among its relations, beside its dependencies,
+    // so a read of either end carries it as Linear's own.
+    let (mut forward, mut inverse) = (forward, inverse);
+    if suffix == "Issue" {
+        for (index, marked) in data["duplicates"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .enumerate()
+        {
+            if marked["from"] == id {
+                forward.push(json!({"id":format!("duplicate:{index}"),"type":"duplicate",
+                                    "relatedIssue":{"id":marked["to"]}}));
+            }
+            if marked["to"] == id {
+                inverse.push(json!({"id":format!("duplicate:{index}"),"type":"duplicate",
+                                    "issue":{"id":marked["from"]}}));
+            }
+        }
+    }
     let items = if suffix == "Issue" {
         "tasks"
     } else {

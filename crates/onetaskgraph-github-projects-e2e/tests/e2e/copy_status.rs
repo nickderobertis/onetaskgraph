@@ -152,6 +152,30 @@ impl Setup {
             .collect()
     }
 
+    /// Hold a copy naming only open categories to reading the board through its own `is:open`
+    /// item filter: at least one page of it, no issue search and no page of the unfiltered
+    /// board.
+    fn reads_open_items_alone(&self) {
+        let served = self.board.served();
+        assert!(
+            served.iter().any(|(document, variables)| document
+                == onetaskgraph_github_projects::graphql::OPEN_ITEMS
+                && variables["filter"] == "is:open"),
+            "the board's open items were not read"
+        );
+        assert_eq!(
+            self.searches(),
+            Vec::<String>::new(),
+            "the board was searched"
+        );
+        assert!(
+            !served
+                .iter()
+                .any(|(document, _)| document == onetaskgraph_github_projects::graphql::BOARD),
+            "the whole board was walked"
+        );
+    }
+
     /// The query each board-scoped issue search was sent with.
     fn searches(&self) -> Vec<String> {
         self.board
@@ -199,14 +223,7 @@ fn a_comment_snapshot_narrowed_to_backlog_copies_only_the_proposals_and_reads_no
         set(&["S-1", "S-2"]),
         "no other item's comments are read"
     );
-    let searches = setup.searches();
-    assert!(!searches.is_empty(), "the board was searched");
-    for search in &searches {
-        assert!(
-            search.split_whitespace().any(|word| word == "is:open"),
-            "a search naming only open categories asks for open issues: {search}"
-        );
-    }
+    setup.reads_open_items_alone();
 }
 
 #[test]
@@ -234,12 +251,7 @@ fn a_snapshot_of_two_open_categories_copies_both_and_still_searches_open_issues_
         setup.comments_read(),
         set(&["S-1", "S-2", "S-3", "T-1", "T-3"])
     );
-    for search in setup.searches() {
-        assert!(
-            search.split_whitespace().any(|word| word == "is:open"),
-            "{search}"
-        );
-    }
+    setup.reads_open_items_alone();
 }
 
 #[test]

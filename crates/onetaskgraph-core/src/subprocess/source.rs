@@ -34,7 +34,7 @@ use super::wire::{
     DocumentWriteParams, EditCommentParams, EngineIdentity, HoldingsParams, HoldingsResult,
     IdParams, InitializeParams, InitializeResult, LabelParams, MetadataParams, MeteringResult,
     PROTOCOL_VERSION, PriorityParams, PriorityResult, ProjectQueryParams, ProjectResult,
-    ProjectWriteParams, Request, StatusParams, StatusResult, StoredStatusParams,
+    ProjectWriteParams, QuotaResult, Request, StatusParams, StatusResult, StoredStatusParams,
     StoredStatusResult, TaskAssetWriteParams, TaskDetailParams, TaskDetailResult, TaskQueryParams,
     TaskResult, TaskWriteParams, UpdateParams, UpdateResult, WriteResult,
     after_the_first_vocabulary, knows_every_category, spelled, vocabulary,
@@ -104,6 +104,14 @@ pub struct SubprocessSource {
     /// A plugin that said nothing is never sent the method and is reported as not metering,
     /// which is what §3.4 makes an absent member mean.
     meters: bool,
+    /// Whether the plugin said it answers `quota` (§3.17), read at the same handshake.
+    ///
+    /// A plugin that said nothing is never sent the method and is answered as reporting no
+    /// reading, which is what §3.17 makes an absent member mean.
+    quota: bool,
+    /// Whether the plugin said it closes a task as a duplicate (§3.18), read at the same
+    /// handshake. A plugin that said nothing is never sent `duplicate_of`.
+    duplicate_closes: bool,
     /// Whether the plugin's handshake listed every status category this build knows (§3.5).
     ///
     /// A plugin that listed none was written against the first vocabulary, and is never
@@ -394,6 +402,8 @@ impl SubprocessSource {
             write_checks,
             project_status,
             stored_forms,
+            quota,
+            duplicate_closes,
         } = match result {
             Ok(result) => result,
             Err(error) => return Err(with_diagnostics(error, &mut peer)),
@@ -420,6 +430,8 @@ impl SubprocessSource {
             capabilities,
             writes: writes.unwrap_or(WriteSupport::Unsupported),
             meters,
+            quota,
+            duplicate_closes,
             knows_every_category: knows_every_category(statuses.as_deref()),
             task_updates,
             metadata_updates,
@@ -625,6 +637,7 @@ impl SubprocessSource {
         record: MetadataRecord,
         params: Value,
     ) -> Result<AssetsWritten, SourceError> {
+        gated(method).await?;
         let mut result = self.connection.call(method, params).await?;
         let stored = stored_content(method, &mut result)?;
         let written: AssetsWritten =
@@ -643,6 +656,7 @@ impl SubprocessSource {
         method: &str,
         params: Value,
     ) -> Result<T, SourceError> {
+        gated(method).await?;
         let result = self.connection.call(method, params).await?;
         serde_json::from_value(result).map_err(|error| SourceError::Malformed {
             message: format!(
@@ -650,6 +664,18 @@ impl SubprocessSource {
             ),
         })
     }
+}
+
+/// Ask a caller's request gate, if the call in progress has one, before `method` is sent to
+/// the plugin: once per method, whatever the plugin then sends its own backend, which only the
+/// plugin can see. A peer reports no reading to tell the gate after one.
+async fn gated(method: &str) -> Result<(), SourceError> {
+    <dyn onetaskgraph_plugin_api::RequestGate>::before(&onetaskgraph_plugin_api::GatedRequest {
+        resource: "stdio".to_owned(),
+        content_creating: matches!(method, "add_comment" | "write_comment_copy"),
+        cost_hint: None,
+    })
+    .await
 }
 
 /// Take the `stored_content` member out of a content write's `result` (§4.9): a string, or
@@ -1157,10 +1183,42 @@ impl TaskSource for SubprocessSource {
         id: &NativeId,
         update: &TaskUpdate,
     ) -> Result<Option<TaskUpdateOutcome>, SourceError> {
+        // A duplicate close is a decision a peer that never declared it would drop in silence
+        // (§2.1), leaving the task open-ended as a plain `cancelled`: it is refused by name,
+        // before anything is sent, unless the handshake declared it (§3.18).
+        if let Some(survivor) = &update.duplicate_of
+            && !self.duplicate_closes
+        {
+            return Err(SourceError::Refused {
+                message: format!(
+                    "the {} plugin's handshake does not declare `duplicate_closes`, so it cannot \
+                     be sent `duplicate_of` ({survivor}) and would drop it; next: close the task \
+                     `cancelled` without it, or use a plugin that declares duplicate closes",
+                    self.kind
+                ),
+            });
+        }
         // A peer's targeted update predates `repositories`, and one that does not know the
         // member would drop it in silence: an update naming it is made the way every peer
         // takes it, by rewriting the task whole.
         if !self.targeted_updates || update.repositories.is_some() {
+            // A whole-task write has no member for a duplicate close, so a peer would be handed
+            // a plain `cancelled` and the decision dropped (§2.1): it is refused by name instead.
+            if let Some(survivor) = &update.duplicate_of {
+                return Err(SourceError::Refused {
+                    message: format!(
+                        "the {} plugin takes this update as a whole-task write, which cannot \
+                         carry `duplicate_of` ({survivor}){}; next: close the task as a \
+                         duplicate in an update of its own",
+                        self.kind,
+                        if self.targeted_updates {
+                            " beside `repositories`"
+                        } else {
+                            ", because its handshake does not declare `targeted_updates`"
+                        }
+                    ),
+                });
+            }
             return update.rewrite(self, id).await;
         }
         // The same guards a `write_task` of the updated task would pass, before anything is
@@ -1526,6 +1584,15 @@ impl TaskSource for SubprocessSource {
         }
         let result: MeteringResult = self.ask("metering", json!({})).await?;
         Ok(result.metering)
+    }
+
+    async fn quota(&self) -> Result<Vec<onetaskgraph_plugin_api::QuotaReading>, SourceError> {
+        // A plugin that did not declare `quota` is never sent it (§3.17): it reports nothing.
+        if !self.quota {
+            return Ok(Vec::new());
+        }
+        let result: QuotaResult = self.ask("quota", json!({})).await?;
+        Ok(result.readings)
     }
 
     async fn end_command(&self) -> Result<(), SourceError> {

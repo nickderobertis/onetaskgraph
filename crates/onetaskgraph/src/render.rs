@@ -1397,6 +1397,27 @@ pub fn sweep(report: &onetaskgraph_core::SweepReport) -> String {
     out
 }
 
+/// `sources quota`: one row per rate-limit window, as the backend reported it.
+pub fn quota(answer: &onetaskgraph_core::SourceQuota) -> String {
+    if answer.resources.is_empty() {
+        return format!("{}: no quota reading to report", answer.source);
+    }
+    let mut out = format!("{}:", answer.source);
+    for reading in &answer.resources {
+        out.push_str(&format!(
+            "\n{}  {} of {} remaining, {} used, resets {}",
+            reading.resource,
+            reading.remaining,
+            reading.limit,
+            reading.used,
+            reading
+                .resets_at
+                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+        ));
+    }
+    out
+}
+
 /// What `sources migrate` did: one line for the source and how many items were already current,
 /// then one per item rewritten — or under `--dry-run` that would be — naming the form it left,
 /// and one per item it could not rewrite, with why.

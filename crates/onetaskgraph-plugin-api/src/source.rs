@@ -13,11 +13,11 @@ use crate::{
     CommentBody, CommentCopy, DependencyEdge, Direction, Document, DocumentQuery,
     DocumentVersionCoverage, IssueHolding, IssueRef, ItemKind, ItemWrite, Label, Location,
     MetadataKey, MetadataRecord, Metering, NativeId, NewComment, Page, PageRequest, Priority,
-    Project, ProjectQuery, ProjectVersionCoverage, Repository, SharedClock, SourceError,
-    SourceName, Status, StatusCategory, StatusContradiction, StoredFormMigration, Task,
-    TaskDetailRead, TaskQuery, TaskRef, TaskUpdate, TaskUpdateOutcome, VersionCoverage, Visibility,
-    WriteJournal, WriteSupport, WriteTarget, assetless, commentless, documentless, unwritable,
-    unwritable_field, unwritable_metadata,
+    Project, ProjectQuery, ProjectVersionCoverage, QuotaReading, Repository, SharedClock,
+    SourceError, SourceName, Status, StatusCategory, StatusContradiction, StoredFormMigration,
+    Task, TaskDetailRead, TaskQuery, TaskRef, TaskUpdate, TaskUpdateOutcome, VersionCoverage,
+    Visibility, WriteJournal, WriteSupport, WriteTarget, assetless, commentless, documentless,
+    unwritable, unwritable_field, unwritable_metadata,
 };
 
 /// Whether a source is answering right now.
@@ -2193,6 +2193,23 @@ pub trait TaskSource: Send + Sync {
     /// command to fail.
     async fn metering(&self) -> Result<Option<Metering>, SourceError> {
         Ok(None)
+    }
+
+    /// What this source's backend says is left of each rate-limit window it meters this
+    /// source's credential by — one [`QuotaReading`] per window, each as
+    /// the backend reported it and never merged with another.
+    ///
+    /// Defaulted to empty, which is what a source with nothing to report — a folder of
+    /// Markdown, an in-memory source — answers. A source asks its backend afresh each time
+    /// rather than answering from anything it holds, and a reading costs nothing
+    /// [`metering`](Self::metering) counts: what the store reports is the reading, and what it
+    /// means is the caller's.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`SourceError`] when the reading itself could not be taken.
+    async fn quota(&self) -> Result<Vec<QuotaReading>, SourceError> {
+        Ok(Vec::new())
     }
 
     /// End one command: drop everything held that a person can change.

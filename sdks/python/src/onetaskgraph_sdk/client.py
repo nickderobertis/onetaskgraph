@@ -140,6 +140,7 @@ NOT_PARTIAL_WRITE_COMMANDS: frozenset[tuple[str, ...]] = frozenset(
         ("config", "show"),
         ("sources", "list"),
         ("sources", "route"),
+        ("sources", "quota"),
         ("task", "list"),
         ("task", "show"),
         ("task", "show-many"),

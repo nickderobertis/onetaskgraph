@@ -363,6 +363,28 @@ pub(crate) struct InitializeResult {
     /// Omitted when `false`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) stored_forms: bool,
+    /// Whether this plugin answers `quota` (§3.17).
+    ///
+    /// Optional, and absent means it does not: such a plugin is never sent the method and is
+    /// answered as reporting no reading. Omitted when `false`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) quota: bool,
+    /// Whether this plugin closes a task as a duplicate when an update names `duplicate_of`
+    /// (§3.18).
+    ///
+    /// Optional, and absent means it does not: such a plugin is never sent `duplicate_of`, and
+    /// an update naming it is refused by name before anything is sent. Omitted when `false`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) duplicate_closes: bool,
+}
+
+/// The `quota` result (§4.26).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct QuotaResult {
+    /// One reading per rate-limit window, each as the backend reported it; empty when the
+    /// plugin has none to give. Required: an answer leaving it out has not said what is left,
+    /// which is not the same as having nothing to report.
+    pub(crate) readings: Vec<onetaskgraph_plugin_api::QuotaReading>,
 }
 
 /// The `metering` result (§4.14).

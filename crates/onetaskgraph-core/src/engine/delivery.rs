@@ -189,6 +189,44 @@ impl Engine {
         })
     }
 
+    /// Close one task as a duplicate of `survivor`, a task of its own source: its status
+    /// `cancelled` — natively a duplicate where its backend can say so, GitHub's duplicate
+    /// closure and Linear's duplicate relation — and the typed `duplicate` link recorded at both
+    /// ends, answered as [`set_task_status`](Self::set_task_status) answers a status write.
+    ///
+    /// It is the targeted update closing nothing but that, so a task already closed as that
+    /// survivor's duplicate is written nothing again.
+    ///
+    /// # Errors
+    ///
+    /// As [`update_task`](Self::update_task): refused before anything is sent for a survivor
+    /// in another source or the task itself, and for a stdio plugin whose handshake does not
+    /// declare duplicate closes.
+    pub async fn close_as_duplicate(
+        &self,
+        id: &GlobalId,
+        survivor: &onetaskgraph_plugin_api::TaskRef,
+    ) -> Result<TaskStatusSet, EngineError> {
+        let updated = self
+            .update_task(
+                id,
+                &onetaskgraph_plugin_api::TaskUpdate {
+                    duplicate_of: Some(survivor.clone()),
+                    ..onetaskgraph_plugin_api::TaskUpdate::default()
+                },
+            )
+            .await?;
+        Ok(TaskStatusSet {
+            id: updated.id,
+            status: updated.task.status.clone(),
+            delivered: updated.delivered,
+            result: updated.result,
+            fallback: updated.fallback,
+            spent: updated.spent,
+            projection: updated.projection,
+        })
+    }
+
     /// Set one project's status, and nothing else about it.
     ///
     /// A project delivers no task, so nothing is kept in step after it.

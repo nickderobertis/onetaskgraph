@@ -46,6 +46,7 @@ import type {
   RenderedTemplate,
   SanitizeDryRun,
   SourceListings,
+  SourceQuota,
   SourceRoute,
   StatusCategory,
   StatusesReconciled,
@@ -286,6 +287,9 @@ export type TaskUpdateOptions = WriteOptions &
     // Write only while the task holds one of these priorities — `none` for one with none; at
     // any other nothing is written and the answer's `guard` says `held`.
     whenPriority?: Priority[];
+    // Close it as a duplicate of this task, the survivor, qualified: `cancelled`, natively a
+    // duplicate where the backend can say so, with the typed `duplicate` link at both ends.
+    duplicateOf?: string;
   };
 // A regenerate: the template to use in place of the recorded one, answers laid over the stored
 // base, `unset` names whose answer is dropped, and `dryRun` to write nothing.
@@ -349,6 +353,8 @@ export const commandResponseRoots: Readonly<Record<string, keyof typeof runtimeS
   "sources sanitize": "SweepReport",
   // What rewriting one source's items still held in a superseded stored form rewrote.
   "sources migrate": "StoredFormsMigrated",
+  // What one source's backend says is left of each rate-limit window, as it reported it.
+  "sources quota": "SourceQuota",
   "task list": "QueryResponseOfQualifiedTask",
   "task show": "TaskDetail",
   // One `TaskDetail` per id, in request order.
@@ -472,6 +478,7 @@ const partialResponseCommands = new Set(
       command !== "sources route" &&
       command !== "sources sanitize" &&
       command !== "sources migrate" &&
+      command !== "sources quota" &&
       command !== "project graph" &&
       (!command.startsWith("task comment ") || command === "task comment add-many") &&
       !command.endsWith(" metadata set") &&
@@ -674,6 +681,7 @@ export const taskUpdateOptionFlags: Readonly<Record<keyof TaskUpdateOptions, str
   expect: "--expect",
   ifVersion: "--if-version",
   whenPriority: "--when-priority",
+  duplicateOf: "--duplicate-of",
   // `[]` is sent as `--no-repositories`, which is how the list is cleared.
   repositories: "--repository",
 };
@@ -713,7 +721,8 @@ export function taskUpdateFlags(options: unknown): string[] {
     | "priority"
     | "expect"
     | "ifVersion"
-  )[] = ["title", "status", "statusName", "priority", "expect", "ifVersion"];
+    | "duplicateOf"
+  )[] = ["title", "status", "statusName", "priority", "expect", "ifVersion", "duplicateOf"];
   for (const name of scalars) {
     if (options[name] !== undefined) {
       args.push(taskUpdateOptionFlags[name], stringOption(method, name, options[name]));
@@ -1313,6 +1322,15 @@ export class OnetaskgraphClient {
     }
     return this.run("sources migrate", [source, ...(options.dryRun ? ["--dry-run"] : [])]);
   }
+  // What `source`'s backend says is left of each rate-limit window it meters the source's
+  // credential by, one reading per window as the backend reported it; a source with nothing to
+  // report answers none. What the reading means is the caller's to decide.
+  sourcesQuota(source: string): Promise<SourceQuota> {
+    if (typeof source !== "string") {
+      throw new TypeError("sourcesQuota: source is not a string; next: name a configured source");
+    }
+    return this.run("sources quota", [source]);
+  }
   // Find the items of `source` already carrying a declared private term and rewrite what the
   // policy's replacements fix; `complete` reads the source whole, `dryRun` writes nothing.
   sourcesSanitize(
@@ -1499,26 +1517,35 @@ export class OnetaskgraphClient {
       ...expectFlags("taskCommentDelete", options),
     ]);
   }
+  // `duplicateOf` closes the task as a duplicate of that task, the survivor — only beside
+  // `cancelled`, which the binary refuses any other category with.
   taskStatusSet(
     id: string,
     category: StatusCategory,
-    options?: (WriteOptions & ExpectOptions) & { sanitizeDryRun?: false },
+    options?: (WriteOptions & ExpectOptions & { duplicateOf?: string }) & {
+      sanitizeDryRun?: false;
+    },
   ): Promise<TaskStatusSet>;
   taskStatusSet(
     id: string,
     category: StatusCategory,
-    options?: WriteOptions & ExpectOptions,
+    options?: WriteOptions & ExpectOptions & { duplicateOf?: string },
   ): Promise<TaskStatusSet | SanitizeDryRun>;
   taskStatusSet(
     id: string,
     category: StatusCategory,
-    options: WriteOptions & ExpectOptions = {},
+    options: WriteOptions & ExpectOptions & { duplicateOf?: string } = {},
   ): Promise<TaskStatusSet | SanitizeDryRun> {
+    const duplicateOf =
+      options.duplicateOf === undefined
+        ? []
+        : ["--duplicate-of", stringOption("taskStatusSet", "duplicateOf", options.duplicateOf)];
     return this.run(
       "task status set",
       [
         id,
         category,
+        ...duplicateOf,
         ...writePolicyFlags("taskStatusSet", options),
         ...expectFlags("taskStatusSet", options),
       ],

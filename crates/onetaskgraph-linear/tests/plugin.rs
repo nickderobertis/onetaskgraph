@@ -8042,3 +8042,76 @@ async fn a_batched_comment_handed_an_author_is_refused_alone_and_its_neighbour_l
     assert_eq!(sent.len(), 2, "one read and the one comment: {sent:?}");
     assert!(!sent.iter().any(|request| request.contains("signed")));
 }
+
+#[test]
+fn every_mutation_root_sent_is_classified_and_creates_content_agrees() {
+    use onetaskgraph_linear::graphql::creates_content;
+    use std::collections::{BTreeMap, BTreeSet};
+    // Whether each root creates an issue, a project, a document or a comment.
+    let classified = BTreeMap::from([
+        ("commentCreate", true),
+        ("commentDelete", false),
+        ("commentUpdate", false),
+        ("documentCreate", true),
+        ("documentDelete", false),
+        ("documentUpdate", false),
+        ("fileUpload", false),
+        ("issueCreate", true),
+        ("issueDelete", false),
+        ("issueRelationCreate", false),
+        ("issueRelationDelete", false),
+        ("issueUpdate", false),
+        ("projectCreate", true),
+        ("projectDelete", false),
+        ("projectRelationCreate", false),
+        ("projectRelationDelete", false),
+        ("projectStatusCreate", false),
+        ("projectUpdate", false),
+        ("workflowStateCreate", false),
+    ]);
+    // Every mutation this crate sends is a string literal opening `"mutation` in its source,
+    // naming one root field first in its selection set.
+    let mut sent = BTreeSet::new();
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    for entry in std::fs::read_dir(&source).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_none_or(|extension| extension != "rs") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).unwrap();
+        for (at, _) in text.match_indices("\"mutation") {
+            let literal = &text[at + 1..];
+            let Some(open) = literal.find('{') else {
+                continue;
+            };
+            let root: String = literal[open + 1..]
+                .trim_start()
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
+            // A literal that closes before its selection set — `"mutation"` alone, the word an
+            // operation's kind is spelled with — is no document.
+            if !root.is_empty() && !literal[..open].contains('"') {
+                sent.insert(root);
+            }
+        }
+    }
+    let unclassified: Vec<_> = sent
+        .iter()
+        .filter(|root| !classified.contains_key(root.as_str()))
+        .collect();
+    assert!(
+        unclassified.is_empty(),
+        "say whether each of these mutation roots creates content: {unclassified:?}"
+    );
+    let unsent: Vec<_> = classified
+        .keys()
+        .filter(|root| !sent.contains(**root))
+        .collect();
+    assert!(unsent.is_empty(), "classified but never sent: {unsent:?}");
+    for (root, creates) in classified {
+        let document = format!("mutation($id:String!){{ {root}(id:$id){{success}} }}");
+        assert_eq!(creates_content(&document), creates, "{root}");
+        assert!(!creates_content(&document.replacen("mutation", "query", 1)));
+    }
+}

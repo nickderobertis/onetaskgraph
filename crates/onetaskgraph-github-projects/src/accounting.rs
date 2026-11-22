@@ -896,7 +896,7 @@ fn document_name(document: &str) -> &str {
 /// refuses a `first:` it has no binding for, and the worst case is the honest answer for a
 /// size nobody narrowed. A variable no `first:` references — a project number, a page
 /// cursor — is ignored by the calculation, so passing every integer through costs nothing.
-fn bindings(variables: &Value) -> Variables {
+pub(crate) fn bindings(variables: &Value) -> Variables {
     let mut bindings = largest_page_sizes();
     if let Some(bound) = variables.as_object() {
         for (name, value) in bound {

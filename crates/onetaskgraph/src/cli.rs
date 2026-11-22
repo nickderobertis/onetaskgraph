@@ -348,6 +348,24 @@ pub enum SourcesCommand {
     /// each named with why.
     // llmlint: ignore[new_command_or_client_gets_its_own_project] This subcommand belongs to the existing binary and engine projects, has no independent executable or package, and affected selection already selects both.
     Migrate(MigrateArgs),
+    /// Report what the source's backend says is left of each rate-limit window it meters the
+    /// source's credential by — one row per window, each as the backend reported it.
+    ///
+    /// Asked afresh every time, a cached source's included, and costs nothing a source
+    /// meters: a GitHub board reads `GET /rate_limit`, a Linear source answers what its last
+    /// response's headers said, and a source with nothing to report — a folder of Markdown, a
+    /// stdio plugin whose handshake does not declare `quota` — answers no resources. The store
+    /// reports the reading; what it means is the caller's to decide.
+    // llmlint: ignore[new_command_or_client_gets_its_own_project] This subcommand belongs to the existing binary and engine projects, has no independent executable or package, and affected selection already selects both.
+    Quota(QuotaArgs),
+}
+
+/// `onetaskgraph sources quota`.
+#[derive(Debug, Args)]
+pub struct QuotaArgs {
+    /// The configured source to ask.
+    // llmlint: ignore[invalid_states_unrepresentable] Clap collects this token as text so an unknown name is refused naming the configured ones; the command converts it to a `SourceName` before any lookup.
+    pub source: String,
 }
 
 /// `onetaskgraph sources migrate`.
@@ -1138,6 +1156,14 @@ pub struct TaskUpdateArgs {
     #[arg(long = "no-repositories")]
     pub no_repositories: bool,
 
+    /// Close it as a duplicate of this task, the survivor, qualified — natively where the
+    /// backend can say so, GitHub's duplicate closure and Linear's duplicate relation — and
+    /// record the typed `duplicate` link at both ends. It implies `--status cancelled`, and any
+    /// other status beside it is refused, writing nothing.
+    // llmlint: ignore[invalid_states_unrepresentable] As `id`: a `GlobalId` here would refuse an unqualified id as a bad invocation under clap's wording, and `qualified` converts it immediately with the next action a user needs.
+    #[arg(long = "duplicate-of", value_name = "ID")]
+    pub duplicate_of: Option<String>,
+
     /// Write the update only while the task holds this priority — `none` for a task with none.
     /// Repeat for several. At any other, nothing of the update is written — none of its fields —
     /// and the answer's `guard` says `held` with the priority the task holds; every field it
@@ -1591,6 +1617,14 @@ pub struct StatusSetArgs {
     /// The status category to set.
     #[arg(value_name = "CATEGORY")]
     pub category: StatusArg,
+
+    /// Close it as a duplicate of this task, the survivor, qualified: only beside `cancelled`,
+    /// and natively where the backend can say so — GitHub's duplicate closure, Linear's
+    /// duplicate relation — with the typed `duplicate` link recorded at both ends. Beside any
+    /// other category it is refused, writing nothing.
+    // llmlint: ignore[invalid_states_unrepresentable] As `id`: `qualified` in `main` converts it immediately, with the next action a user needs.
+    #[arg(long = "duplicate-of", value_name = "ID")]
+    pub duplicate_of: Option<String>,
 
     #[command(flatten)]
     pub expect: ExpectArgs,

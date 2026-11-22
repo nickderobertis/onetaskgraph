@@ -85,6 +85,7 @@ if TYPE_CHECKING:
     from .source_failure import SourceFailure as SourceFailure
     from .source_listing import SourceListing as SourceListing
     from .source_name import SourceName as SourceName
+    from .source_quota import SourceQuota as SourceQuota
     from .source_route import SourceRoute as SourceRoute
     from .source_visibility import SourceVisibility as SourceVisibility
     from .status_category import StatusCategory as StatusCategory
@@ -200,6 +201,7 @@ __all__ = [
     "SourceFailure",
     "SourceListing",
     "SourceName",
+    "SourceQuota",
     "SourceRoute",
     "SourceVisibility",
     "StatusCategory",
@@ -311,6 +313,7 @@ _MODULES: dict[str, tuple[str, str]] = {
     "SourceFailure": ("source_failure", "SourceFailure"),
     "SourceListing": ("source_listing", "SourceListing"),
     "SourceName": ("source_name", "SourceName"),
+    "SourceQuota": ("source_quota", "SourceQuota"),
     "SourceRoute": ("source_route", "SourceRoute"),
     "SourceVisibility": ("source_visibility", "SourceVisibility"),
     "StatusCategory": ("status_category", "StatusCategory"),

@@ -2155,6 +2155,12 @@ impl TaskSource for CachedSource {
         self.inner.metering().await
     }
 
+    // Never answered from the cache: a reading is of the backend's allowance now, which other
+    // work sharing the credential moves, so the source asks its backend every time.
+    async fn quota(&self) -> Result<Vec<onetaskgraph_plugin_api::QuotaReading>, SourceError> {
+        self.inner.quota().await
+    }
+
     async fn end_command(&self) -> Result<(), SourceError> {
         self.cache.end_command();
         self.inner.end_command().await

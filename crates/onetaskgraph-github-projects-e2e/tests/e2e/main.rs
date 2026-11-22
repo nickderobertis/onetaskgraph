@@ -33,6 +33,7 @@ mod cache_budget;
 mod cache_kinds;
 mod cache_writes;
 mod closed_status;
+mod comments_since_cache;
 mod connections;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] The github-project-copy-back-requests workload must run in this crate's `test` target, whose saved telemetry its reporter reads and whose `budgets` target judges it, as every budget of this crate does (`relation_batch`, `store_cost`); it is loopback-only and seconds long.
 mod copy_back_cost;
@@ -41,6 +42,7 @@ mod copy_recopy;
 mod copy_status;
 mod copy_unsettled;
 mod creation_owners;
+mod duplicate_close;
 mod fields;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] The github-points-per-follow-up-cycle workload must run in this crate's `test` target, whose saved telemetry its reporter reads and whose `budgets` target judges it, as every budget of this crate does (`plan_copy`, `store_cost`); it is loopback-only and seconds long.
 mod follow_up_cycle;
@@ -55,6 +57,8 @@ mod locate;
 mod member_copy;
 mod metadata_fields;
 mod narrow_write_cost;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] The github-open-board-list-requests workload must run in this crate's `test` target, whose saved telemetry its reporter reads and whose `budgets` target judges it, as every budget of this crate does (`relation_batch`, `store_cost`); it is loopback-only, on the simulated clock, and seconds long.
+mod open_list;
 mod oversize;
 mod plan_copy;
 mod plan_locations;
@@ -63,14 +67,17 @@ mod plan_reads;
 mod plan_writes;
 mod private_home;
 mod project_status;
+mod quota;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] The github-points-per-relation-batch workload must run in this crate's `test` target, whose saved telemetry its reporter reads and whose `budgets` target judges it, as every budget of this crate does (`follow_up_cycle`, `store_cost`); it is loopback-only and under a second long.
 mod relation_batch;
 mod relations;
+mod request_gate;
 // `sources sanitize` against the loopback board, screened by the pinned onevcs release.
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] Loopback-only and seconds long, like every journey of this crate; it drives the sweep through this plugin's own search and comment reads, so this plugin's edge is the one it belongs behind, beside the screened plan copy that already runs the same pinned onevcs.
 mod sanitize_sweep;
 mod status_complete;
 mod status_reconcile;
+mod status_state;
 mod store_cost;
 mod store_startup;
 mod write_order;

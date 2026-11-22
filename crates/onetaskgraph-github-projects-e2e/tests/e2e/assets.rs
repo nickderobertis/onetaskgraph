@@ -2015,3 +2015,98 @@ fn task_assets_writes_each_uploaded_image_a_board_task_holds_under_its_reference
     );
     assert!(written(&empty).is_empty());
 }
+
+/// A request gate recording every request it is asked about, refusing each upload — the one
+/// content-creating REST request — when `refusing` says so.
+struct UploadGate {
+    asked: std::sync::Mutex<Vec<onetaskgraph_plugin_api::GatedRequest>>,
+    refusing: bool,
+}
+
+#[async_trait::async_trait]
+impl onetaskgraph_plugin_api::RequestGate for UploadGate {
+    async fn before_request(
+        &self,
+        request: &onetaskgraph_plugin_api::GatedRequest,
+    ) -> Result<(), onetaskgraph_plugin_api::SourceError> {
+        self.asked.lock().unwrap().push(request.clone());
+        if self.refusing && request.resource == "core" && request.content_creating {
+            return Err(onetaskgraph_plugin_api::SourceError::Refused {
+                message: "the caller's gate refused the upload".into(),
+            });
+        }
+        Ok(())
+    }
+
+    fn after_response(&self, _readings: &[onetaskgraph_plugin_api::QuotaReading]) {}
+}
+
+#[test]
+fn a_request_gate_is_asked_before_each_upload_and_its_refusal_uploads_nothing() {
+    for refusing in [false, true] {
+        let clock = SimulatedClock::start(1);
+        let plan = Plan::new(&clock, 0, None);
+        let bytes = plan.author("task", "T", false, &[50_500], 30);
+        let environment = onetaskgraph_core::Environment::from_pairs([(
+            "XDG_CONFIG_HOME",
+            plan.sandbox.config_home().to_string_lossy().into_owned(),
+        )]);
+        let loaded = onetaskgraph_core::config::load(
+            &plan.sandbox.project(),
+            &environment,
+            &onetaskgraph_core::config::Layer::default(),
+        )
+        .expect("the configuration loads");
+        let attached = onetaskgraph_core::process_clock(
+            &onetaskgraph_core::Environment::from_pairs(clock.client_env(0)),
+        )
+        .expect("the clock attaches");
+        let gate = std::sync::Arc::new(UploadGate {
+            asked: std::sync::Mutex::new(Vec::new()),
+            refusing,
+        });
+        let engine =
+            onetaskgraph_core::Engine::build_with_clock(&loaded.config, &loaded.secrets, &attached)
+                .with_request_gate(gate.clone());
+        let request = onetaskgraph_core::CopyRequest {
+            items: onetaskgraph_core::CopyItems::new(vec!["notes:T".parse().unwrap()]).unwrap(),
+            scope: onetaskgraph_core::CopyScope::Tasks,
+            destination: onetaskgraph_plugin_api::SourceName::new("board").unwrap(),
+            target_task: None,
+            match_by: None,
+            recreate: false,
+            create: false,
+            dry_run: false,
+            comments: false,
+            no_link: false,
+            expect: None,
+            status_policy: onetaskgraph_core::StatusPolicy::Source,
+            statuses: Vec::new(),
+            conditions: Default::default(),
+        };
+        let copied = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(engine.copy(&request));
+        let asked = gate.asked.lock().unwrap().clone();
+        assert!(
+            asked
+                .iter()
+                .any(|request| request.resource == "core" && request.content_creating),
+            "the upload was asked about: {asked:?}"
+        );
+        let calls = plan.board.calls();
+        if refusing {
+            let said = match &copied {
+                Ok(report) => serde_json::to_string(report).unwrap(),
+                Err(error) => error.to_string(),
+            };
+            assert!(said.contains("refused the upload"), "{said}");
+            assert!(uploads(&calls).is_empty(), "nothing was uploaded");
+        } else {
+            copied.expect("the copy lands");
+            assert_eq!(uploads(&calls).len(), bytes.len());
+        }
+    }
+}

@@ -9,6 +9,7 @@ export const binaryCommands = [
   "sources route",
   "sources sanitize",
   "sources migrate",
+  "sources quota",
   "task list",
   "task show",
   "task show-many",

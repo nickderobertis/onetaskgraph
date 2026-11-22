@@ -357,3 +357,12 @@ document's node count and point cost now covers that lookup too — bound to a l
 in every slot — so the record moved by that one reconciliation call, to 242 requests, with the
 same worst-case node count: the lookup selects no connection. The journey's own sources do not
 opt in, so no other request moved.
+
+## The board's open items, 2026-11-21
+
+A task listing whose every status category is open reads the board through its own `is:open`
+item filter, `graphql::OPEN_ITEMS`, instead of walking every page of the board and sweeping its
+issue search. The session's reconciliation of every document's node count and point cost now
+covers that read too, priced as the board's closed-item read is — the same selection under the
+other filter — so the record moved by that one reconciliation call, to 243 requests and a node
+count 10,150 higher. The journey's own listings name no status, so no other request moved.
