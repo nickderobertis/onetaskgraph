@@ -84,7 +84,10 @@ impl Kind {
                 Self::Mutation
             };
         }
-        if query == graphql::BOARD {
+        // A page of the board's own items narrowed by its open filter is a page of the board's
+        // items as much as an unfiltered one is: the open-item listing's spike measured its five
+        // pages at a board page's latency.
+        if query == graphql::BOARD || query == graphql::OPEN_ITEMS {
             return Self::BoardPage;
         }
         if query == graphql::SEARCH_ISSUES {

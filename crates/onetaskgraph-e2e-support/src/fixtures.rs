@@ -3481,6 +3481,39 @@ impl GitHubBoard {
             "items":{"nodes":nodes,"pageInfo":{"hasNextPage":more,"endCursor":cursor}}}}})
     }
 
+    /// The open items of this board, as its own `is:open` filter answers — every open issue,
+    /// whatever its card says, and every draft, which has no state and is never closed.
+    fn open_items(&self, variables: &Value) -> Value {
+        assert_eq!(variables["owner"], "fixture-owner");
+        assert_eq!(variables["number"], 7);
+        assert_eq!(
+            variables["filter"], "is:open",
+            "a listing of open categories reads the board through its open filter alone"
+        );
+        let offset = match &variables["after"] {
+            Value::Null => 0,
+            Value::String(cursor) => cursor.parse::<usize>().expect("numeric after cursor"),
+            other => panic!("GraphQL after must be null or a numeric string: {other}"),
+        };
+        let first = usize::try_from(variables["first"].as_u64().expect("GraphQL first"))
+            .expect("GraphQL first fits usize");
+        let visible = self.items.len().saturating_sub(self.lagging_reads);
+        let open: Vec<&Value> = self.items[..visible]
+            .iter()
+            .filter(|item| Self::on_board(item))
+            .filter(|item| Self::is_draft(item) || item["state"] != "CLOSED")
+            .collect();
+        let end = (offset + first).min(open.len());
+        let tallies = self.tallies();
+        let nodes: Vec<Value> = open[offset.min(end)..end]
+            .iter()
+            .map(|item| self.rendered_counted(item, Some(&tallies)))
+            .collect();
+        json!({"openItems":{"projectV2":{"id":"PVT-board","fields":self.fields(),
+            "items":{"nodes":nodes,"pageInfo":{"hasNextPage":end < open.len(),
+                                                "endCursor":end.to_string()}}}}})
+    }
+
     /// Each reference of a batch read by reference, answered as GitHub answers one: the issue
     /// that repository holds under that number, or `null` beside a `NOT_FOUND` error naming the
     /// alias — its first slot bent once as [`ReferenceFault`] says, when one is armed.
@@ -6039,6 +6072,9 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
     }
     if query == onetaskgraph_github_projects::graphql::CLOSED_ITEMS {
         return board.closed_items(variables);
+    }
+    if query == onetaskgraph_github_projects::graphql::OPEN_ITEMS {
+        return board.open_items(variables);
     }
     if query == onetaskgraph_github_projects::graphql::ISSUES_BY_REFERENCE {
         return board.issues_by_reference(variables);

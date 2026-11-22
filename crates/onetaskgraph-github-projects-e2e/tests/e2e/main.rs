@@ -53,6 +53,8 @@ mod locate;
 mod member_copy;
 mod metadata_fields;
 mod narrow_write_cost;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] The github-open-board-list-requests workload must run in this crate's `test` target, whose saved telemetry its reporter reads and whose `budgets` target judges it, as every budget of this crate does (`relation_batch`, `store_cost`); it is loopback-only, on the simulated clock, and seconds long.
+mod open_list;
 mod oversize;
 mod plan_copy;
 mod plan_locations;

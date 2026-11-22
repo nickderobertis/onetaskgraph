@@ -1408,6 +1408,40 @@ pub mod graphql {
     }"#
     );
 
+    /// Every open item of the board, drafts included, by the board's own field filter — what a
+    /// task listing whose every status category is open reads, and nothing else of the board.
+    ///
+    /// **`ProjectV2.items(query:)` narrowed by `$filter`**, which this source binds to
+    /// `is:open` alone. GitHub's filter reads the issue's state, not its card, so it answers
+    /// every open issue whatever column its card sits in — an open issue under a terminal card,
+    /// and one under an option no mapping names, among them — and every draft, which has no
+    /// state and is never closed; measured on the real board by `spike-store-defects`, it read
+    /// 466 open items in five requests where the whole board's walk and its issue search took
+    /// thirty-one. Each item's category is still confirmed in process from its own node, so a
+    /// filter that let a closed item through would cost a read and keep nothing it should not.
+    ///
+    /// The board's own id and field definitions ride along, as [`CLOSED_ITEMS`] carries them,
+    /// so a status write after it needs no read of the board's fields. The root is aliased
+    /// `openItems`, so nothing counting the board's whole reads counts this one among them.
+    pub const OPEN_ITEMS: &str = concat!(
+        r#"query($owner:String!,$number:Int!,$first:Int!,$after:String,$filter:String!,$nestedFirst:Int!,$duplicates:Boolean!"#,
+        relationship_events_variable!(),
+        r#"){
+      openItems:repositoryOwner(login:$owner){
+        ... on ProjectV2Owner{projectV2(number:$number){id
+          fields(first:$nestedFirst){nodes{
+            ... on ProjectV2SingleSelectField{__typename id name options{id name}}
+            ... on ProjectV2Field{__typename id name dataType}
+          }pageInfo{hasNextPage}}
+          items(first:$first,after:$after,query:$filter){nodes{id updatedAt "#,
+        board_item_values!(),
+        board_item_content!(),
+        r#"} pageInfo{hasNextPage endCursor}}
+        }}
+      }
+    }"#
+    );
+
     /// One alias of [`ISSUES_BY_REFERENCE`]: the issue `$owner<n>/$name<n>#$number<n>` names.
     macro_rules! reference_alias {
         ($n:literal) => {
@@ -2747,7 +2781,7 @@ pub mod graphql {
     /// `documents_are_all_inventoried` reads this file back and fails naming any `pub
     /// const` here that this list omits, so the two cannot part — which is the same guard
     /// `CATEGORIES` carries, in the one shape available to a set of `&str` constants.
-    pub const DOCUMENTS: [(&str, &str); 69] = [
+    pub const DOCUMENTS: [(&str, &str); 70] = [
         (USER_IDS, "looking up the people an assignee write names"),
         (
             ISSUE_RELATIONS,
@@ -2782,6 +2816,7 @@ pub mod graphql {
         ),
         (ORIGIN_LOOKUP, "looking up the items copied from one origin"),
         (CLOSED_ITEMS, "reading the board's closed items"),
+        (OPEN_ITEMS, "reading the board's open items"),
         (
             ISSUES_BY_REFERENCE,
             "reading a batch of issues by their references",
@@ -8239,6 +8274,100 @@ impl GitHubProjectsSource {
         Ok(board)
     }
 
+    /// Every open item of this board, drafts included, read through the board's own `is:open`
+    /// filter page by page — never its unfiltered `items`, and with no issue search beside it —
+    /// held for the command under [`OPEN_ITEMS_KEY`] on the terms every narrowed answer is
+    /// held on, and completed with this process's own writes each time it is given.
+    ///
+    /// What a task listing whose every status category is open reads: an item is open exactly
+    /// when GitHub's filter answers it, so the categories are still confirmed in process from
+    /// each item's own node, and the answer is the whole board's filtered to the same
+    /// categories — an open issue under a terminal card read as its card, a draft and an item
+    /// under an option no mapping names included.
+    async fn open_items(&self) -> Result<Vec<Resolved>, SourceError> {
+        let key = OPEN_ITEMS_KEY.to_owned();
+        let cached = self.narrowed_cache()?.get(&key).cloned();
+        let mut found = match cached {
+            Some(found) => found,
+            None => {
+                let found = self.read_open_items().await?;
+                self.narrowed_cache()?.insert(key, found.clone());
+                found
+            }
+        };
+        // Every item this process wrote, drafts included: the filter answers drafts, so an
+        // own draft is as much an answer as an own issue. Its category is confirmed below like
+        // any other's, so one this process closed is left out there.
+        let own: Vec<Resolved> = self
+            .created()?
+            .iter()
+            .chain(self.updated()?.iter())
+            .cloned()
+            .collect();
+        for own in own {
+            match found.iter_mut().find(|read| read.id == own.id) {
+                Some(read) => *read = own,
+                None => found.push(own),
+            }
+        }
+        Ok(found)
+    }
+
+    /// Every page of [`graphql::OPEN_ITEMS`], resolved; the board's own fields are held for
+    /// the writes that follow, as a reconcile holds them.
+    async fn read_open_items(&self) -> Result<Vec<Resolved>, SourceError> {
+        let mut after: Option<String> = None;
+        let mut found = Vec::new();
+        loop {
+            let data = self
+                .graphql(
+                    graphql::OPEN_ITEMS,
+                    json!({"owner":self.owner,"number":self.project_number,
+                           "first":MAX_PAGE_SIZE,"after":after,"filter":OPEN_QUALIFIER,
+                           "nestedFirst":NESTED_PAGE_SIZE,"duplicates":true}),
+                )
+                .await?;
+            let board = data
+                .pointer("/openItems/projectV2")
+                .filter(|value| !value.is_null())
+                .ok_or_else(|| SourceError::Refused {
+                    message: format!(
+                        "GitHub project {}/{} was not found or is not visible to the token",
+                        self.owner, self.project_number
+                    ),
+                })?;
+            *self.fields_cache()? = Some(BoardFields {
+                id: BoardId::parse(required_str(board, "id")?)?,
+                fields: board.get("fields").cloned().unwrap_or(Value::Null),
+            });
+            let items = board.get("items").ok_or_else(|| SourceError::Malformed {
+                message: "GitHub project open items are missing".into(),
+            })?;
+            for item in items
+                .get("nodes")
+                .and_then(Value::as_array)
+                .ok_or_else(|| SourceError::Malformed {
+                    message: "GitHub project items.nodes is not an array".into(),
+                })?
+            {
+                if let Some(resolved) = self.resolve(item)? {
+                    found.push(resolved);
+                }
+            }
+            let info = items
+                .get("pageInfo")
+                .ok_or_else(|| SourceError::Malformed {
+                    message: "GitHub project items have no pageInfo".into(),
+                })?;
+            if !required_bool(info, "hasNextPage")? {
+                return Ok(found);
+            }
+            let next = required_str(info, "endCursor")?;
+            validate_cursor_progress(after.as_deref(), next)?;
+            after = Some(next.to_owned());
+        }
+    }
+
     /// This process's own view of the board, or the refusal a poisoned lock is.
     fn board_cache(&self) -> Result<std::sync::MutexGuard<'_, Option<Board>>, SourceError> {
         self.board_cache
@@ -13477,6 +13606,22 @@ fn open_only(query: &TaskQuery) -> bool {
         })
 }
 
+/// Whether every status category `query` keeps is one only an open item reads as — `draft`,
+/// `backlog`, `todo`, `queued`, `in-progress` and `unknown` — so a listing of it can read the
+/// board's open items alone.
+///
+/// `unknown` is among them here though [`open_only`] leaves it out: a closed issue reads
+/// `unknown` only for a closure reason GitHub never records on a closed issue (see
+/// [`closed_category`]), so an open-only read of the board loses nothing a whole one keeps,
+/// while an issue search, which [`open_only`] narrows, keeps its own rule.
+fn open_items_only(query: &TaskQuery) -> bool {
+    !query.statuses.is_empty()
+        && query
+            .statuses
+            .iter()
+            .all(|category| !matches!(category, StatusCategory::Done | StatusCategory::Cancelled))
+}
+
 /// What a task query is narrowed by beside a board-scoped issue search's scope — its comment
 /// activity and its text and metadata, with `is:open` when [`open_only`] — or `None` for a query
 /// carrying none of those, which no narrowed search answers.
@@ -14386,6 +14531,10 @@ const FAR_ENDS_UNCOVERED: &str = "a github item's change token does not attest a
 /// categories an open issue reads as narrows a board-scoped search with.
 const OPEN_QUALIFIER: &str = "is:open";
 
+/// What the board's open items are held under among the narrowed answers of one command — a
+/// key no [`Narrowing`], each `origin …` or `search …`, can spell.
+const OPEN_ITEMS_KEY: &str = "items is:open";
+
 /// The board filter `task status reconcile` reads the board through: closed items alone.
 const CLOSED_FILTER: &str = "is:closed";
 
@@ -15176,6 +15325,11 @@ impl TaskSource for GitHubProjectsSource {
                     // The board's own items list every draft; only the search half, which
                     // completes them with issues they lag behind on, is narrowed — a closed
                     // issue that half leaves out is at no category the filter keeps.
+                    // Every category it keeps reads only off an open item, so it reads the
+                    // board's open items alone, through the board's own filter.
+                    (None, None) if open_items_only(query) => {
+                        (self.open_items().await?, &query.project)
+                    }
                     (None, None) if open_only => (
                         self.board_completed_by(Some(OPEN_QUALIFIER)).await?.items,
                         &query.project,

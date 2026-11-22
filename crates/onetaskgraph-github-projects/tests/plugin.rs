@@ -2988,9 +2988,16 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
         .items_connection_behind_from
         .unwrap_or(state.items.len())
         .min(state.items.len());
+    // The board's own `is:open` filter keeps every item whose content is not closed — a
+    // draft's included, which has no state to close.
+    let open_only = query == onetaskgraph_github_projects::graphql::OPEN_ITEMS;
+    if open_only {
+        assert_eq!(variables["filter"], json!("is:open"));
+    }
     let shown = state.items[..listed.saturating_sub(state.lagging_reads)]
         .iter()
         .filter(|item| item.listed)
+        .filter(|item| !open_only || item.state != "CLOSED")
         .collect::<Vec<_>>();
     let visible = shown.len();
     let end = (offset + first).min(visible);
@@ -3019,7 +3026,8 @@ fn answer(state: &Arc<Mutex<State>>, query: &str, variables: &Value) -> Value {
                    "content":content})
         })
         .collect::<Vec<_>>();
-    json!({"owner":{"projectV2":{"id":"PVT_board","title":"Roadmap","fields":state.fields(),
+    let root = if open_only { "openItems" } else { "owner" };
+    json!({root:{"projectV2":{"id":"PVT_board","title":"Roadmap","fields":state.fields(),
         "items":{"nodes":nodes,"pageInfo":{"hasNextPage":end < visible,"endCursor":end.to_string()}}}}})
 }
 
@@ -4178,6 +4186,15 @@ fn committed_server() -> String {
                 let id = variables["id"].as_str().expect("a node id");
                 let held = recorded.iter().find(|node| node["id"] == json!(id));
                 json!({"data":{"node":held.cloned().unwrap_or(Value::Null)}})
+            } else if query == onetaskgraph_github_projects::graphql::OPEN_ITEMS {
+                // The board's own `is:open` filter: every item whose content is not closed.
+                assert_eq!(variables["filter"], "is:open");
+                let mut open = board["data"]["owner"].clone();
+                open["projectV2"]["items"]["nodes"]
+                    .as_array_mut()
+                    .expect("the board's items")
+                    .retain(|node| node["content"]["state"] != "CLOSED");
+                json!({"data":{"openItems":open}})
             } else {
                 board.clone()
             };
@@ -17708,8 +17725,9 @@ async fn a_text_metadata_or_origin_query_asks_a_narrower_question_than_the_board
         }
     }
 
-    // And a query carrying none of the three still reads the board as before: its items and
-    // its board-scoped search, and no narrowed search.
+    // And a query carrying none of the three, naming only an open category, reads the board's
+    // open items alone through its own `is:open` filter — the draft among them, which no issue
+    // search answers — with no page of the unfiltered board and no search beside it.
     let fixture = narrowing_board();
     let source = source(&fixture);
     assert_eq!(
@@ -17723,10 +17741,9 @@ async fn a_text_metadata_or_origin_query_asks_a_narrower_question_than_the_board
         .await,
         ["I_ship", "I_shipment", "I_owned", "I_copied", "D_ship"]
     );
-    assert_eq!(fixture.requests("board"), 1);
-    // A filter naming only an open category narrows the search half to open issues, and the
-    // board's own items still list the draft, which no issue search answers.
-    assert_eq!(fixture.searches(), ["project:octo-org/7 is:issue is:open"]);
+    assert_eq!(fixture.requests("openItems"), 1);
+    assert_eq!(fixture.requests("board"), 0);
+    assert_eq!(fixture.searches(), Vec::<String>::new());
     assert_eq!(fixture.origin_filters(), Vec::<String>::new());
 
     // And a query naming `done` asks the search for every issue, open or closed.

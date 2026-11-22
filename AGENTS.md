@@ -1270,8 +1270,9 @@ them do; this is the inventory of what is owed, not a status board.
     tasks in step, listing every other source `unsupported`; `Engine::complete_issues` answers
     the same.
 110. `task copy --status` keeps only the tasks at the named categories, by query — a GitHub
-    board's search narrowed to open issues when every category is open — and beside ids, where a
-    task at another category is answered `skipped` without its comments being read.
+    board read through its own `is:open` item filter alone when every category is open — and
+    beside ids, where a task at another category is answered `skipped` without its comments
+    being read.
 111. A task copy leaves out each task its destination says it cannot represent — a status,
     content or `delivers` — answered `failed` and exit `4`, the rest landing and an edge to it
     written as one outside the copy; every check precedes the first write; any other refusal,
