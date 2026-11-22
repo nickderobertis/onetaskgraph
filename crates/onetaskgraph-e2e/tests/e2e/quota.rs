@@ -131,3 +131,42 @@ fn a_stdio_peer_declaring_quota_is_sent_it_once_and_its_readings_are_answered() 
     );
     assert_eq!(asked(&log), ["initialize", "quota"]);
 }
+
+#[test]
+fn the_shipped_host_forwards_quota_to_the_plugin_it_serves() {
+    let sandbox = Sandbox::new();
+    let root = sandbox.subdirectory("plan");
+    std::fs::create_dir_all(root.join("tasks")).expect("a folder");
+    let log = sandbox.subdirectory("peer").join("sent.log");
+    sandbox.project_document(&document(&json!({
+        "peer": crate::request_gate::hosted(&root, &log),
+    })));
+    // `plugin-serve local-md` declares `quota` and answers what the folder reports: nothing.
+    assert_eq!(
+        quota(&sandbox, "peer"),
+        json!({"source": "peer", "resources": []})
+    );
+    assert_eq!(asked(&log), ["initialize", "quota"]);
+}
+
+#[test]
+fn a_peer_answering_a_reading_it_cannot_have_read_is_refused_as_malformed() {
+    let sandbox = Sandbox::new();
+    let store = sandbox.subdirectory("store").join("documents.json");
+    std::fs::write(&store, r#"{"documents": []}"#).expect("a store");
+    let mut peer = store_at(&store, None, "native");
+    // A reading naming no limit, remainder, use or reset.
+    peer["config"]["settings"]["quota"] = json!([{"resource": "requests"}]);
+    sandbox.project_document(&document(&json!({ "peer": peer })));
+    let output = sandbox
+        .command()
+        .args(["sources", "quota", "peer", "--json"])
+        .assert()
+        .get_output()
+        .clone();
+    assert_ne!(output.status.code(), Some(0), "{}", stdout(&output));
+    // The failure document, and no reading.
+    let answer: Value = serde_json::from_str(&stdout(&output)).expect("a failure document");
+    assert_eq!(answer["failure"]["kind"], "malformed", "{answer:#}");
+    assert!(answer.get("resources").is_none(), "{answer:#}");
+}

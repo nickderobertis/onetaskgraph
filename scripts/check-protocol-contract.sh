@@ -1386,6 +1386,8 @@ PAYLOAD_EXAMPLES = (
         "StatusContradiction",
         "issue.rs",
     ),
+    ("### 4.26 `quota`", "quota", "result", (), "QuotaResult", "wire"),
+    ("### 4.26 `quota`", "quota", "result", ("readings", 0), "QuotaReading", "quota.rs"),
     ("### 4.24 `issue_holdings`", "issue_holdings", "params", (), "HoldingsParams", "wire"),
     ("### 4.24 `issue_holdings`", "issue_holdings", "result", (), "HoldingsResult", "wire"),
     (

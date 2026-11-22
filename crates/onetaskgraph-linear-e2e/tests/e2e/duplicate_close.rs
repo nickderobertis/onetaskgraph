@@ -204,3 +204,34 @@ fn a_repeated_close_succeeds_whether_linear_answers_the_held_relation_created_or
         "{relations:#}"
     );
 }
+
+#[test]
+fn a_duplicate_relation_linear_refuses_fails_the_close_and_moves_nothing() {
+    let setup = Setup::new();
+    let before = setup.ok(&["--json", "task", "show", "linear:L-3"]);
+    setup.workspace.refuse_writes_of("L-3");
+    let output = setup
+        .sandbox
+        .command()
+        .args([
+            "task",
+            "status",
+            "set",
+            "linear:L-3",
+            "cancelled",
+            "--duplicate-of",
+            "linear:L-2",
+        ])
+        .assert()
+        .get_output()
+        .clone();
+    assert_ne!(output.status.code(), Some(0));
+    assert!(setup.workspace.duplicates().is_empty());
+    let after = setup.ok(&["--json", "task", "show", "linear:L-3"]);
+    assert_eq!(
+        after["items"][0]["item"]["status"],
+        before["items"][0]["item"]["status"],
+        "the status did not move: {}",
+        stderr(&output)
+    );
+}

@@ -1003,13 +1003,117 @@ fn gated_graphql(document: &str, variables: &Value) -> onetaskgraph_plugin_api::
     }
 }
 
-/// Whether `document` creates content GitHub's secondary limits meter as such: an issue, a
-/// board draft or a comment.
+/// Whether `document` creates content GitHub's secondary limits meter as such: an issue or a
+/// comment. `creates_content_tests` classifies every mutation root `graphql::DOCUMENTS` sends,
+/// so a root added later fails there until it is said whether it creates content.
 fn creates_content(document: &str) -> bool {
     is_mutation(document)
-        && ["createIssue(", "addProjectV2DraftIssue(", "addComment("]
+        && ["createIssue(", "addComment("]
             .iter()
             .any(|root| document.contains(root))
+}
+
+#[cfg(test)]
+mod creates_content_tests {
+    use super::{creates_content, graphql};
+    use std::collections::BTreeMap;
+
+    /// Every root field a mutation document selects at its top level, aliases resolved.
+    fn roots(document: &str) -> Vec<String> {
+        let body = &document[document.find('{').expect("a selection set") + 1..];
+        let (mut braces, mut parens, mut roots) = (0_usize, 0_usize, Vec::new());
+        let mut chars = body.char_indices().peekable();
+        while let Some((at, c)) = chars.next() {
+            match c {
+                '{' => braces += 1,
+                '}' if braces == 0 => break,
+                '}' => braces -= 1,
+                '(' => parens += 1,
+                ')' => parens -= 1,
+                // A directive's name is no field.
+                '@' => {
+                    while chars
+                        .peek()
+                        .is_some_and(|&(_, n)| n.is_ascii_alphanumeric() || n == '_')
+                    {
+                        chars.next();
+                    }
+                }
+                c if braces == 0 && parens == 0 && (c.is_ascii_alphabetic() || c == '_') => {
+                    let mut end = at + c.len_utf8();
+                    while let Some(&(next, n)) = chars.peek() {
+                        if !(n.is_ascii_alphanumeric() || n == '_') {
+                            break;
+                        }
+                        end = next + n.len_utf8();
+                        chars.next();
+                    }
+                    let rest = body[end..].trim_start();
+                    // An alias names the root after its colon, which this loop reads next.
+                    if !rest.starts_with(':') {
+                        roots.push(body[at..end].to_owned());
+                    }
+                }
+                _ => {}
+            }
+        }
+        roots
+    }
+
+    #[test]
+    fn every_mutation_root_sent_is_classified_and_creates_content_agrees() {
+        // Whether each root creates an issue or a comment: what GitHub's
+        // secondary limits meter as content creation.
+        let classified = BTreeMap::from([
+            ("addBlockedBy", false),
+            ("addComment", true),
+            ("addProjectV2ItemById", false),
+            ("addRelatesTo", false),
+            ("addSubIssue", false),
+            ("clearProjectV2ItemFieldValue", false),
+            ("closeIssue", false),
+            ("createIssue", true),
+            ("createProjectV2Field", false),
+            ("deleteIssue", false),
+            ("deleteIssueComment", false),
+            ("removeBlockedBy", false),
+            ("removeRelatesTo", false),
+            ("removeSubIssue", false),
+            ("updateIssue", false),
+            ("updateIssueComment", false),
+            ("updateProjectV2DraftIssue", false),
+            ("updateProjectV2Field", false),
+            ("updateProjectV2ItemFieldValue", false),
+        ]);
+        let (mut seen, mut unclassified) = (BTreeMap::new(), std::collections::BTreeSet::new());
+        for (document, _) in graphql::DOCUMENTS {
+            if !super::is_mutation(document) {
+                assert!(!creates_content(document), "a query: {document}");
+                continue;
+            }
+            let roots = roots(document);
+            assert!(!roots.is_empty(), "no root read: {document}");
+            for root in &roots {
+                match classified.get(root.as_str()) {
+                    Some(&creates) => _ = seen.insert(root.clone(), creates),
+                    None => _ = unclassified.insert(root.clone()),
+                }
+            }
+            let expected = roots
+                .iter()
+                .any(|root| classified.get(root.as_str()) == Some(&true));
+            assert_eq!(creates_content(document), expected, "{document}");
+        }
+        assert!(
+            unclassified.is_empty(),
+            "say whether each of these mutation roots creates content: {unclassified:?}"
+        );
+        let unsent: Vec<_> = classified
+            .keys()
+            .filter(|root| !seen.contains_key(**root))
+            .collect();
+        assert!(unsent.is_empty(), "classified but never sent: {unsent:?}");
+    }
 }
 
 /// The input members a mutation names the issue or board item it writes by.

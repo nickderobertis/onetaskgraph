@@ -279,3 +279,24 @@ fn every_refusal_of_a_duplicate_close_writes_nothing() {
     }
     assert_eq!(setup.board.state("U-1").0, "OPEN");
 }
+
+#[test]
+fn a_duplicate_closure_github_refuses_fails_and_a_repeat_closes_it() {
+    let setup = Setup::new();
+    setup.board.refuse_once("closeIssue(");
+    let arguments = [
+        "--json",
+        "task",
+        "status",
+        "set",
+        "board:U-1",
+        "cancelled",
+        "--duplicate-of",
+        "board:K-9",
+    ];
+    let output = setup.run(&arguments, None);
+    assert_ne!(output.status.code(), Some(0));
+    assert_eq!(setup.board.state("U-1").0, "OPEN", "{}", stderr(&output));
+    setup.ok(&arguments, None);
+    setup.assert_closed_as_duplicate("U-1");
+}

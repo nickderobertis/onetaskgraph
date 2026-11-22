@@ -349,3 +349,41 @@ fn a_declaring_peer_s_duplicate_close_beside_repositories_is_refused_before_anyt
         "the peer was sent nothing: {sent}"
     );
 }
+
+#[test]
+fn a_declaring_peer_without_targeted_updates_is_refused_a_duplicate_close_before_anything_is_sent()
+{
+    let sandbox = Sandbox::new();
+    let root = folder(&sandbox);
+    let log = sandbox.subdirectory("peer").join("sent.log");
+    let mut peer = crate::request_gate::hosted(&root, &log);
+    let args = peer["config"]["args"].as_array_mut().unwrap();
+    for (flag, member) in [
+        ("--declare", "duplicate_closes"),
+        ("--withhold", "targeted_updates"),
+    ] {
+        args.insert(2, json!(member));
+        args.insert(2, json!(flag));
+    }
+    sandbox.project_document(&document(&json!({ "peer": peer })));
+    let before = read(&root, "T-1");
+    // Every update reaches such a peer as a whole-task write, which has no member for the close.
+    let output = sandbox
+        .command()
+        .args(["task", "update", "peer:T-1", "--duplicate-of", "peer:T-2"])
+        .assert()
+        .get_output()
+        .clone();
+    assert_ne!(output.status.code(), Some(0));
+    assert!(
+        stderr(&output).contains("targeted_updates") && stderr(&output).contains("peer:T-2"),
+        "{}",
+        stderr(&output)
+    );
+    assert_eq!(read(&root, "T-1"), before, "nothing was written");
+    let sent = std::fs::read_to_string(&log).unwrap_or_default();
+    assert!(
+        sent.lines().all(|method| method == "initialize"),
+        "the peer was sent nothing: {sent}"
+    );
+}

@@ -945,6 +945,9 @@ pub mod graphql {
         "query($id:String){ comment(id:$id){ id body archivedAt issue{id} } }";
     /// Whether `document` creates content — an issue, a project, a document or a comment —
     /// which is what a caller's request gate is told of each request.
+    /// `every_mutation_root_sent_is_classified_and_creates_content_agrees` classifies every
+    /// mutation root this crate's source sends, so one added later fails there until it is said
+    /// whether it creates content.
     #[must_use]
     pub fn creates_content(document: &str) -> bool {
         document.trim_start().starts_with("mutation")

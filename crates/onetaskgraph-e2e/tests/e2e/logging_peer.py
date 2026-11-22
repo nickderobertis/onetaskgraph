@@ -1,15 +1,15 @@
 """A stdio plugin that is another plugin, with every method it is sent written down.
 
-    python3 logging_peer.py LOG [--declare MEMBER]... COMMAND [ARGUMENT...]
+    python3 logging_peer.py LOG [--declare MEMBER | --withhold MEMBER]... COMMAND [ARGUMENT...]
 
 It starts COMMAND — the shipped host, `onetaskgraph plugin-serve <kind>` — hands it every line
 the engine sends, and hands the engine every line the host answers, unchanged. Before forwarding
 a request it appends the request's method to LOG, one per line, so a journey can say exactly
 which methods the peer was sent and that none followed a refusal — an `update_task` naming
 `duplicate_of` written as `update_task duplicate_of`. Each `--declare MEMBER` adds `MEMBER: true`
-to the host's handshake answer, so a journey can stand up a peer declaring what this build's own
-host does not. The engine spawns a plugin with a cleared environment (§3.1), so every path
-arrives as an argument.
+to the host's handshake answer and each `--withhold MEMBER` removes `MEMBER` from it, so a journey
+can stand up a peer declaring what this build's own host does not, or not what it does. The
+engine spawns a plugin with a cleared environment (§3.1), so every path arrives as an argument.
 """
 
 # llmlint: ignore-file[async_typed_clients_at_boundaries] No network or shared service is
@@ -27,17 +27,21 @@ import threading
 from typing import TextIO
 
 
-def relay(source: TextIO, sink: TextIO, declared: list[str]) -> None:
+def relay(source: TextIO, sink: TextIO, declared: list[str], withheld: list[str]) -> None:
     """Copy every line of `source` to `sink`, flushing each, until `source` ends.
 
-    The first line, the handshake's answer, carries each of `declared` added to its result.
+    The first line, the handshake's answer, carries each of `declared` added to its result and
+    each of `withheld` removed from it.
     """
     first = True
     for line in source:
-        if first and declared:
+        if first and (declared or withheld):
             answer = json.loads(line)
+            result = answer.setdefault("result", {})
             for member in declared:
-                answer.setdefault("result", {})[member] = True
+                result[member] = True
+            for member in withheld:
+                result.pop(member, None)
             line = json.dumps(answer) + "\n"
         first = False
         sink.write(line)
@@ -47,9 +51,9 @@ def relay(source: TextIO, sink: TextIO, declared: list[str]) -> None:
 def main() -> None:
     """Forward the engine's requests to the host, each method written down first."""
     log, command = sys.argv[1], sys.argv[2:]
-    declared = []
-    while command[:1] == ["--declare"]:
-        declared.append(command[1])
+    declared, withheld = [], []
+    while command[:1] in (["--declare"], ["--withhold"]):
+        (declared if command[0] == "--declare" else withheld).append(command[1])
         command = command[2:]
     child = subprocess.Popen(
         command,
@@ -59,7 +63,9 @@ def main() -> None:
         encoding="utf-8",
         bufsize=1,
     )
-    answers = threading.Thread(target=relay, args=(child.stdout, sys.stdout, declared), daemon=True)
+    answers = threading.Thread(
+        target=relay, args=(child.stdout, sys.stdout, declared, withheld), daemon=True
+    )
     answers.start()
     for line in sys.stdin:
         try:

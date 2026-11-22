@@ -2428,11 +2428,7 @@ that did not. It takes no parameters, and changes nothing.
 
 ```json
 { "id": "29", "method": "quota", "params": {} }
-{ "id": "29", "result": { "readings": [
-  { "resource": "requests", "limit": 1500, "remaining": 1480, "used": 20,
-    "resets_at": "2026-11-22T00:22:07Z" },
-  { "resource": "complexity", "limit": 250000, "remaining": 200000, "used": 50000,
-    "resets_at": "2026-11-22T01:08:36Z" } ] } }
+{ "id": "29", "result": { "readings": [{ "resource": "requests", "limit": 1500, "remaining": 1480, "used": 20, "resets_at": "2026-11-22T00:22:07Z" }, { "resource": "complexity", "limit": 250000, "remaining": 200000, "used": 50000, "resets_at": "2026-11-22T01:08:36Z" }] } }
 ```
 
 `readings` is a `Vec<QuotaReading>`: one `QuotaReading` per rate-limit window, each as the
