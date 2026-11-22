@@ -345,6 +345,7 @@ budgets:
     unit: points
     direction: max
     threshold: 12
+  # llmlint: ignore[budgets_track_product_owner_outcomes] Not the allowance `github-live-session-points` holds: that budget prices one whole credentialed session in points, while this one counts the requests of one open-items listing, offline at a fixed 2,038-item workload, which the secondary limiter meters per request and which is the wait a grooming pass sees. The store-fixes task names this budget and this file as the proof that the listing reads only open items.
   - id: github-open-board-list-requests
     description: >-
       An inner measure of the minutes a grooming pass waits to list a board's open items and the

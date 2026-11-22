@@ -235,3 +235,47 @@ fn a_duplicate_relation_linear_refuses_fails_the_close_and_moves_nothing() {
         stderr(&output)
     );
 }
+
+#[test]
+fn a_close_whose_state_write_answer_is_lost_after_the_relation_landed_is_finished_by_a_repeat() {
+    let setup = Setup::new();
+    // Linear applies the state write and its answer is lost, after the duplicate relation landed.
+    setup
+        .workspace
+        .lose_answer_once(onetaskgraph_linear::graphql::ISSUE_UPDATE);
+    let arguments = [
+        "--json",
+        "task",
+        "status",
+        "set",
+        "linear:L-3",
+        "cancelled",
+        "--duplicate-of",
+        "linear:L-2",
+    ];
+    let output = setup
+        .sandbox
+        .command()
+        .args(arguments)
+        .assert()
+        .get_output()
+        .clone();
+    assert_ne!(output.status.code(), Some(0), "{}", stdout(&output));
+    assert_eq!(
+        setup.workspace.duplicates(),
+        [("L-3".to_owned(), "L-2".to_owned())]
+    );
+    // The repeat finds the relation held, whether Linear answers it created or refused, and
+    // ends with the issue closed and its link recorded once.
+    setup.workspace.refuse_repeated_duplicate();
+    let answer = setup.ok(&arguments);
+    assert_eq!(answer["status"]["category"], "cancelled", "{answer:#}");
+    assert_eq!(setup.workspace.duplicates().len(), 1);
+    let relations = setup.ok(&["task", "relations", "linear:L-3", "linear:L-2", "--json"]);
+    assert_eq!(
+        relations["items"][0]["links"],
+        json!([{"type": "duplicate", "direction": "out", "other": "linear:L-2",
+                "other_end": "present"}]),
+        "{relations:#}"
+    );
+}

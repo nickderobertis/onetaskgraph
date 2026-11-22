@@ -300,3 +300,46 @@ fn a_duplicate_closure_github_refuses_fails_and_a_repeat_closes_it() {
     setup.ok(&arguments, None);
     setup.assert_closed_as_duplicate("U-1");
 }
+
+#[test]
+fn an_update_many_closing_one_task_as_a_duplicate_beside_other_updates_writes_each() {
+    let setup = Setup::new();
+    // A batch carrying a duplicate close is made update by update, the other updates included.
+    let batch = json!({"schema_version": 1, "updates": [
+        {"item": "board:U-1", "title": "Groomed"},
+        {"item": "board:U-2", "duplicate_of": "board:K-9"},
+        {"item": "board:U-3", "status": "done"},
+    ]});
+    let output = setup.run(
+        &["task", "update-many", "board", "--input", "-", "--json"],
+        Some(&batch.to_string()),
+    );
+    let answer: Value = serde_json::from_str(&stdout(&output)).expect("JSON");
+    for result in answer["results"].as_array().unwrap() {
+        assert_eq!(
+            result["outcome"],
+            "written",
+            "{answer:#}\n{}",
+            stderr(&output)
+        );
+    }
+    assert_eq!(output.status.code(), Some(0));
+    setup.assert_closed_as_duplicate("U-2");
+    assert_eq!(
+        setup
+            .closes()
+            .iter()
+            .map(|close| close["issueId"].clone())
+            .collect::<Vec<_>>(),
+        [json!("U-2")]
+    );
+    let renamed = setup.ok(&["--json", "task", "show", "board:U-1"], None);
+    assert_eq!(renamed["items"][0]["item"]["title"], "Groomed");
+    assert_eq!(setup.board.state("U-1").0, "OPEN");
+    // Done, and closed as completed rather than as a duplicate.
+    assert_eq!(
+        setup.board.state("U-3"),
+        ("CLOSED".to_owned(), Some("COMPLETED".to_owned()))
+    );
+    assert_eq!(setup.board.status("U-3").as_deref(), Some("Done"));
+}
