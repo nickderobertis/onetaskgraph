@@ -6505,6 +6505,11 @@ impl IssueSearch {
     /// this loopback what it costs GitHub, nothing a copy's simulated time does not already
     /// charge, rather than a word list of every item's body.
     fn admits(&self, title: &str, body: &str) -> bool {
+        // No phrase admits every issue, and splitting each body into words to learn that is
+        // what made an unnarrowed sweep of a board of thousands cost a second a page.
+        if self.phrases.is_empty() {
+            return true;
+        }
         let words = |field: &str, searched: bool| {
             (searched
                 && (self.phrases.is_empty()
