@@ -186,7 +186,7 @@ fn a_refusal_in_a_folder_leaves_exactly_the_earlier_records_written() {
 
 /// A peer serving the folder at `root` over the stdio protocol, every method it is sent
 /// logged to `log`.
-fn hosted(root: &Path, log: &Path) -> Value {
+pub(crate) fn hosted(root: &Path, log: &Path) -> Value {
     let proxy = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/e2e/logging_peer.py");
     json!({"plugin": "subprocess", "config": {
         "command": interpreter().to_string_lossy(),

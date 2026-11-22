@@ -1176,6 +1176,8 @@ struct GitHubBoard {
     /// What each `GET /rate_limit` answers, in turn: the next is taken off the front, and once
     /// none is left the last is answered again — [`GitHubBoardFields::serve_rate_limits`].
     rate_limits: std::collections::VecDeque<Value>,
+    /// The status and body the next `GET /rate_limit` is answered with instead, once.
+    rate_limit_refusal: Option<(u16, String)>,
     /// The rate-limit windows each GraphQL answer's `x-ratelimit-*` headers name, in turn,
     /// cycling — none when empty: [`GitHubBoardFields::answer_from_windows`].
     windows: Vec<Value>,
@@ -1822,6 +1824,13 @@ impl GitHubBoardFields {
     pub fn serve_rate_limits(&self, answers: Vec<Value>) {
         assert!(!answers.is_empty(), "at least one answer to serve");
         self.board.lock().unwrap().rate_limits = answers.into();
+    }
+
+    /// Answer the next `GET /rate_limit` with `status` and `body` in place of a reading, once —
+    /// a rejected credential, a failure, or an answer that does not read as rate limits.
+    // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback board's own answer to `GET /rate_limit`, which only its server loop here answers, as `serve_rate_limits` beside it is; the GitHub Projects quota journeys are what drive it.
+    pub fn refuse_rate_limit_read(&self, status: u16, body: &str) {
+        self.board.lock().unwrap().rate_limit_refusal = Some((status, body.to_owned()));
     }
 
     /// Carry one of `windows` on each GraphQL answer, in turn and cycling, as its
@@ -4039,6 +4048,7 @@ fn github_projects_board_at(
         refusing_after: Vec::new(),
         rate_limit_next: None,
         rate_limits: std::collections::VecDeque::from([default_rate_limits()]),
+        rate_limit_refusal: None,
         windows: Vec::new(),
         windows_served: 0,
         replacing: Vec::new(),
@@ -4153,21 +4163,26 @@ fn github_projects_board_at(
         let (line, request, token) = http_request_parts(sent);
         // What the token has left of each rate-limit window, as `GET /rate_limit` answers it.
         if line.starts_with("GET /rate_limit ") || line == "GET /rate_limit" {
-            let body = {
+            let (status, body) = {
                 let mut served = board.lock().unwrap();
                 served.documents.push("GET /rate_limit".to_owned());
                 served.variables.push(Value::Null);
                 served.tokens.push(token.clone());
                 served.arrivals.push(std::time::Instant::now());
-                let answer = if served.rate_limits.len() > 1 {
-                    served.rate_limits.pop_front()
+                if let Some(refused) = served.rate_limit_refusal.take() {
+                    refused
                 } else {
-                    served.rate_limits.front().cloned()
-                };
-                answer.expect("an answer to serve").to_string()
+                    let answer = if served.rate_limits.len() > 1 {
+                        served.rate_limits.pop_front()
+                    } else {
+                        served.rate_limits.front().cloned()
+                    };
+                    (200, answer.expect("an answer to serve").to_string())
+                }
             };
             return Some(format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                "HTTP/1.1 {status} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                if status == 200 { "OK" } else { "Refused" },
                 body.len()
             ));
         }

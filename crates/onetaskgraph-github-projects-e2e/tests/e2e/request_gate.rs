@@ -608,3 +608,71 @@ fn a_wait_at_the_thirtieth_request_holds_it_on_the_simulated_clock() {
     );
     assert!(calls[28].at < calls[28].answered + wait);
 }
+
+#[test]
+fn a_private_board_s_repository_visibility_read_is_asked_and_its_refusal_sends_it_not() {
+    for refusing in [false, true] {
+        let sandbox = Sandbox::new();
+        let (config, github) = github_projects_with_items(&sandbox, vec![issue(&ticket(1))]);
+        // Declared private, the board reads each destination's visibility before a write: the
+        // repository's over REST.
+        sandbox.project_document(&document(&json!({
+            "board": {"plugin":"github-projects","config":config,"visibility":"private"},
+        })));
+        let setup = Setup {
+            sandbox,
+            board: github,
+        };
+        struct Visibility {
+            asked: Mutex<Vec<GatedRequest>>,
+            refusing: bool,
+        }
+        #[async_trait::async_trait]
+        impl RequestGate for Visibility {
+            async fn before_request(&self, request: &GatedRequest) -> Result<(), SourceError> {
+                self.asked.lock().unwrap().push(request.clone());
+                if self.refusing && request.resource == "core" {
+                    return Err(SourceError::Refused {
+                        message: "the caller's gate refused the visibility read".into(),
+                    });
+                }
+                Ok(())
+            }
+            fn after_response(&self, _readings: &[QuotaReading]) {}
+        }
+        let gate = Arc::new(Visibility {
+            asked: Mutex::new(Vec::new()),
+            refusing,
+        });
+        let engine = setup.engine().with_request_gate(gate.clone());
+        let id = GlobalId {
+            source: board(),
+            native: NativeId(ticket(1)),
+        };
+        let written = runtime().block_on(
+            engine.set_task_status(&id, onetaskgraph_plugin_api::StatusCategory::InProgress),
+        );
+        let asked = gate.asked.lock().unwrap().clone();
+        assert!(
+            asked
+                .iter()
+                .any(|request| request.resource == "core" && !request.content_creating),
+            "the repository read was asked about: {asked:?}"
+        );
+        let reads = setup
+            .board
+            .documents()
+            .iter()
+            .filter(|document| document.starts_with("GET /repos/"))
+            .count();
+        if refusing {
+            let said = written.expect_err("the write is refused").to_string();
+            assert!(said.contains("refused the visibility read"), "{said}");
+            assert_eq!(reads, 0, "the repository was not read");
+            assert_eq!(setup.board.status(&ticket(1)).as_deref(), Some("Todo"));
+        } else {
+            written.expect("the write lands");
+            assert!(reads >= 1);
+        }
+    }
+}

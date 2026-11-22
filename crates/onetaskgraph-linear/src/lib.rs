@@ -2014,11 +2014,11 @@ struct LinearSource {
     /// [`TaskSource::written_location`] answers, so a copy records where it landed an item it
     /// created without reading it.
     locations: std::sync::Mutex<std::collections::HashMap<(MetadataRecord, NativeId), String>>,
-    /// The ids Linear's editor gave each record's headings, as the latest answer this instance
-    /// read or wrote it with carried them — what [`TaskSource::stored_headings`] answers.
     /// What the last response this source received said about each rate-limit window, as
     /// [`quota::header_readings`] reads it; empty before its first. See [`quota`].
     quota: std::sync::Mutex<Vec<onetaskgraph_plugin_api::QuotaReading>>,
+    /// The ids Linear's editor gave each record's headings, as the latest answer this instance
+    /// read or wrote it with carried them — what [`TaskSource::stored_headings`] answers.
     headings: std::sync::Mutex<
         std::collections::HashMap<
             (MetadataRecord, NativeId),

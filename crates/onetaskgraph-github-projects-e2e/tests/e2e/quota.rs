@@ -168,3 +168,68 @@ fn an_unknown_source_is_refused_naming_it() {
     assert!(stderr(&output).contains("elsewhere"), "{}", stderr(&output));
     assert_eq!(setup.board.documents().len(), 0, "nothing was sent");
 }
+
+#[test]
+fn a_rate_limit_read_github_refuses_fails_the_command_naming_why() {
+    for (status, body, said) in [
+        (
+            401,
+            r#"{"message":"Bad credentials"}"#,
+            "rejected source board's credential",
+        ),
+        (500, r#"{"message":"boom"}"#, "GitHub answered HTTP 500"),
+        (
+            200,
+            r#"{"rate":{"limit":5000}}"#,
+            "does not read as rate limits",
+        ),
+        (
+            200,
+            r#"{"resources":{"core":{"limit":5000,"used":1,"reset":1}}}"#,
+            "no whole-number remaining",
+        ),
+    ] {
+        let setup = Setup::new(false);
+        setup.board.refuse_rate_limit_read(status, body);
+        let output = setup
+            .sandbox
+            .command()
+            .args(["sources", "quota", "board", "--json"])
+            .assert()
+            .get_output()
+            .clone();
+        assert_ne!(output.status.code(), Some(0), "{status} {body}");
+        assert!(
+            stderr(&output).contains(said),
+            "{status}: {}",
+            stderr(&output)
+        );
+        assert_eq!(setup.board.documents(), ["GET /rate_limit"]);
+    }
+}
+
+#[test]
+fn a_rate_limit_read_that_never_reaches_github_fails_naming_the_transport() {
+    let sandbox = Sandbox::new();
+    let (mut config, _board) = github_projects_with_board(&sandbox);
+    // A port nothing listens on: the read cannot be sent at all.
+    let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = closed.local_addr().unwrap();
+    drop(closed);
+    config["endpoint"] = json!(format!("http://{address}/graphql"));
+    sandbox.project_document(&document(&json!({
+        "board": {"plugin":"github-projects","config":config},
+    })));
+    let output = sandbox
+        .command()
+        .args(["sources", "quota", "board", "--json"])
+        .assert()
+        .get_output()
+        .clone();
+    assert_ne!(output.status.code(), Some(0));
+    assert!(
+        stderr(&output).contains("could not read its token's rate limits from GET /rate_limit"),
+        "{}",
+        stderr(&output)
+    );
+}

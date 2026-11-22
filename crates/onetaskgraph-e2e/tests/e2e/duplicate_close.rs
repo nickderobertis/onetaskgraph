@@ -208,3 +208,102 @@ fn a_stdio_peer_not_declaring_duplicate_closes_is_refused_the_field_before_anyth
         "the peer was sent nothing"
     );
 }
+
+#[test]
+fn a_close_whose_link_cannot_be_recorded_says_so_and_a_repeat_records_it() {
+    let sandbox = Sandbox::new();
+    let root = folder(&sandbox);
+    // The survivor holds links in a shape no link verb can extend, as a hand edit can leave
+    // them: its end of the link cannot be written.
+    let survivor = root.join("tasks/T-2.md");
+    std::fs::write(
+        &survivor,
+        "---\ntitle: Task 2\nstatus: todo\nmetadata: {\"onetaskgraph.links\": \"not a list\"}\n---\nTask 2.\n",
+    )
+    .unwrap();
+    let arguments = [
+        "task",
+        "status",
+        "set",
+        "plan:T-1",
+        "cancelled",
+        "--duplicate-of",
+        "plan:T-2",
+    ];
+    let output = sandbox
+        .command()
+        .args(arguments)
+        .assert()
+        .get_output()
+        .clone();
+    assert_ne!(output.status.code(), Some(0));
+    assert!(
+        stderr(&output).contains("was not recorded") && stderr(&output).contains("repeat"),
+        "{}",
+        stderr(&output)
+    );
+    // The close itself landed.
+    assert!(read(&root, "T-1").contains("status: cancelled"));
+    // Repaired, the same command closes nothing again and records the link at both ends.
+    std::fs::write(
+        &survivor,
+        "---\ntitle: Task 2\nstatus: todo\n---\nTask 2.\n",
+    )
+    .unwrap();
+    ok(&sandbox, &[&["--json"], &arguments[..]].concat());
+    let relations = ok(
+        &sandbox,
+        &["task", "relations", "plan:T-1", "plan:T-2", "--json"],
+    );
+    assert_eq!(
+        relations["items"][0]["links"][0]["other_end"], "present",
+        "{relations:#}"
+    );
+    assert_eq!(
+        relations["items"][1]["links"][0]["type"], "duplicate",
+        "{relations:#}"
+    );
+}
+
+#[test]
+fn a_stdio_peer_declaring_duplicate_closes_is_sent_the_field_and_records_its_own_link() {
+    let sandbox = Sandbox::new();
+    let root = folder(&sandbox);
+    let log = sandbox.subdirectory("peer").join("sent.log");
+    let mut peer = crate::request_gate::hosted(&root, &log);
+    let args = peer["config"]["args"].as_array_mut().unwrap();
+    args.insert(2, json!("duplicate_closes"));
+    args.insert(2, json!("--declare"));
+    sandbox.project_document(&document(&json!({ "peer": peer })));
+    let updated = ok(
+        &sandbox,
+        &[
+            "--json",
+            "task",
+            "update",
+            "peer:T-1",
+            "--duplicate-of",
+            "peer:T-2",
+        ],
+    );
+    assert_eq!(
+        updated["task"]["status"]["category"], "cancelled",
+        "{updated:#}"
+    );
+    let sent = std::fs::read_to_string(&log).unwrap();
+    assert!(
+        sent.lines()
+            .any(|method| method == "update_task duplicate_of"),
+        "the peer was sent duplicate_of: {sent}"
+    );
+    assert!(read(&root, "T-1").contains("status: cancelled"));
+    // Relations do not cross the protocol, so the engine writes no link for the peer — what a
+    // declaring peer owes is its own — and neither end's file gains one.
+    for id in ["T-1", "T-2"] {
+        assert!(
+            !read(&root, id).contains("## Links"),
+            "{id}: {}",
+            read(&root, id)
+        );
+    }
+}

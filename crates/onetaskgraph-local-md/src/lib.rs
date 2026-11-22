@@ -5108,12 +5108,6 @@ struct Held {
     assets: Vec<(AssetName, Vec<u8>)>,
 }
 
-/// Write `text` at `path` — replacing the file there, or creating one where there is none —
-/// through a staging file and a rename, by the rules [`STAGING_SUFFIX`] states.
-///
-/// A file already there that this process cannot write is refused before anything is
-/// staged: a rename would replace it regardless of its own permissions, and a file a person
-/// made read-only is one they meant not to have rewritten.
 /// Ask a caller's request gate, if the call in progress has one, before a record is written:
 /// a folder of Markdown is metered by nothing, so it names its writes `local` and is told no
 /// reading after one. `creating` is whether the write creates content — a comment.
@@ -5126,6 +5120,12 @@ async fn record_gate(creating: bool) -> Result<(), SourceError> {
     .await
 }
 
+/// Write `text` at `path` — replacing the file there, or creating one where there is none —
+/// through a staging file and a rename, by the rules [`STAGING_SUFFIX`] states.
+///
+/// A file already there that this process cannot write is refused before anything is
+/// staged: a rename would replace it regardless of its own permissions, and a file a person
+/// made read-only is one they meant not to have rewritten.
 fn write_atomically(path: &Path, text: &str) -> Result<(), SourceError> {
     let unavailable = |e: std::io::Error| SourceError::Unavailable {
         message: format!("cannot write {}: {e}", path.display()),

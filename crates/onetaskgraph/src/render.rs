@@ -1397,9 +1397,6 @@ pub fn sweep(report: &onetaskgraph_core::SweepReport) -> String {
     out
 }
 
-/// What `sources migrate` did: one line for the source and how many items were already current,
-/// then one per item rewritten — or under `--dry-run` that would be — naming the form it left,
-/// and one per item it could not rewrite, with why.
 /// `sources quota`: one row per rate-limit window, as the backend reported it.
 pub fn quota(answer: &onetaskgraph_core::SourceQuota) -> String {
     if answer.resources.is_empty() {
@@ -1421,6 +1418,9 @@ pub fn quota(answer: &onetaskgraph_core::SourceQuota) -> String {
     out
 }
 
+/// What `sources migrate` did: one line for the source and how many items were already current,
+/// then one per item rewritten — or under `--dry-run` that would be — naming the form it left,
+/// and one per item it could not rewrite, with why.
 pub fn migrated(report: &onetaskgraph_core::StoredFormsMigrated) -> String {
     let mut out = format!(
         "{}: {} {}, {} already current, {} failed{}",

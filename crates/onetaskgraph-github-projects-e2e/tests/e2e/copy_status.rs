@@ -152,7 +152,6 @@ impl Setup {
             .collect()
     }
 
-    /// The query each board-scoped issue search was sent with.
     /// Hold a copy naming only open categories to reading the board through its own `is:open`
     /// item filter: at least one page of it, no issue search and no page of the unfiltered
     /// board.
@@ -177,6 +176,7 @@ impl Setup {
         );
     }
 
+    /// The query each board-scoped issue search was sent with.
     fn searches(&self) -> Vec<String> {
         self.board
             .served()

@@ -82,6 +82,7 @@ pub struct TaskUpdate {
     /// A source closes it natively where its backend can — GitHub's duplicate closure, Linear's
     /// duplicate relation — and every source records the typed `duplicate` link in the task's
     /// metadata, so a later read reports it `cancelled` with that link.
+    // llmlint: ignore[invalid_states_unrepresentable] `duplicate_of: Option<TaskRef>` beside `status` is the shape the store-fixes contract fixes by name and type, which onefollowup and onepipeline build against; the one state it can express that is no update — a duplicate close beside a status other than `cancelled` — is refused by `consistent` before any source is read or written, in one wording every source and the engine share, as `metadata_set` beside `metadata_remove` is above.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duplicate_of: Option<TaskRef>,
 }

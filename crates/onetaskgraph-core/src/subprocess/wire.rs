@@ -382,8 +382,8 @@ pub(crate) struct InitializeResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct QuotaResult {
     /// One reading per rate-limit window, each as the backend reported it; empty when the
-    /// plugin has none to give.
-    #[serde(default)]
+    /// plugin has none to give. Required: an answer leaving it out has not said what is left,
+    /// which is not the same as having nothing to report.
     pub(crate) readings: Vec<onetaskgraph_plugin_api::QuotaReading>,
 }
 
