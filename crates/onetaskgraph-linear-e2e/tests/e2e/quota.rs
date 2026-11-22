@@ -140,3 +140,55 @@ fn the_engine_reports_exactly_what_the_last_response_carried() {
         readings(1470, 230_000)
     );
 }
+
+#[test]
+fn an_endpoint_window_is_reported_and_a_window_named_incompletely_or_over_its_limit_is_not() {
+    let setup = Setup::new();
+    let engine = setup.engine();
+    let linear = onetaskgraph_plugin_api::SourceName::new("linear").expect("a name");
+    let id = onetaskgraph_core::GlobalId {
+        source: linear.clone(),
+        native: onetaskgraph_plugin_api::NativeId("L-1".to_owned()),
+    };
+    // Requests whole, complexity without its reset, and the endpoint's own window whole; then
+    // the same with the endpoint naming more remaining than its limit.
+    let answer = |endpoint_remaining: &str| {
+        [
+            ("x-ratelimit-requests-limit", "1500"),
+            ("x-ratelimit-requests-remaining", "1490"),
+            ("x-ratelimit-requests-reset", "1795306927000"),
+            ("x-ratelimit-complexity-limit", "250000"),
+            ("x-ratelimit-complexity-remaining", "249000"),
+            ("x-ratelimit-endpoint-requests-limit", "60"),
+            (
+                "x-ratelimit-endpoint-requests-remaining",
+                endpoint_remaining,
+            ),
+            ("x-ratelimit-endpoint-requests-reset", "1795303327000"),
+        ]
+        .map(|(name, value)| (name.to_owned(), value.to_owned()))
+        .to_vec()
+    };
+    let runtime = tokio::runtime::Runtime::new().expect("a runtime");
+    setup.workspace.answer_with_headers(vec![answer("58")]);
+    runtime
+        .block_on(engine.task(&id))
+        .expect("the task is read");
+    let read = serde_json::to_value(runtime.block_on(engine.quota(&linear)).unwrap()).unwrap();
+    assert_eq!(
+        read,
+        json!([
+            {"resource": "requests", "limit": 1500, "remaining": 1490, "used": 10,
+             "resets_at": "2026-11-22T00:22:07Z"},
+            {"resource": "endpoint-requests", "limit": 60, "remaining": 58, "used": 2,
+             "resets_at": "2026-11-21T23:22:07Z"},
+        ])
+    );
+    setup.workspace.answer_with_headers(vec![answer("61")]);
+    runtime
+        .block_on(engine.task(&id))
+        .expect("the task is read");
+    let read = serde_json::to_value(runtime.block_on(engine.quota(&linear)).unwrap()).unwrap();
+    assert_eq!(read.as_array().unwrap().len(), 1, "{read:#}");
+    assert_eq!(read[0]["resource"], "requests");
+}

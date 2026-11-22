@@ -188,6 +188,12 @@ fn a_rate_limit_read_github_refuses_fails_the_command_naming_why() {
             r#"{"resources":{"core":{"limit":5000,"used":1,"reset":1}}}"#,
             "no whole-number remaining",
         ),
+        (
+            200,
+            r#"{"resources":{"core":{"limit":5000,"used":1,"remaining":4999,
+                "reset":18446744073709551615}}}"#,
+            "which is no instant",
+        ),
     ] {
         let setup = Setup::new(false);
         setup.board.refuse_rate_limit_read(status, body);
