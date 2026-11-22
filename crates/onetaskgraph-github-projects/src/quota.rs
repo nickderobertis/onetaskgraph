@@ -101,7 +101,8 @@ impl GitHubProjectsSource {
         };
         // Asked like every other request this source sends, at no cost: GitHub documents the
         // endpoint as not counting against the REST allowance.
-        <dyn RequestGate>::before(&GatedRequest {
+        // Held until the body is read, or the request fails, and ended on every way out.
+        let _admitted = <dyn RequestGate>::before(&GatedRequest {
             resource: "core".to_owned(),
             content_creating: false,
             cost_hint: Some(0),

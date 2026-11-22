@@ -144,7 +144,10 @@ function bumpVersion(dir) {
     /\[workspace\.package\][^[]*?version = "([^"]+)"/,
   )?.[1];
   assert.ok(version, "the workspace declares a version");
-  const next = `${version}9`;
+  // The next patch, so the bump is a valid version whatever the current patch is: appending a
+  // digit made "0.15.0" into "0.15.09", which cargo refuses for its leading zero.
+  const [major, minor, patch] = version.split(".");
+  const next = `${major}.${minor}.${Number(patch) + 1}`;
   const replaceVersion = (path) => {
     const text = readFileSync(join(dir, path), "utf8");
     writeFileSync(
@@ -169,15 +172,24 @@ function bumpVersion(dir) {
       // not a crate directory
     }
   }
-  const lock = join(dir, "Cargo.lock");
-  writeFileSync(
-    lock,
-    readFileSync(lock, "utf8").replace(
-      /(name = "onetaskgraph[^"]*"\nversion = )"[^"]+"/g,
-      `$1"${next}"`,
-    ),
-  );
+  // A lock entry moves only under one of this repository's own names: a third-party package
+  // may sit at the same version (uv.lock locks librt at 0.15.0), and a release never moves it.
+  const bumpLock = (path) => {
+    const lock = join(dir, path);
+    writeFileSync(
+      lock,
+      readFileSync(lock, "utf8").replace(
+        /(name = "onetaskgraph[^"]*"\nversion = )"[^"]+"/g,
+        `$1"${next}"`,
+      ),
+    );
+  };
+  bumpLock("Cargo.lock");
   for (const path of VERSIONED_FILES) {
+    if (path === "uv.lock") {
+      bumpLock(path);
+      continue;
+    }
     const text = readFileSync(join(dir, path), "utf8");
     writeFileSync(join(dir, path), text.replaceAll(version, next));
   }

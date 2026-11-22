@@ -2813,8 +2813,9 @@ impl LinearSource {
             std::borrow::Cow::Borrowed(query)
         };
         // Asked immediately before the request leaves, whatever it is: a caller pacing its
-        // own floor inside one call waits or stops here.
-        <dyn onetaskgraph_plugin_api::RequestGate>::before(
+        // own floor inside one call waits or stops here. Held until the answer is read, and
+        // ended on every way out of this function — a transport failure and a drop included.
+        let _admitted = <dyn onetaskgraph_plugin_api::RequestGate>::before(
             &onetaskgraph_plugin_api::GatedRequest {
                 resource: "requests".to_owned(),
                 content_creating: graphql::creates_content(&query),

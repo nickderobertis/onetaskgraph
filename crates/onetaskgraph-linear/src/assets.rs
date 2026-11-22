@@ -252,7 +252,7 @@ impl LinearSource {
                 // And of a caller's request gate, as every request this source sends is: the
                 // upload goes to Linear's signed storage URL, which no API window meters, so it
                 // is named as its own resource.
-                if let Err(refused) = <dyn onetaskgraph_plugin_api::RequestGate>::before(
+                let admitted = match <dyn onetaskgraph_plugin_api::RequestGate>::before(
                     &onetaskgraph_plugin_api::GatedRequest {
                         resource: "uploads".to_owned(),
                         content_creating: true,
@@ -261,8 +261,9 @@ impl LinearSource {
                 )
                 .await
                 {
-                    return Err(failure(asset, Stage::Put, &refused.to_string()));
-                }
+                    Ok(admitted) => admitted,
+                    Err(refused) => return Err(failure(asset, Stage::Put, &refused.to_string())),
+                };
                 let mut request = client
                     .put(upload.upload_url.0.clone())
                     .header("Content-Type", asset.content_type.as_str())
@@ -275,23 +276,27 @@ impl LinearSource {
                     .send()
                     .await
                     .map_err(|error| failure(asset, Stage::Put, &super::with_causes(&error)))?;
-                if response.status().as_u16() == 429 {
+                // The upload's answer is its status and its reset alone. The response is read to
+                // its end and dropped before the request is ended — and so before any wait for a
+                // retry, which is asked for as a request of its own.
+                let status = response.status();
+                let reset = super::reset_wait(response.headers());
+                // A body that cannot be read changes nothing the status already said.
+                let _ = response.bytes().await;
+                admitted.end();
+                if status.as_u16() == 429 {
                     self.wait_asset(
                         asset,
                         Stage::Put,
-                        &format!("HTTP {}", response.status()),
-                        super::reset_wait(response.headers()),
+                        &format!("HTTP {status}"),
+                        reset,
                         &mut waited,
                     )
                     .await?;
                     continue;
                 }
-                if !response.status().is_success() {
-                    return Err(failure(
-                        asset,
-                        Stage::Put,
-                        &format!("HTTP {}", response.status()),
-                    ));
+                if !status.is_success() {
+                    return Err(failure(asset, Stage::Put, &format!("HTTP {status}")));
                 }
                 break;
             }

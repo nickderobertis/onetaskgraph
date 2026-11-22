@@ -637,8 +637,9 @@ impl SubprocessSource {
         record: MetadataRecord,
         params: Value,
     ) -> Result<AssetsWritten, SourceError> {
-        gated(method).await?;
+        let admitted = gated(method).await?;
         let mut result = self.connection.call(method, params).await?;
+        admitted.end();
         let stored = stored_content(method, &mut result)?;
         let written: AssetsWritten =
             serde_json::from_value(result).map_err(|error| SourceError::Malformed {
@@ -656,8 +657,9 @@ impl SubprocessSource {
         method: &str,
         params: Value,
     ) -> Result<T, SourceError> {
-        gated(method).await?;
+        let admitted = gated(method).await?;
         let result = self.connection.call(method, params).await?;
+        admitted.end();
         serde_json::from_value(result).map_err(|error| SourceError::Malformed {
             message: format!(
                 "the plugin's answer to {method} is not the shape it promises: {error}"
@@ -668,8 +670,9 @@ impl SubprocessSource {
 
 /// Ask a caller's request gate, if the call in progress has one, before `method` is sent to
 /// the plugin: once per method, whatever the plugin then sends its own backend, which only the
-/// plugin can see. A peer reports no reading to tell the gate after one.
-async fn gated(method: &str) -> Result<(), SourceError> {
+/// plugin can see. A peer reports no reading to tell the gate after one; the admission is held
+/// until the peer has answered, or the call failed or was dropped.
+async fn gated(method: &str) -> Result<onetaskgraph_plugin_api::AdmittedRequest, SourceError> {
     <dyn onetaskgraph_plugin_api::RequestGate>::before(&onetaskgraph_plugin_api::GatedRequest {
         resource: "stdio".to_owned(),
         content_creating: matches!(method, "add_comment" | "write_comment_copy"),

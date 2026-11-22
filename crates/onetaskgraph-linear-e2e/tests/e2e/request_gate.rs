@@ -2,7 +2,7 @@
 //! (`Engine::with_request_gate`): asked before every request the workspace receives, told each
 //! response's own rate-limit headers, and — refusing part way through an `update-many` — leaving
 //! every earlier item written, every later one answered with the refusal, and nothing sent after
-//! it.
+//! it. Each request admitted is told ended exactly once, and the one refused never is.
 
 use std::sync::{Arc, Mutex};
 
@@ -24,6 +24,7 @@ struct Recording {
     workspace: LinearWorkspace,
     asked: Mutex<Vec<(GatedRequest, usize)>>,
     told: Mutex<Vec<QuotaReading>>,
+    ended: Mutex<usize>,
     refuse_at: Option<usize>,
 }
 
@@ -53,6 +54,10 @@ impl RequestGate for Recording {
 
     fn after_response(&self, readings: &[QuotaReading]) {
         self.told.lock().unwrap().extend_from_slice(readings);
+    }
+
+    fn request_ended(&self) {
+        *self.ended.lock().unwrap() += 1;
     }
 }
 
@@ -105,6 +110,7 @@ impl Setup {
             workspace: self.workspace.clone(),
             asked: Mutex::new(Vec::new()),
             told: Mutex::new(Vec::new()),
+            ended: Mutex::new(0),
             refuse_at,
         })
     }
@@ -166,6 +172,7 @@ fn the_gate_is_asked_before_every_request_and_told_each_response_s_headers() {
             .collect::<Vec<_>>()
     );
     assert!(told.iter().all(|reading| reading.resource == "requests"));
+    assert_eq!(*gate.ended.lock().unwrap(), served, "one end per request");
 }
 
 #[test]
@@ -194,6 +201,11 @@ fn a_refusal_part_way_answers_every_later_item_with_it_and_sends_nothing_more() 
         "nothing after it"
     );
     assert_eq!(gate.asked.lock().unwrap().len(), refuse_at);
+    assert_eq!(
+        *gate.ended.lock().unwrap(),
+        refuse_at - 1,
+        "the refused request is never ended"
+    );
     let results = answer["results"].as_array().unwrap();
     let written = results
         .iter()

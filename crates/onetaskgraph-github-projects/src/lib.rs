@@ -6416,15 +6416,21 @@ impl GitHubProjectsSource {
             }
             // And of a caller's request gate, before every request this source sends — a retry
             // as its own — so a caller pacing its own floor inside one call waits or stops here.
-            if let Err(refused) = <dyn onetaskgraph_plugin_api::RequestGate>::before(
-                &gated_graphql(query, &variables),
-            )
+            let admitted = match <dyn onetaskgraph_plugin_api::RequestGate>::before(&gated_graphql(
+                query, &variables,
+            ))
             .await
             {
-                self.paced(ticket, mutation);
-                return Err(refused);
-            }
+                Ok(admitted) => admitted,
+                Err(refused) => {
+                    self.paced(ticket, mutation);
+                    return Err(refused);
+                }
+            };
             let attempt = self.send_once(query, &variables, waits + 1).await;
+            // Over however it ended — answered, refused or failed before any header — and
+            // ended before any wait for a retry, which is asked for as a request of its own.
+            admitted.end();
             self.paced(ticket, mutation);
             let remaining = self.pacing.retry_budget.saturating_sub(waited);
             let (wait, cause) = match attempt {

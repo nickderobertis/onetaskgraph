@@ -2,7 +2,8 @@
 //! protocol, through the engine the binary links (`Engine::with_request_gate`).
 //!
 //! A folder asks the gate once before each record it writes, naming the write `local`, and is
-//! told no reading after one; the engine asks once before each method it sends a stdio peer. A
+//! told no reading after one; the engine asks once before each method it sends a stdio peer.
+//! Each request admitted is told ended exactly once, and one refused never is. A
 //! refusal part way through an `update-many` leaves exactly the earlier records written, answers
 //! every later item with the refusal, and sends nothing after it. A GitHub board's and a Linear
 //! source's gate are their own suites'.
@@ -18,10 +19,13 @@ use crate::common::Sandbox;
 use crate::document_store::interpreter;
 use crate::fixtures::document;
 
-/// A gate recording what it is asked, refusing its `refuse_at`th ask when one is named.
+/// A gate recording what it is asked, refusing its `refuse_at`th ask when one is named, and
+/// counting the requests it admitted that ended and the most it ever held in flight at once.
 struct Recording {
     asked: Mutex<Vec<GatedRequest>>,
     told: Mutex<Vec<QuotaReading>>,
+    /// Requests ended, requests in flight, and the most in flight at once.
+    ended: Mutex<(usize, usize, usize)>,
     refuse_at: Option<usize>,
 }
 
@@ -30,8 +34,16 @@ impl Recording {
         Arc::new(Self {
             asked: Mutex::new(Vec::new()),
             told: Mutex::new(Vec::new()),
+            ended: Mutex::new((0, 0, 0)),
             refuse_at,
         })
+    }
+
+    /// How many admitted requests ended, and the most that were in flight at once.
+    fn ended(&self) -> (usize, usize) {
+        let (ended, in_flight, most) = *self.ended.lock().unwrap();
+        assert_eq!(in_flight, 0, "a request admitted never ended");
+        (ended, most)
     }
 }
 
@@ -45,11 +57,23 @@ impl RequestGate for Recording {
                 message: format!("the caller's gate refused request {}", asked.len()),
             });
         }
+        let mut ended = self.ended.lock().unwrap();
+        ended.1 += 1;
+        ended.2 = ended.2.max(ended.1);
         Ok(())
     }
 
     fn after_response(&self, readings: &[QuotaReading]) {
         self.told.lock().unwrap().extend_from_slice(readings);
+    }
+
+    fn request_ended(&self) {
+        let mut ended = self.ended.lock().unwrap();
+        ended.0 += 1;
+        ended.1 = ended
+            .1
+            .checked_sub(1)
+            .expect("ended a request never admitted");
     }
 }
 
@@ -154,6 +178,11 @@ fn a_folder_asks_the_gate_once_before_each_record_it_writes() {
         "a folder reports no reading"
     );
     assert_eq!(started(&root), [true; 5]);
+    assert_eq!(
+        gate.ended(),
+        (5, 1),
+        "each record write ended once, one at a time"
+    );
 }
 
 #[test]
@@ -182,6 +211,7 @@ fn a_refusal_in_a_folder_leaves_exactly_the_earlier_records_written() {
         3,
         "nothing is asked after the refusal"
     );
+    assert_eq!(gate.ended().0, 2, "the refused write is never ended");
 }
 
 /// A peer serving the folder at `root` over the stdio protocol, every method it is sent
@@ -232,11 +262,13 @@ fn the_engine_asks_once_before_each_method_it_sends_a_stdio_peer_and_stops_at_a_
                 assert_eq!(asked.len(), methods.len(), "{methods:?}");
                 assert!(asked.iter().all(|request| request.resource == "stdio"));
                 assert_eq!(started(&root), [true; 5]);
+                assert_eq!(gate.ended(), (asked.len(), 1), "each method ended once");
             }
             Some(n) => {
                 // Every method asked for before the refusal was sent, and none after it.
                 assert_eq!(asked.len(), n);
                 assert_eq!(methods.len(), n - 1, "{methods:?}");
+                assert_eq!(gate.ended().0, n - 1, "the refused method is never ended");
                 let answered = answered(&answer, n);
                 let written = answered
                     .iter()
@@ -318,6 +350,11 @@ fn a_comment_add_is_asked_as_content_creating_and_an_update_is_not() {
             assert!(adding.iter().all(|request| request.content_creating));
         }
         assert!(adding.iter().all(|request| request.cost_hint.is_none()));
+        assert_eq!(
+            gate.ended(),
+            (asked.len(), 1),
+            "{name}: each request ended once"
+        );
         for n in 1..=2 {
             let file = std::fs::read_to_string(root.join(format!("tasks/T-{n}.md"))).unwrap();
             assert!(file.contains("note"), "{name}: T-{n}: {file}");

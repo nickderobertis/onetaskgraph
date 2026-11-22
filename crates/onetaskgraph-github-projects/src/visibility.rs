@@ -241,7 +241,8 @@ impl GitHubProjectsSource {
                 repository.slug()
             ),
         };
-        <dyn onetaskgraph_plugin_api::RequestGate>::before(
+        // Held until the body is read, or the request fails, and ended on every way out.
+        let admitted = <dyn onetaskgraph_plugin_api::RequestGate>::before(
             &onetaskgraph_plugin_api::GatedRequest {
                 resource: "core".to_owned(),
                 content_creating: false,
@@ -277,6 +278,7 @@ impl GitHubProjectsSource {
         });
         <dyn onetaskgraph_plugin_api::RequestGate>::after(&crate::quota::header_readings(&limits));
         let body = response.bytes().await;
+        admitted.end();
         self.ledger
             .record(accounting::Request::rest(endpoint).finished(
                 if status.is_success() {
