@@ -17,16 +17,18 @@ import json
 import subprocess
 import sys
 import threading
+from typing import TextIO
 
 
-def relay(source, sink):
+def relay(source: TextIO, sink: TextIO) -> None:
     """Copy every line of `source` to `sink`, flushing each, until `source` ends."""
     for line in source:
         sink.write(line)
         sink.flush()
 
 
-def main():
+def main() -> None:
+    """Forward the engine's requests to the host, each method written down first."""
     log, command = sys.argv[1], sys.argv[2:]
     child = subprocess.Popen(
         command,
@@ -44,7 +46,7 @@ def main():
         except ValueError:
             method = ""
         with open(log, "a", encoding="utf-8") as handle:
-            handle.write("%s\n" % method)
+            handle.write(f"{method}\n")
         child.stdin.write(line)
         child.stdin.flush()
     child.stdin.close()
