@@ -89,6 +89,12 @@ class UpdateBatchItem(BaseModel):
             description="Write only while the task is assigned to exactly these people, whatever their order —\n`[]` only while it is unassigned. Otherwise nothing of the update is written and it\nanswers `held`. Left out, it sets no guard."
         ),
     ] = None
+    duplicate_of: Annotated[
+        str | None,
+        Field(
+            description="Close it as a duplicate of this task, the survivor, qualified or of the batch's source —\nvalid only beside `status: cancelled` or no status, which it then implies."
+        ),
+    ] = None
 
 
 class UpdateBatch(BaseModel):

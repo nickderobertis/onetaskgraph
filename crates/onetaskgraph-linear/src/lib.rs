@@ -3636,6 +3636,9 @@ impl LinearSource {
         id: &NativeId,
         update: &TaskUpdate,
     ) -> Result<Option<TaskUpdateOutcome>, SourceError> {
+        if let Some(survivor) = &update.duplicate_of {
+            return Box::pin(self.closed_as_duplicate(id, update, survivor)).await;
+        }
         self.update_checked(id, update)?;
         if let Some(status) = update.status.as_ref().filter(|_| {
             TaskUpdate {
@@ -3663,6 +3666,58 @@ impl LinearSource {
         };
         let composed = self.compose_update(update, before, description).await?;
         self.send_composed(id, update, composed).await
+    }
+
+    /// A duplicate close: Linear's own duplicate relation from `id` to `survivor`, an issue of
+    /// this source, then the rest of the update with the `cancelled` it implies — written after
+    /// the relation, because Linear moves an issue it marks a duplicate to `Duplicate`, and the
+    /// status written after it is what a read then reports. Refused naming both, before any
+    /// request, for a survivor of another source or the issue itself.
+    async fn closed_as_duplicate(
+        &self,
+        id: &NativeId,
+        update: &TaskUpdate,
+        survivor: &TaskRef,
+    ) -> Result<Option<TaskUpdateOutcome>, SourceError> {
+        let closing = TaskUpdate {
+            status: update.effective_status(),
+            duplicate_of: None,
+            ..update.clone()
+        };
+        self.update_checked(id, &closing)?;
+        update.consistent()?;
+        let (source, native) = survivor.parts(self.name.as_str());
+        let refused = |why: &str| SourceError::Refused {
+            message: format!(
+                "{} cannot be closed as a duplicate of {survivor}: {why}; next: name an issue of \
+                 source {} as the survivor",
+                TaskRef::qualified(&self.name, id),
+                self.name
+            ),
+        };
+        if source != self.name.as_str() {
+            return Err(refused("it is not an issue of this Linear source"));
+        }
+        if native == id.0 {
+            return Err(refused("an issue cannot be a duplicate of itself"));
+        }
+        let created = self
+            .send(
+                graphql::ISSUE_RELATION_CREATE,
+                json!({"input":{"issueId":id.0,"relatedIssueId":native,"type":"duplicate"}}),
+            )
+            .await;
+        match created {
+            Ok(_) => {}
+            // A relation Linear already holds is the one asked for.
+            Err(error) if error.to_string().to_ascii_lowercase().contains("already") => {}
+            Err(error) => return Err(error),
+        }
+        let Some(mut outcome) = Box::pin(self.targeted_update(id, &closing)).await? else {
+            return Ok(None);
+        };
+        outcome.written.insert(UpdatedField::DuplicateOf);
+        Ok(Some(outcome))
     }
 
     /// Refuse, before any request, an update that contradicts itself, a `delivers` list naming

@@ -17,3 +17,4 @@ class UpdatedField(StrEnum):
     UpdatedFieldDependsOn = "depends-on"
     UpdatedFieldRepositories = "repositories"
     UpdatedFieldAssignees = "assignees"
+    UpdatedFieldDuplicateOf = "duplicate-of"

@@ -213,6 +213,7 @@ the source can do natively, and what configuration it is being built with.
 | `project_status` | boolean | Whether this plugin answers `set_project_status`. Optional; see §3.15. |
 | `stored_forms` | boolean | Whether this plugin answers `stored_status`, and says in a content write's result what its backend stores. Optional; see §3.16. |
 | `quota` | boolean | Whether this plugin answers `quota`. Optional; see §3.17. |
+| `duplicate_closes` | boolean | Whether this plugin closes a task as a duplicate when an update names `duplicate_of`. Optional; see §3.18. |
 
 An `initialize` that fails answers with an `error` envelope, ordinarily
 `{"kind": "config"}` for a `config` block this plugin cannot use, or
@@ -439,6 +440,18 @@ the rate-limit windows its credential is metered by answers `quota: true`, and i
 `quota` (§4.26) whenever a caller asks the engine for the source's reading. One that does not
 is never sent the method, and the engine answers for it that it has no reading — exactly what a
 plugin with nothing to report says. Omitted when `false`.
+
+### 3.18 `duplicate_closes`
+
+Optional, and absent means `false`: a plugin that closes a task as a duplicate of another when a
+`update_task` (§4.21) names `duplicate_of` — the survivor, a task of the same source — answers
+`duplicate_closes: true`. Such a plugin writes the `cancelled` the close implies, natively as a
+duplicate where its backend can say so, and records the typed `duplicate` link in the task's
+`onetaskgraph.links` itself, because the relation calls the engine records that link through
+for an in-process source are not carried by this protocol. One that does not is never sent
+`duplicate_of`: an update naming it is refused by name before anything is sent, rather than
+handed a member §2.1 would have it drop, leaving a plain `cancelled`. This build's own host
+does not declare it. Omitted when `false`.
 
 ## 4. The methods
 
@@ -2552,6 +2565,11 @@ held by `crates/onetaskgraph-core/tests/fixtures/stored-forms-wire.json`.
 §3.9 were added **without** a bump, as the methods of §4.18 were: the first reaches only a
 plugin that declared `priority` `"native"`, and the second only one that answered
 `content_updates: true`, neither of which a plugin written before them can have done.
+
+The `duplicate_of` member of an `update_task`'s update and the `duplicate_closes` member of
+§3.18 were added **without** a bump, on the same terms: the member reaches only a plugin that
+answered `duplicate_closes: true`, and an update naming it is refused before anything is sent to
+any other.
 
 `quota` (§4.26) and the `quota` member of §3.17 were added **without** a bump, on the terms of
 §3.14: the method reaches only a plugin that answered `quota: true`, which a plugin written before

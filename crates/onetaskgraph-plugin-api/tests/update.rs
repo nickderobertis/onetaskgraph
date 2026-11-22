@@ -376,6 +376,7 @@ fn an_update_names_on_the_wire_only_what_it_names_and_round_trips() {
                 .expect("a repository origin"),
         ]),
         assignees: None,
+        duplicate_of: None,
     };
     let wire = serde_json::to_value(&whole).expect("serialises");
     assert_eq!(wire["delivers"], json!([]), "an empty list is named");
@@ -413,4 +414,52 @@ fn an_update_names_on_the_wire_only_what_it_names_and_round_trips() {
     assert!(refused.is_err(), "{refused:?}");
     assert!(schema_for!(TaskUpdate).as_value().is_object());
     assert!(schema_for!(TaskUpdateOutcome).as_value().is_object());
+}
+
+#[test]
+fn a_duplicate_close_names_its_survivor_on_the_wire_and_implies_cancelled() {
+    let survivor = TaskRef::new("board:I_kept").expect("a task id");
+    let update = TaskUpdate {
+        duplicate_of: Some(survivor.clone()),
+        ..TaskUpdate::default()
+    };
+    let wire = serde_json::to_value(&update).expect("serialises");
+    assert_eq!(wire, json!({"duplicate_of": "board:I_kept"}));
+    let back: TaskUpdate = serde_json::from_value(wire).expect("round trips");
+    assert_eq!(back, update);
+    assert!(!update.is_empty());
+    assert!(update.names(UpdatedField::DuplicateOf));
+    assert!(!TaskUpdate::default().names(UpdatedField::DuplicateOf));
+    assert_eq!(
+        update.effective_status(),
+        Some(Status {
+            category: StatusCategory::Cancelled,
+            name: "cancelled".to_owned()
+        })
+    );
+    assert_eq!(update.consistent(), Ok(()));
+    // Beside `cancelled` it is as consistent; beside anything else it is refused naming both.
+    let cancelled = TaskUpdate {
+        status: Some(Status {
+            category: StatusCategory::Cancelled,
+            name: "Won't do".to_owned(),
+        }),
+        ..update.clone()
+    };
+    assert_eq!(cancelled.consistent(), Ok(()));
+    assert_eq!(cancelled.effective_status(), cancelled.status);
+    let done = TaskUpdate {
+        status: Some(Status {
+            category: StatusCategory::Done,
+            name: "done".to_owned(),
+        }),
+        ..update
+    };
+    let refused = done.consistent().expect_err("refused");
+    assert!(
+        refused.to_string().contains("board:I_kept") && refused.to_string().contains("\"done\""),
+        "{refused}"
+    );
+    // An update closing nothing writes no status it did not name.
+    assert_eq!(TaskUpdate::default().effective_status(), None);
 }

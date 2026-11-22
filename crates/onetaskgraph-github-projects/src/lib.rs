@@ -1708,6 +1708,12 @@ pub mod graphql {
     /// Updates an issue's visible fields and its open or closed state in one call.
     pub const UPDATE_ISSUE: &str =
         r#"mutation($input:UpdateIssueInput!){updateIssue(input:$input){issue{id}}}"#;
+    /// Closes one issue for a reason, the survivor it is a duplicate of included — the one way
+    /// GitHub records a duplicate's link: `updateIssue`'s `stateInput` carries no survivor, and
+    /// the REST `state_reason=duplicate` is accepted and records none, both measured by
+    /// `spike-store-defects`.
+    pub const CLOSE_ISSUE: &str =
+        r#"mutation($input:CloseIssueInput!){closeIssue(input:$input){issue{id}}}"#;
     /// Updates an existing draft's user-visible fields.
     pub const UPDATE_DRAFT: &str = r#"mutation($input:UpdateProjectV2DraftIssueInput!){updateProjectV2DraftIssue(input:$input){draftIssue{id}}}"#;
     /// Updates a text or single-select value on one project item.
@@ -2802,7 +2808,7 @@ pub mod graphql {
     /// `documents_are_all_inventoried` reads this file back and fails naming any `pub
     /// const` here that this list omits, so the two cannot part — which is the same guard
     /// `CATEGORIES` carries, in the one shape available to a set of `&str` constants.
-    pub const DOCUMENTS: [(&str, &str); 70] = [
+    pub const DOCUMENTS: [(&str, &str); 71] = [
         (USER_IDS, "looking up the people an assignee write names"),
         (
             ISSUE_RELATIONS,
@@ -2838,6 +2844,7 @@ pub mod graphql {
         (ORIGIN_LOOKUP, "looking up the items copied from one origin"),
         (CLOSED_ITEMS, "reading the board's closed items"),
         (OPEN_ITEMS, "reading the board's open items"),
+        (CLOSE_ISSUE, "closing an issue as a duplicate"),
         (
             ISSUES_BY_REFERENCE,
             "reading a batch of issues by their references",
@@ -9678,6 +9685,12 @@ impl GitHubProjectsSource {
         // Everything this source can refuse without reading the item is refused first, in the
         // words a whole write of the same fields is refused with.
         update.consistent()?;
+        // A duplicate close is the `cancelled` it implies where it names no status.
+        let closing = update.duplicate_of.as_ref().map(|_| TaskUpdate {
+            status: update.effective_status(),
+            ..update.clone()
+        });
+        let update = closing.as_ref().unwrap_or(update);
         if update.assignees.is_some() && !self.assignees {
             return Err(onetaskgraph_plugin_api::unwritable_field(KIND, "assignees"));
         }
@@ -9724,6 +9737,12 @@ impl GitHubProjectsSource {
             return Ok(None);
         };
         let before = item.task()?;
+        // The issue a duplicate close names as its survivor, refused naming both before anything
+        // is written when it is not an issue of this board's own.
+        let survivor = match &update.duplicate_of {
+            Some(survivor) => Some(self.duplicate_survivor(id, &item, survivor).await?),
+            None => None,
+        };
         // The people it is to be assigned to, by node id, when they are not exactly whom it
         // holds: looked up — unless this process already has — and refused for a login GitHub
         // does not know, before anything is sent.
@@ -9759,21 +9778,24 @@ impl GitHubProjectsSource {
             if terminal && item.content_kind == ContentKind::DraftIssue {
                 return Err(self.closes_a_draft(status.category));
             }
-            let landed = match &target {
-                StatusTarget::Terminal(_, reason) => {
-                    self.statuses
-                        .status(ItemKind::Task, Some(&name), true, Some(reason.reason()))
-                }
-                _ => self
-                    .statuses
-                    .status(ItemKind::Task, Some(&name), false, None),
+            // A duplicate close lands closed as `DUPLICATE`, which reads `cancelled` as not
+            // planned does; an issue already closed as one is not closed again.
+            let reason = match (&target, &survivor) {
+                (StatusTarget::Terminal(_, _), Some(_)) => Some(DUPLICATE_REASON),
+                (StatusTarget::Terminal(_, reason), None) => Some(reason.reason()),
+                _ => None,
             };
+            let landed = self
+                .statuses
+                .status(ItemKind::Task, Some(&name), terminal, reason);
             let option_moves = item
                 .option
                 .as_deref()
                 .is_none_or(|held| !held.eq_ignore_ascii_case(&name));
             let state_moves = item.content_kind == ContentKind::Issue
-                && (item.closed != terminal || (terminal && item.status != landed));
+                && (item.closed != terminal
+                    || (terminal && item.status != landed)
+                    || (survivor.is_some() && item.reason.as_deref() != Some(DUPLICATE_REASON)));
             if let Some(moves) = Moves::of(option_moves, state_moves) {
                 status_move = Some(StatusMove {
                     board: board.id,
@@ -9976,9 +9998,18 @@ impl GitHubProjectsSource {
         if body != held {
             fields.insert("body".to_owned(), json!(body));
         }
-        if let Some(moving) = status_move.as_ref().filter(|moving| moving.moves.state()) {
+        // A duplicate's closure is `closeIssue`'s, sent after this update: `stateInput` names
+        // no survivor.
+        if let Some(moving) = status_move
+            .as_ref()
+            .filter(|moving| moving.moves.state() && survivor.is_none())
+        {
             fields.insert("stateInput".to_owned(), state_input(Some(&moving.target)));
         }
+        let closes_as_duplicate = status_move
+            .as_ref()
+            .is_some_and(|moving| moving.moves.state())
+            && survivor.is_some();
         // The assignees ride the same mutation: replacing whoever the issue holds, in the one
         // `updateIssue` this update already ends with — or as the one it sends for them alone.
         if let Some(ids) = &assignee_ids {
@@ -10040,8 +10071,11 @@ impl GitHubProjectsSource {
                 .await?;
         }
         // Whether anything is sent: what the version answered has to come after.
-        let sends =
-            option_selected || !board_writes.is_empty() || !clears.is_empty() || !fields.is_empty();
+        let sends = option_selected
+            || !board_writes.is_empty()
+            || !clears.is_empty()
+            || !fields.is_empty()
+            || closes_as_duplicate;
         let mut blocked_by_moved = false;
         if let Some((native, _)) = &edges
             && item.content_kind == ContentKind::Issue
@@ -10057,6 +10091,17 @@ impl GitHubProjectsSource {
         if !fields.is_empty() {
             self.update_content(item.content_kind, &item.id, Value::Object(fields))
                 .await?;
+        }
+        // Last, the duplicate's closure, with the survivor GitHub links it to: the card already
+        // shows the `cancelled` option, so a refusal here leaves an open issue at a terminal
+        // card, which the next write of the same status closes.
+        if let (true, Some(survivor)) = (closes_as_duplicate, &survivor) {
+            self.graphql(
+                graphql::CLOSE_ISSUE,
+                json!({"input":{"issueId":item.id.0,"stateReason":DUPLICATE_REASON,
+                                "duplicateIssueId":survivor.0}}),
+            )
+            .await?;
         }
 
         // The `blockedBy` this item was read with is what the write just changed, so it is no
@@ -10081,6 +10126,15 @@ impl GitHubProjectsSource {
         if let Some(moving) = status_move {
             item.closed = matches!(moving.target, StatusTarget::Terminal(_, _))
                 && item.content_kind == ContentKind::Issue;
+            if moving.moves.state() {
+                item.reason = match &moving.target {
+                    StatusTarget::Terminal(_, _) if survivor.is_some() => {
+                        Some(DUPLICATE_REASON.to_owned())
+                    }
+                    StatusTarget::Terminal(_, reason) => Some(reason.reason().to_owned()),
+                    _ => None,
+                };
+            }
             item.status = moving.landed;
             item.option = Some(moving.name);
         }
@@ -10100,6 +10154,9 @@ impl GitHubProjectsSource {
         if blocked_by_moved || recorded_moves {
             written.insert(UpdatedField::DependsOn);
         }
+        if closes_as_duplicate {
+            written.insert(UpdatedField::DuplicateOf);
+        }
         if sends || blocked_by_moved {
             // The token the item was read at is not the one it holds now. A batch of updates
             // holding this one's writes back reads every task it wrote once they are sent.
@@ -10115,6 +10172,43 @@ impl GitHubProjectsSource {
             written,
             delivers_before: before.delivers,
         }))
+    }
+
+    /// The issue `survivor` names, the one a duplicate close of `id` links GitHub's closure to:
+    /// refused, naming both, when it is not an issue of this board's own source — a task of
+    /// another source, a board draft, an item this board does not hold — or is `id` itself.
+    async fn duplicate_survivor(
+        &self,
+        id: &NativeId,
+        item: &Resolved,
+        survivor: &TaskRef,
+    ) -> Result<NativeId, SourceError> {
+        let refused = |why: String| SourceError::Refused {
+            message: format!(
+                "{} cannot be closed as a duplicate of {survivor}: {why}; next: name an issue of \
+                 source {} as the survivor",
+                TaskRef::qualified(&self.name, id),
+                self.name
+            ),
+        };
+        let (source, native) = survivor.parts(self.name.as_str());
+        if source != self.name.as_str() {
+            return Err(refused(format!(
+                "it is not a GitHub issue of source {}, which GitHub links a duplicate to",
+                self.name
+            )));
+        }
+        let native = NativeId(native.to_owned());
+        if native == *id || native == item.id {
+            return Err(refused("a task cannot be a duplicate of itself".to_owned()));
+        }
+        match self.bound_item(&native).await? {
+            Some(held) if held.content_kind == ContentKind::Issue => Ok(held.id),
+            Some(_) => Err(refused(
+                "it is a board draft, which is no issue GitHub can link a duplicate to".to_owned(),
+            )),
+            None => Err(refused(format!("source {} holds no such issue", self.name))),
+        }
     }
 
     /// The change token the task `id` holds after the writes a targeted update just sent: the
@@ -16975,6 +17069,9 @@ fn related_kind(value: &Value, meaning: SubIssues) -> Result<ItemKind, SourceErr
         ItemKind::Task
     })
 }
+
+/// The reason GitHub records an issue closed as a duplicate of another under.
+const DUPLICATE_REASON: &str = "DUPLICATE";
 
 /// The `stateInput` that closes an issue for `reason`.
 fn closed_input(reason: ClosedState) -> Value {

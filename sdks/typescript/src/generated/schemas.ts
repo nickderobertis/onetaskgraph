@@ -31513,6 +31513,17 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
         "items": {
           "type": "string"
         }
+      },
+      "duplicate_of": {
+        "description": "Close the task as a duplicate of this one, the survivor — a decision its caller made,\nwhich the store never makes on its own. Valid only beside a `cancelled` status, or with\nno status named, when it implies `cancelled`; any other status is refused by\n[`consistent`](Self::consistent), writing nothing.\n\nA source closes it natively where its backend can — GitHub's duplicate closure, Linear's\nduplicate relation — and every source records the typed `duplicate` link in the task's\nmetadata, so a later read reports it `cancelled` with that link.",
+        "anyOf": [
+          {
+            "$ref": "#/$defs/TaskRef"
+          },
+          {
+            "type": "null"
+          }
+        ]
       }
     },
     "$defs": {
@@ -32121,6 +32132,11 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "description": "[`TaskUpdate::assignees`].",
             "type": "string",
             "const": "assignees"
+          },
+          {
+            "description": "[`TaskUpdate::duplicate_of`]: the task was closed as a duplicate, natively or by the\nlink the store records.",
+            "type": "string",
+            "const": "duplicate-of"
           }
         ]
       }
@@ -32604,6 +32620,11 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "description": "[`TaskUpdate::assignees`].",
             "type": "string",
             "const": "assignees"
+          },
+          {
+            "description": "[`TaskUpdate::duplicate_of`]: the task was closed as a duplicate, natively or by the\nlink the store records.",
+            "type": "string",
+            "const": "duplicate-of"
           }
         ]
       },
@@ -33810,6 +33831,13 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "items": {
               "type": "string"
             }
+          },
+          "duplicate_of": {
+            "description": "Close it as a duplicate of this task, the survivor, qualified or of the batch's source —\nvalid only beside `status: cancelled` or no status, which it then implies.",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "additionalProperties": false,
@@ -33947,6 +33975,11 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
         "description": "[`TaskUpdate::assignees`].",
         "type": "string",
         "const": "assignees"
+      },
+      {
+        "description": "[`TaskUpdate::duplicate_of`]: the task was closed as a duplicate, natively or by the\nlink the store records.",
+        "type": "string",
+        "const": "duplicate-of"
       }
     ]
   },

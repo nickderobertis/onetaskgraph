@@ -1027,12 +1027,18 @@ impl GitHubProjectsSource {
     ///
     /// A batch of one is the update alone, as are a task that is a board draft, an update
     /// naming dependencies, and one of an item whose body this process has not read — each
-    /// sends writes of its own the batch does not hold.
+    /// sends writes of its own the batch does not hold — and every update of a batch carrying a
+    /// duplicate close.
     pub(super) async fn updates_batched(
         &self,
         updates: &[BatchUpdate],
     ) -> Vec<Result<BatchAnswer<TaskUpdateOutcome>, SourceError>> {
+        // A duplicate close ends in a `closeIssue` the held writes of a batch would be reordered
+        // around, so a batch carrying one is made update by update.
         let alone = updates.len() < 2
+            || updates
+                .iter()
+                .any(|each| each.update.duplicate_of.is_some())
             || self.expected.journaling()
             || self.deferring().unwrap_or(true)
             || self.task_writes().map_or(true, |held| held.is_some());

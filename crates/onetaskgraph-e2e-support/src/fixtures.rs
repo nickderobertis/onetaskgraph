@@ -2413,6 +2413,18 @@ impl GitHubBoardFields {
         board.touch_issue(&json!(id));
     }
 
+    /// The issue `id` was closed as a duplicate of, as GitHub records it — `None` for one closed
+    /// otherwise, or open.
+    #[must_use]
+    pub fn duplicate_of(&self, id: &str) -> Option<String> {
+        let board = self.board.lock().unwrap();
+        board
+            .items
+            .iter()
+            .find(|item| item["id"] == json!(id))
+            .and_then(|item| item["duplicate_of"].as_str().map(str::to_owned))
+    }
+
     /// One issue's `state` and the reason it was closed with, as GitHub holds them.
     #[must_use]
     pub fn state(&self, id: &str) -> (String, Option<String>) {
@@ -5751,6 +5763,16 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
         board.items.push(item);
         return json!({"addProjectV2ItemById":{"item":{"id":id}}});
     }
+    // A close as GitHub records it, a duplicate's included: its state, its reason, and the
+    // issue it is a duplicate of.
+    if query.contains("closeIssue(input:$input)") {
+        let held = board.find(&input["issueId"]);
+        held["state"] = json!("CLOSED");
+        held["reason"] = input["stateReason"].clone();
+        held["duplicate_of"] = input["duplicateIssueId"].clone();
+        board.touch_issue(&input["issueId"]);
+        return json!({"closeIssue":{"issue":{"id":input["issueId"]}}});
+    }
     if query.contains("updateIssue(input:$input)") {
         let held = board.find(&input["id"]);
         if let Some(title) = input["title"].as_str() {
@@ -6875,6 +6897,22 @@ impl LinearWorkspace {
     // llmlint: ignore[code_lands_in_the_domain_that_owns_it] A control of the loopback Linear's own answers, which only its server loop here answers: like `rate_limit` below it can only be a method of this handle, and a suite of one plugin could not add it from outside.
     pub fn lose_answer_once(&self, operation: &'static str) {
         self.lost.lock().unwrap().push(operation);
+    }
+
+    /// Every duplicate relation the workspace holds, as `(duplicate, survivor)`.
+    #[must_use]
+    pub fn duplicates(&self) -> Vec<(String, String)> {
+        self.state.lock().unwrap()["duplicates"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|marked| {
+                (
+                    marked["from"].as_str().unwrap_or_default().to_owned(),
+                    marked["to"].as_str().unwrap_or_default().to_owned(),
+                )
+            })
+            .collect()
     }
 
     /// Carry `script`'s headers on each of the next answers, in order — Linear's
@@ -9825,6 +9863,23 @@ fn linear_write_relation(
     // `type must be one of the following values: dependency`, so this responder refuses it
     // too — the plugin now says so itself before the write, and a fixture that took the
     // value anyway would be the one place that never noticed if it stopped.
+    // A duplicate relation is no dependency: Linear keeps it beside them and moves the issue it
+    // marks to `Duplicate`, which a later status write moves on from.
+    if !project && wire == "duplicate" {
+        let marked = json!({"from": input.get(near_key).ok_or("missing near id")?,
+                            "to": input.get(far_key).ok_or("missing far id")?});
+        let duplicates = data
+            .as_object_mut()
+            .ok_or("fixture data is not an object")?
+            .entry("duplicates")
+            .or_insert_with(|| json!([]))
+            .as_array_mut()
+            .ok_or("fixture duplicates are not an array")?;
+        if !duplicates.contains(&marked) {
+            duplicates.push(marked);
+        }
+        return Ok(json!({"issueRelationCreate":{"success":true,"issueRelation":{"id":"IR-D"}}}));
+    }
     let kind = match (project, wire) {
         (true, "dependency") | (false, "blocks") => "blocks",
         (false, "related") => "related",

@@ -109,6 +109,9 @@ pub struct SubprocessSource {
     /// A plugin that said nothing is never sent the method and is answered as reporting no
     /// reading, which is what §3.17 makes an absent member mean.
     quota: bool,
+    /// Whether the plugin said it closes a task as a duplicate (§3.18), read at the same
+    /// handshake. A plugin that said nothing is never sent `duplicate_of`.
+    duplicate_closes: bool,
     /// Whether the plugin's handshake listed every status category this build knows (§3.5).
     ///
     /// A plugin that listed none was written against the first vocabulary, and is never
@@ -400,6 +403,7 @@ impl SubprocessSource {
             project_status,
             stored_forms,
             quota,
+            duplicate_closes,
         } = match result {
             Ok(result) => result,
             Err(error) => return Err(with_diagnostics(error, &mut peer)),
@@ -427,6 +431,7 @@ impl SubprocessSource {
             writes: writes.unwrap_or(WriteSupport::Unsupported),
             meters,
             quota,
+            duplicate_closes,
             knows_every_category: knows_every_category(statuses.as_deref()),
             task_updates,
             metadata_updates,
@@ -1178,6 +1183,21 @@ impl TaskSource for SubprocessSource {
         id: &NativeId,
         update: &TaskUpdate,
     ) -> Result<Option<TaskUpdateOutcome>, SourceError> {
+        // A duplicate close is a decision a peer that never declared it would drop in silence
+        // (§2.1), leaving the task open-ended as a plain `cancelled`: it is refused by name,
+        // before anything is sent, unless the handshake declared it (§3.18).
+        if let Some(survivor) = &update.duplicate_of
+            && !self.duplicate_closes
+        {
+            return Err(SourceError::Refused {
+                message: format!(
+                    "the {} plugin's handshake does not declare `duplicate_closes`, so it cannot \
+                     be sent `duplicate_of` ({survivor}) and would drop it; next: close the task \
+                     `cancelled` without it, or use a plugin that declares duplicate closes",
+                    self.kind
+                ),
+            });
+        }
         // A peer's targeted update predates `repositories`, and one that does not know the
         // member would drop it in silence: an update naming it is made the way every peer
         // takes it, by rewriting the task whole.

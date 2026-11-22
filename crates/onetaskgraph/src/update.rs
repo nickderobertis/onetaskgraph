@@ -128,6 +128,12 @@ fn request(id: &GlobalId, args: &TaskUpdateArgs) -> Result<TaskUpdate, Failure> 
             Some(args.repository.clone())
         },
         assignees: None,
+        duplicate_of: args
+            .duplicate_of
+            .as_deref()
+            .map(qualified)
+            .transpose()?
+            .map(|survivor| TaskRef::qualified(&survivor.source, &survivor.native)),
     })
 }
 

@@ -260,6 +260,8 @@ OPTION_TYPES = {
     "commented_since": "str",
     "origin": "GlobalId | str",
     "target_task": "GlobalId | str",
+    # The survivor a duplicate close names, qualified.
+    "duplicate_of": "GlobalId | str",
     # A source's own id for the item a `task locate` names as the one task's counterpart.
     "target_native": "str",
     "dry_run": "bool",
@@ -382,6 +384,7 @@ OPTION_PLACEHOLDERS = {
     "commented_since": "RFC3339",
     "origin": "SOURCE:ID",
     "target_task": "QUALIFIED-ID",
+    "duplicate_of": "ID",
     "target_native": "NATIVE-ID",
     "dry_run": None,
     "exclude": "KEY",

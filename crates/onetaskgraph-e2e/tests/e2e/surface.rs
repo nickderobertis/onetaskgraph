@@ -302,7 +302,17 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
     let bundle: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("schema output is valid JSON");
 
-    assert_eq!(bundle["version"], 68);
+    assert_eq!(bundle["version"], 69);
+    // Version 69: a duplicate close's `duplicate_of`, on a targeted update and on an
+    // `update-many` entry, and the `duplicate-of` field it reports written.
+    assert!(bundle["roots"]["TaskUpdate"]["properties"]["duplicate_of"].is_object());
+    assert!(
+        bundle["roots"]["UpdateBatch"]["$defs"]["UpdateBatchItem"]["properties"]["duplicate_of"]
+            .is_object()
+            || bundle["roots"]["UpdateBatch"]
+                .to_string()
+                .contains("duplicate_of")
+    );
     // Version 68: `SourceQuota`, what `sources quota` answers, and the reading inside it.
     assert_eq!(
         bundle["roots"]["SourceQuota"]["required"],

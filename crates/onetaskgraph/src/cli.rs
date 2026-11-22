@@ -1156,6 +1156,14 @@ pub struct TaskUpdateArgs {
     #[arg(long = "no-repositories")]
     pub no_repositories: bool,
 
+    /// Close it as a duplicate of this task, the survivor, qualified — natively where the
+    /// backend can say so, GitHub's duplicate closure and Linear's duplicate relation — and
+    /// record the typed `duplicate` link at both ends. It implies `--status cancelled`, and any
+    /// other status beside it is refused, writing nothing.
+    // llmlint: ignore[invalid_states_unrepresentable] As `id`: a `GlobalId` here would refuse an unqualified id as a bad invocation under clap's wording, and `qualified` converts it immediately with the next action a user needs.
+    #[arg(long = "duplicate-of", value_name = "ID")]
+    pub duplicate_of: Option<String>,
+
     /// Write the update only while the task holds this priority — `none` for a task with none.
     /// Repeat for several. At any other, nothing of the update is written — none of its fields —
     /// and the answer's `guard` says `held` with the priority the task holds; every field it
@@ -1609,6 +1617,14 @@ pub struct StatusSetArgs {
     /// The status category to set.
     #[arg(value_name = "CATEGORY")]
     pub category: StatusArg,
+
+    /// Close it as a duplicate of this task, the survivor, qualified: only beside `cancelled`,
+    /// and natively where the backend can say so — GitHub's duplicate closure, Linear's
+    /// duplicate relation — with the typed `duplicate` link recorded at both ends. Beside any
+    /// other category it is refused, writing nothing.
+    // llmlint: ignore[invalid_states_unrepresentable] As `id`: `qualified` in `main` converts it immediately, with the next action a user needs.
+    #[arg(long = "duplicate-of", value_name = "ID")]
+    pub duplicate_of: Option<String>,
 
     #[command(flatten)]
     pub expect: ExpectArgs,

@@ -133,6 +133,19 @@ impl Engine {
         update
             .consistent()
             .map_err(|error| source_failed(source, error))?;
+        // A duplicate close names a survivor of this task's own source, never the task itself,
+        // and writes `cancelled` where it names no status.
+        let duplicate = match &update.duplicate_of {
+            Some(survivor) => {
+                checked_survivor(source, id, survivor)?;
+                Some(TaskUpdate {
+                    status: update.effective_status(),
+                    ..update.clone()
+                })
+            }
+            None => None,
+        };
+        let update = duplicate.as_ref().unwrap_or(update);
         if let Some(priority) = update.priority {
             holds_priority(source, &id.to_string(), priority)?;
         }
@@ -257,10 +270,15 @@ impl Engine {
         } else {
             None
         };
+        let mut written = outcome.written;
+        if let Some(survivor) = &update.duplicate_of {
+            self.record_duplicate(source, id, survivor).await?;
+            written.insert(UpdatedField::DuplicateOf);
+        }
         Ok(TaskUpdated {
             id: id.clone(),
             task: qualified_task(id.clone(), outcome.task).item,
-            written: outcome.written,
+            written,
             delivered,
             spent,
             result,
@@ -270,6 +288,90 @@ impl Engine {
         })
     }
 }
+
+/// The refusal of a duplicate close of `id` whose survivor is not a task of `id`'s own source,
+/// or is `id` itself — made before anything is sent.
+fn checked_survivor(
+    source: &super::ResolvedSource,
+    id: &GlobalId,
+    survivor: &onetaskgraph_plugin_api::TaskRef,
+) -> Result<GlobalId, EngineError> {
+    let refused = |message: String| {
+        source_failed(
+            source,
+            onetaskgraph_plugin_api::SourceError::Refused { message },
+        )
+    };
+    let named = survivor.in_source(&id.source);
+    let survivor: GlobalId = named.as_str().parse().map_err(|_| {
+        refused(format!(
+            "{id} cannot be closed as a duplicate of {named}, which names no task; next: name \
+             the surviving task by its qualified id"
+        ))
+    })?;
+    if survivor.source != id.source {
+        return Err(refused(format!(
+            "{id} cannot be closed as a duplicate of {survivor}: the survivor is in source {}, \
+             another backend than {}, where {id} lives; next: name a surviving task of {}",
+            survivor.source, id.source, id.source
+        )));
+    }
+    if survivor == *id {
+        return Err(refused(format!(
+            "{id} cannot be closed as a duplicate of itself; next: name the task that survives"
+        )));
+    }
+    Ok(survivor)
+}
+
+impl Engine {
+    /// Record the typed `duplicate` link from `id` to its survivor at both ends, through the
+    /// link verbs every relation write goes through, once its source has closed it.
+    ///
+    /// A link already held is no write. A source that holds no relations — a stdio plugin,
+    /// whose handshake declared `duplicate_closes` and so records the link itself (§3.18) — is
+    /// sent no link write.
+    async fn record_duplicate(
+        &self,
+        source: &super::ResolvedSource,
+        id: &GlobalId,
+        survivor: &onetaskgraph_plugin_api::TaskRef,
+    ) -> Result<(), EngineError> {
+        let survivor = checked_survivor(source, id, survivor)?;
+        let batch = super::relations::LinkBatch {
+            schema_version: super::relations::RELATIONS_SCHEMA_VERSION,
+            links: vec![super::relations::LinkItem {
+                from: id.to_string(),
+                to: survivor.to_string(),
+                link_type: DUPLICATE_LINK.to_owned(),
+            }],
+        };
+        let written = self.add_links(&batch).await?;
+        let Some(result) = written.results.first() else {
+            return Ok(());
+        };
+        if result.outcome.settled() {
+            return Ok(());
+        }
+        let reason = result.reason.clone().unwrap_or_default();
+        if reason.contains(&onetaskgraph_plugin_api::relationless(source.kind()).to_string()) {
+            return Ok(());
+        }
+        Err(source_failed(
+            source,
+            onetaskgraph_plugin_api::SourceError::Unavailable {
+                message: format!(
+                    "{id} was closed as a duplicate of {survivor}, and its `{DUPLICATE_LINK}` link \
+                     was not recorded: {reason}; next: repeat the update, which closes nothing \
+                     again and records the link"
+                ),
+            },
+        ))
+    }
+}
+
+/// The type of the link a duplicate close records from the duplicate to its survivor.
+pub const DUPLICATE_LINK: &str = "duplicate";
 
 /// `edges` as the task `near` of `source` holds them: each starting at `near`, and each far
 /// end in `source` itself named by its native id, which is how a source names one of its own.

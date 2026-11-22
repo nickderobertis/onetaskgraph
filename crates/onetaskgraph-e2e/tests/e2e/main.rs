@@ -199,6 +199,9 @@ mod metadata;
 mod migrate;
 mod multi_source;
 mod no_persistence;
+// A duplicate close on a folder of Markdown, and its refusal over a stdio peer that does not
+// declare it — no credential and no network.
+mod duplicate_close;
 // `sources quota` on a folder of Markdown and the Python stdio peer, with and without `quota` in
 // its handshake — no credential and no network.
 mod quota;

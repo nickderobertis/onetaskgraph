@@ -293,7 +293,9 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     # read from the raw document and the roots from the validated one.
     bundle = generate.validate_schema_bundle(emitted_bundle)
 
-    assert emitted_bundle["version"] == 68
+    assert emitted_bundle["version"] == 69
+    # Version 69: a duplicate close's `duplicate_of` on a targeted update.
+    assert "duplicate_of" in emitted_bundle["roots"]["TaskUpdate"]["properties"]
     # Version 68: what `sources quota` answers, and the reading inside it.
     assert {"SourceQuota", "QuotaReading"} <= set(bundle["roots"])
     assert "sources quota" in emitted_bundle["commands"]

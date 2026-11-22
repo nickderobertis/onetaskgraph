@@ -720,14 +720,54 @@ async fn run_inner(
                 },
         } => {
             let task = qualified(&args.id)?;
+            // A duplicate close is `cancelled` and nothing else, refused beside another status
+            // before anything is read.
+            let survivor = match &args.duplicate_of {
+                Some(given) => {
+                    let category = args.category.category();
+                    if category != onetaskgraph_plugin_api::StatusCategory::Cancelled {
+                        return Err(Failure::decided(
+                            "invalid-duplicate-close",
+                            format!(
+                                "--duplicate-of {given} closes {task} as a duplicate, which leaves \
+                                 it cancelled, and the status named beside it is {}; next: name \
+                                 `cancelled`",
+                                serde_json::to_value(category)
+                                    .ok()
+                                    .and_then(|word| word.as_str().map(str::to_owned))
+                                    .unwrap_or_default()
+                            ),
+                        ));
+                    }
+                    let survivor = qualified(given)?;
+                    Some(onetaskgraph_plugin_api::TaskRef::qualified(
+                        &survivor.source,
+                        &survivor.native,
+                    ))
+                }
+                None => None,
+            };
             let engine = expecting(loaded, &task, &args.expect)?;
-            let set = held(
-                &engine,
-                &task,
-                &args.held,
-                engine.set_task_status(&task, args.category.category()),
-            )
-            .await
+            let set = match &survivor {
+                Some(survivor) => {
+                    held(
+                        &engine,
+                        &task,
+                        &args.held,
+                        engine.close_as_duplicate(&task, survivor),
+                    )
+                    .await
+                }
+                None => {
+                    held(
+                        &engine,
+                        &task,
+                        &args.held,
+                        engine.set_task_status(&task, args.category.category()),
+                    )
+                    .await
+                }
+            }
             .map_err(|error| write_failed(&engine, &error))?;
             let rendered = rendering(loaded, &set, render::status_set, "the status")?;
             emit(out, rendered.trim_end(), "the status")?;

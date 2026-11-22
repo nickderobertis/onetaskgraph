@@ -118,6 +118,7 @@ onetaskgraph task comment edit   <ID> <COMMENT-ID> [--body-file PATH] [--expect 
 onetaskgraph task comment delete <ID> <COMMENT-ID> [--expect VERSION]
 onetaskgraph task status set <ID> draft|backlog|todo|queued|in-progress|done|cancelled|unknown
                              [--expect VERSION] [--if-version VERSION]
+                             [--duplicate-of ID]  # beside `cancelled` alone; see below
 onetaskgraph task status reconcile --source <SOURCE> [--dry-run]
 onetaskgraph task status complete --issue <OWNER/NAME#N>... [--source <SOURCE>]... [--dry-run]
 onetaskgraph task priority set <ID> none|urgent|high|medium|low [--expect VERSION]
@@ -134,6 +135,7 @@ onetaskgraph task update <ID> [--title TITLE] [--body-file PATH]
                          [--delivers ID... | --no-delivers] [--depends-on ID... | --no-depends-on]
                          [--repository ORIGIN... | --no-repositories]
                          [--when-priority PRIORITY]...  # every field, only over these
+                         [--duplicate-of ID]  # closes it cancelled, a duplicate of ID
                          [--expect VERSION] [--if-version VERSION]
                          [--term-scope REPOSITORY... | --term-scope-empty]
 onetaskgraph task create <SOURCE> --project P --title TITLE
@@ -3347,6 +3349,19 @@ served over the stdio protocol included, has nothing to migrate and is sent noth
 
 `from` names the form an item left: `html-comment-slot`, `multi-line-comment-slot` or
 `fields-comment-marker`. Exit 0 when nothing failed, and 1 when any item could not be rewritten.
+
+**Closing a task as a duplicate: `task status set <ID> cancelled --duplicate-of <ID>`,
+`task update <ID> --duplicate-of <ID>`, or an `update-many` entry's `duplicate_of`.** A caller
+that has decided two tasks are the same work closes the one as a duplicate of the other, the
+survivor, a task of the same source. It leaves the task `cancelled` — `--duplicate-of` beside any
+other status is refused, writing nothing — natively a duplicate where the backend can say so,
+and records the typed `duplicate` link at both ends, which `task relations` reads. On a GitHub
+board that is one `closeIssue` with `stateReason: DUPLICATE` naming the survivor's issue, beside
+the card's `cancelled` option, refused naming both when the survivor is not an issue of the
+board; on Linear, Linear's own duplicate relation, then the `cancelled` state the mapping names;
+on a folder of Markdown, `cancelled` and the link. A survivor in another source is refused, and so
+is a stdio plugin whose handshake does not declare `duplicate_closes`, before anything is sent. A
+repeat closes nothing again. The store never decides on its own that two tasks are one.
 
 **A source's quota: `onetaskgraph sources quota <SOURCE> [--json]`.** What the source's backend
 says is left of each rate-limit window it meters the source's credential by — everything that

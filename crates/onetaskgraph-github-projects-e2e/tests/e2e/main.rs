@@ -33,12 +33,14 @@ mod cache_budget;
 mod cache_kinds;
 mod cache_writes;
 mod closed_status;
+mod comments_since_cache;
 mod connections;
 mod copy_cost;
 mod copy_recopy;
 mod copy_status;
 mod copy_unsettled;
 mod creation_owners;
+mod duplicate_close;
 mod fields;
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] The github-points-per-follow-up-cycle workload must run in this crate's `test` target, whose saved telemetry its reporter reads and whose `budgets` target judges it, as every budget of this crate does (`plan_copy`, `store_cost`); it is loopback-only and seconds long.
 mod follow_up_cycle;

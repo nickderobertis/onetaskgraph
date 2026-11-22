@@ -290,6 +290,10 @@ async fn initialize(
                 // And a quota reading, which this host forwards to whichever plugin it serves:
                 // one with nothing to report answers empty, as the contract's default does.
                 quota: true,
+                // But not a duplicate close: the plugin it serves closes one natively and the
+                // engine records its typed link through the relation calls, which this protocol
+                // does not carry, so the link would be lost (§3.18).
+                duplicate_closes: false,
             };
             *source = Some(Hosted {
                 source: built,

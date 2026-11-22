@@ -369,6 +369,13 @@ pub(crate) struct InitializeResult {
     /// answered as reporting no reading. Omitted when `false`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) quota: bool,
+    /// Whether this plugin closes a task as a duplicate when an update names `duplicate_of`
+    /// (§3.18).
+    ///
+    /// Optional, and absent means it does not: such a plugin is never sent `duplicate_of`, and
+    /// an update naming it is refused by name before anything is sent. Omitted when `false`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) duplicate_closes: bool,
 }
 
 /// The `quota` result (§4.26).

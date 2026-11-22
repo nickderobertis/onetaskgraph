@@ -242,6 +242,11 @@ pub struct UpdateBatchItem {
     /// answers `held`. Left out, it sets no guard.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub when_assignees: Option<Vec<String>>,
+    /// Close it as a duplicate of this task, the survivor, qualified or of the batch's source —
+    /// valid only beside `status: cancelled` or no status, which it then implies.
+    // llmlint: ignore[invalid_states_unrepresentable] As `item`: read as text so a malformed id is that item's own `error`, refused by `TaskRef::new` before anything is sent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duplicate_of: Option<String>,
 }
 
 /// A member that may be `null`, read so that `null` is present: `Some(None)`, where a member
@@ -863,11 +868,17 @@ impl Engine {
                 .assignee
                 .as_ref()
                 .map(|person| person.iter().cloned().collect()),
+            duplicate_of: each
+                .duplicate_of
+                .as_deref()
+                .map(onetaskgraph_plugin_api::TaskRef::new)
+                .transpose()
+                .map_err(named)?,
         };
         if update.is_empty() {
             return Err(named(
                 "it names no field to write; name at least one of title, body, status, \
-                 priority, metadata, remove_metadata, repositories or assignee"
+                 priority, metadata, remove_metadata, repositories, assignee or duplicate_of"
                     .to_owned(),
             ));
         }

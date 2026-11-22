@@ -287,6 +287,9 @@ export type TaskUpdateOptions = WriteOptions &
     // Write only while the task holds one of these priorities — `none` for one with none; at
     // any other nothing is written and the answer's `guard` says `held`.
     whenPriority?: Priority[];
+    // Close it as a duplicate of this task, the survivor, qualified: `cancelled`, natively a
+    // duplicate where the backend can say so, with the typed `duplicate` link at both ends.
+    duplicateOf?: string;
   };
 // A regenerate: the template to use in place of the recorded one, answers laid over the stored
 // base, `unset` names whose answer is dropped, and `dryRun` to write nothing.
@@ -678,6 +681,7 @@ export const taskUpdateOptionFlags: Readonly<Record<keyof TaskUpdateOptions, str
   expect: "--expect",
   ifVersion: "--if-version",
   whenPriority: "--when-priority",
+  duplicateOf: "--duplicate-of",
   // `[]` is sent as `--no-repositories`, which is how the list is cleared.
   repositories: "--repository",
 };
@@ -717,7 +721,8 @@ export function taskUpdateFlags(options: unknown): string[] {
     | "priority"
     | "expect"
     | "ifVersion"
-  )[] = ["title", "status", "statusName", "priority", "expect", "ifVersion"];
+    | "duplicateOf"
+  )[] = ["title", "status", "statusName", "priority", "expect", "ifVersion", "duplicateOf"];
   for (const name of scalars) {
     if (options[name] !== undefined) {
       args.push(taskUpdateOptionFlags[name], stringOption(method, name, options[name]));
@@ -1512,26 +1517,35 @@ export class OnetaskgraphClient {
       ...expectFlags("taskCommentDelete", options),
     ]);
   }
+  // `duplicateOf` closes the task as a duplicate of that task, the survivor — only beside
+  // `cancelled`, which the binary refuses any other category with.
   taskStatusSet(
     id: string,
     category: StatusCategory,
-    options?: (WriteOptions & ExpectOptions) & { sanitizeDryRun?: false },
+    options?: (WriteOptions & ExpectOptions & { duplicateOf?: string }) & {
+      sanitizeDryRun?: false;
+    },
   ): Promise<TaskStatusSet>;
   taskStatusSet(
     id: string,
     category: StatusCategory,
-    options?: WriteOptions & ExpectOptions,
+    options?: WriteOptions & ExpectOptions & { duplicateOf?: string },
   ): Promise<TaskStatusSet | SanitizeDryRun>;
   taskStatusSet(
     id: string,
     category: StatusCategory,
-    options: WriteOptions & ExpectOptions = {},
+    options: WriteOptions & ExpectOptions & { duplicateOf?: string } = {},
   ): Promise<TaskStatusSet | SanitizeDryRun> {
+    const duplicateOf =
+      options.duplicateOf === undefined
+        ? []
+        : ["--duplicate-of", stringOption("taskStatusSet", "duplicateOf", options.duplicateOf)];
     return this.run(
       "task status set",
       [
         id,
         category,
+        ...duplicateOf,
         ...writePolicyFlags("taskStatusSet", options),
         ...expectFlags("taskStatusSet", options),
       ],
