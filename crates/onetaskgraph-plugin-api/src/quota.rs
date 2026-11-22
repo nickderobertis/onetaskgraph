@@ -77,6 +77,11 @@ tokio::task_local! {
 /// `before_request` answering `Err` — makes the source send nothing more in that call: what
 /// already landed is answered as it is today, the item in flight as a failure part way
 /// through it, and every later item of a batch with the refusal, nothing sent for it.
+///
+/// **One request is exempt: a stdio peer's `initialize` handshake.** The engine sends it once,
+/// while the engine is being built, before `Engine::with_request_gate` can install a gate, and
+/// it costs no backend quota. Every method sent a peer after the gate is installed is asked of
+/// it first.
 #[async_trait::async_trait]
 pub trait RequestGate: Send + Sync {
     /// Answer whether `request` may be sent now — after as long a wait as the caller's policy
