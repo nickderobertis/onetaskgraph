@@ -35,6 +35,8 @@ mod cache_writes;
 mod closed_status;
 mod comments_since_cache;
 mod connections;
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] The github-project-copy-back-requests workload must run in this crate's `test` target, whose saved telemetry its reporter reads and whose `budgets` target judges it, as every budget of this crate does (`relation_batch`, `store_cost`); it is loopback-only and seconds long.
+mod copy_back_cost;
 mod copy_cost;
 mod copy_recopy;
 mod copy_status;

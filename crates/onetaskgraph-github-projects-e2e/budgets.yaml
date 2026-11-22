@@ -361,3 +361,17 @@ budgets:
     unit: requests
     direction: max
     threshold: 7
+  - id: github-project-copy-back-requests
+    description: >-
+      The GitHub GraphQL requests one copy back of a 27-task board project to a folder of
+      Markdown sends — `project copy --update-fields status --metadata KEY=null`, the plain copy
+      a host refreshes its plan with — the larger with the board's cache warmed by the copy that
+      put the plan there and with it cold. It protects the hourly GitHub allowance every manager
+      on a host shares from a replan that reads the board once per task.
+    labels: [github]
+    measure: reported
+    # llmlint: ignore[budget_commands_measure_directly] Every budget of this file selects its own report-only entry in `budget_runner`, the harness-runner convention this crate's budgets landed with; this one reads only the telemetry `copy_back_cost.rs` recorded during the crate's test run, refuses a recording of another workload or a figure that is not its scenarios' larger request count, and hands the figure to onebudgetspec, which alone judges it.
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_project_copy_back_requests", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-github-projects-e2e"]
+    unit: requests
+    direction: max
+    threshold: 8

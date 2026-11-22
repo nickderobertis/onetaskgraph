@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.21](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.14.20...onetaskgraph-core-v0.14.21) - 2026-11-22
+
+### Fixed
+
+- *(copy)* read a GitHub Projects project's tasks without a request per task ([#4075](https://github.com/nickderobertis/onetaskgraph/pull/4075))
+
 ## [0.14.19](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.14.18...onetaskgraph-core-v0.14.19) - 2026-11-20
 
 ### Added

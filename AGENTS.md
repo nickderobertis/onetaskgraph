@@ -1656,6 +1656,10 @@ them do; this is the inventory of what is owed, not a status board.
      each response's own readings, two windows of one resource apart; a wait holds only its
      source, on the simulated clock; a refusal stops the call, every later item answering it,
      and a second call of those items lands them without writing any twice.
+172. A board project copied back into a folder of Markdown — `--update-fields status --metadata
+     KEY=null`, the board's cache warmed by the copy that put it there and cold — writes the
+     moved statuses, removes the key, keeps every edge and link, and reads no task on its own:
+     every request but the members listing's pages is the same at 3 tasks and at 27.
 
 ## The public boundary
 

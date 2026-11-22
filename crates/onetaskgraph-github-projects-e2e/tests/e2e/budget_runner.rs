@@ -602,6 +602,130 @@ fn the_open_list_report_hands_over_the_recorded_figure_and_refuses_another_workl
     }
 }
 
+// llmlint: ignore-block[tests_assert_real_behavior] A report-only command entry point budgets.yaml selects, which reports nothing without ONEBUDGETSPEC_BUDGET_ID; `the_project_copy_back_report_hands_over_the_recorded_figure_and_refuses_another_workload` below asserts what it hands over and refuses.
+// llmlint: ignore-block[budget_commands_measure_directly] Every budget of this crate selects its own report-only entry here, the harness-runner convention it landed with (report_visibility_reads, report_metadata_fields), and the task registering this one names that pattern. It reads only the telemetry `copy_back_cost.rs` recorded during the crate's ordinary test run, refuses a recording of another workload, and hands the figure to onebudgetspec, which alone judges it.
+#[test]
+fn report_project_copy_back_requests() {
+    let Some(budget) = selected() else {
+        return;
+    };
+    let (value, detail) = project_copy_back_figure(&budget).unwrap_or_else(|error| refuse(&error));
+    hand_over(value, &detail);
+}
+// llmlint: ignore-end[budget_commands_measure_directly]
+// llmlint: ignore-end[tests_assert_real_behavior]
+
+/// What `copy_back_cost.rs` recorded for `budget`, refused unless it is that journey's recording
+/// of the copy back — its two scenarios in order, each of the measured plan's tasks and a whole
+/// number of requests — and its figure the larger of their request counts.
+fn project_copy_back_figure(budget: &str) -> Result<(f64, String), String> {
+    let value = recorded(budget)?;
+    if value["workload"].as_str() != Some(super::copy_back_cost::WORKLOAD) {
+        return Err("the recording is not of the copy back's workload".into());
+    }
+    let scenarios = value["scenarios"]
+        .as_array()
+        .ok_or("missing the scenarios")?;
+    let named: Vec<&str> = scenarios
+        .iter()
+        .map(|scenario| scenario["scenario"].as_str().unwrap_or_default())
+        .collect();
+    if named != super::copy_back_cost::SCENARIOS {
+        return Err(format!(
+            "the recording's scenarios are {named:?}, not the copy back's {:?}",
+            super::copy_back_cost::SCENARIOS
+        ));
+    }
+    let mut largest = 0_u64;
+    for scenario in scenarios {
+        if scenario["tasks"].as_u64() != Some(super::copy_back_cost::TASKS as u64) {
+            return Err("a scenario of another plan".into());
+        }
+        largest = largest.max(
+            scenario["requests"]
+                .as_u64()
+                .ok_or("a scenario without a whole number of requests")?,
+        );
+    }
+    let figure = value["value"]
+        .as_u64()
+        .ok_or("missing whole-number figure")?;
+    if figure != largest {
+        return Err(format!(
+            "the figure {figure} is not the scenarios' larger request count, {largest}"
+        ));
+    }
+    let detail = value["detail"].as_str().ok_or("missing detail")?.to_owned();
+    let figure = u32::try_from(figure).map_err(|_| "figure out of range")?;
+    Ok((f64::from(figure), detail))
+}
+
+#[test]
+fn the_project_copy_back_report_hands_over_the_recorded_figure_and_refuses_another_workload() {
+    use onetaskgraph_e2e_support::common::Sandbox;
+    let sandbox = Sandbox::new();
+    let directory = sandbox.subdirectory("project-copy-back");
+    let budget = super::copy_back_cost::BUDGET;
+    let run = |recorded: Option<Value>| {
+        let path = onetaskgraph_e2e_support::telemetry::file_in(&directory, budget);
+        let _ = std::fs::remove_file(&path);
+        if let Some(recorded) = recorded {
+            std::fs::create_dir_all(&directory).unwrap();
+            std::fs::write(&path, recorded.to_string()).unwrap();
+        }
+        let result = directory.join("result.json");
+        let _ = std::fs::remove_file(&result);
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "budget_runner::report_project_copy_back_requests",
+                "--exact",
+                "--nocapture",
+            ])
+            .env("GITHUB_ASSET_TELEMETRY_DIR", &directory)
+            .env("ONEBUDGETSPEC_BUDGET_ID", budget)
+            .env("ONEBUDGETSPEC_RESULT", &result)
+            .output()
+            .unwrap();
+        (output, std::fs::read_to_string(&result).ok())
+    };
+    let scenario = |name: &str, requests: u64| json!({"scenario": name, "tasks": super::copy_back_cost::TASKS, "requests": requests});
+    let valid = json!({"budget": budget, "value": 6,
+        "workload": super::copy_back_cost::WORKLOAD, "detail": "6 requests",
+        "scenarios": [scenario("warm", 5), scenario("cold", 6)]});
+    let (output, result) = run(Some(valid.clone()));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let handed: Value = serde_json::from_str(&result.expect("a figure")).unwrap();
+    assert_eq!(handed["value"], 6.0, "{handed}");
+    let mut other = valid.clone();
+    other["workload"] = json!("another workload");
+    let mut smaller = valid.clone();
+    smaller["value"] = json!(5);
+    let mut reordered = valid.clone();
+    reordered["scenarios"].as_array_mut().unwrap().swap(0, 1);
+    let mut fewer = valid;
+    fewer["scenarios"][0]["tasks"] = json!(3);
+    for (recorded, message) in [
+        (None, "no telemetry"),
+        (Some(other), "not of the copy back's workload"),
+        (Some(smaller), "is not the scenarios' larger request count"),
+        (Some(reordered), "not the copy back's"),
+        (Some(fewer), "a scenario of another plan"),
+    ] {
+        let (output, result) = run(recorded);
+        assert!(!output.status.success());
+        assert!(result.is_none(), "{message}: a figure was written");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains(message),
+            "{message}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
 /// What `relation_batch.rs` recorded for `budget`, refused unless it is that journey's recording
 /// of the whole batch — its six calls in order, each a whole number of requests and of points —
 /// and its figure the points of every call added up.
