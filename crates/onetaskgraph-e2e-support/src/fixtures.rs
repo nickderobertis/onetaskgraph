@@ -10832,6 +10832,26 @@ fn linear_relations(
         .filter(|(_,e)| e["to"] == id && e["from"].is_string())
         .map(|(index,e)| json!({"id":format!("relation:{index}"),"type":wire(&e["kind"]),(suffix.to_ascii_lowercase()):{"id":e["from"]}}))
         .collect::<Vec<_>>();
+    // Linear lists an issue's duplicate relation among its relations, beside its dependencies,
+    // so a read of either end carries it as Linear's own.
+    let (mut forward, mut inverse) = (forward, inverse);
+    if suffix == "Issue" {
+        for (index, marked) in data["duplicates"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .enumerate()
+        {
+            if marked["from"] == id {
+                forward.push(json!({"id":format!("duplicate:{index}"),"type":"duplicate",
+                                    "relatedIssue":{"id":marked["to"]}}));
+            }
+            if marked["to"] == id {
+                inverse.push(json!({"id":format!("duplicate:{index}"),"type":"duplicate",
+                                    "issue":{"id":marked["from"]}}));
+            }
+        }
+    }
     let items = if suffix == "Issue" {
         "tasks"
     } else {

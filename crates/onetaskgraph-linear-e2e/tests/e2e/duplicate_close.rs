@@ -279,3 +279,36 @@ fn a_close_whose_state_write_answer_is_lost_after_the_relation_landed_is_finishe
         "{relations:#}"
     );
 }
+
+#[test]
+fn a_closed_duplicate_s_dependencies_read_from_either_end_without_its_duplicate_relation() {
+    let setup = Setup::new();
+    let deps = |id: &str, direction: &str| {
+        setup.ok(&["--json", "task", "deps", id, "--direction", direction])
+    };
+    let before = [
+        deps("linear:L-3", "depends-on"),
+        deps("linear:L-2", "depended-on-by"),
+    ];
+    setup.ok(&[
+        "--json",
+        "task",
+        "status",
+        "set",
+        "linear:L-3",
+        "cancelled",
+        "--duplicate-of",
+        "linear:L-2",
+    ]);
+    // Linear now lists the duplicate relation among each end's relations; it is no dependency,
+    // so both reads answer exactly what they did.
+    assert_eq!(
+        setup.workspace.duplicates(),
+        [("L-3".to_owned(), "L-2".to_owned())]
+    );
+    let after = [
+        deps("linear:L-3", "depends-on"),
+        deps("linear:L-2", "depended-on-by"),
+    ];
+    assert_eq!(after, before);
+}

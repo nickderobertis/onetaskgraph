@@ -3709,18 +3709,63 @@ impl LinearSource {
                 graphql::ISSUE_RELATION_CREATE,
                 json!({"input":{"issueId":id.0,"relatedIssueId":native,"type":"duplicate"}}),
             )
-            .await;
-        match created {
-            Ok(_) => {}
-            // A relation Linear already holds is the one asked for.
-            Err(error) if error.to_string().to_ascii_lowercase().contains("already") => {}
-            Err(error) => return Err(error),
+            .await
+            .and_then(|data| {
+                mutation_payload(&data, MutationRoot::IssueRelationCreate).map(|_| ())
+            });
+        // A create Linear refuses or answers unsuccessful is accepted only when the relation it
+        // asked for is the one the issue holds — a repeated close — read back rather than
+        // inferred from the refusal's words.
+        if let Err(error) = created
+            && !self.holds_duplicate_relation(id, native).await?
+        {
+            return Err(error);
         }
         let Some(mut outcome) = Box::pin(self.targeted_update(id, &closing)).await? else {
             return Ok(None);
         };
         outcome.written.insert(UpdatedField::DuplicateOf);
         Ok(Some(outcome))
+    }
+
+    /// Whether issue `id` holds Linear's duplicate relation to `survivor`, read across every
+    /// page of its own relations.
+    async fn holds_duplicate_relation(
+        &self,
+        id: &NativeId,
+        survivor: &str,
+    ) -> Result<bool, SourceError> {
+        let mut cursor: Option<String> = None;
+        loop {
+            let data = self
+                .send(
+                    graphql::ISSUE_DEPENDS_ON,
+                    json!({"id":id.0,"first":MAX_PAGE_SIZE,"after":cursor}),
+                )
+                .await?;
+            let relations = data
+                .get("issue")
+                .and_then(|issue| issue.get("relations"))
+                .ok_or_else(|| SourceError::Malformed {
+                    message: format!("issue {id} answered no relations"),
+                })?;
+            let nodes = relations
+                .get("nodes")
+                .and_then(Value::as_array)
+                .ok_or_else(|| SourceError::Malformed {
+                    message: "missing relation nodes".into(),
+                })?;
+            if nodes.iter().any(|node| {
+                node.get("type").and_then(Value::as_str) == Some("duplicate")
+                    && node.pointer("/relatedIssue/id").and_then(Value::as_str) == Some(survivor)
+            }) {
+                return Ok(true);
+            }
+            match page_next(relations)? {
+                Some(next) => cursor = Some(next.0),
+                None => return Ok(false),
+            }
+        }
     }
 
     /// Refuse, before any request, an update that contradicts itself, a `delivers` list naming
@@ -7877,6 +7922,14 @@ fn relation_page(
         })?;
     let mut items = Vec::new();
     for n in nodes {
+        // A duplicate relation is Linear's record of a duplicate close, kept beside an issue's
+        // dependencies and no dependency of its own: the store's typed `duplicate` link is what
+        // reports it.
+        if root == DependencyRoot::Issue
+            && n.get("type").and_then(Value::as_str) == Some("duplicate")
+        {
+            continue;
+        }
         let other = n
             .get(if direction == Direction::DependsOn {
                 "relatedIssue"
