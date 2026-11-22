@@ -7494,10 +7494,14 @@ impl Engine {
                 None => by_source.push((id.source.clone(), vec![id.native.clone()])),
             }
         }
-        for (name, natives) in by_source {
-            let Ok(source) = self.readable(&name) else {
-                continue;
-            };
+        // Every id here was listed among its project's tasks out of its own source before this is
+        // asked — by `project_members` or `named_members` — so `readable` refusing one is not
+        // expected; if it does, that source is left to the read of each member, which reports
+        // the refusal as it always did.
+        let readable = by_source
+            .into_iter()
+            .filter_map(|(name, natives)| Some((self.readable(&name).ok()?, natives)));
+        for (source, natives) in readable {
             let _ = source.source().read_ahead_for_copy(&natives).await;
         }
     }
