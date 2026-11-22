@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-plugin-api-v0.14.21...onetaskgraph-plugin-api-v0.15.0) - 2026-11-22
+
+### Added
+
+- [**breaking**] close the issue a status write leaves open, list only open board items, close duplicates, read quota ([#4077](https://github.com/nickderobertis/onetaskgraph/pull/4077))
+
 ## [0.14.19](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-plugin-api-v0.14.18...onetaskgraph-plugin-api-v0.14.19) - 2026-11-20
 
 ### Added
