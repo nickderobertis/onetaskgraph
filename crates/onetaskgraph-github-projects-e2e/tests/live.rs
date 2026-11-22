@@ -629,20 +629,20 @@ async fn status_option_names(
         .collect())
 }
 
-/// Every issue id the board's own `is:closed` filter answers, page by page: ids alone, so the
-/// wait in [`wait_until_closed_filter_answers`] costs one point a read.
-const CLOSED_ISSUE_IDS: &str = r#"query($owner:String!,$number:Int!,$after:String){
-      closedIds:repositoryOwner(login:$owner){
+/// Every issue id the board's own item filter `$filter` answers, page by page: ids alone, so
+/// the wait in [`wait_until_filter_answers`] costs one point a read.
+const FILTERED_ISSUE_IDS: &str = r#"query($owner:String!,$number:Int!,$after:String,$filter:String!){
+      filteredIds:repositoryOwner(login:$owner){
         ... on ProjectV2Owner{projectV2(number:$number){
-          items(first:100,after:$after,query:"is:closed"){
+          items(first:100,after:$after,query:$filter){
             nodes{content{... on Issue{id}}} pageInfo{hasNextPage endCursor}
           }
         }}
       }
     }"#;
 
-/// How long the reconcile journey waits for the board's `is:closed` filter to answer the two
-/// issues it has just closed.
+/// How long the reconcile journey waits for one of the board's item filters to answer the
+/// issues it has just written.
 ///
 /// GitHub answers `ProjectV2.items`, filtered or not, from an index that trails the board by
 /// many minutes, while the item read by its own id is already there. A reconcile reads the
@@ -650,17 +650,18 @@ const CLOSED_ISSUE_IDS: &str = r#"query($owner:String!,$number:Int!,$after:Strin
 /// rather than assert against it, and a run that outwaits this fails naming the lag.
 const CLOSED_INDEX_WAIT: std::time::Duration = std::time::Duration::from_secs(45 * 60);
 
-/// How often the wait in [`wait_until_closed_filter_answers`] reads the filter again.
+/// How often the wait in [`wait_until_filter_answers`] reads the filter again.
 const CLOSED_INDEX_POLL: std::time::Duration = std::time::Duration::from_secs(60);
 
-/// Waits until the board's `is:closed` filter answers every issue in `ids`, reading it whole
-/// once per [`CLOSED_INDEX_POLL`] for at most [`CLOSED_INDEX_WAIT`], and fails naming the ids
-/// it still lacks.
-async fn wait_until_closed_filter_answers(
+/// Waits until the board's item filter `filter` — `is:closed` or `is:open` — answers every
+/// issue in `ids`, reading it whole once per [`CLOSED_INDEX_POLL`] for at most
+/// [`CLOSED_INDEX_WAIT`], and fails naming the ids it still lacks.
+async fn wait_until_filter_answers(
     endpoint: &str,
     token: &str,
     owner: &str,
     number: u32,
+    filter: &str,
     ids: &[&str],
     ledger: &Accounting,
 ) -> Result<(), String> {
@@ -672,15 +673,15 @@ async fn wait_until_closed_filter_answers(
             let page = asset_graphql(
                 endpoint,
                 token,
-                CLOSED_ISSUE_IDS,
-                &json!({"owner":owner,"number":number,"after":after}),
+                FILTERED_ISSUE_IDS,
+                &json!({"owner":owner,"number":number,"after":after,"filter":filter}),
                 ledger,
             )
             .await?;
-            let items = &page["data"]["closedIds"]["projectV2"]["items"];
+            let items = &page["data"]["filteredIds"]["projectV2"]["items"];
             for node in items["nodes"]
                 .as_array()
-                .ok_or("the closed filter answered no items")?
+                .ok_or_else(|| format!("the {filter} filter answered no items"))?
             {
                 if let Some(id) = node["content"]["id"].as_str() {
                     answered.insert(id.to_owned());
@@ -688,14 +689,16 @@ async fn wait_until_closed_filter_answers(
             }
             if !items["pageInfo"]["hasNextPage"]
                 .as_bool()
-                .ok_or("the closed filter answered no hasNextPage")?
+                .ok_or_else(|| format!("the {filter} filter answered no hasNextPage"))?
             {
                 break;
             }
             after = Some(
                 items["pageInfo"]["endCursor"]
                     .as_str()
-                    .ok_or("the closed filter answered a next page and no cursor")?
+                    .ok_or_else(|| {
+                        format!("the {filter} filter answered a next page and no cursor")
+                    })?
                     .to_owned(),
             );
         }
@@ -707,22 +710,33 @@ async fn wait_until_closed_filter_answers(
         let waited = started.elapsed();
         if missing.is_empty() {
             journey::say(&format!(
-                "the board's is:closed filter answered both closed tasks after {}s",
+                "the board's {filter} filter answered all {} tasks it was waited for after {}s",
+                ids.len(),
                 waited.as_secs()
             ));
             return Ok(());
         }
         if waited >= CLOSED_INDEX_WAIT {
             return Err(format!(
-                "GitHub's is:closed filter on the board still did not answer {missing:?} {}s \
-                 after they were closed: its index trails the board by more than this journey \
-                 waits, so the reconcile could not be asked to find them",
+                "GitHub's {filter} filter on the board still did not answer {missing:?} {}s \
+                 after they were written: its index trails the board by more than this journey \
+                 waits, so the read could not be asked to find them",
                 waited.as_secs()
             ));
         }
         tokio::time::sleep(CLOSED_INDEX_POLL).await;
     }
 }
+
+/// Every status category only an open item reads as.
+const OPEN_CATEGORIES: [onetaskgraph_plugin_api::StatusCategory; 6] = [
+    onetaskgraph_plugin_api::StatusCategory::Draft,
+    onetaskgraph_plugin_api::StatusCategory::Backlog,
+    onetaskgraph_plugin_api::StatusCategory::Todo,
+    onetaskgraph_plugin_api::StatusCategory::Queued,
+    onetaskgraph_plugin_api::StatusCategory::InProgress,
+    onetaskgraph_plugin_api::StatusCategory::Unknown,
+];
 
 /// `task status reconcile --dry-run` against the live lane's own board: one task closed as
 /// completed outside the stack while its card still reads the board's first option, and one
@@ -732,8 +746,14 @@ async fn wait_until_closed_filter_answers(
 /// with is the fact this journey re-takes on every run: every item the filtered read returns is
 /// a closed issue. The dry run then has to list the contradicting task, from its option to the
 /// `done` option, and not the one in line — and writes nothing. It first waits for GitHub's
-/// index of that filter to answer both tasks (see [`CLOSED_INDEX_WAIT`]). Both tasks are taken
-/// back afterwards, whatever came of the assertions.
+/// index of that filter to answer both tasks (see [`CLOSED_INDEX_WAIT`]).
+///
+/// Beside them it plants an open issue under the board's terminal card and one under an option
+/// the reconcile's mapping leaves unnamed, and re-takes the fact a listing of open work rests
+/// on: the board's own `is:open` filter, read with the plugin's `OPEN_ITEMS` document, returns
+/// both — it filters on the issue's state, not its card — and never a closed issue, and a
+/// listing of every open category reads the one as `unknown` and leaves out the other, which
+/// reads as its card. Every task is taken back afterwards, whatever came of the assertions.
 #[tokio::test]
 async fn a_reconcile_dry_run_reads_the_live_board_through_its_closed_filter_alone() {
     if !onetaskgraph_github_live::quota::live_selected().unwrap() {
@@ -791,6 +811,14 @@ async fn a_reconcile_dry_run_reads_the_live_board_through_its_closed_filter_alon
     let [first, done, ..] = options.as_slice() else {
         panic!("the nominated board's Status field holds fewer than two options: {options:?}");
     };
+    // An option the reconcile's mapping leaves unnamed, for the open-filter probe.
+    let unnamed = options
+        .iter()
+        .find(|option| *option != first && *option != done)
+        .unwrap_or_else(|| {
+            panic!("the nominated board's Status field holds no third option: {options:?}")
+        })
+        .clone();
     let mut config = lane::live_write_config(&owner, number, &repository, first);
     for (key, value) in endpoints
         .source
@@ -809,7 +837,12 @@ async fn a_reconcile_dry_run_reads_the_live_board_through_its_closed_filter_alon
     std::fs::create_dir_all(root.join("tasks")).unwrap();
     let stamp = onetaskgraph_live::artifact::now_micros();
     writer.check_clock(stamp, 1).unwrap();
-    for (offset, id) in [(0, "LINE"), (1, "CONTRADICT")] {
+    for (offset, id) in [
+        (0, "LINE"),
+        (1, "CONTRADICT"),
+        (2, "OPEN-TERMINAL"),
+        (3, "OPEN-UNMAPPED"),
+    ] {
         std::fs::write(
             root.join(format!("tasks/{id}.md")),
             format!(
@@ -839,6 +872,8 @@ async fn a_reconcile_dry_run_reads_the_live_board_through_its_closed_filter_alon
             items: CopyItems::new(vec![
                 format!("{notes_name}:LINE").parse().unwrap(),
                 format!("{notes_name}:CONTRADICT").parse().unwrap(),
+                format!("{notes_name}:OPEN-TERMINAL").parse().unwrap(),
+                format!("{notes_name}:OPEN-UNMAPPED").parse().unwrap(),
             ])
             .unwrap(),
             scope: CopyScope::Tasks,
@@ -862,8 +897,8 @@ async fn a_reconcile_dry_run_reads_the_live_board_through_its_closed_filter_alon
         for item in &report.items {
             created.push(item.destination().ok_or("a copied task")?.clone());
         }
-        let [in_line, contradicting] = created.as_slice() else {
-            return Err(format!("two tasks were created: {created:?}"));
+        let [in_line, contradicting, terminal, unmapped] = created.as_slice() else {
+            return Err(format!("four tasks were created: {created:?}"));
         };
         engine
             .set_task_status(in_line, onetaskgraph_plugin_api::StatusCategory::Done)
@@ -880,19 +915,180 @@ async fn a_reconcile_dry_run_reads_the_live_board_through_its_closed_filter_alon
             &ledger,
         )
         .await?;
+        // An open issue under a terminal card, as a person reopening a finished ticket leaves
+        // it: written `done` through the source, then reopened with its card left at `done`.
+        engine
+            .set_task_status(terminal, onetaskgraph_plugin_api::StatusCategory::Done)
+            .await
+            .map_err(|error| error.to_string())?;
+        asset_graphql(
+            &graphql_endpoint,
+            token,
+            graphql::UPDATE_ISSUE,
+            &json!({"input":{"id":terminal.native.0,"stateInput":{"value":"OPEN"}}}),
+            &ledger,
+        )
+        .await?;
+        // An open issue under an option this source's mapping does not name: moved there by
+        // another source mapping `in-progress` to it, as a person dragging the card would.
+        let mut moving = config.clone();
+        moving["status_mapping"]["in-progress"] = json!(unnamed);
+        Plugin
+            .build_recording_into(&name("board"), &moving, &secrets, ledger.clone())
+            .map_err(|error| error.to_string())?
+            .set_task_status(
+                &unmapped.native,
+                onetaskgraph_plugin_api::StatusCategory::InProgress,
+            )
+            .await
+            .map_err(|error| error.to_string())?;
         engine
             .end_command()
             .await
             .map_err(|error| error.to_string())?;
-        wait_until_closed_filter_answers(
+        wait_until_filter_answers(
             &graphql_endpoint,
             token,
             &owner,
             number,
+            "is:closed",
             &[in_line.native.0.as_str(), contradicting.native.0.as_str()],
             &ledger,
         )
         .await?;
+        wait_until_filter_answers(
+            &graphql_endpoint,
+            token,
+            &owner,
+            number,
+            "is:open",
+            &[terminal.native.0.as_str(), unmapped.native.0.as_str()],
+            &ledger,
+        )
+        .await?;
+        // What GitHub answers the board's open filter with, through the plugin's own
+        // document: every open issue whatever its card says, and never a closed one.
+        let mut after = Value::Null;
+        let mut cards: std::collections::BTreeMap<String, (String, Option<String>)> =
+            std::collections::BTreeMap::new();
+        loop {
+            let page = asset_graphql(
+                &graphql_endpoint,
+                token,
+                graphql::OPEN_ITEMS,
+                &json!({"owner":owner,"number":number,"first":100,"after":after,
+                        "filter":"is:open","nestedFirst":50,"duplicates":true}),
+                &ledger,
+            )
+            .await?;
+            let items = &page["data"]["openItems"]["projectV2"]["items"];
+            for node in items["nodes"]
+                .as_array()
+                .ok_or("the open filter answered no items")?
+            {
+                let content = &node["content"];
+                if content["__typename"] == "Issue" && content["state"] != "OPEN" {
+                    return Err(format!(
+                        "the board's is:open filter returned a closed issue: {}",
+                        content["id"]
+                    ));
+                }
+                let option = node["fieldValues"]["nodes"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .find(|value| value["field"]["name"] == "Status")
+                    .and_then(|value| value["name"].as_str())
+                    .map(str::to_owned);
+                if let Some(id) = content["id"].as_str() {
+                    cards.insert(
+                        id.to_owned(),
+                        (
+                            content["state"].as_str().unwrap_or("draft").to_owned(),
+                            option,
+                        ),
+                    );
+                }
+            }
+            if items["pageInfo"]["hasNextPage"] != true {
+                break;
+            }
+            after = items["pageInfo"]["endCursor"].clone();
+        }
+        for (what, id, option) in [
+            (
+                "an open issue under the terminal card",
+                terminal,
+                done.as_str(),
+            ),
+            (
+                "an open issue under an unmapped option",
+                unmapped,
+                unnamed.as_str(),
+            ),
+        ] {
+            let held = cards
+                .get(&id.native.0)
+                .ok_or_else(|| format!("the board's is:open filter did not return {what}, {id}"))?;
+            if held.1.as_deref() != Some(option) {
+                return Err(format!(
+                    "{what}, {id}, was returned at {held:?}, not {option}"
+                ));
+            }
+            journey::say(&format!(
+                "the board's is:open filter returned {what}: {id} {} at {option:?}",
+                held.0
+            ));
+        }
+        journey::say(&format!(
+            "the board's is:open filter returned {} item(s), every issue among them open",
+            cards.len()
+        ));
+        // And a listing of every open category reads them as the whole board's walk did: the
+        // issue under the unmapped option as `unknown`, the one under the terminal card as its
+        // card, so out.
+        let reader = Plugin
+            .build_recording_into(&name("board"), &config, &secrets, ledger.clone())
+            .map_err(|error| error.to_string())?;
+        let mut listed = Vec::new();
+        let mut cursor = None;
+        loop {
+            let page = reader
+                .query_tasks(
+                    &onetaskgraph_plugin_api::TaskQuery {
+                        statuses: OPEN_CATEGORIES.to_vec(),
+                        ..Default::default()
+                    },
+                    &onetaskgraph_plugin_api::PageRequest { cursor, limit: 100 },
+                )
+                .await
+                .map_err(|error| error.to_string())?;
+            listed.extend(page.items);
+            match page.next {
+                Some(next) => cursor = Some(next),
+                None => break,
+            }
+        }
+        let category = |id: &onetaskgraph_core::GlobalId| {
+            listed
+                .iter()
+                .find(|task| task.id == id.native)
+                .map(|task| task.status.category)
+        };
+        if category(unmapped) != Some(onetaskgraph_plugin_api::StatusCategory::Unknown)
+            || category(terminal).is_some()
+        {
+            return Err(format!(
+                "the open listing read the unmapped task as {:?} and the terminal one as {:?}",
+                category(unmapped),
+                category(terminal)
+            ));
+        }
+        journey::say(&format!(
+            "a listing of every open category answered {} task(s): {unmapped} as unknown, and \
+             not {terminal}, which reads as its done card",
+            listed.len()
+        ));
         // What GitHub answers the board's closed filter with: closed issues, and nothing else.
         let closed = asset_graphql(
             &graphql_endpoint,
