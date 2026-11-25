@@ -1386,14 +1386,11 @@ fn details(summary: &str, body: &str) -> String {
     format!("<details>\n<summary>{summary}</summary>\n\n{body}\n\n</details>")
 }
 
-/// The issue's own body: its three blocks, one after another.
 fn issue_body() -> String {
     let [pros, results, repro] = ISSUE_BLOCKS.map(|(summary, body)| details(summary, body));
     format!("{pros}\n\n{results}\n\n{repro}\n")
 }
 
-/// The issue's body and its variants, by what each varies: the fenced block first, in the
-/// middle, last, alone, and ending a body that opens with a paragraph.
 fn issue_variants() -> Vec<(&'static str, String)> {
     let [pros, results, repro] = ISSUE_BLOCKS.map(|(summary, body)| details(summary, body));
     vec![
@@ -1449,7 +1446,6 @@ fn as_linear_reads_it(authored: &str) -> String {
         .join("\n")
 }
 
-/// The lines of `text` outside every fenced code block.
 fn unfenced(text: &str) -> Vec<&str> {
     let mut fence: Option<&str> = None;
     let mut outside = Vec::new();
@@ -1592,7 +1588,6 @@ impl LinearPlan {
         file.display().to_string()
     }
 
-    /// The one comment the copied task carries, by its id.
     fn comment(&self) -> String {
         let comments = self.workspace.comments_on(self.landed["T"].native());
         comments[0]["id"].as_str().expect("a comment id").to_owned()
@@ -1619,7 +1614,6 @@ impl LinearPlan {
         }
     }
 
-    /// The body the workspace stores for `at`, without its slot.
     fn stored(&self, at: &Landed) -> String {
         visible(
             &self
@@ -1630,7 +1624,6 @@ impl LinearPlan {
         .to_owned()
     }
 
-    /// Replace the authored folder's record `key`'s body with `body`, keeping its front matter.
     fn author(&self, key: &str, body: &str) {
         let folder = match key {
             "P" => "projects",

@@ -621,7 +621,6 @@ struct LinearSections {
 
 /// One block of a body a read gave back, in the authored form.
 struct ReadBlock {
-    /// Its whole text.
     text: String,
     held: HeldAs,
 }
