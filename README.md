@@ -2727,7 +2727,7 @@ is still missing.
 A program linking the engine asks, before it writes, whether a source has a name for a
 category:
 
-```rust
+```rust,ignore
 pub fn maps_status(
     &self,
     source: &SourceName,

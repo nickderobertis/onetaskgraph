@@ -302,7 +302,16 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
     let bundle: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("schema output is valid JSON");
 
-    assert_eq!(bundle["version"], 69);
+    assert_eq!(bundle["version"], 70);
+    // Version 70: the `in-review` status category, right after `in-progress`.
+    let words: Vec<&str> = bundle["roots"]["StatusCategory"]["oneOf"]
+        .as_array()
+        .expect("a status vocabulary")
+        .iter()
+        .filter_map(|branch| branch["const"].as_str())
+        .collect();
+    let at = |word: &str| words.iter().position(|w| *w == word);
+    assert_eq!(at("in-review"), at("in-progress").map(|i| i + 1), "{words:?}");
     // Version 69: a duplicate close's `duplicate_of`, on a targeted update and on an
     // `update-many` entry, and the `duplicate-of` field it reports written.
     assert!(bundle["roots"]["TaskUpdate"]["properties"]["duplicate_of"].is_object());
