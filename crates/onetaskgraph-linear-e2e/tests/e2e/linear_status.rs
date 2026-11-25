@@ -770,6 +770,93 @@ fn an_unmapped_name_reads_as_unknown_and_status_returns_exactly_what_reads_as_ea
 }
 
 #[test]
+fn in_review_reads_lists_and_writes_at_its_mapped_name_and_is_refused_where_none_is_mapped() {
+    let sandbox = Sandbox::new();
+    let (config, workspace) = linear_workspace_with(
+        &sandbox,
+        held(
+            vec![
+                issue("L-REVIEW", "In Review", TEAM_STATES, json!({})),
+                issue("L-WORK", "In Progress", TEAM_STATES, json!({})),
+            ],
+            Vec::new(),
+        ),
+        TEAM_STATES,
+        PROJECT_STATUSES,
+    );
+    let mut reviewing = example_mapping();
+    reviewing["in-review"] = json!({"task": "In Review"});
+    sandbox.project_document(&document(&json!({
+        "linear": linear(&config, json!({"status_mapping": reviewing})),
+        "plain": linear(&config, json!({"status_mapping": example_mapping()})),
+    })));
+
+    // At its mapped name an issue reads `in-review`, and `--status in-review` keeps it alone.
+    assert_eq!(
+        status(&sandbox, "task", "linear:L-REVIEW"),
+        json!(["in-review", "In Review"])
+    );
+    assert_eq!(listed(&sandbox, "task", "in-review"), ["L-REVIEW"]);
+
+    // A status set moves an issue to that name and reads it back as `in-review`.
+    let set = answered(
+        &sandbox,
+        &[
+            "--json",
+            "task",
+            "status",
+            "set",
+            "linear:L-WORK",
+            "in-review",
+        ],
+    );
+    assert_eq!(set["status"]["category"], "in-review", "{set:#}");
+    assert_eq!(workspace.state_of("L-WORK").as_deref(), Some("In Review"));
+    assert_eq!(
+        status(&sandbox, "task", "linear:L-WORK"),
+        json!(["in-review", "In Review"])
+    );
+
+    // A source whose mapping names no `in-review` reads the same issue as `unknown`, keeps it
+    // out of `--status in-review`, and refuses the write before any mutation.
+    assert_eq!(
+        status(&sandbox, "task", "plain:L-REVIEW"),
+        json!(["unknown", "In Review"])
+    );
+    let unlisted = answered(
+        &sandbox,
+        &[
+            "--json",
+            "task",
+            "list",
+            "--source",
+            "plain",
+            "--status",
+            "in-review",
+        ],
+    );
+    assert_eq!(unlisted["items"], json!([]), "{unlisted:#}");
+    let from = workspace.served().len();
+    let said = failed(
+        &sandbox,
+        &["task", "status", "set", "plain:L-REVIEW", "in-review"],
+    );
+    for part in [
+        "plain",
+        "task status",
+        "in-review",
+        "status_mapping.in-review.task",
+    ] {
+        assert!(
+            said.contains(part),
+            "refused without naming {part:?}:\n{said}"
+        );
+    }
+    assert_eq!(mutations_since(&workspace, from), Vec::<String>::new());
+    assert_eq!(workspace.state_of("L-REVIEW").as_deref(), Some("In Review"));
+}
+
+#[test]
 fn sources_fields_reports_both_kinds_and_apply_creates_every_missing_name_once() {
     let sandbox = Sandbox::new();
     // Every category names a task and a project missing from the workspace; `draft` names one
@@ -780,6 +867,7 @@ fn sources_fields_reports_both_kinds_and_apply_creates_every_missing_name_once()
         ("todo", "Todo"),
         ("queued", "Queued"),
         ("in-progress", "Progress"),
+        ("in-review", "Review"),
         ("unknown", "Unknown"),
         ("done", "Done"),
         ("cancelled", "Cancelled"),
@@ -804,7 +892,8 @@ fn sources_fields_reports_both_kinds_and_apply_creates_every_missing_name_once()
     let types = |category: &str| match category {
         "backlog" | "draft" => ("backlog", "backlog"),
         "todo" | "queued" => ("unstarted", "planned"),
-        "in-progress" | "unknown" => ("started", "started"),
+        // `in-review` is work started and not yet completed, created beside `in-progress`.
+        "in-progress" | "in-review" | "unknown" => ("started", "started"),
         "done" => ("completed", "completed"),
         _ => ("canceled", "canceled"),
     };
@@ -831,6 +920,7 @@ fn sources_fields_reports_both_kinds_and_apply_creates_every_missing_name_once()
         "todo",
         "queued",
         "in-progress",
+        "in-review",
         "done",
         "cancelled",
         "unknown",
@@ -907,7 +997,7 @@ fn sources_fields_reports_both_kinds_and_apply_creates_every_missing_name_once()
         })
         .map(|(_, variables)| variables["input"].clone())
         .collect::<Vec<_>>();
-    assert_eq!(creates.len(), 16, "{creates:#?}");
+    assert_eq!(creates.len(), 18, "{creates:#?}");
     assert!(
         creates.iter().all(|input| input["color"] == "#95a2b3"),
         "{creates:#?}"
@@ -919,7 +1009,7 @@ fn sources_fields_reports_both_kinds_and_apply_creates_every_missing_name_once()
     let last = PROJECT_STATUSES.len() as f64;
     assert_eq!(
         positions,
-        (1..=8).map(|at| last + f64::from(at)).collect::<Vec<_>>(),
+        (1..=9).map(|at| last + f64::from(at)).collect::<Vec<_>>(),
         "after the workspace's last, at {last}"
     );
     assert_eq!(

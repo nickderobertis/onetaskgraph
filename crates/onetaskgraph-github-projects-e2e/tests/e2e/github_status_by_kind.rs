@@ -543,3 +543,107 @@ fn sources_fields_names_each_kinds_missing_options_and_apply_adds_both_keeping_e
         "{set}"
     );
 }
+
+/// What `task show --json` reads one item back as, as `[category, name]`.
+fn shown(setup: &Setup, id: &str) -> Value {
+    let item = setup.json(&["--json", "task", "show", id])["items"][0]["item"].clone();
+    json!([item["status"]["category"], item["status"]["name"]])
+}
+
+#[test]
+fn in_review_reads_lists_and_writes_at_the_option_its_mapping_names_for_a_task() {
+    let setup = Setup::new(json!({
+        "todo": "Todo",
+        "in-progress": "Doing",
+        "in-review": {"task": "In Review"},
+    }));
+    setup.board.add_status_option("In Review");
+    setup.board.move_card("T-3", "In Review");
+
+    assert_eq!(
+        shown(&setup, "board:T-3"),
+        json!(["in-review", "In Review"])
+    );
+    assert_eq!(
+        setup.ids(&[
+            "--json",
+            "task",
+            "list",
+            "--source",
+            "board",
+            "--status",
+            "in-review"
+        ]),
+        ["board:T-3"]
+    );
+
+    let set = setup.json(&["--json", "task", "status", "set", "board:T-4", "in-review"]);
+    assert_eq!(
+        json!([set["status"]["category"], set["status"]["name"]]),
+        json!(["in-review", "In Review"]),
+        "{set:#}"
+    );
+    assert_eq!(setup.board.status("T-4").as_deref(), Some("In Review"));
+    assert_eq!(
+        shown(&setup, "board:T-4"),
+        json!(["in-review", "In Review"])
+    );
+}
+
+#[test]
+fn a_board_mapping_no_in_review_reads_its_review_column_as_unknown_and_refuses_the_write() {
+    // No key at all: every category keeps its shipped default, and none is shipped for
+    // `in-review`, so a board's own review column reads as it always has.
+    let setup = Setup::new(json!({}));
+    setup.board.add_status_option("In Progress");
+    setup.board.add_status_option("In Review");
+    for (option, category) in [
+        ("Backlog", "backlog"),
+        ("Todo", "todo"),
+        ("Queued", "queued"),
+        ("In Progress", "in-progress"),
+        ("Done", "done"),
+        ("Cancelled", "cancelled"),
+        ("In Review", "unknown"),
+    ] {
+        setup.board.move_card("T-3", option);
+        assert_eq!(
+            shown(&setup, "board:T-3"),
+            json!([category, option]),
+            "a card at {option}"
+        );
+    }
+    assert_eq!(
+        setup.ids(&[
+            "--json",
+            "task",
+            "list",
+            "--source",
+            "board",
+            "--status",
+            "in-review"
+        ]),
+        Vec::<String>::new()
+    );
+
+    let output = setup.run(&["task", "status", "set", "board:T-4", "in-review"]);
+    assert_ne!(output.status.code(), Some(0), "{}", stdout(&output));
+    let said = stderr(&output);
+    for part in [
+        "board",
+        "task status",
+        "in-review",
+        "status_mapping.in-review.task",
+    ] {
+        assert!(
+            said.contains(part),
+            "refused without naming {part:?}:\n{said}"
+        );
+    }
+    assert_eq!(
+        setup.mutations(),
+        Vec::<(String, Value)>::new(),
+        "a write refused for want of a name sends no mutation"
+    );
+    assert_eq!(setup.board.status("T-4").as_deref(), Some("Doing"));
+}
