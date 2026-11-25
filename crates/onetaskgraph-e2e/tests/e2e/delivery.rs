@@ -304,6 +304,142 @@ fn a_status_set_on_local_markdown_rewrites_the_status_and_nothing_else() {
 }
 
 #[test]
+fn a_folder_reads_in_review_by_either_word_and_writes_the_category_word() {
+    for boundary in SOURCE_BOUNDARIES {
+        let who = format!("{boundary:?}");
+        let sandbox = Sandbox::new();
+        let root = folder(
+            &sandbox,
+            "work",
+            &[
+                (
+                    "tasks/T-1.md",
+                    "---\ntitle: Hyphenated\nstatus: in-review\n---\n",
+                ),
+                (
+                    "tasks/T-2.md",
+                    "---\ntitle: Spoken\nstatus: in review\n---\n",
+                ),
+                (
+                    "tasks/T-3.md",
+                    "---\ntitle: Working\nstatus: in progress\n---\nbody\n",
+                ),
+            ],
+        );
+        sandbox.project_document(&document(&json!({
+            "work": boundary.source("local-md", json!({"root": root})),
+        })));
+        for id in ["work:T-1", "work:T-2"] {
+            assert_eq!(category(&sandbox, id), "in-review", "{who}: {id}");
+        }
+        let listed = parsed(&exits(
+            &who,
+            &sandbox,
+            &[
+                "task",
+                "list",
+                "--source",
+                "work",
+                "--status",
+                "in-review",
+                "--json",
+            ],
+            0,
+        ));
+        let ids: Vec<&str> = listed["items"]
+            .as_array()
+            .expect("a page")
+            .iter()
+            .map(|item| item["id"].as_str().expect("an id"))
+            .collect();
+        assert_eq!(ids, ["work:T-1", "work:T-2"], "{who}");
+
+        let set = parsed(&exits(
+            &who,
+            &sandbox,
+            &["task", "status", "set", "work:T-3", "in-review", "--json"],
+            0,
+        ));
+        assert_eq!(set["status"]["category"], "in-review", "{who}: {set:#}");
+        assert_eq!(
+            read(&root, "tasks/T-3.md"),
+            "---\ntitle: Working\nstatus: in-review\n---\nbody\n",
+            "{who}"
+        );
+        assert_eq!(category(&sandbox, "work:T-3"), "in-review", "{who}");
+    }
+}
+
+#[test]
+fn a_ticket_follows_its_deliverer_into_in_review_or_into_in_progress_where_none_is_mapped() {
+    let sandbox = Sandbox::new();
+    let plan = folder(
+        &sandbox,
+        "plan",
+        &[(
+            "tasks/P.md",
+            "---\ntitle: P\nstatus: in progress\ndelivers: [\"reviewing:T\", \"plain:U\"]\n---\n",
+        )],
+    );
+    let reviewing = folder(
+        &sandbox,
+        "reviewing",
+        &[("tasks/T.md", "---\ntitle: T\nstatus: todo\n---\n")],
+    );
+    let plain = folder(
+        &sandbox,
+        "plain",
+        &[("tasks/U.md", "---\ntitle: U\nstatus: todo\n---\n")],
+    );
+    sandbox.project_document(&document(&json!({
+        "plan": markdown(&plan),
+        "reviewing": markdown(&reviewing),
+        // A folder whose words name no `in-review`, so it has nothing to write it as.
+        "plain": {"plugin": "local-md", "config": {"root": plain, "status_mapping": {
+            "todo": "todo", "queued": "queued", "in progress": "in-progress",
+            "done": "done", "cancelled": "cancelled",
+        }}},
+    })));
+    let set = parsed(&exits(
+        "in-review",
+        &sandbox,
+        &["task", "status", "set", "plan:P", "in-review", "--json"],
+        0,
+    ));
+    assert_eq!(
+        entries_of(&set),
+        [
+            "reviewing:T plan:P written todo->in-review",
+            "plain:U plan:P written todo->in-progress",
+        ],
+        "{set:#}"
+    );
+    assert_eq!(category(&sandbox, "reviewing:T"), "in-review");
+    assert_eq!(category(&sandbox, "plain:U"), "in-progress");
+    assert!(
+        read(&plain, "tasks/U.md").contains("\nstatus: in progress\n"),
+        "{}",
+        read(&plain, "tasks/U.md")
+    );
+
+    // Finishing the review finishes both.
+    let done = parsed(&exits(
+        "done",
+        &sandbox,
+        &["task", "status", "set", "plan:P", "done", "--json"],
+        0,
+    ));
+    assert_eq!(
+        entries_of(&done),
+        [
+            "reviewing:T plan:P written in-review->done",
+            "plain:U plan:P written in-progress->done",
+        ],
+        "{done:#}"
+    );
+}
+
+#[test]
 fn a_status_set_with_no_deliveries_says_so_in_text() {
     let sandbox = Sandbox::new();
     let root = folder(
@@ -925,6 +1061,8 @@ fn a_release_returns_the_ticket_to_todo_and_draft_or_backlog_writes_nothing() {
 fn two_deliverers_decide_the_ticket_by_the_result_rule() {
     for (other, set, after) in [
         ("in progress", "cancelled", "in-progress"),
+        ("in progress", "in-review", "in-review"),
+        ("in review", "in-progress", "in-review"),
         ("in progress", "todo", "in-progress"),
         ("todo", "queued", "queued"),
         ("todo", "done", "todo"),
