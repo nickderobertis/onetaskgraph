@@ -986,7 +986,7 @@ pub async fn run_with_clock(config: Config, clock: Arc<dyn Clock>) -> Result<Rep
 mod tests {
     use super::*;
 
-    const ORIGIN: &str = "https://api.github.com/";
+    const API_BASE: &str = "https://api.github.com/";
     const CURRENT: &str = "/repos/owner/scratch/issues?state=all&per_page=100&page=1";
     const NOMINATED: &str = "/repos/owner/scratch/issues";
     // Values a refusal must never repeat: each sits only in a refused link's query or user info.
@@ -1007,7 +1007,7 @@ mod tests {
     fn next(target: &str) -> Result<Option<String>, String> {
         next_page(
             &format!("<{target}>; rel=\"next\""),
-            ORIGIN,
+            API_BASE,
             CURRENT,
             &scratch(),
         )
@@ -1027,7 +1027,7 @@ mod tests {
         assert_eq!(
             next_page(
                 "<https://api.github.com/repositories/42/issues?state=all&per_page=100&page=3>; rel=\"next\"",
-                ORIGIN,
+                API_BASE,
                 "/repositories/42/issues?state=all&per_page=100&page=2",
                 &scratch(),
             ),

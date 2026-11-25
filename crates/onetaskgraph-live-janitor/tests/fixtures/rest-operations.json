@@ -164,26 +164,15 @@
       "path": "/repos/{owner}/{repo}/issues",
       "query": {
         "milestone": null,
-        "state": [
-          "open",
-          "closed",
-          "all"
-        ],
+        "state": ["open", "closed", "all"],
         "assignee": null,
         "type": null,
         "creator": null,
         "mentioned": null,
         "issue_field_values": null,
         "labels": null,
-        "sort": [
-          "created",
-          "updated",
-          "comments"
-        ],
-        "direction": [
-          "asc",
-          "desc"
-        ],
+        "sort": ["created", "updated", "comments"],
+        "direction": ["asc", "desc"],
         "since": null,
         "per_page": null,
         "page": null
