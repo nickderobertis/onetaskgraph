@@ -15,7 +15,7 @@ onetaskgraph project attestation check <PROJECT-ID> --kind <KIND> --tasks \
 | Flag | Keeps a task when | Values |
 | --- | --- | --- |
 | `--status CATEGORY` | its status category is one of those named | `draft`, `backlog`, `todo`, `queued`, `in-progress`, `in-review`, `done`, `cancelled`, `unknown` |
-| `--not-status CATEGORY` | its status category is none of those named | the same eight |
+| `--not-status CATEGORY` | its status category is none of those named | the same nine |
 | `--state STATE` | its check answers one of the states named | `valid`, `void`, `absent` |
 
 - **Each flag is repeatable, and repeats of one flag are alternatives**: `--status todo --status
@@ -64,7 +64,7 @@ valid; read `tasks` to see what it kept.
 onetaskgraph task list [--status CATEGORY]... [--not-status CATEGORY]... ...
 ```
 
-`--not-status` takes the same eight categories and drops the tasks at any it names, as
+`--not-status` takes the same nine categories and drops the tasks at any it names, as
 `--status` keeps the tasks at any it names. Alone, it keeps every task at a category it does
 not name — `--not-status draft` over a project with no drafts lists every task. Beside
 `--status`, a task is kept at a category `--status` names and `--not-status` does not.
