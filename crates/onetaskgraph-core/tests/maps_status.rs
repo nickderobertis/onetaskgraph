@@ -194,3 +194,37 @@ fn a_source_nothing_configures_is_refused_by_name() {
         "{error:?}"
     );
 }
+
+/// Answers no credential, so a source that needs one is configured but cannot be built.
+struct NoCredential;
+
+impl SecretResolver for NoCredential {
+    fn get(&self, _var: &str) -> Option<SecretString> {
+        None
+    }
+}
+
+#[test]
+fn a_source_configured_but_not_built_is_refused_as_unavailable_and_is_sent_nothing() {
+    let (listener, endpoint) = unvisited();
+    let absent = tempfile::tempdir().unwrap();
+    let config = Config::from_document(json!({"sources": {
+        "gone": {"plugin": "local-md", "config": {"root": absent.path().join("absent")}},
+        "keyless": {"plugin": "linear", "config": {
+            "team": "ENG", "endpoint": endpoint,
+            "status_mapping": {"in-review": {"task": "In Review"}},
+        }},
+    }}))
+    .expect("a valid configuration");
+    let engine = Engine::build(&config, &NoCredential);
+    for source in ["gone", "keyless"] {
+        let error = engine
+            .maps_status(&name(source), Task, InReview)
+            .expect_err("the source could not be built");
+        assert!(
+            matches!(&error, EngineError::SourceUnavailable { name, .. } if name == source),
+            "{source}: {error:?}"
+        );
+    }
+    assert_never_visited(&listener, "Linear");
+}
