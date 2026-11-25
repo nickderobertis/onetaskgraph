@@ -2061,19 +2061,24 @@ own normalization:
 
 Linear stores each such block as literal paragraphs with its body expanded, as it stores every
 `<details>` block. Its own rewrite can give such a block the blank line it lacked, so that it reads
-back in the authored form. So which form a block is written in depends on who wrote the body:
+back in the authored form. So which form a block is written in depends on who wrote the body, and
+is decided by the item written alone: the Linear source keeps each item's body as Linear last
+answered storing it, and reads that item's own again just before writing it, so no other item's
+read — however alike its text — has any say.
 
 - **A body a caller wrote** — a create, a replace or a render of a task, project or document,
   `task content set`, `task update`, a comment added or edited, and a copy's write of its
   source's content — has every block written as a section, even one whose text the item already
-  holds as literal text. The one exception is a body that is, byte for byte, one a read through
-  the same source gave back: content set back exactly as it reads, which is written back as below.
-  A body differing from it anywhere, in prose around its blocks included, is the caller's own.
+  holds as literal text. The one exception is a body that is, byte for byte, the body last read of
+  that same item: content set back exactly as it reads, which is written back as below. A body
+  differing from it anywhere — in prose around its blocks, or in one line break — is the caller's
+  own.
 - **A body the store writes back** — a copy's follow-up sending what Linear stored, and every other
-  write of content the store read rather than was given — carries each block as the latest read
-  found it, block by block: one Linear held as literal text stays literal text, so a follow-up
-  never turns it into a section, while a block that changed, or that Linear held as a section,
-  is written as a section.
+  write of content the store read rather than was given — carries as literal text each block the
+  last read of that item found Linear holding as literal text, so a follow-up never turns it into
+  a section; every other block is written as a section.
+- **A write in a new process** whose item was read only by an earlier one — and every create —
+  has no read of that item to go by, so every block in the authored form is written as a section.
 
 A plugin served over the stdio protocol has no expandable form: it is sent the authored form.
 

@@ -2208,3 +2208,134 @@ fn a_callers_body_differing_from_the_held_one_only_in_prose_lands_its_block_as_a
         "read back as authored"
     );
 }
+
+/// Two tasks on one Linear source holding the same block's text, the first as literal text and
+/// the second as a section after a line of prose: the plan's own task and one created beside it,
+/// each with metadata, so each body reads back alike, a slot following it.
+fn two_items_holding_one_block(plan: &LinearPlan, fenced: &str) -> (Landed, Landed) {
+    let file = plan.file("beside.md", "Beside.\n");
+    let created: Value = serde_json::from_str(&ok(
+        &plan.sandbox,
+        &[
+            "task",
+            "create",
+            "dest",
+            "--project",
+            plan.landed["P"].native(),
+            "--title",
+            "Beside",
+            "--metadata",
+            "review.note=\"beside\"",
+            "--body-file",
+            &file,
+            "--json",
+        ],
+    ))
+    .expect("JSON");
+    let beside = Landed {
+        verb: "task",
+        id: created["items"][0]["id"]
+            .as_str()
+            .expect("an id")
+            .to_owned(),
+    };
+    let task = plan.landed["T"].clone();
+    plan.hold_as_text(&task, &format!("{fenced}\n"));
+    let file = plan.file("section.md", &format!("Intro.\n\n{fenced}"));
+    ok(
+        &plan.sandbox,
+        &["task", "content", "set", &beside.id, "--file", &file],
+    );
+    assert_eq!(
+        plan.stored(&task),
+        fenced,
+        "the plan's task holds it as literal text"
+    );
+    assert!(
+        plan.stored(&beside).starts_with("Intro.\n\n+++ "),
+        "the other holds it as a section, after a line of prose"
+    );
+    (task, beside)
+}
+
+/// One `task update-many` of `first` and then `second`, each held at the version it is at, so
+/// the call reads both before it writes either.
+fn update_both(plan: &LinearPlan, first: (&Landed, Value), second: (&Landed, Value)) {
+    let mut updates = Vec::new();
+    for (at, mut update) in [first, second] {
+        update["item"] = json!(at.id);
+        update["if_version"] = shown(&plan.sandbox, "task", &at.id)["version"].clone();
+        updates.push(update);
+    }
+    let file = plan.file(
+        "updates.json",
+        &json!({"schema_version": 1, "updates": updates}).to_string(),
+    );
+    let answered: Value = serde_json::from_str(&ok(
+        &plan.sandbox,
+        &["task", "update-many", "dest", "--input", &file, "--json"],
+    ))
+    .expect("JSON");
+    for result in answered["results"].as_array().expect("results") {
+        assert_eq!(result["outcome"], json!("written"), "{answered:#}");
+    }
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace.
+#[test]
+fn another_items_read_of_the_same_body_never_holds_back_a_callers_block() {
+    // The caller sets, on the task holding the block as a section after prose, the block alone —
+    // byte for byte the body of the other task, which holds it as literal text — in a call that
+    // reads both, either one last: the other's read is no read of this one, and the block lands
+    // as a section.
+    let (summary, held) = ISSUE_BLOCKS[2];
+    let fenced = details(summary, held);
+    for read_last in ["the writer", "the other"] {
+        let plan = LinearPlan::new();
+        let (text, section) = two_items_holding_one_block(&plan, &fenced);
+        let write = (&section, json!({"body": fenced}));
+        let other = (&text, json!({"title": "Blocks, again"}));
+        match read_last {
+            "the writer" => update_both(&plan, other, write),
+            _ => update_both(&plan, write, other),
+        }
+        let what = format!("{read_last} read last");
+        lands_as_sections(&plan.stored(&section), &[summary], &what);
+        assert_eq!(
+            plan.stored(&text),
+            fenced,
+            "{what}: the other task is as it was"
+        );
+    }
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace.
+#[test]
+fn another_items_read_of_the_same_block_never_changes_what_a_write_back_keeps() {
+    // A metadata write on the task holding the block as literal text sends its body back as it
+    // read it, in a call that also reads the task holding that block as a section: its own read
+    // decides, and its block stays literal text, whichever task was read last.
+    let (summary, held) = ISSUE_BLOCKS[2];
+    let fenced = details(summary, held);
+    for read_last in ["the writer", "the other"] {
+        let plan = LinearPlan::new();
+        let (text, section) = two_items_holding_one_block(&plan, &fenced);
+        let write = (&text, json!({"metadata": {"review.note": "kept"}}));
+        let other = (&section, json!({"title": "Beside, again"}));
+        match read_last {
+            "the writer" => update_both(&plan, other, write),
+            _ => update_both(&plan, write, other),
+        }
+        let what = format!("{read_last} read last");
+        assert_eq!(plan.stored(&text), fenced, "{what}: kept as literal text");
+        let raw = plan
+            .workspace
+            .long_form("tasks", text.native())
+            .expect("the task");
+        assert!(
+            raw.contains("review.note"),
+            "{what}: the metadata write landed: {raw}"
+        );
+        lands_as_sections(&plan.stored(&section), &[summary], &what);
+    }
+}

@@ -619,34 +619,28 @@ pub(crate) async fn authored<F: Future>(call: F) -> F::Output {
 /// that Linear's own rewrite sets apart with the blank line the form wants, so it reads back as an
 /// authored block though Linear shows it as paragraphs. Written back as it reads, as a copy's
 /// follow-up writes what the destination stored, it would be translated into a section the author
-/// never wrote. So, for as long as this source lives, every block a read gives back is remembered
-/// by its text with how the latest read of it found it held, and every body a read gives back is
-/// remembered whole.
+/// never wrote. So the markup remembers the latest body read through it, and how that read found
+/// each of its blocks held; the Linear source reads each item's own last stored body through it
+/// again immediately before writing that item, or reads nothing — an empty body — for an item it
+/// has not read, so the latest read is always the written item's own.
 ///
 /// A write of content a caller authored ([`authored`]) is written with every block as a section —
-/// one whose text Linear holds as literal text included — unless the body is, byte for byte, one
-/// a read gave back, which is that content set back as it reads. Any other write, and that one, is
-/// the engine writing back what it read: each block is carried as the latest read found it.
+/// one whose text Linear holds as literal text included — unless the body is, byte for byte, the
+/// latest body read: that content set back as it reads. Any other write, and that one, is the
+/// engine writing back what it read: each block the latest read found held as literal text is
+/// carried as it stands, and every other block is written as a section.
 #[derive(Default)]
 struct LinearSections {
-    held: std::sync::Mutex<Held>,
+    latest: std::sync::Mutex<LatestRead>,
 }
 
-/// What [`LinearSections`] remembers of its reads.
+/// The latest body read through [`LinearSections`].
 #[derive(Default)]
-struct Held {
-    /// Each block's whole text in the authored form, beside how the latest read found it.
-    blocks: std::collections::HashMap<String, HeldAs>,
-    /// Every body a read gave back, its line breaks at the end taken off.
-    bodies: std::collections::HashSet<String>,
-}
-
-/// How Linear held a block a read gave back in the authored form.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum HeldAs {
-    /// As literal text, which a write back keeps.
-    Literal,
-    Section,
+struct LatestRead {
+    /// The body, in the authored form, as the read gave it back.
+    body: String,
+    /// The whole text of each of its blocks Linear held as literal text.
+    literal: std::collections::HashSet<String>,
 }
 
 /// The whole text of every block of `content` in the authored form, in order.
@@ -659,44 +653,30 @@ fn block_texts(content: &str) -> Vec<String> {
         .collect()
 }
 
-/// `body` without the line breaks it ends in, which a backend may add or take off.
-fn unended(body: &str) -> &str {
-    body.trim_end_matches(['\n', '\r'])
-}
-
 impl BodyMarkup for LinearSections {
     fn written(&self, content: &str) -> String {
-        let held = self
-            .held
+        let latest = self
+            .latest
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let caller_authored = AUTHORED.try_with(|()| ()).is_ok();
-        if caller_authored && !held.bodies.contains(unended(content)) {
+        if AUTHORED.try_with(|()| ()).is_ok() && latest.body != content {
             return linear_written(content, &std::collections::HashSet::new());
         }
-        let literal = block_texts(content)
-            .into_iter()
-            .filter(|block| held.blocks.get(block) == Some(&HeldAs::Literal))
-            .collect();
-        linear_written(content, &literal)
+        linear_written(content, &latest.literal)
     }
 
     fn read(&self, content: &str) -> String {
-        let literal = block_texts(content);
         let read = ExpandableForm::Linear.read(content);
-        let mut held = self
-            .held
+        // A block Linear held as literal text reads back as it is stored, so it is one of the
+        // stored body's blocks still; one read out of a section is not.
+        let literal = block_texts(content).into_iter().collect();
+        *self
+            .latest
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        for block in block_texts(&read) {
-            let how = if literal.contains(&block) {
-                HeldAs::Literal
-            } else {
-                HeldAs::Section
-            };
-            held.blocks.insert(block, how);
-        }
-        held.bodies.insert(unended(&read).to_owned());
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = LatestRead {
+            body: read.clone(),
+            literal,
+        };
         read
     }
 }
@@ -868,10 +848,13 @@ mod tests {
             authored(|| markup.written(&body)),
             format!("New.\n\n{FENCED_SECTION}")
         );
-        // Set back byte for byte as it reads, it is written back as Linear stored it.
+        // Set back byte for byte as it reads, it is written back as Linear stored it; one line
+        // break more is no longer that body.
+        assert_eq!(markup.read(FENCED), FENCED);
+        assert_eq!(authored(|| markup.written(FENCED)), FENCED);
         assert_eq!(
             authored(|| markup.written(&format!("{FENCED}\n"))),
-            format!("{FENCED}\n")
+            format!("{FENCED_SECTION}\n")
         );
     }
 
