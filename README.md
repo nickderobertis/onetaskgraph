@@ -2042,8 +2042,9 @@ store and Linear's API, and was no part of its defect.
 task, project or document created or replaced, `task content set`, `task update`, a comment added
 or edited, and each copy — every block in the authored form is written as a section wherever it
 stands (first, between others, last, alone, or ending a body that the item's metadata slot does or
-does not follow) and whatever its body holds, fenced code included. Nothing about a block's
-position or content leaves it as HTML. The one body written otherwise is a body written back, below.
+does not follow) and whatever its body holds, fenced code included. Neither its position, its
+neighbours nor what its body holds leaves a block as HTML: only the summaries and line endings
+listed below do, and a body written back, below.
 
 **What is carried as it stands.** Nothing but the authored form is translated. These reach a
 folder of Markdown and a GitHub issue byte for byte, and Linear as sent, subject only to Linear's
