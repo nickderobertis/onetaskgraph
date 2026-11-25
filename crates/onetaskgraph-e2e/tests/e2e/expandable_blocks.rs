@@ -1382,7 +1382,6 @@ const ISSUE_BLOCKS: [(&str, &str); 3] = [
     ("Reproduction", "Run:\n\n```\nsome command --count=10\n```"),
 ];
 
-/// One block in the authored form.
 fn details(summary: &str, body: &str) -> String {
     format!("<details>\n<summary>{summary}</summary>\n\n{body}\n\n</details>")
 }
@@ -1427,7 +1426,6 @@ fn without_blocks(body: &str) -> String {
     plain
 }
 
-/// The summaries of the blocks `body` holds, in order.
 fn summaries_of(body: &str) -> Vec<&'static str> {
     let mut at: Vec<(usize, &'static str)> = ISSUE_BLOCKS
         .iter()
@@ -1515,7 +1513,9 @@ fn by_kind(served: &[(String, Value)]) -> BTreeMap<String, usize> {
     kinds
 }
 
-/// A path that writes a body to Linear.
+/// Every path that writes a body to Linear, each one journey: the paths that write over a
+/// record read it first, which is what let a block it held as literal text decide the form of the
+/// caller's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum WritePath {
     TaskContentSet,
@@ -1586,7 +1586,6 @@ impl LinearPlan {
         }
     }
 
-    /// A file of the sandbox holding `body`, by its path.
     fn file(&self, name: &str, body: &str) -> String {
         let file = self.sandbox.project().join(name);
         std::fs::write(&file, body).expect("the body file");

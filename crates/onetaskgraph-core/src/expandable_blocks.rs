@@ -606,9 +606,8 @@ fn linear_written(authored: &str, literal: &std::collections::HashSet<String>) -
 /// authored block though Linear shows it as paragraphs. Written back as it reads, as a copy's
 /// follow-up writes what the destination stored, it would be translated into a section the author
 /// never wrote. So every body a read gives back is remembered, for as long as this source lives,
-/// as its blocks in order, each with whether Linear held it as literal text or as a section — the
-/// latest read of the same blocks replacing an earlier one — and a body written back carries each
-/// block as that read found it: a body read from Linear and written back is what Linear stored.
+/// as its blocks in order, each with how Linear held it — the latest read of the same blocks
+/// replacing an earlier one — and a body written back carries each block as that read found it: a body read from Linear and written back is what Linear stored.
 ///
 /// A body is written back only when its blocks, in order, are exactly the blocks of one body a
 /// read gave. Any other body is the caller's own, and every block in it is written as a section,
@@ -616,9 +615,34 @@ fn linear_written(authored: &str, literal: &std::collections::HashSet<String>) -
 /// the body it is written in, never its position, its neighbours or its content.
 #[derive(Default)]
 struct LinearSections {
-    /// The blocks of every body a read gave back, in order, each beside whether Linear held it
-    /// as literal text.
-    read: std::sync::Mutex<std::collections::HashMap<Vec<String>, Vec<bool>>>,
+    /// Every body a read gave back, the latest last, no two holding the same blocks.
+    read: std::sync::Mutex<Vec<Vec<ReadBlock>>>,
+}
+
+/// One block of a body a read gave back, in the authored form.
+struct ReadBlock {
+    /// Its whole text.
+    text: String,
+    /// How Linear held it.
+    held: HeldAs,
+}
+
+/// How Linear held a block a read gave back in the authored form.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HeldAs {
+    /// As literal text, which a write back keeps.
+    Literal,
+    /// As a collapsible section.
+    Section,
+}
+
+/// Whether `body`'s blocks, in order, are exactly `texts`.
+fn holds_blocks(body: &[ReadBlock], texts: &[String]) -> bool {
+    body.len() == texts.len()
+        && body
+            .iter()
+            .zip(texts)
+            .all(|(block, text)| block.text == *text)
 }
 
 /// The whole text of every block of `content` in the authored form, in order.
@@ -633,32 +657,46 @@ fn block_texts(content: &str) -> Vec<String> {
 
 impl BodyMarkup for LinearSections {
     fn written(&self, content: &str) -> String {
-        let blocks = block_texts(content);
+        let texts = block_texts(content);
         let read = self
             .read
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let literal = read.get(&blocks).map_or_else(Default::default, |held| {
-            blocks
-                .iter()
-                .zip(held)
-                .filter(|(_, literal)| **literal)
-                .map(|(block, _)| block.clone())
-                .collect()
-        });
+        let literal = read
+            .iter()
+            .find(|body| holds_blocks(body, &texts))
+            .map_or_else(Default::default, |body| {
+                body.iter()
+                    .filter(|block| block.held == HeldAs::Literal)
+                    .map(|block| block.text.clone())
+                    .collect()
+            });
         linear_written(content, &literal)
     }
 
     fn read(&self, content: &str) -> String {
         let literal = block_texts(content);
         let read = ExpandableForm::Linear.read(content);
-        let blocks = block_texts(&read);
-        if !blocks.is_empty() {
-            let held = blocks.iter().map(|block| literal.contains(block)).collect();
-            self.read
+        let texts = block_texts(&read);
+        if !texts.is_empty() {
+            let mut bodies = self
+                .read
                 .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .insert(blocks, held);
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            bodies.retain(|body| !holds_blocks(body, &texts));
+            bodies.push(
+                texts
+                    .into_iter()
+                    .map(|text| ReadBlock {
+                        held: if literal.contains(&text) {
+                            HeldAs::Literal
+                        } else {
+                            HeldAs::Section
+                        },
+                        text,
+                    })
+                    .collect(),
+            );
         }
         read
     }
