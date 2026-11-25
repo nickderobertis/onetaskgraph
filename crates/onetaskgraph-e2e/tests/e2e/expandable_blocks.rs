@@ -2142,3 +2142,51 @@ fn the_issues_body_set_on_a_folder_and_a_board_is_stored_byte_for_byte() {
         );
     }
 }
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace.
+#[test]
+fn a_copys_follow_up_keeps_literal_text_linear_stored_over_the_section_it_replaced() {
+    // The counterpart holds a section; the copy reads it, then sends a shape the authored form
+    // does not recognise — a list straight after the summary — which Linear stores as literal
+    // text reading back as that very section's block. The copy's follow-up sends what Linear
+    // stored back, and the block stays the literal text the latest read found.
+    let plan = LinearPlan::new();
+    let task = &plan.landed["T"];
+    let section = details("Held", "* a point");
+    let file = plan.file("section.md", &format!("{section}\n"));
+    ok(
+        &plan.sandbox,
+        &["task", "content", "set", &task.id, "--file", &file],
+    );
+    assert_eq!(
+        plan.stored(task),
+        "+++ Held\n\n* a point\n\n+++",
+        "held as a section"
+    );
+    let shape = "<details>\n<summary>Held</summary>\n- a point\n\n</details>\n";
+    let recorded = onetaskgraph_e2e_support::linear_markdown::stored(shape);
+    assert_eq!(
+        recorded.trim_end(),
+        section,
+        "Linear stores it as the section's block"
+    );
+    plan.author("T", shape);
+    let mark = plan.workspace.served_count();
+    ok(
+        &plan.sandbox,
+        &["task", "copy", "authored:T", "--to", "dest", "--json"],
+    );
+    let updates = plan
+        .workspace
+        .served_since(mark)
+        .into_iter()
+        .filter(|(document, _)| document.contains("issueUpdate("))
+        .count();
+    assert_eq!(updates, 2, "the copy's write, then its follow-up");
+    assert_eq!(
+        plan.stored(task),
+        section,
+        "stored as literal text, as Linear stored it"
+    );
+    assert_eq!(task.content(&plan.sandbox), section, "and read back so");
+}
