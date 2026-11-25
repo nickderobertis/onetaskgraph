@@ -32,12 +32,13 @@ use serde_json::Value;
 pub(crate) const PROTOCOL_VERSION: u32 = 2;
 
 /// Every status category this build knows, in the order the vocabulary lists them (§3.5).
-pub(crate) const STATUS_VOCABULARY: [StatusCategory; 8] = [
+pub(crate) const STATUS_VOCABULARY: [StatusCategory; 9] = [
     StatusCategory::Draft,
     StatusCategory::Backlog,
     StatusCategory::Todo,
     StatusCategory::Queued,
     StatusCategory::InProgress,
+    StatusCategory::InReview,
     StatusCategory::Done,
     StatusCategory::Cancelled,
     StatusCategory::Unknown,
@@ -49,7 +50,7 @@ pub(crate) const STATUS_VOCABULARY: [StatusCategory; 8] = [
 /// somebody decides here whether a peer that predates it can be handed it.
 pub(crate) const fn after_the_first_vocabulary(category: StatusCategory) -> bool {
     match category {
-        StatusCategory::Queued => true,
+        StatusCategory::Queued | StatusCategory::InReview => true,
         StatusCategory::Draft
         | StatusCategory::Backlog
         | StatusCategory::Todo
@@ -73,18 +74,42 @@ pub(crate) fn vocabulary() -> Vec<String> {
     STATUS_VOCABULARY.into_iter().map(spelled).collect()
 }
 
-/// Whether a handshake's `statuses` member lists every category this build knows.
+/// The categories a peer's handshake says it was written against (§3.5).
 ///
-/// An absent member is the first vocabulary, so it lists none of the categories added
-/// after it.
-pub(crate) fn knows_every_category(statuses: Option<&[String]>) -> bool {
-    let Some(listed) = statuses else {
-        return false;
-    };
-    STATUS_VOCABULARY
-        .into_iter()
-        .filter(|category| after_the_first_vocabulary(*category))
-        .all(|category| listed.contains(&spelled(category)))
+/// Every category of the first vocabulary, and each category added after it that the
+/// handshake's `statuses` member lists by name. Each added category is decided on its own, so
+/// a peer that lists `queued` and predates `in-review` is still handed `queued` and is never
+/// handed `in-review`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Vocabulary {
+    /// Per position of [`STATUS_VOCABULARY`], whether the peer was written against it.
+    known: [bool; STATUS_VOCABULARY.len()],
+}
+
+impl Vocabulary {
+    /// What a handshake's `statuses` member says. An absent member is the first vocabulary,
+    /// so it lists none of the categories added after it.
+    pub(crate) fn listed(statuses: Option<&[String]>) -> Self {
+        let listed = statuses.unwrap_or_default();
+        Self {
+            known: STATUS_VOCABULARY.map(|category| {
+                !after_the_first_vocabulary(category) || listed.contains(&spelled(category))
+            }),
+        }
+    }
+
+    /// Whether the peer may be handed `category`.
+    pub(crate) fn knows(self, category: StatusCategory) -> bool {
+        STATUS_VOCABULARY
+            .iter()
+            .position(|held| *held == category)
+            .is_some_and(|position| self.known[position])
+    }
+
+    /// Whether the peer may be handed every category this build knows.
+    pub(crate) fn knows_every(self) -> bool {
+        self.known.iter().all(|known| *known)
+    }
 }
 
 /// One request line: `{ "id": …, "method": …, "params": … }` (§2).

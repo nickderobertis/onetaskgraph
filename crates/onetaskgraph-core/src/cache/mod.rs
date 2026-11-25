@@ -62,8 +62,9 @@ pub(crate) use source::CachedSource;
 /// schema its shapes are digested from now describes a task's classification as its own, never
 /// tightened by its project, and an entry version 2 wrote is read as a miss. Version 4 adds a
 /// task's `assignees`, held for a source that opted in to them: an entry an earlier release
-/// wrote holds none, so it is read as a miss rather than served as an unassigned task.
-pub const ENTRY_SCHEMA: u32 = 4;
+/// wrote holds none, so it is read as a miss rather than served as an unassigned task. Version
+/// 5 admits the `in-review` status category, which an earlier release cannot read.
+pub const ENTRY_SCHEMA: u32 = 5;
 
 /// Where a source's cache lives, and what names the remote it caches.
 #[derive(Debug, Clone, PartialEq, Eq)]

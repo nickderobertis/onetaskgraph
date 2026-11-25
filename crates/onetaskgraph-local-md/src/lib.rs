@@ -164,7 +164,7 @@ pub struct LocalMdConfig {
 /// word here fails there.
 ///
 /// The display aliases sit beside those words rather than instead of them: `in progress`
-/// and `doing` for `in-progress`, `canceled` for `cancelled`.
+/// and `doing` for `in-progress`, `in review` for `in-review`, `canceled` for `cancelled`.
 fn default_statuses() -> BTreeMap<String, StatusCategory> {
     [
         ("draft", StatusCategory::Draft),
@@ -174,6 +174,8 @@ fn default_statuses() -> BTreeMap<String, StatusCategory> {
         ("in progress", StatusCategory::InProgress),
         ("in-progress", StatusCategory::InProgress),
         ("doing", StatusCategory::InProgress),
+        ("in review", StatusCategory::InReview),
+        ("in-review", StatusCategory::InReview),
         ("done", StatusCategory::Done),
         ("cancelled", StatusCategory::Cancelled),
         ("canceled", StatusCategory::Cancelled),
@@ -1801,6 +1803,19 @@ impl TaskSource for LocalMdSource {
         let _admitted = record_gate(false).await?;
         self.write_document_with(write, Some(answers))
     }
+    /// Whether this folder's `status_mapping` has a word reading back as `category` — the
+    /// word [`set_task_status`](TaskSource::set_task_status) writes. The default mapping has
+    /// one for every category, so a folder that configures none writes them all.
+    fn maps_status(&self, kind: ItemKind, category: StatusCategory) -> bool {
+        let _ = kind;
+        let word = self.word_for(category);
+        self.statuses
+            .get(&word.to_lowercase())
+            .copied()
+            .unwrap_or(StatusCategory::Unknown)
+            == category
+    }
+
     /// Rewrite the one `status:` entry of the task's front matter, and nothing else.
     ///
     /// A task already in `category` is left byte for byte as it is, word and all: a rewrite
@@ -3851,6 +3866,7 @@ fn category_name(category: StatusCategory) -> &'static str {
         StatusCategory::Todo => "todo",
         StatusCategory::Queued => "queued",
         StatusCategory::InProgress => "in-progress",
+        StatusCategory::InReview => "in-review",
         StatusCategory::Done => "done",
         StatusCategory::Cancelled => "cancelled",
         StatusCategory::Unknown => "unknown",
@@ -4564,9 +4580,17 @@ impl LocalMdSource {
     /// persists the canonical word reads back as that category, and what a person reads in
     /// a file this source writes stays `in progress`. Stating the preference is what keeps
     /// that from resting on the order a `BTreeMap` happens to hold two words in.
+    ///
+    /// The spoken preference is `in-progress`'s alone, because it is what this folder wrote
+    /// before the canonical word was read: `in-review` arrived with both words read, so it is
+    /// written as the category's own spelling, the word every other tool prints.
     fn word_for(&self, category: StatusCategory) -> String {
         let spelled = category_name(category);
-        let spoken = spelled.replace('-', " ");
+        let spoken = if category == StatusCategory::InProgress {
+            spelled.replace('-', " ")
+        } else {
+            spelled.to_owned()
+        };
         let words: Vec<&String> = self
             .statuses
             .iter()

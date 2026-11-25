@@ -22,6 +22,8 @@ const PUBLISHED_CONTEXTS: &[(u64, u64)] = &[
     // Version 6: an item carries the people its issue is assigned to, on a source opted in to
     // assignees.
     (6, 0xaf7c_9095_88d5_4ea4),
+    // Version 7: a status may be `in-review`.
+    (7, 0xaeff_5ebc_2544_36cd),
 ];
 
 /// FNV-1a over `value`'s JSON, whose object keys serde_json keeps sorted.

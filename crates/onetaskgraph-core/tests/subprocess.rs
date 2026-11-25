@@ -2081,6 +2081,7 @@ async fn a_plugin_whose_handshake_lists_no_statuses_is_never_handed_queued_or_a_
             "todo",
             "queued",
             "in-progress",
+            "in-review",
             "done",
             "cancelled",
             "unknown"
@@ -2171,6 +2172,176 @@ async fn a_plugin_whose_handshake_lists_no_statuses_is_never_handed_queued_or_a_
         .collect();
     assert_eq!(methods, ["initialize", "query_tasks"], "{heard:?}");
     assert_eq!(heard[1]["params"]["query"]["statuses"], json!(["todo"]));
+}
+
+/// The vocabulary a peer written after `queued` and before `in-review` lists.
+fn before_in_review() -> Value {
+    json!([
+        "draft",
+        "backlog",
+        "todo",
+        "queued",
+        "in-progress",
+        "done",
+        "cancelled",
+        "unknown"
+    ])
+}
+
+#[tokio::test]
+async fn a_plugin_whose_handshake_does_not_list_in_review_is_never_handed_it_and_still_handed_queued()
+ {
+    let (source, heard) = recording(vec![
+        json!({"protocol_version": 2, "kind": "earlier", "capabilities": capabilities(),
+               "writes": "supported", "task_updates": true, "statuses": before_in_review()}),
+        json!({"items": [], "next": null}),
+        json!({"status": {"category": "queued", "name": "Queued"}}),
+    ]);
+    let source = source.expect("the handshake completes");
+
+    // Configuration alone says which it has a name for, and asks the peer nothing.
+    assert!(!source.maps_status(ItemKind::Task, StatusCategory::InReview));
+    assert!(!source.maps_status(ItemKind::Project, StatusCategory::InReview));
+    assert!(source.maps_status(ItemKind::Task, StatusCategory::Queued));
+
+    // A query for `in-review` alone is not sent; one beside `queued` is sent `queued` alone.
+    let only = TaskQuery {
+        statuses: vec![StatusCategory::InReview],
+        ..everything()
+    };
+    let answered = source
+        .query_tasks(&only, &page(10))
+        .await
+        .expect("answered");
+    assert!(answered.items.is_empty() && answered.next.is_none());
+    let mixed = TaskQuery {
+        statuses: vec![StatusCategory::Queued, StatusCategory::InReview],
+        ..everything()
+    };
+    source
+        .query_tasks(&mixed, &page(10))
+        .await
+        .expect("answered");
+
+    let refused = |error: SourceError| match error {
+        SourceError::Refused { message } => message,
+        other => panic!("expected a refusal by name, got {other:?}"),
+    };
+    let message = refused(
+        source
+            .set_task_status(&NativeId::from("T-1"), StatusCategory::InReview)
+            .await
+            .expect_err("never handed in-review"),
+    );
+    assert!(
+        message
+            .contains("\"earlier\" plugin's handshake does not list the status category in-review"),
+        "{message}"
+    );
+    let reviewing = written(json!({"id": "T-1", "title": "Alpha", "content": null,
+        "status": {"category": "in-review", "name": "In Review"}, "labels": []}));
+    let message = refused(
+        source
+            .write_task(&ItemWrite {
+                target: None,
+                item: reviewing,
+                depends_on: Vec::new(),
+            })
+            .await
+            .expect_err("never handed in-review"),
+    );
+    assert!(message.contains("status category in-review"), "{message}");
+    // `queued`, which it lists, is still sent.
+    source
+        .set_task_status(&NativeId::from("T-1"), StatusCategory::Queued)
+        .await
+        .expect("handed queued");
+
+    let heard = heard.lock().expect("the record").clone();
+    let methods: Vec<&str> = heard
+        .iter()
+        .map(|request| request["method"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        methods,
+        ["initialize", "query_tasks", "set_task_status"],
+        "{heard:?}"
+    );
+    assert_eq!(heard[1]["params"]["query"]["statuses"], json!(["queued"]));
+    assert_eq!(heard[2]["params"]["category"], json!("queued"));
+}
+
+#[tokio::test]
+async fn in_review_crosses_the_wire_to_a_plugin_whose_handshake_lists_it() {
+    let there = a_process_away(hosted_settings()).expect("connects");
+    assert!(there.maps_status(ItemKind::Task, StatusCategory::InReview));
+    let id = NativeId::from("T-3");
+    assert_eq!(
+        there
+            .set_task_status(&id, StatusCategory::InReview)
+            .await
+            .expect("answered"),
+        Some(Status {
+            category: StatusCategory::InReview,
+            name: "in-review".to_owned()
+        })
+    );
+    let reviewing = TaskQuery {
+        statuses: vec![StatusCategory::InReview],
+        ..everything()
+    };
+    let found: Vec<String> = there
+        .query_tasks(&reviewing, &page(2))
+        .await
+        .expect("answered")
+        .items
+        .into_iter()
+        .map(|task| task.id.0)
+        .collect();
+    assert_eq!(found, ["T-3"]);
+    let held = there.get_task(&id).await.expect("answered").expect("held");
+    assert_eq!(held.status.category, StatusCategory::InReview);
+}
+
+#[test]
+fn an_engine_that_does_not_list_in_review_is_told_it_as_unknown_under_its_own_name() {
+    let mut settings = hosted_settings();
+    settings["config"]["tasks"][0]["status"] =
+        json!({"category": "in-review", "name": "In Review"});
+    settings["config"]["tasks"][1]["status"] = json!({"category": "queued", "name": "Queued"});
+    let first = json!({"id": "1", "method": "get_task", "params": {"id": "T-1"}});
+    let second = json!({"id": "2", "method": "get_task", "params": {"id": "T-2"}});
+    let mut earlier = handshake(2, settings.clone());
+    earlier["params"]["statuses"] = before_in_review();
+    let told = served(&[earlier, first.clone(), second]);
+    assert_eq!(
+        told[1]["result"]["task"]["status"],
+        json!({"category": "unknown", "name": "In Review"}),
+        "{told:?}"
+    );
+    assert_eq!(
+        told[2]["result"]["task"]["status"],
+        json!({"category": "queued", "name": "Queued"}),
+        "{told:?}"
+    );
+
+    let mut current = handshake(2, settings);
+    current["params"]["statuses"] = json!([
+        "draft",
+        "backlog",
+        "todo",
+        "queued",
+        "in-progress",
+        "in-review",
+        "done",
+        "cancelled",
+        "unknown"
+    ]);
+    let now = served(&[current, first]);
+    assert_eq!(
+        now[1]["result"]["task"]["status"],
+        json!({"category": "in-review", "name": "In Review"})
+    );
 }
 
 #[tokio::test]
@@ -2270,6 +2441,7 @@ fn an_engine_that_lists_no_statuses_is_told_queued_as_unknown_under_its_own_name
             "todo",
             "queued",
             "in-progress",
+            "in-review",
             "done",
             "cancelled",
             "unknown"
@@ -2295,6 +2467,7 @@ fn an_engine_that_lists_no_statuses_is_told_queued_as_unknown_under_its_own_name
         "todo",
         "queued",
         "in-progress",
+        "in-review",
         "done",
         "cancelled",
         "unknown"

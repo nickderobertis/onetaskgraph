@@ -718,6 +718,11 @@ pub enum StatusCategory {
     Queued,
     /// Being worked on.
     InProgress,
+    /// Done and waiting on a reviewer before it is finished.
+    ///
+    /// No source ships a default name for it: a source writes and reads it only at the name its
+    /// `status_mapping` gives it, so a board with no review column reads exactly as before.
+    InReview,
     /// Finished.
     Done,
     /// Abandoned.

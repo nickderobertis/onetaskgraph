@@ -881,6 +881,22 @@ pub trait TaskSource: Send + Sync {
         status.clone()
     }
 
+    /// Whether this source has a name to write `category` as on an item of `kind`, so a status
+    /// write of it would not be refused for want of one — answered from this source's
+    /// configuration alone, sending no request and reading nothing.
+    ///
+    /// `false` for a category its `status_mapping` does not name, sets to `null`, or names for
+    /// the other kind only. A name the backend's own vocabulary lacks still answers `true`:
+    /// only a write discovers that, exactly as [`check_status_write`](Self::check_status_write)
+    /// or the write itself does.
+    ///
+    /// Defaulted to `true`, which is what a source that keeps whatever category it is given —
+    /// the in-memory source — answers for every one.
+    fn maps_status(&self, kind: ItemKind, category: StatusCategory) -> bool {
+        let _ = (kind, category);
+        true
+    }
+
     /// Set the status of one task this source holds, and change nothing else about it,
     /// answering with the status as this source now reads it — or `None` when this source
     /// holds no such task.
