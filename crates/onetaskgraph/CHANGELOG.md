@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0](https://github.com/nickderobertis/onetaskgraph/compare/v0.15.1...v0.16.0) - 2026-11-25
+
+### Added
+
+- *(status)* [**breaking**] add an in-review status category every source maps, reads and writes ([#4091](https://github.com/nickderobertis/onetaskgraph/pull/4091))
+
 ## [0.15.0](https://github.com/nickderobertis/onetaskgraph/compare/v0.14.21...v0.15.0) - 2026-11-22
 
 ### Added
