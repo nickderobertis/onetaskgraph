@@ -1583,12 +1583,28 @@ class GeneratedClient:
         default_sources: list[str] | tuple[str, ...] | None = None,
         not_status: list[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ]
         ]
         | tuple[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ],
             ...,
         ]
@@ -1603,12 +1619,28 @@ class GeneratedClient:
         | None = None,
         status: list[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ]
         ]
         | tuple[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ],
             ...,
         ]
@@ -1626,12 +1658,28 @@ class GeneratedClient:
         default_sources: list[str] | tuple[str, ...] | None = None,
         not_status: list[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ]
         ]
         | tuple[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ],
             ...,
         ]
@@ -1646,12 +1694,28 @@ class GeneratedClient:
         | None = None,
         status: list[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ]
         ]
         | tuple[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ],
             ...,
         ]
@@ -1669,12 +1733,28 @@ class GeneratedClient:
         default_sources: list[str] | tuple[str, ...] | None = None,
         not_status: list[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ]
         ]
         | tuple[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ],
             ...,
         ]
@@ -1689,12 +1769,28 @@ class GeneratedClient:
         | None = None,
         status: list[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ]
         ]
         | tuple[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ],
             ...,
         ]
@@ -1711,12 +1807,28 @@ class GeneratedClient:
         default_sources: list[str] | tuple[str, ...] | None = None,
         not_status: list[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ]
         ]
         | tuple[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ],
             ...,
         ]
@@ -1731,12 +1843,28 @@ class GeneratedClient:
         | None = None,
         status: list[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ]
         ]
         | tuple[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ],
             ...,
         ]
@@ -1916,7 +2044,15 @@ class GeneratedClient:
         search_path: list[str] | tuple[str, ...] | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         status: Literal[
-            "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            "draft",
+            "backlog",
+            "todo",
+            "queued",
+            "in-progress",
+            "in-review",
+            "done",
+            "cancelled",
+            "unknown",
         ]
         | None = None,
         template: str | None = None,
@@ -1948,7 +2084,15 @@ class GeneratedClient:
         search_path: list[str] | tuple[str, ...] | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         status: Literal[
-            "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            "draft",
+            "backlog",
+            "todo",
+            "queued",
+            "in-progress",
+            "in-review",
+            "done",
+            "cancelled",
+            "unknown",
         ]
         | None = None,
         template: str | None = None,
@@ -1980,7 +2124,15 @@ class GeneratedClient:
         search_path: list[str] | tuple[str, ...] | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         status: Literal[
-            "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            "draft",
+            "backlog",
+            "todo",
+            "queued",
+            "in-progress",
+            "in-review",
+            "done",
+            "cancelled",
+            "unknown",
         ]
         | None = None,
         template: str | None = None,
@@ -2011,7 +2163,15 @@ class GeneratedClient:
         search_path: list[str] | tuple[str, ...] | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         status: Literal[
-            "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            "draft",
+            "backlog",
+            "todo",
+            "queued",
+            "in-progress",
+            "in-review",
+            "done",
+            "cancelled",
+            "unknown",
         ]
         | None = None,
         template: str | None = None,
@@ -2251,12 +2411,28 @@ class GeneratedClient:
         source: list[str] | tuple[str, ...] | None = None,
         status: list[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ]
         ]
         | tuple[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ],
             ...,
         ]
@@ -2285,12 +2461,28 @@ class GeneratedClient:
         source: list[str] | tuple[str, ...] | None = None,
         status: list[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ]
         ]
         | tuple[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ],
             ...,
         ]
@@ -2319,12 +2511,28 @@ class GeneratedClient:
         source: list[str] | tuple[str, ...] | None = None,
         status: list[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ]
         ]
         | tuple[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ],
             ...,
         ]
@@ -2352,12 +2560,28 @@ class GeneratedClient:
         source: list[str] | tuple[str, ...] | None = None,
         status: list[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ]
         ]
         | tuple[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ],
             ...,
         ]
@@ -4095,12 +4319,28 @@ class GeneratedClient:
         set: list[str] | tuple[str, ...] | None = None,
         status: list[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ]
         ]
         | tuple[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ],
             ...,
         ]
@@ -4123,12 +4363,28 @@ class GeneratedClient:
         set: list[str] | tuple[str, ...] | None = None,
         status: list[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ]
         ]
         | tuple[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ],
             ...,
         ]
@@ -4151,12 +4407,28 @@ class GeneratedClient:
         set: list[str] | tuple[str, ...] | None = None,
         status: list[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ]
         ]
         | tuple[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ],
             ...,
         ]
@@ -4178,12 +4450,28 @@ class GeneratedClient:
         set: list[str] | tuple[str, ...] | None = None,
         status: list[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ]
         ]
         | tuple[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ],
             ...,
         ]
@@ -4314,12 +4602,28 @@ class GeneratedClient:
         source: list[str] | tuple[str, ...] | None = None,
         status: list[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ]
         ]
         | tuple[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ],
             ...,
         ]
@@ -4334,12 +4638,28 @@ class GeneratedClient:
         | None = None,
         when_destination_status: list[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ]
         ]
         | tuple[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ],
             ...,
         ]
@@ -4371,12 +4691,28 @@ class GeneratedClient:
         source: list[str] | tuple[str, ...] | None = None,
         status: list[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ]
         ]
         | tuple[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ],
             ...,
         ]
@@ -4391,12 +4727,28 @@ class GeneratedClient:
         | None = None,
         when_destination_status: list[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ]
         ]
         | tuple[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ],
             ...,
         ]
@@ -4428,12 +4780,28 @@ class GeneratedClient:
         source: list[str] | tuple[str, ...] | None = None,
         status: list[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ]
         ]
         | tuple[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ],
             ...,
         ]
@@ -4448,12 +4816,28 @@ class GeneratedClient:
         | None = None,
         when_destination_status: list[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ]
         ]
         | tuple[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ],
             ...,
         ]
@@ -4484,12 +4868,28 @@ class GeneratedClient:
         source: list[str] | tuple[str, ...] | None = None,
         status: list[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ]
         ]
         | tuple[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ],
             ...,
         ]
@@ -4504,12 +4904,28 @@ class GeneratedClient:
         | None = None,
         when_destination_status: list[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ]
         ]
         | tuple[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ],
             ...,
         ]
@@ -4574,7 +4990,15 @@ class GeneratedClient:
         search_path: list[str] | tuple[str, ...] | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         status: Literal[
-            "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            "draft",
+            "backlog",
+            "todo",
+            "queued",
+            "in-progress",
+            "in-review",
+            "done",
+            "cancelled",
+            "unknown",
         ]
         | None = None,
         template: str | None = None,
@@ -4609,7 +5033,15 @@ class GeneratedClient:
         search_path: list[str] | tuple[str, ...] | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         status: Literal[
-            "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            "draft",
+            "backlog",
+            "todo",
+            "queued",
+            "in-progress",
+            "in-review",
+            "done",
+            "cancelled",
+            "unknown",
         ]
         | None = None,
         template: str | None = None,
@@ -4644,7 +5076,15 @@ class GeneratedClient:
         search_path: list[str] | tuple[str, ...] | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         status: Literal[
-            "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            "draft",
+            "backlog",
+            "todo",
+            "queued",
+            "in-progress",
+            "in-review",
+            "done",
+            "cancelled",
+            "unknown",
         ]
         | None = None,
         template: str | None = None,
@@ -4678,7 +5118,15 @@ class GeneratedClient:
         search_path: list[str] | tuple[str, ...] | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         status: Literal[
-            "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            "draft",
+            "backlog",
+            "todo",
+            "queued",
+            "in-progress",
+            "in-review",
+            "done",
+            "cancelled",
+            "unknown",
         ]
         | None = None,
         template: str | None = None,
@@ -5106,12 +5554,28 @@ class GeneratedClient:
         not_label: list[str] | tuple[str, ...] | None = None,
         not_status: list[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ]
         ]
         | tuple[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ],
             ...,
         ]
@@ -5131,12 +5595,28 @@ class GeneratedClient:
         source: list[str] | tuple[str, ...] | None = None,
         status: list[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ]
         ]
         | tuple[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ],
             ...,
         ]
@@ -5161,12 +5641,28 @@ class GeneratedClient:
         not_label: list[str] | tuple[str, ...] | None = None,
         not_status: list[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ]
         ]
         | tuple[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ],
             ...,
         ]
@@ -5186,12 +5682,28 @@ class GeneratedClient:
         source: list[str] | tuple[str, ...] | None = None,
         status: list[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ]
         ]
         | tuple[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ],
             ...,
         ]
@@ -5216,12 +5728,28 @@ class GeneratedClient:
         not_label: list[str] | tuple[str, ...] | None = None,
         not_status: list[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ]
         ]
         | tuple[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ],
             ...,
         ]
@@ -5241,12 +5769,28 @@ class GeneratedClient:
         source: list[str] | tuple[str, ...] | None = None,
         status: list[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ]
         ]
         | tuple[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ],
             ...,
         ]
@@ -5270,12 +5814,28 @@ class GeneratedClient:
         not_label: list[str] | tuple[str, ...] | None = None,
         not_status: list[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ]
         ]
         | tuple[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ],
             ...,
         ]
@@ -5295,12 +5855,28 @@ class GeneratedClient:
         source: list[str] | tuple[str, ...] | None = None,
         status: list[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ]
         ]
         | tuple[
             Literal[
-                "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+                "draft",
+                "backlog",
+                "todo",
+                "queued",
+                "in-progress",
+                "in-review",
+                "done",
+                "cancelled",
+                "unknown",
             ],
             ...,
         ]
@@ -6328,7 +6904,15 @@ class GeneratedClient:
         sanitize_dry_run: Literal[False] | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         status: Literal[
-            "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            "draft",
+            "backlog",
+            "todo",
+            "queued",
+            "in-progress",
+            "in-review",
+            "done",
+            "cancelled",
+            "unknown",
         ]
         | None = None,
         status_name: str | None = None,
@@ -6364,7 +6948,15 @@ class GeneratedClient:
         sanitize_dry_run: Literal[True],
         set: list[str] | tuple[str, ...] | None = None,
         status: Literal[
-            "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            "draft",
+            "backlog",
+            "todo",
+            "queued",
+            "in-progress",
+            "in-review",
+            "done",
+            "cancelled",
+            "unknown",
         ]
         | None = None,
         status_name: str | None = None,
@@ -6400,7 +6992,15 @@ class GeneratedClient:
         sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         status: Literal[
-            "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            "draft",
+            "backlog",
+            "todo",
+            "queued",
+            "in-progress",
+            "in-review",
+            "done",
+            "cancelled",
+            "unknown",
         ]
         | None = None,
         status_name: str | None = None,
@@ -6435,7 +7035,15 @@ class GeneratedClient:
         sanitize_dry_run: bool | None = None,
         set: list[str] | tuple[str, ...] | None = None,
         status: Literal[
-            "draft", "backlog", "todo", "queued", "in-progress", "done", "cancelled", "unknown"
+            "draft",
+            "backlog",
+            "todo",
+            "queued",
+            "in-progress",
+            "in-review",
+            "done",
+            "cancelled",
+            "unknown",
         ]
         | None = None,
         status_name: str | None = None,

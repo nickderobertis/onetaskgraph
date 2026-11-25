@@ -35,6 +35,7 @@ class StatusCategory(StrEnum):
     StatusCategoryTodo = "todo"
     StatusCategoryQueued = "queued"
     StatusCategoryInProgress = "in-progress"
+    StatusCategoryInReview = "in-review"
     StatusCategoryDone = "done"
     StatusCategoryCancelled = "cancelled"
     StatusCategoryUnknown = "unknown"
