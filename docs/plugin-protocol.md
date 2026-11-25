@@ -289,6 +289,20 @@ The member is **optional**, and an absent one means the **first vocabulary**: `"
 category there was before `"queued"`. A listed value the other side has never heard of is
 ignored, by §2.1.
 
+Two categories were added after the first vocabulary, and each is decided **on its own**: a
+peer knows one only when its member lists it by name, so a peer that lists `"queued"` and was
+written before `"in-review"` is handed `"queued"` and never `"in-review"`.
+
+- `"queued"`: work claimed by something that will do it and not yet started.
+- `"in-review"`: work done and waiting on a reviewer before it is finished, between
+  `"in-progress"` and `"done"` in the vocabulary's order. No source ships a default name for
+  it; a source writes and reads it only at a name it is configured with.
+
+This build lists `"draft"`, `"backlog"`, `"todo"`, `"queued"`, `"in-progress"`, `"in-review"`,
+`"done"`, `"cancelled"` and `"unknown"`, in that order. What a plugin's member lists is also
+what `Engine::maps_status` answers for it: `false` for a category it did not list, with no
+request sent.
+
 Nothing crosses to a peer that did not list it without a refusal by name:
 
 - **An engine never hands a plugin a category that plugin did not list.** A `query_tasks` or
@@ -832,10 +846,11 @@ passes; a task that never settles is written nowhere and reported failed.
   task carrying at least one; `all_of` matches a task carrying every one; `none_of`
   excludes a task carrying any. An empty list is not a filter.
 - `statuses` holds `StatusCategory` values: `"draft"`, `"backlog"`, `"todo"`, `"queued"`,
-  `"in-progress"`, `"done"`, `"cancelled"`, `"unknown"`. An empty list is not a filter.
-  `"todo"` is work accepted and ready to be picked up that nothing has claimed; `"queued"` is
-  work claimed by something that will do it and not yet started. §3.5 says what a plugin
-  whose handshake does not list `"queued"` is handed instead.
+  `"in-progress"`, `"in-review"`, `"done"`, `"cancelled"`, `"unknown"`. An empty list is not a
+  filter. `"todo"` is work accepted and ready to be picked up that nothing has claimed;
+  `"queued"` is work claimed by something that will do it and not yet started; `"in-review"` is
+  work done and waiting on a reviewer before it is finished. §3.5 says what a plugin whose
+  handshake does not list `"queued"` or `"in-review"` is handed instead.
 - `project` is the string `"any"`, the string `"orphans"` — tasks belonging to no
   project — or the object `{"is": "<native id>"}`. It is externally tagged, unlike
   `SourceError` (§5), which is tagged on `kind`; both shapes are as
@@ -2583,7 +2598,8 @@ documents were: the engine sends a comment method only to a plugin that declared
 `"native"` in its handshake, and a plugin written before there were comments cannot have
 declared that. The three that write are gated twice, on that declaration and on §3.3.
 
-The `"queued"` status category, the `statuses` and `task_updates` members of §3.5 and §3.6,
+The `"queued"` and `"in-review"` status categories, the `statuses` and `task_updates` members of
+§3.5 and §3.6,
 the two methods of §4.17 and a task's `delivers` and `delivered_by` were added **without** a
 bump, and each of them is gated so that a peer written against the earlier protocol is never
 handed a shape it was not written for without a refusal by name. A new category is a value a

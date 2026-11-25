@@ -116,7 +116,7 @@ onetaskgraph task update-many <SOURCE> --input FILE|-
 onetaskgraph task comment edit   <ID> <COMMENT-ID> [--body-file PATH] [--expect VERSION]
                                       [--if-version VERSION]
 onetaskgraph task comment delete <ID> <COMMENT-ID> [--expect VERSION]
-onetaskgraph task status set <ID> draft|backlog|todo|queued|in-progress|done|cancelled|unknown
+onetaskgraph task status set <ID> draft|backlog|todo|queued|in-progress|in-review|done|cancelled|unknown
                              [--expect VERSION] [--if-version VERSION]
                              [--duplicate-of ID]  # beside `cancelled` alone; see below
 onetaskgraph task status reconcile --source <SOURCE> [--dry-run]
@@ -170,7 +170,7 @@ onetaskgraph project copy <ID> --to <SOURCE> [--no-tasks | --member TASK-ID...]
 onetaskgraph project copy <ID> --to <SOURCE> --member TASK-ID... --members-only
                                                  # into the project already there, untouched
 onetaskgraph project metadata set <ID> <KEY> <VALUE>
-onetaskgraph project status set <ID> draft|backlog|todo|queued|in-progress|done|cancelled|unknown
+onetaskgraph project status set <ID> draft|backlog|todo|queued|in-progress|in-review|done|cancelled|unknown
 onetaskgraph project create <SOURCE> --id NATIVE-ID --title TITLE [--status CATEGORY]
                             ...                  # the body, label, repository, metadata,
                                                  # classification and term-scope flags of
@@ -321,7 +321,15 @@ claimed by something that will do it and not yet started, between `todo` (ready,
 has claimed it) and `in-progress`. A folder of Markdown reads the word `queued`; a GitHub
 Projects board sends it to its `Queued` column by default, `status_mapping.queued` naming
 another; Linear writes it as the name its source's `status_mapping.queued` gives the item's
-kind, and refuses it by name when that source gives none. See "Status mapping" below.
+kind, and refuses it by name when that source gives none. `in-review` is the category for work
+that is done and waiting on a reviewer before it is finished, between `in-progress` and `done`.
+**No source ships a default name for it**, so a board without a review column reads and writes
+exactly as it did before the category existed: an item at a review column its source does not
+map reads `unknown`. A folder of Markdown reads the words `in-review` and `in review` and writes
+`in-review`; a GitHub Projects board and a Linear source write it, and read it, only at the name
+their `status_mapping.in-review` gives the item's kind, and refuse `task status set <ID>
+in-review` by the key to set, `status_mapping.in-review.<kind>`, before any request when they
+give none. See "Status mapping" below.
 
 <!-- llmlint: ignore[contracts_have_one_source_or_a_drift_gate] This user-facing summary is required to describe the GitHub projection; the loopback plugin tests and shared live journey drive the resolved mapping, mutations, and observed read-back together. -->
 On GitHub Projects, terminal writes keep both GitHub representations aligned: `done`
@@ -445,9 +453,13 @@ folder and `<source>:<id>` a task anywhere — and on a GitHub board it is the
 `delivered_by` is onetaskgraph's to keep. Whenever it writes a task that delivers anything,
 or delivered something before — a copy, `task status set` or `task update` — each delivered
 task gains the deliverer's qualified id, a task it dropped loses it, and the delivered task's
-status follows its deliverers while it is at `todo`, `queued` or `in-progress`:
-`in-progress` while any runs, `queued` while any is queued, `done` once every one is done or
-cancelled and at least one is done, and `todo` when they release it. A delivered task at `draft`, `backlog`, `unknown`,
+status follows its deliverers while it is at `todo`, `queued`, `in-progress` or `in-review`:
+`done` once every one is done or cancelled and at least one is done, `in-review` while any is in
+review, `in-progress` while any runs, `queued` while any is queued, and `todo` when they release
+it. A delivered task whose own source has no name for `in-review` on a task — by
+[`Engine::maps_status`](#whether-a-source-can-write-a-status), from its configuration alone,
+before any request — is written `in-progress` in its place, so delivery never sends a write the
+source refuses for want of a name. A delivered task at `draft`, `backlog`, `unknown`,
 `done` or `cancelled` is left alone, a deliverer its source no longer holds is dropped from
 `delivered_by`, and a delivered task that cannot be read or written is reported failed while
 the deliverer's own write stands.
@@ -2621,7 +2633,7 @@ sources:
 
 A `github-projects` or `linear` source names its statuses with one `status_mapping`, the same
 grammar on both. Its keys are status categories — `draft`, `backlog`, `todo`, `queued`,
-`in-progress`, `done`, `cancelled`, `unknown` — and each value is one of:
+`in-progress`, `in-review`, `done`, `cancelled`, `unknown` — and each value is one of:
 
 - **a name**, which is the category's name for a task and for a project alike;
 - **`null`**, which disables the category for every kind;
@@ -2657,8 +2669,9 @@ each category it names, `unknown` among them.
 **On a GitHub Projects board** both kinds' names are options of its one `Status` field. A
 category the source does not mention keeps its shipped default for both kinds — `backlog` →
 `Backlog`, `todo` → `Todo`, `queued` → `Queued`, `in-progress` → `In Progress`, `done` → `Done`,
-`cancelled` → `Cancelled`; `draft` and `unknown` have none — and a category it does mention uses
-only what it configures. `done` and `cancelled` close the issue as completed or not planned,
+`cancelled` → `Cancelled`; `draft`, `in-review` and `unknown` have none — and a category it does
+mention uses only what it configures. So a board's review column reads as a task in review only
+once `status_mapping.in-review` names it, and as `unknown` until then. `done` and `cancelled` close the issue as completed or not planned,
 for both kinds.
 
 <!-- llmlint: ignore-block[contracts_have_one_source_or_a_drift_gate] Held by the journeys in
@@ -2701,13 +2714,41 @@ or deletes a name that is there, and reports one present under another type as i
 | --- | --- | --- |
 | `backlog`, `draft` | `backlog` | `backlog` |
 | `todo`, `queued` | `unstarted` | `planned` |
-| `in-progress`, `unknown` | `started` | `started` |
+| `in-progress`, `in-review`, `unknown` | `started` | `started` |
 | `done` | `completed` | `completed` |
 | `cancelled` | `canceled` | `canceled` |
 
 A create Linear refuses stops the run, naming the name and its kind, and the report names every
 name created before it; run `--apply` again once the refusal is lifted, and it creates only what
 is still missing.
+
+#### Whether a source can write a status
+
+A program linking the engine asks, before it writes, whether a source has a name for a
+category:
+
+```rust
+pub fn maps_status(
+    &self,
+    source: &SourceName,
+    kind: ItemKind,
+    category: StatusCategory,
+) -> Result<bool, EngineError>
+```
+
+`Engine::maps_status` answers `true` when `source` has a name to write `category` as on an item
+of `kind`, so a status write of it would not be refused for want of one. It answers from the
+source's configuration alone and sends no request to any backend: its `status_mapping` over that
+plugin's shipped defaults, every category a folder of Markdown's words or the in-memory source
+write, and for a stdio plugin what its handshake lists
+([`docs/plugin-protocol.md`](docs/plugin-protocol.md) §3.5). It answers `false` for a category
+the mapping does not name, sets to `null` or names for the other kind only, and for one a stdio
+plugin's handshake does not list. A mapped name the backend's own vocabulary lacks still answers
+`true`, because only a write discovers that. It errs only for a source nothing configures
+(`EngineError::UnknownSource`) or one configured but unavailable
+(`EngineError::SourceUnavailable`). So a caller writes `in-review` to a board with a review
+column and `done` to one without, deciding before its one write rather than refusing and
+retrying.
 
 **Migrating to 0.3.** This grammar changes what an existing configuration does:
 

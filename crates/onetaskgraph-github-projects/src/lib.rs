@@ -3654,8 +3654,8 @@ pub struct GitHubProjectsConfig {
     /// does not mention keeps its shipped default for both kinds: `backlog` to "Backlog",
     /// `todo` to "Todo", `queued` to "Queued", `in-progress` to "In Progress", `done` to
     /// "Done" plus closed as completed, `cancelled` to "Cancelled" plus closed as not
-    /// planned, and `draft` and `unknown` unmapped. A category it does mention gets no
-    /// shipped default for a kind it leaves out. `done` and `cancelled` close the issue for
+    /// planned, and `draft`, `in-review` and `unknown` unmapped. A category it does mention
+    /// gets no shipped default for a kind it leaves out. `done` and `cancelled` close the issue for
     /// either kind. No two categories may name one option for the same kind, ignoring case.
     /// `unknown` may name one existing option; every unknown word then lands on it and
     /// reads back as `unknown` under its name. Unlike `local-md`, this source cannot keep

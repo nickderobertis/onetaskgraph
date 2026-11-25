@@ -385,7 +385,7 @@
 //! | --- | --- | --- |
 //! | `backlog`, `draft` | `backlog` | `backlog` |
 //! | `todo`, `queued` | `unstarted` | `planned` |
-//! | `in-progress`, `unknown` | `started` | `started` |
+//! | `in-progress`, `in-review`, `unknown` | `started` | `started` |
 //! | `done` | `completed` | `completed` |
 //! | `cancelled` | `canceled` | `canceled` |
 //!
@@ -1417,8 +1417,8 @@ impl CreatedStatusType {
 /// One row per category, fixed: a category is created as the type whose meaning is nearest
 /// it, and `draft`, `queued`, `in-review` and `unknown` — which no type of either vocabulary
 /// means — as the nearest neighbour's: `in-review` is work started and not yet completed, so
-/// `started`, beside `in-progress`. An exhaustive match, so a category the contract adds fails to compile
-/// here rather than being created as something unstated.
+/// `started`, beside `in-progress`. An exhaustive match, so a category the contract adds fails
+/// to compile here rather than being created as something unstated.
 const fn created_types(category: StatusCategory) -> (CreatedStateType, CreatedStatusType) {
     match category {
         StatusCategory::Backlog | StatusCategory::Draft => {

@@ -14,7 +14,7 @@ onetaskgraph project attestation check <PROJECT-ID> --kind <KIND> --tasks \
 
 | Flag | Keeps a task when | Values |
 | --- | --- | --- |
-| `--status CATEGORY` | its status category is one of those named | `draft`, `backlog`, `todo`, `queued`, `in-progress`, `done`, `cancelled`, `unknown` |
+| `--status CATEGORY` | its status category is one of those named | `draft`, `backlog`, `todo`, `queued`, `in-progress`, `in-review`, `done`, `cancelled`, `unknown` |
 | `--not-status CATEGORY` | its status category is none of those named | the same eight |
 | `--state STATE` | its check answers one of the states named | `valid`, `void`, `absent` |
 

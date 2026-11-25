@@ -4107,12 +4107,13 @@ const FORTY_SIXTH_BUNDLE_BESIDE: [(&str, u64); 8] = [
 ];
 
 /// Version 70 admits `in-review` in every plugin configuration's status vocabulary and in what
-/// `sources fields` reports a Linear source's names under.
+/// `sources fields` reports a Linear source's names under, and says a GitHub board ships no
+/// option for it.
 const SEVENTIETH_BUNDLE_BESIDE: [(&str, u64); 8] = [
     ("binary/FieldsReport", 0x29439ba93e5e343a),
     ("binary/StatusNamesReport", 0x7d625252596d7b65),
     ("binary/StatusOptionsReport", 0x31ab0209e340bd4d),
-    ("plugin_config/github-projects", 0xce4b44694d0f567c),
+    ("plugin_config/github-projects", 0x62120e32d820f8c6),
     ("plugin_config/in-memory", 0xf88f0101348cee3a),
     ("plugin_config/linear", 0xad7abb01ee593762),
     ("plugin_config/local-md", 0x834d8270c37e0c92),
