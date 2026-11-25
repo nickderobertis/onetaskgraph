@@ -323,13 +323,16 @@ struct Janitor {
 
 impl Janitor {
     async fn rest(&mut self, path: &str, role: CredentialRole) -> Result<Value, ReadError> {
-        self.rest_page(path, role).await.map(|(body, _)| body)
+        self.rest_page(path, role, &Endpoint::exact(path))
+            .await
+            .map(|(body, _)| body)
     }
 
     async fn rest_page(
         &mut self,
         path: &str,
         role: CredentialRole,
+        endpoint: &Endpoint,
     ) -> Result<(Value, Option<String>), ReadError> {
         if self.report.rest_reads == REST_READ_LIMIT {
             return Err(ReadError::LimitExhausted(format!(
@@ -337,13 +340,16 @@ impl Janitor {
             )));
         }
         self.report.rest_reads += 1;
-        self.fetch(path, role).await.map_err(ReadError::Failed)
+        self.fetch(path, role, endpoint)
+            .await
+            .map_err(ReadError::Failed)
     }
 
     async fn fetch(
         &mut self,
         path: &str,
         role: CredentialRole,
+        endpoint: &Endpoint,
     ) -> Result<(Value, Option<String>), String> {
         let token = match (role, &self.config.ownership) {
             (CredentialRole::Actions, Ownership::CompletedRuns { actions_token }) => actions_token,
@@ -376,7 +382,7 @@ impl Janitor {
                     .map_err(|e| format!("{path} invalid Link: {e}"))
             })
             .transpose()?
-            .map(|header| next_page(header, self.config.rest.as_str(), path))
+            .map(|header| next_page(header, self.config.rest.as_str(), path, endpoint))
             .transpose()?
             .flatten();
         let body = response
@@ -445,7 +451,15 @@ impl Janitor {
 
     // Numeric pagination avoids GitHub search's 1,000-result ceiling. A repeated page
     // fails closed rather than claiming that an incomplete listing authorised cleanup.
-    async fn pages(&mut self, path: &str, role: CredentialRole) -> Result<Vec<Value>, String> {
+    async fn pages(
+        &mut self,
+        repository: &Repository,
+        resource: &str,
+        filters: &str,
+        role: CredentialRole,
+    ) -> Result<Vec<Value>, String> {
+        let endpoint = Endpoint::listing(repository, resource);
+        let path = format!("{}?{filters}", endpoint.nominated);
         let mut result = Vec::new();
         let mut seen = BTreeSet::new();
         let mut paths = BTreeSet::new();
@@ -455,7 +469,7 @@ impl Janitor {
             if !paths.insert(next.clone()) {
                 return Err(format!("{path} page {page} did not advance"));
             }
-            let (value, linked) = self.rest_page(&next, role).await?;
+            let (value, linked) = self.rest_page(&next, role, &endpoint).await?;
             let nodes = Some(&value)
                 .and_then(Value::as_array)
                 .ok_or_else(|| format!("{path} page {page}: missing array"))?;
@@ -484,11 +498,36 @@ impl Janitor {
         }
     }
 
+    /// The nominated repository's canonical id, read once per pass before any listing is
+    /// paged, so that a next link in GitHub's `/repositories/{id}/…` form can be held to it.
+    async fn repository(&mut self, name: &'static str) -> Result<Repository, String> {
+        let path = format!("/repos/{name}");
+        let value = self
+            .rest(&path, CredentialRole::Write)
+            .await
+            .map_err(|error| match error {
+                ReadError::LimitExhausted(message) => message,
+                ReadError::Failed(message) => {
+                    format!("repository read {path} failed: {message}; no listing was paged")
+                }
+            })?;
+        let id = value
+            .get("id")
+            .and_then(Value::as_u64)
+            .filter(|id| *id > 0)
+            .ok_or_else(|| {
+                format!("repository read {path} answered no repository id; no listing was paged")
+            })?;
+        Ok(Repository { name, id })
+    }
+
     async fn repositories(&mut self, listed: &mut Listed) -> Result<(), String> {
-        let repository = SCRATCH_REPOSITORY;
+        let repository = self.repository(SCRATCH_REPOSITORY).await?;
         for issue in self
             .pages(
-                &format!("/repos/{repository}/issues?state=all&sort=created&direction=asc"),
+                &repository,
+                "issues",
+                "state=all&sort=created&direction=asc",
                 CredentialRole::Write,
             )
             .await?
@@ -503,10 +542,7 @@ impl Janitor {
             }
         }
         for label in self
-            .pages(
-                &format!("/repos/{repository}/labels?"),
-                CredentialRole::Write,
-            )
+            .pages(&repository, "labels", "", CredentialRole::Write)
             .await?
         {
             let name = text(&label, "name")?;
@@ -766,9 +802,49 @@ impl Janitor {
     }
 }
 
+/// A repository the janitor lists, with the numeric id GitHub answered for its name.
+struct Repository {
+    name: &'static str,
+    id: u64,
+}
+
+/// The paths a page of one listing may link to: the one the janitor nominated and, for a
+/// repository's listing, the same resource under that repository's canonical
+/// `/repositories/{id}/…` form, which is the form GitHub's own next links take.
+struct Endpoint {
+    nominated: String,
+    canonical: Option<String>,
+}
+
+impl Endpoint {
+    fn exact(path: &str) -> Self {
+        Self {
+            nominated: path.split('?').next().unwrap_or(path).to_owned(),
+            canonical: None,
+        }
+    }
+
+    fn listing(repository: &Repository, resource: &str) -> Self {
+        Self {
+            nominated: format!("/repos/{}/{resource}", repository.name),
+            canonical: Some(format!("/repositories/{}/{resource}", repository.id)),
+        }
+    }
+
+    fn admits(&self, path: &str) -> bool {
+        path == self.nominated || self.canonical.as_deref() == Some(path)
+    }
+}
+
 // Follow only this same origin and list endpoint. A malformed or redirected page
 // fails closed rather than sending either credential to an unrelated host or repository.
-fn next_page(header: &str, origin: &str, path: &str) -> Result<Option<String>, String> {
+// A refusal names paths alone: a link's query, user info and the token never reach it.
+fn next_page(
+    header: &str,
+    origin: &str,
+    current: &str,
+    endpoint: &Endpoint,
+) -> Result<Option<String>, String> {
     let mut next = None;
     for link in header.split(',') {
         let (target, parameters) = link
@@ -788,14 +864,18 @@ fn next_page(header: &str, origin: &str, path: &str) -> Result<Option<String>, S
         .map_err(|e| e.to_string())?;
         let base = reqwest::Url::parse(origin).map_err(|e| e.to_string())?;
         if url.origin() != base.origin()
-            || url.path() != path.split('?').next().unwrap_or(path)
+            || !endpoint.admits(url.path())
             || !url.username().is_empty()
             || url.password().is_some()
             || url.fragment().is_some()
         {
-            return Err("pagination Link leaves nominated endpoint".into());
+            return Err(format!(
+                "pagination Link {} leaves nominated endpoint {}",
+                url.path(),
+                endpoint.nominated
+            ));
         }
-        let current = base.join(path).map_err(|e| e.to_string())?;
+        let current = base.join(current).map_err(|e| e.to_string())?;
         let parameters = |url: &reqwest::Url| -> Result<BTreeMap<String, String>, String> {
             let mut result = BTreeMap::new();
             for (key, value) in url.query_pairs() {
@@ -900,4 +980,112 @@ pub async fn run_with_clock(config: Config, clock: Arc<dyn Clock>) -> Result<Rep
     listed.sort_by_key(|a| (!matches!(a.delete, Delete::Item(_)), a.owner.to_string()));
     janitor.scratch_pass(listed).await?;
     Ok(janitor.report)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ORIGIN: &str = "https://api.github.com/";
+    const CURRENT: &str = "/repos/owner/scratch/issues?state=all&per_page=100&page=1";
+    const NOMINATED: &str = "/repos/owner/scratch/issues";
+    // Values a refusal must never repeat: each sits only in a refused link's query or user info.
+    const QUERY_SECRET: &str = "query-secret";
+    const USER: &str = "link-user";
+    const PASSWORD: &str = "link-password";
+
+    fn scratch() -> Endpoint {
+        Endpoint::listing(
+            &Repository {
+                name: "owner/scratch",
+                id: 42,
+            },
+            "issues",
+        )
+    }
+
+    fn next(target: &str) -> Result<Option<String>, String> {
+        next_page(
+            &format!("<{target}>; rel=\"next\""),
+            ORIGIN,
+            CURRENT,
+            &scratch(),
+        )
+    }
+
+    #[test]
+    fn a_next_link_at_the_nominated_path_or_its_canonical_id_form_is_followed() {
+        for path in [NOMINATED, "/repositories/42/issues"] {
+            assert_eq!(
+                next(&format!(
+                    "https://api.github.com{path}?state=all&per_page=100&page=2"
+                )),
+                Ok(Some(format!("{path}?state=all&per_page=100&page=2")))
+            );
+        }
+        // A canonical page's own next link is held to the same query rules.
+        assert_eq!(
+            next_page(
+                "<https://api.github.com/repositories/42/issues?state=all&per_page=100&page=3>; rel=\"next\"",
+                ORIGIN,
+                "/repositories/42/issues?state=all&per_page=100&page=2",
+                &scratch(),
+            ),
+            Ok(Some(
+                "/repositories/42/issues?state=all&per_page=100&page=3".into()
+            ))
+        );
+        assert_eq!(
+            next("https://api.github.com/repositories/42/issues?state=open&per_page=100&page=2"),
+            Err("pagination Link changed enumeration filters or did not advance".into())
+        );
+    }
+
+    #[test]
+    fn a_next_link_leaving_the_nominated_endpoint_is_refused_naming_both_paths_alone() {
+        let filters = format!("state=all&per_page=100&page=2&token={QUERY_SECRET}");
+        for (target, rejected) in [
+            (
+                format!("https://api.github.com/repositories/43/issues?{filters}"),
+                "/repositories/43/issues",
+            ),
+            (
+                format!("https://api.github.com/repositories/42/labels?{filters}"),
+                "/repositories/42/labels",
+            ),
+            (
+                format!("https://example.com/repositories/42/issues?{filters}"),
+                "/repositories/42/issues",
+            ),
+            (
+                format!("https://{USER}:{PASSWORD}@api.github.com{NOMINATED}?{filters}"),
+                NOMINATED,
+            ),
+            (
+                format!("https://{USER}@api.github.com/repositories/42/issues?{filters}"),
+                "/repositories/42/issues",
+            ),
+            (
+                format!("https://api.github.com/repositories/42/issues?{filters}#{QUERY_SECRET}"),
+                "/repositories/42/issues",
+            ),
+        ] {
+            let refusal = next(&target).expect_err(&target);
+            assert_eq!(
+                refusal,
+                format!("pagination Link {rejected} leaves nominated endpoint {NOMINATED}"),
+                "{target}"
+            );
+            for secret in [QUERY_SECRET, "state=all", "page=2", USER, PASSWORD] {
+                assert!(!refusal.contains(secret), "{refusal} repeats {secret}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_read_that_is_no_listing_admits_only_its_own_path() {
+        let endpoint = Endpoint::exact("/rate_limit?x=1");
+        assert!(endpoint.admits("/rate_limit"));
+        assert!(!endpoint.admits("/repositories/42/rate_limit"));
+    }
 }

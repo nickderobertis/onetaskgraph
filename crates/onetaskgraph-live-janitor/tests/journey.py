@@ -250,8 +250,24 @@ class Github:
         self.field_delete_status = 200
         # Every way a request or a served body departed from GitHub's description.
         self.unpinned: list[str] = []
+        # The id GitHub's repository read answers for each name. Its next links name a listing
+        # by that id, `/repositories/{id}/…`, rather than by the `/repos/{owner}/{repo}/…`
+        # path requested, so the stand-in links that way too.
+        self.repository_ids: dict[Repository, int] = {CORE: 1_296_269, SCRATCH: 1_300_192}
+        # The repository read misanswered: an HTTP status, or a body without its id.
+        self.repository_fault: int | dict | None = None
+
+    def named(self, target: str) -> str:
+        """The request in GitHub's `/repos/{owner}/{repo}/…` form, whichever form it was sent in."""
+        match target.split('/', 3):
+            case ['', 'repositories', spelled, rest]:
+                found = [name for name, identity in self.repository_ids.items() if str(identity) == spelled]
+                if found:
+                    return f'/repos/{found[0]}/{rest}'
+        return target
 
     def pin(self, method, target):
+        target = self.named(target)
         found = unpinned_request(method, target)
         if found:
             self.unpinned.append(found)
@@ -338,7 +354,7 @@ class Github:
                     return
                 # A malformed allowance is a fault the journey injects, like those above.
                 self.operation = operation if state.allowance_record is None else None
-                match path.split('/'):
+                match urlparse(state.named(self.path)).path.split('/'):
                     case ['', 'rate_limit']:
                         record: Allowance = {'limit': 5000, 'remaining': state.allowance, 'reset': 2000000000}
                         self.reply({'resources': {r: state.allowance_record if state.allowance_record is not None else record for r in ('core', 'graphql')}})
@@ -354,9 +370,20 @@ class Github:
                             callback()
                         self.reply({'status': status} if status is not None else {}, 200 if status is not None else 404)
                         return
+                    case ['', 'repos', owner, name]:
+                        repository = Repository(f'{owner}/{name}')
+                        if isinstance(state.repository_fault, int):
+                            self.reply({'message': 'Server Error'}, state.repository_fault)
+                        elif state.repository_fault is not None:
+                            self.operation = None
+                            self.reply(state.repository_fault)
+                        else:
+                            self.reply({'id': state.repository_ids[repository], 'full_name': repository})
+                        return
                     case ['', 'repos', owner, name, 'issues' | 'labels' as kind]:
                         repository = Repository(f'{owner}/{name}')
                         nodes = state.issues[repository] if kind == 'issues' else state.labels[repository]
+                        canonical = f'/repositories/{state.repository_ids[repository]}/{kind}'
                     case _:
                         self.reply({'message': 'Not Found'}, 404)
                         return
@@ -365,7 +392,7 @@ class Github:
                 count = len(nodes)
                 nodes = copy.deepcopy(nodes[(page - 1) * state.page_size:page * state.page_size])
                 query['page'] = [str(page + 1)]
-                next_url = path + '?' + urlencode(query, doseq=True)
+                next_url = canonical + '?' + urlencode(query, doseq=True)
                 link = f'<http://127.0.0.1:{self.server.server_port}{next_url}>; rel="next"' if page * state.page_size < count else None
                 if state.link_override is not None:
                     filters = urlencode({k: v for k, v in query.items() if k != 'page'}, doseq=True)
@@ -599,6 +626,7 @@ class Journeys(unittest.TestCase):
             Request('POST', documents['BOARD_DOCUMENT']),
             Request('POST', documents['BOARD_DOCUMENT']),
             Request('POST', RUN_BOARDS_DOCUMENT),
+            Request('GET', f'/repos/{SCRATCH}'),
             Request('GET', f'/repos/{SCRATCH}/issues?state=all&sort=created&direction=asc&per_page=100&page=1'),
             Request('GET', f'/repos/{SCRATCH}/labels?&per_page=100&page=1'),
             Request('GET', f'/repos/{CORE}/actions/runs/123'),
@@ -792,6 +820,57 @@ class Journeys(unittest.TestCase):
                 self.assertNotEqual(state.run().returncode, 0)
                 self.assertFalse(state.writes)
 
+    def test_canonical_repository_links_are_walked_to_the_last_page(self):
+        # GitHub links a `/repos/{owner}/{repo}/…` listing's later pages under the id its
+        # repository read answers; every page is read under that id and the pass finishes.
+        state = Github()
+        state.page_size = 10
+        for n in range(25):
+            state.issues[SCRATCH].append({'node_id': IssueId(f'o:{n}'), 'title': 'Ordinary'})
+        state.labels[SCRATCH].extend({'name': LabelName(f'ordinary-{n}')} for n in range(15))
+        issue = state.artifact(SCRATCH, f'ci-123-1-{NOW - DAY}', run=123)
+        self.assert_success(state.run())
+        identity = state.repository_ids[SCRATCH]
+        listings = [target for method, target in state.requests if method == 'GET' and '/actions/' not in target and target != '/rate_limit']
+        self.assertEqual(listings, [
+            f'/repos/{SCRATCH}',
+            f'/repos/{SCRATCH}/issues?state=all&sort=created&direction=asc&per_page=100&page=1',
+            f'/repositories/{identity}/issues?state=all&sort=created&direction=asc&per_page=100&page=2',
+            f'/repositories/{identity}/issues?state=all&sort=created&direction=asc&per_page=100&page=3',
+            f'/repos/{SCRATCH}/labels?&per_page=100&page=1',
+            f'/repositories/{identity}/labels?per_page=100&page=2',
+        ])
+        # The artifact on the last issue page was listed, and so was removed.
+        self.assertIn(Write('POST', IssueDelete(issue)), state.writes)
+        self.assertNotIn(issue, [v['node_id'] for v in state.issues[SCRATCH]])
+
+    def test_a_link_to_another_repository_id_is_refused_naming_both_paths(self):
+        for link, rejected in (('<{origin}/repositories/{other}/issues?{filters}&page=2>; rel="next"', '/repositories/{other}/issues'),
+                               ('<{origin}/repositories/{own}/labels?{filters}&page=2>; rel="next"', '/repositories/{own}/labels')):
+            with self.subTest(link=link):
+                state = workload()
+                own, other = state.repository_ids[SCRATCH], state.repository_ids[CORE]
+                state.link_override = link.replace('{other}', str(other)).replace('{own}', str(own))
+                result = state.run(overrides={'GH_PROJECTS_TOKEN': 'offline-write-secret'})
+                self.assert_failed(result)
+                self.assertIn(f"pagination Link {rejected.format(other=other, own=own)} leaves nominated endpoint /repos/{SCRATCH}/issues", result.stderr)
+                for secret in ('offline-write-secret', 'offline-actions', 'state=all', 'page=2'):
+                    self.assertNotIn(secret, result.stderr)
+                self.assertFalse(state.writes)
+
+    def test_a_failed_repository_read_ends_the_pass_before_any_listing(self):
+        for fault, said in ((500, f'repository read /repos/{SCRATCH} failed: read /repos/{SCRATCH}: unexpected HTTP 500'),
+                            ({'full_name': SCRATCH}, f'repository read /repos/{SCRATCH} answered no repository id'),
+                            ({'id': 0}, f'repository read /repos/{SCRATCH} answered no repository id')):
+            with self.subTest(fault=fault):
+                state = workload()
+                state.repository_fault = fault
+                result = state.run()
+                self.assert_failed(result)
+                self.assertIn(said, result.stderr)
+                self.assertFalse([target for _, target in state.requests if '/issues' in target or '/labels' in target])
+                self.assertFalse(state.writes)
+
     def test_each_pagination_refusal_is_reached_with_the_real_filters(self):
         # Every link keeps the request's own filters, so only the named defect differs.
         for link, refusal in (
@@ -814,7 +893,7 @@ class Journeys(unittest.TestCase):
     def test_rest_pin_is_exactly_what_the_janitor_sends(self):
         state = workload()
         self.assert_success(state.run())
-        sent = {(o['method'], o['path']) for o in (rest_operation(r.method, urlparse(r.target).path) for r in state.requests if r.method != 'POST') if o}
+        sent = {(o['method'], o['path']) for o in (rest_operation(r.method, urlparse(state.named(r.target)).path) for r in state.requests if r.method != 'POST') if o}
         # The pin names nothing the janitor no longer sends, and run() refused anything it does not name.
         self.assertEqual(sent, {(o['method'], o['path']) for o in REST})
 
@@ -954,7 +1033,9 @@ class Journeys(unittest.TestCase):
         for n in range(50):
             state.artifact(SCRATCH, f'ci-123-1-{NOW - DAY - n}', run=123)
         state.artifact(SCRATCH, f'ci-124-1-{NOW - DAY}', run=124)
-        state.issues[SCRATCH].extend({'node_id': IssueId(f'ordinary:{n}'), 'title': 'Ordinary'} for n in range(24_300))
+        # 243 issue pages beside the allowance, repository and label reads leave exactly four
+        # status reads under the REST read limit.
+        state.issues[SCRATCH].extend({'node_id': IssueId(f'ordinary:{n}'), 'title': 'Ordinary'} for n in range(24_200))
         result = state.run()
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('REST read limit', result.stderr)
@@ -1215,6 +1296,7 @@ class Journeys(unittest.TestCase):
         self.assertEqual(state.requests[0], ('GET', '/rate_limit'))
         for path, token in state.authentication:
             self.assertEqual(token, 'Bearer offline-actions' if '/actions/' in path else 'Bearer offline-write')
+            path = state.named(path)
             if path.startswith('/repos/'):
                 self.assertIn('/'.join(path.split('/')[2:4]), (CORE, SCRATCH))
         self.assertEqual(state.boards, {Board(BOARD_OWNER, 1)})
@@ -1249,7 +1331,7 @@ class Journeys(unittest.TestCase):
         self.assertEqual(state.origin_field, ORIGIN_FIELD)
         requests = state.requests[before:]
         for (repo, kind), size in listing_sizes.items():
-            pages = [path for method, path in requests if method == 'GET' and urlparse(path).path == f'/repos/{repo}/{kind}']
+            pages = [path for method, path in requests if method == 'GET' and urlparse(state.named(path)).path == f'/repos/{repo}/{kind}']
             self.assertEqual(len(pages), size // 100 + 1)
             self.assertEqual([int(parse_qs(urlparse(path).query)['page'][0]) for path in pages], list(range(1, len(pages) + 1)))
         self.assertEqual(sum(method == 'POST' and path.startswith('query') and 'projectsV2(' not in path for method, path in requests), board_pages)
