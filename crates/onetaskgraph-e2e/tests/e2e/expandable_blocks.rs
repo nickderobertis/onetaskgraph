@@ -1533,21 +1533,6 @@ enum WritePath {
 }
 
 impl WritePath {
-    const ALL: [Self; 12] = [
-        Self::TaskContentSet,
-        Self::TaskCreate,
-        Self::TaskUpdate,
-        Self::ProjectCreate,
-        Self::ProjectReplace,
-        Self::DocumentCreate,
-        Self::DocumentReplace,
-        Self::CommentAdd,
-        Self::CommentEdit,
-        Self::TaskCopy,
-        Self::ProjectCopy,
-        Self::DocumentCopy,
-    ];
-
     /// The record of the copied plan this path writes over, when it writes over one, by its key:
     /// the one a write over it reads first.
     fn over(self) -> Option<&'static str> {
@@ -1988,41 +1973,109 @@ fn every_block_lands_as_a_section_wherever_the_fenced_one_stands_with_metadata_o
     }
 }
 
-// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace.
-#[test]
-fn every_path_that_writes_a_body_to_linear_lands_each_block_as_a_section_at_no_extra_request() {
-    // Each path sends the issue's body — over a record holding it as literal text, where the
-    // path writes over one — and the same body with no block in it, each in a plan of its own:
-    // every block lands as a section, reads back as authored, and costs no request.
+/// `path` sends the issue's body — over a record holding it as literal text, where the path
+/// writes over one — and the same body with no block in it, each in a plan of its own: every
+/// block lands as a section, reads back as authored, and costs no request the plain body does not.
+fn every_block_lands_as_a_section_along(path: WritePath) {
     let body = issue_body();
     let plain = without_blocks(&body);
-    for path in WritePath::ALL {
-        let what = format!("{path:?}");
-        // The loopback stores a comment's body as it is sent, as Linear was recorded storing a
-        // long form's with its `-` bullets as `*`.
-        let reads = |authored: &str| match path {
-            WritePath::CommentAdd | WritePath::CommentEdit => authored.trim_end().to_owned(),
-            _ => as_linear_reads_it(authored),
-        };
-        let with = LinearPlan::new().write(path, &body, &body);
-        lands_as_sections(&with.stored, &summaries_of(&body), &what);
-        assert_eq!(
-            with.read.trim_end(),
-            reads(&body),
-            "{what}: read back as authored"
-        );
-        reads_as_authored_from_linear(&with.read, &body, &what);
-        let without = LinearPlan::new().write(path, &plain, &plain);
-        assert_eq!(
-            without.read.trim_end(),
-            reads(&plain),
-            "{what}: the plain body"
-        );
-        assert_eq!(
-            with.requests, without.requests,
-            "{what}: converting blocks sends no request the same write without them does not"
-        );
-    }
+    let what = format!("{path:?}");
+    // The loopback stores a comment's body as it is sent, and a long form's `-` bullets as `*`,
+    // as Linear was recorded storing it.
+    let reads = |authored: &str| match path {
+        WritePath::CommentAdd | WritePath::CommentEdit => authored.trim_end().to_owned(),
+        _ => as_linear_reads_it(authored),
+    };
+    let with = LinearPlan::new().write(path, &body, &body);
+    lands_as_sections(&with.stored, &summaries_of(&body), &what);
+    assert_eq!(
+        with.read.trim_end(),
+        reads(&body),
+        "{what}: read back as authored"
+    );
+    reads_as_authored_from_linear(&with.read, &body, &what);
+    let without = LinearPlan::new().write(path, &plain, &plain);
+    assert_eq!(
+        without.read.trim_end(),
+        reads(&plain),
+        "{what}: the plain body"
+    );
+    assert_eq!(
+        with.requests, without.requests,
+        "{what}: converting blocks sends no request the same write without them does not"
+    );
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace.
+#[test]
+fn task_content_set_lands_every_block_as_a_section_at_no_extra_request() {
+    every_block_lands_as_a_section_along(WritePath::TaskContentSet);
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace.
+#[test]
+fn task_create_lands_every_block_as_a_section_at_no_extra_request() {
+    every_block_lands_as_a_section_along(WritePath::TaskCreate);
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace.
+#[test]
+fn task_update_lands_every_block_as_a_section_at_no_extra_request() {
+    every_block_lands_as_a_section_along(WritePath::TaskUpdate);
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace.
+#[test]
+fn project_create_lands_every_block_as_a_section_at_no_extra_request() {
+    every_block_lands_as_a_section_along(WritePath::ProjectCreate);
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace.
+#[test]
+fn project_replace_lands_every_block_as_a_section_at_no_extra_request() {
+    every_block_lands_as_a_section_along(WritePath::ProjectReplace);
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace.
+#[test]
+fn document_create_lands_every_block_as_a_section_at_no_extra_request() {
+    every_block_lands_as_a_section_along(WritePath::DocumentCreate);
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace.
+#[test]
+fn document_replace_lands_every_block_as_a_section_at_no_extra_request() {
+    every_block_lands_as_a_section_along(WritePath::DocumentReplace);
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace.
+#[test]
+fn comment_add_lands_every_block_as_a_section_at_no_extra_request() {
+    every_block_lands_as_a_section_along(WritePath::CommentAdd);
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace.
+#[test]
+fn comment_edit_lands_every_block_as_a_section_at_no_extra_request() {
+    every_block_lands_as_a_section_along(WritePath::CommentEdit);
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace.
+#[test]
+fn task_copy_lands_every_block_as_a_section_at_no_extra_request() {
+    every_block_lands_as_a_section_along(WritePath::TaskCopy);
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace.
+#[test]
+fn project_copy_lands_every_block_as_a_section_at_no_extra_request() {
+    every_block_lands_as_a_section_along(WritePath::ProjectCopy);
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace.
+#[test]
+fn document_copy_lands_every_block_as_a_section_at_no_extra_request() {
+    every_block_lands_as_a_section_along(WritePath::DocumentCopy);
 }
 
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace.
