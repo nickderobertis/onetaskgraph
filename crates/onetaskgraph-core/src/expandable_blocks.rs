@@ -605,38 +605,62 @@ fn linear_written(authored: &str, literal: &std::collections::HashSet<String>) -
 /// that Linear's own rewrite sets apart with the blank line the form wants, so it reads back as an
 /// authored block though Linear shows it as paragraphs. Written back as it reads, as a copy's
 /// follow-up writes what the destination stored, it would be translated into a section the author
-/// never wrote. So each block a read finds held as literal text is remembered by its text, for
-/// as long as this source lives, and a later write carries it as it stands: a body read from
-/// Linear and written back is what Linear stored.
+/// never wrote. So every body a read gives back is remembered, for as long as this source lives,
+/// as its blocks in order, each with whether Linear held it as literal text or as a section — the
+/// latest read of the same blocks replacing an earlier one — and a body written back carries each
+/// block as that read found it: a body read from Linear and written back is what Linear stored.
+///
+/// A body is written back only when its blocks, in order, are exactly the blocks of one body a
+/// read gave. Any other body is the caller's own, and every block in it is written as a section,
+/// one whose text Linear holds as literal text elsewhere included: what decides a block's form is
+/// the body it is written in, never its position, its neighbours or its content.
 #[derive(Default)]
 struct LinearSections {
-    /// The text of every block in the authored form a read found Linear holding as literal text.
-    literal: std::sync::Mutex<std::collections::HashSet<String>>,
+    /// The blocks of every body a read gave back, in order, each beside whether Linear held it
+    /// as literal text.
+    read: std::sync::Mutex<std::collections::HashMap<Vec<String>, Vec<bool>>>,
+}
+
+/// The whole text of every block of `content` in the authored form, in order.
+fn block_texts(content: &str) -> Vec<String> {
+    let lines = lines(content);
+    authored_regions(content)
+        .iter()
+        .filter(|region| matches!(region.shape, Shape::Block(_)))
+        .map(|region| region_text(&lines, region))
+        .collect()
 }
 
 impl BodyMarkup for LinearSections {
     fn written(&self, content: &str) -> String {
-        let literal = self
-            .literal
+        let blocks = block_texts(content);
+        let read = self
+            .read
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let literal = read.get(&blocks).map_or_else(Default::default, |held| {
+            blocks
+                .iter()
+                .zip(held)
+                .filter(|(_, literal)| **literal)
+                .map(|(block, _)| block.clone())
+                .collect()
+        });
         linear_written(content, &literal)
     }
 
     fn read(&self, content: &str) -> String {
-        let lines = lines(content);
-        let held: Vec<String> = authored_regions(content)
-            .iter()
-            .filter(|region| matches!(region.shape, Shape::Block(_)))
-            .map(|region| region_text(&lines, region))
-            .collect();
-        if !held.is_empty() {
-            self.literal
+        let literal = block_texts(content);
+        let read = ExpandableForm::Linear.read(content);
+        let blocks = block_texts(&read);
+        if !blocks.is_empty() {
+            let held = blocks.iter().map(|block| literal.contains(block)).collect();
+            self.read
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .extend(held);
+                .insert(blocks, held);
         }
-        ExpandableForm::Linear.read(content)
+        read
     }
 }
 // llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
@@ -738,6 +762,57 @@ mod tests {
             markup.written("<details>\n<summary>New</summary>\n\nBody.\n\n</details>"),
             "+++ New\n\nBody.\n\n+++"
         );
+    }
+
+    /// A body whose blocks are not those of one read is the caller's own: every block in it is
+    /// written as a section, one whose text Linear holds as literal text included, wherever it
+    /// stands, alone among them.
+    #[test]
+    fn a_callers_own_body_has_every_block_written_as_a_section_whatever_was_held_as_text() {
+        let fenced = "<details>\n<summary>Reproduction</summary>\n\nRun:\n\n```\nsome command\n```\n\n</details>";
+        let section = "+++ Reproduction\n\nRun:\n\n```\nsome command\n```\n\n+++";
+        let listed = "<details>\n<summary>Points</summary>\n\n- a point\n\n</details>";
+        let listed_section = "+++ Points\n\n- a point\n\n+++";
+        let markup = ExpandableForm::Linear.markup().expect("Linear's markup");
+        // The item holds the fenced block as literal text, and a read remembers it.
+        let stored = format!("Held.\n\n{listed}\n\n{fenced}").replace("- a", "* a");
+        assert_eq!(markup.read(&stored), stored);
+        // Written back as it was read, it stays as Linear stored it.
+        assert_eq!(markup.written(&stored), stored);
+        // A body of the caller's own, the held block first, between others and last.
+        for body in [
+            format!("{fenced}\n\n{listed}\n"),
+            format!("{listed}\n\n{fenced}\n\n{listed}\n"),
+            format!("{listed}\n\n{fenced}\n"),
+            format!("New.\n\n{fenced}\n\n{listed}"),
+            format!("{fenced}\n"),
+        ] {
+            let expected = body
+                .replace(fenced, section)
+                .replace(listed, listed_section);
+            assert_eq!(markup.written(&body), expected, "{body}");
+            assert_eq!(ExpandableForm::Linear.read(&expected), body, "{body}");
+        }
+    }
+
+    /// The same blocks read as literal text and then, from a write's own answer, as sections are
+    /// written back as the latest read found them: a copy's follow-up keeps the sections it wrote.
+    #[test]
+    fn a_body_written_back_carries_each_block_as_the_latest_read_found_it() {
+        let markup = ExpandableForm::Linear.markup().expect("Linear's markup");
+        let block =
+            "<details>\n<summary>Reproduction</summary>\n\nRun:\n\n```\nrun\n```\n\n</details>";
+        let section = "+++ Reproduction\n\nRun:\n\n```\nrun\n```\n\n+++";
+        assert_eq!(markup.read(block), block);
+        assert_eq!(markup.written(block), block, "held as literal text");
+        assert_eq!(markup.read(section), block);
+        assert_eq!(
+            markup.written(block),
+            section,
+            "the latest read held a section"
+        );
+        assert_eq!(markup.read(block), block);
+        assert_eq!(markup.written(block), block, "and literal text again");
     }
 
     #[test]

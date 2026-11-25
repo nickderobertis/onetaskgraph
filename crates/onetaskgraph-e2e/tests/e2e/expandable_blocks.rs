@@ -1370,3 +1370,723 @@ fn a_chain_through_a_board_and_linear_gives_back_the_authored_document_and_no_re
         );
     }
 }
+
+// Every authored block a write sends to Linear lands as a section, wherever it stands and on
+// every path that writes a body — issue onetaskgraph#4087.
+
+/// Issue onetaskgraph#4087's three blocks, each summary beside its body: two lists, then a
+/// fenced code block.
+const ISSUE_BLOCKS: [(&str, &str); 3] = [
+    ("Pros and cons", "- a point"),
+    ("Test results", "- a result"),
+    ("Reproduction", "Run:\n\n```\nsome command --count=10\n```"),
+];
+
+/// One block in the authored form.
+fn details(summary: &str, body: &str) -> String {
+    format!("<details>\n<summary>{summary}</summary>\n\n{body}\n\n</details>")
+}
+
+/// The issue's own body: its three blocks, one after another.
+fn issue_body() -> String {
+    let [pros, results, repro] = ISSUE_BLOCKS.map(|(summary, body)| details(summary, body));
+    format!("{pros}\n\n{results}\n\n{repro}\n")
+}
+
+/// The issue's body and its variants, by what each varies: the fenced block first, in the
+/// middle, last, alone, and ending a body that opens with a paragraph.
+fn issue_variants() -> Vec<(&'static str, String)> {
+    let [pros, results, repro] = ISSUE_BLOCKS.map(|(summary, body)| details(summary, body));
+    vec![
+        ("the issue's body", issue_body()),
+        ("fenced first", format!("{repro}\n\n{pros}\n\n{results}\n")),
+        (
+            "fenced in the middle",
+            format!("{pros}\n\n{repro}\n\n{results}\n"),
+        ),
+        ("fenced last", format!("{pros}\n\n{results}\n\n{repro}\n")),
+        ("fenced alone", format!("{repro}\n")),
+        (
+            "ending in the fenced block",
+            format!("Intro.\n\n{results}\n\n{repro}"),
+        ),
+    ]
+}
+
+/// `body` with every block written as its summary's paragraph then its body: the same text with
+/// no expandable block in it.
+fn without_blocks(body: &str) -> String {
+    let mut plain = body.to_owned();
+    for (summary, held) in ISSUE_BLOCKS {
+        plain = plain.replace(&details(summary, held), &format!("{summary}\n\n{held}"));
+    }
+    assert!(
+        !plain.contains("<details>"),
+        "every block taken out: {plain}"
+    );
+    plain
+}
+
+/// The summaries of the blocks `body` holds, in order.
+fn summaries_of(body: &str) -> Vec<&'static str> {
+    let mut at: Vec<(usize, &'static str)> = ISSUE_BLOCKS
+        .iter()
+        .filter_map(|(summary, held)| body.find(&details(summary, held)).map(|at| (at, *summary)))
+        .collect();
+    at.sort_unstable();
+    at.into_iter().map(|(_, summary)| summary).collect()
+}
+
+/// `authored` as Linear reads back: the one recorded normalization these bodies meet, a `- `
+/// bullet stored as `* ` (`issue-linear-plus.json`, probe P08), and no line break at the end.
+fn as_linear_reads_it(authored: &str) -> String {
+    authored
+        .trim_end()
+        .lines()
+        .map(|line| {
+            line.strip_prefix("- ")
+                .map_or_else(|| line.to_owned(), |rest| format!("* {rest}"))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The lines of `text` outside every fenced code block.
+fn unfenced(text: &str) -> Vec<&str> {
+    let mut fence: Option<&str> = None;
+    let mut outside = Vec::new();
+    for line in text.lines() {
+        let marker = line.trim_start();
+        let opens = marker.starts_with("```") || marker.starts_with("~~~");
+        match fence {
+            Some(open) if opens && marker.starts_with(open) => fence = None,
+            Some(_) => {}
+            None if opens => fence = Some(&marker[..3]),
+            None => outside.push(line),
+        }
+    }
+    outside
+}
+
+/// Hold `stored`, the body a Linear workspace holds, to `summaries`: each a `+++ <summary>` line,
+/// a closing `+++` line for each, and no `<details>` or `</details>` line outside fenced code.
+fn lands_as_sections(stored: &str, summaries: &[&str], what: &str) {
+    let lines = unfenced(stored);
+    for summary in summaries {
+        assert!(
+            lines.contains(&format!("+++ {summary}").as_str()),
+            "{what}: `{summary}` lands as a section:\n{stored}"
+        );
+    }
+    assert_eq!(
+        lines.iter().filter(|line| **line == "+++").count(),
+        summaries.len(),
+        "{what}: every section closed, and no other:\n{stored}"
+    );
+    assert!(
+        !lines
+            .iter()
+            .any(|line| *line == "<details>" || *line == "</details>"),
+        "{what}: no block is left as literal HTML:\n{stored}"
+    );
+}
+
+/// The requests `served` holds, counted by kind: each GraphQL document's operation and its
+/// first field.
+fn by_kind(served: &[(String, Value)]) -> BTreeMap<String, usize> {
+    let mut kinds = BTreeMap::new();
+    for (document, _) in served {
+        let operation = document
+            .trim_start()
+            .split([' ', '(', '{'])
+            .next()
+            .unwrap_or_default();
+        let field = document
+            .split_once('{')
+            .map(|(_, rest)| {
+                rest.trim_start()
+                    .split(|c: char| !(c.is_alphanumeric() || c == '_' || c == ':'))
+                    .next()
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default();
+        *kinds.entry(format!("{operation} {field}")).or_insert(0) += 1;
+    }
+    kinds
+}
+
+/// A path that writes a body to Linear.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WritePath {
+    TaskContentSet,
+    TaskCreate,
+    TaskUpdate,
+    ProjectCreate,
+    ProjectReplace,
+    DocumentCreate,
+    DocumentReplace,
+    CommentAdd,
+    CommentEdit,
+    TaskCopy,
+    ProjectCopy,
+    DocumentCopy,
+}
+
+impl WritePath {
+    const ALL: [Self; 12] = [
+        Self::TaskContentSet,
+        Self::TaskCreate,
+        Self::TaskUpdate,
+        Self::ProjectCreate,
+        Self::ProjectReplace,
+        Self::DocumentCreate,
+        Self::DocumentReplace,
+        Self::CommentAdd,
+        Self::CommentEdit,
+        Self::TaskCopy,
+        Self::ProjectCopy,
+        Self::DocumentCopy,
+    ];
+
+    /// The record of the copied plan this path writes over, when it writes over one, by its key:
+    /// the one a write over it reads first.
+    fn over(self) -> Option<&'static str> {
+        match self {
+            Self::TaskContentSet | Self::TaskUpdate | Self::TaskCopy | Self::CommentEdit => {
+                Some("T")
+            }
+            Self::ProjectReplace | Self::ProjectCopy => Some("P"),
+            Self::DocumentReplace | Self::DocumentCopy => Some("D"),
+            Self::TaskCreate | Self::ProjectCreate | Self::DocumentCreate | Self::CommentAdd => {
+                None
+            }
+        }
+    }
+}
+
+/// A plan the authored folder copied into a loopback Linear storing what it is sent as real
+/// Linear was recorded storing it: a project, a task carrying one comment and a document, each
+/// with metadata, so the store's slot follows each body.
+struct LinearPlan {
+    sandbox: Sandbox,
+    workspace: onetaskgraph_e2e_support::fixtures::LinearWorkspace,
+    landed: BTreeMap<&'static str, Landed>,
+}
+
+/// What one write left: the body the workspace stores, without its slot, the body a read gives
+/// back through the store, and the requests the write sent, by kind.
+struct Written {
+    stored: String,
+    read: String,
+    requests: BTreeMap<String, usize>,
+}
+
+impl LinearPlan {
+    fn new() -> Self {
+        let sandbox = Sandbox::new();
+        let authored_config = authored(&sandbox, "authored");
+        let (store, config) = destination(&sandbox, "linear", "dest", None);
+        configure(
+            &sandbox,
+            &[("authored", &authored_config), ("dest", &config)],
+        );
+        let landed = copy_plan(&sandbox, &authored_ids("authored"), "dest");
+        let Store::Linear(workspace) = store else {
+            unreachable!("a Linear store")
+        };
+        Self {
+            sandbox,
+            workspace,
+            landed,
+        }
+    }
+
+    /// A file of the sandbox holding `body`, by its path.
+    fn file(&self, name: &str, body: &str) -> String {
+        let file = self.sandbox.project().join(name);
+        std::fs::write(&file, body).expect("the body file");
+        file.display().to_string()
+    }
+
+    /// The one comment the copied task carries, by its id.
+    fn comment(&self) -> String {
+        let comments = self.workspace.comments_on(self.landed["T"].native());
+        comments[0]["id"].as_str().expect("a comment id").to_owned()
+    }
+
+    /// Have the record `at` hold `body` as literal text, its slot kept: what Linear stores of it
+    /// sent with its `<details>` as written — as a client that never converted them, or 0.15.1
+    /// for a block it left as HTML, sends it.
+    fn hold_as_text(&self, at: &Landed, body: &str) {
+        let held = onetaskgraph_e2e_support::linear_markdown::stored(body);
+        let held = held.trim_end();
+        let raw = self
+            .workspace
+            .long_form(at.collection(), at.native())
+            .expect("the record");
+        let slot = raw
+            .find("\n\n+++ onetaskgraph metadata\n\n")
+            .map_or("", |at| &raw[at..]);
+        let whole = format!("{held}{slot}");
+        match at.verb {
+            "task" => self.workspace.store_description(at.native(), &whole),
+            "project" => self.workspace.edit_project_content(at.native(), &whole),
+            _ => self.workspace.edit_document_content(at.native(), &whole),
+        }
+    }
+
+    /// The body the workspace stores for `at`, without its slot.
+    fn stored(&self, at: &Landed) -> String {
+        visible(
+            &self
+                .workspace
+                .long_form(at.collection(), at.native())
+                .expect("the record"),
+        )
+        .to_owned()
+    }
+
+    /// Replace the authored folder's record `key`'s body with `body`, keeping its front matter.
+    fn author(&self, key: &str, body: &str) {
+        let folder = match key {
+            "P" => "projects",
+            "T" => "tasks",
+            _ => "documents",
+        };
+        let path = root_of(&self.sandbox, "authored")
+            .join(folder)
+            .join(format!("{key}.md"));
+        let held = std::fs::read_to_string(&path).expect("the authored record");
+        let front_end = held[3..].find("\n---\n").expect("front matter") + 3 + "\n---\n".len();
+        std::fs::write(&path, format!("{}{body}", &held[..front_end])).expect("the record");
+    }
+
+    /// Write `body` along `path` — over a record holding `held_before` as literal text, for a
+    /// path that writes over one — answering what it left.
+    fn write(&self, path: WritePath, body: &str, held_before: &str) -> Written {
+        if let Some(key) = path.over() {
+            if path == WritePath::CommentEdit {
+                self.workspace.edit_comment(
+                    &self.comment(),
+                    &onetaskgraph_e2e_support::linear_markdown::stored(held_before),
+                );
+            } else {
+                self.hold_as_text(&self.landed[key], held_before);
+            }
+        }
+        let file = self.file("written.md", body);
+        let (project, task) = (&self.landed["P"], &self.landed["T"]);
+        let mark = self.workspace.served_count();
+        let created = |rendered: String, verb: &'static str| Landed {
+            verb,
+            id: serde_json::from_str::<Value>(&rendered).expect("JSON")["items"][0]["id"]
+                .as_str()
+                .expect("the created id")
+                .to_owned(),
+        };
+        let at = match path {
+            WritePath::TaskContentSet => {
+                ok(
+                    &self.sandbox,
+                    &["task", "content", "set", &task.id, "--file", &file],
+                );
+                task.clone()
+            }
+            WritePath::TaskUpdate => {
+                ok(
+                    &self.sandbox,
+                    &["task", "update", &task.id, "--body-file", &file],
+                );
+                task.clone()
+            }
+            WritePath::TaskCreate => created(
+                ok(
+                    &self.sandbox,
+                    &[
+                        "task",
+                        "create",
+                        "dest",
+                        "--project",
+                        project.native(),
+                        "--title",
+                        "Written",
+                        "--body-file",
+                        &file,
+                        "--json",
+                    ],
+                ),
+                "task",
+            ),
+            WritePath::ProjectCreate => created(
+                ok(
+                    &self.sandbox,
+                    &[
+                        "project",
+                        "create",
+                        "dest",
+                        "--id",
+                        "written-plan",
+                        "--title",
+                        "Written",
+                        "--body-file",
+                        &file,
+                        "--json",
+                    ],
+                ),
+                "project",
+            ),
+            WritePath::ProjectReplace => {
+                ok(
+                    &self.sandbox,
+                    &[
+                        "project",
+                        "create",
+                        "dest",
+                        "--id",
+                        project.native(),
+                        "--title",
+                        "Block plan",
+                        "--body-file",
+                        &file,
+                    ],
+                );
+                project.clone()
+            }
+            WritePath::DocumentCreate => created(
+                ok(
+                    &self.sandbox,
+                    &[
+                        "document",
+                        "create",
+                        "dest",
+                        "--project",
+                        project.native(),
+                        "--title",
+                        "Written",
+                        "--body-file",
+                        &file,
+                        "--json",
+                    ],
+                ),
+                "document",
+            ),
+            WritePath::DocumentReplace => {
+                let document = &self.landed["D"];
+                ok(
+                    &self.sandbox,
+                    &[
+                        "document",
+                        "create",
+                        "dest",
+                        "--id",
+                        document.native(),
+                        "--project",
+                        project.native(),
+                        "--title",
+                        "Block design",
+                        "--body-file",
+                        &file,
+                    ],
+                );
+                document.clone()
+            }
+            WritePath::CommentAdd | WritePath::CommentEdit => {
+                let before: Vec<String> = self
+                    .workspace
+                    .comments_on(task.native())
+                    .iter()
+                    .map(|comment| comment["id"].as_str().unwrap_or_default().to_owned())
+                    .collect();
+                let comment = if path == WritePath::CommentAdd {
+                    ok(
+                        &self.sandbox,
+                        &["task", "comment", "add", &task.id, "--body-file", &file],
+                    );
+                    self.workspace
+                        .comments_on(task.native())
+                        .iter()
+                        .map(|comment| comment["id"].as_str().unwrap_or_default().to_owned())
+                        .find(|id| !before.contains(id))
+                        .expect("the comment added")
+                } else {
+                    let comment = self.comment();
+                    ok(
+                        &self.sandbox,
+                        &[
+                            "task",
+                            "comment",
+                            "edit",
+                            &task.id,
+                            &comment,
+                            "--body-file",
+                            &file,
+                        ],
+                    );
+                    comment
+                };
+                let requests = by_kind(&self.workspace.served_since(mark));
+                let stored = self
+                    .workspace
+                    .comments_on(task.native())
+                    .into_iter()
+                    .find(|held| held["id"] == json!(comment))
+                    .and_then(|held| held["body"].as_str().map(str::to_owned))
+                    .expect("the comment written");
+                let listed: Value = serde_json::from_str(&ok(
+                    &self.sandbox,
+                    &["task", "comment", "list", &task.id, "--json"],
+                ))
+                .expect("comments");
+                let read = listed["comments"]
+                    .as_array()
+                    .expect("comments")
+                    .iter()
+                    .find(|listed| listed["id"] == json!(comment))
+                    .and_then(|listed| listed["body"].as_str())
+                    .expect("the comment, listed")
+                    .to_owned();
+                return Written {
+                    stored: stored.trim_end().to_owned(),
+                    read,
+                    requests,
+                };
+            }
+            WritePath::TaskCopy | WritePath::ProjectCopy | WritePath::DocumentCopy => {
+                let (key, verb) = match path {
+                    WritePath::TaskCopy => ("T", "task"),
+                    WritePath::ProjectCopy => ("P", "project"),
+                    _ => ("D", "document"),
+                };
+                self.author(key, body);
+                let mark = self.workspace.served_count();
+                let source = format!("authored:{key}");
+                let mut arguments = vec![verb, "copy", source.as_str(), "--to", "dest", "--json"];
+                if path == WritePath::ProjectCopy {
+                    arguments.push("--no-tasks");
+                }
+                let report = outcomes(&ok(&self.sandbox, &arguments));
+                assert_eq!(
+                    report[&source]["destination"],
+                    json!(self.landed[key].id),
+                    "{path:?}: the copy writes over the counterpart: {report:#?}"
+                );
+                let at = &self.landed[key];
+                return Written {
+                    stored: self.stored(at),
+                    read: at.content(&self.sandbox),
+                    requests: by_kind(&self.workspace.served_since(mark)),
+                };
+            }
+        };
+        let requests = by_kind(&self.workspace.served_since(mark));
+        Written {
+            stored: self.stored(&at),
+            read: at.content(&self.sandbox),
+            requests,
+        }
+    }
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace.
+#[test]
+fn the_issues_body_set_over_an_issue_holding_it_as_text_lands_every_block_as_a_section() {
+    // The issue reproduced: its body set with `task content set` on an issue already holding it
+    // as literal text, which the write reads first. Linear stored the lists' `-` as `*`, so the
+    // two list blocks differ from what it holds; the fenced block does not.
+    let plan = LinearPlan::new();
+    let body = issue_body();
+    let written = plan.write(WritePath::TaskContentSet, &body, &body);
+    let summaries = summaries_of(&body);
+    assert_eq!(summaries, ["Pros and cons", "Test results", "Reproduction"]);
+    lands_as_sections(&written.stored, &summaries, "the issue's body");
+    assert_eq!(
+        written.stored,
+        "+++ Pros and cons\n\n* a point\n\n+++\n\n+++ Test results\n\n* a result\n\n+++\n\n\
+         +++ Reproduction\n\nRun:\n\n```\nsome command --count=10\n```\n\n+++",
+        "every block stored as a section"
+    );
+    assert_eq!(
+        written.read,
+        as_linear_reads_it(&body),
+        "read back as authored"
+    );
+    reads_as_authored_from_linear(&written.read, &body, "the issue's body");
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace.
+#[test]
+fn every_block_lands_as_a_section_wherever_the_fenced_one_stands_with_metadata_or_without() {
+    // Each variant set over the copied task, whose metadata slot follows the body, and over a
+    // created task carrying none — each holding the issue's body as literal text first, and
+    // fresh.
+    let plan = LinearPlan::new();
+    let bare = Landed {
+        verb: "task",
+        id: {
+            let file = plan.file("bare.md", "Bare.\n");
+            let created: Value = serde_json::from_str(&ok(
+                &plan.sandbox,
+                &[
+                    "task",
+                    "create",
+                    "dest",
+                    "--project",
+                    plan.landed["P"].native(),
+                    "--title",
+                    "Bare",
+                    "--body-file",
+                    &file,
+                    "--json",
+                ],
+            ))
+            .expect("JSON");
+            created["items"][0]["id"]
+                .as_str()
+                .expect("an id")
+                .to_owned()
+        },
+    };
+    let raw = plan
+        .workspace
+        .long_form("tasks", bare.native())
+        .expect("the bare task");
+    assert!(
+        !raw.contains("onetaskgraph metadata"),
+        "the bare task has no slot: {raw}"
+    );
+    for (what, body) in issue_variants() {
+        for (at, slot) in [(&plan.landed["T"], "a slot"), (&bare, "no slot")] {
+            for held_first in [true, false] {
+                let what = format!("{what}, {slot}, held as text first: {held_first}");
+                if held_first {
+                    plan.hold_as_text(at, &issue_body());
+                }
+                let file = plan.file("variant.md", &body);
+                ok(
+                    &plan.sandbox,
+                    &["task", "content", "set", &at.id, "--file", &file],
+                );
+                lands_as_sections(&plan.stored(at), &summaries_of(&body), &what);
+                let read = at.content(&plan.sandbox);
+                assert_eq!(
+                    read,
+                    as_linear_reads_it(&body),
+                    "{what}: read back as authored"
+                );
+                reads_as_authored_from_linear(&read, &body, &what);
+                let raw = plan
+                    .workspace
+                    .long_form("tasks", at.native())
+                    .expect("the task");
+                assert_eq!(
+                    raw.contains("\n\n+++ onetaskgraph metadata\n\n"),
+                    slot == "a slot",
+                    "{what}: the slot follows the body only where the item has metadata"
+                );
+            }
+        }
+    }
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace.
+#[test]
+fn every_path_that_writes_a_body_to_linear_lands_each_block_as_a_section_at_no_extra_request() {
+    // Each path sends the issue's body — over a record holding it as literal text, where the
+    // path writes over one — and the same body with no block in it, each in a plan of its own:
+    // every block lands as a section, reads back as authored, and costs no request.
+    let body = issue_body();
+    let plain = without_blocks(&body);
+    for path in WritePath::ALL {
+        let what = format!("{path:?}");
+        // The loopback stores a comment's body as it is sent, as Linear was recorded storing a
+        // long form's with its `-` bullets as `*`.
+        let reads = |authored: &str| match path {
+            WritePath::CommentAdd | WritePath::CommentEdit => authored.trim_end().to_owned(),
+            _ => as_linear_reads_it(authored),
+        };
+        let with = LinearPlan::new().write(path, &body, &body);
+        lands_as_sections(&with.stored, &summaries_of(&body), &what);
+        assert_eq!(
+            with.read.trim_end(),
+            reads(&body),
+            "{what}: read back as authored"
+        );
+        reads_as_authored_from_linear(&with.read, &body, &what);
+        let without = LinearPlan::new().write(path, &plain, &plain);
+        assert_eq!(
+            without.read.trim_end(),
+            reads(&plain),
+            "{what}: the plain body"
+        );
+        assert_eq!(
+            with.requests, without.requests,
+            "{what}: converting blocks sends no request the same write without them does not"
+        );
+    }
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace.
+#[test]
+fn a_body_linear_holds_as_text_read_and_written_back_is_stored_as_it_was() {
+    // A body read from Linear and set back as it reads — as `task show` gives it — keeps every
+    // block Linear held as literal text as literal text.
+    let plan = LinearPlan::new();
+    let task = &plan.landed["T"];
+    plan.hold_as_text(task, &issue_body());
+    let held = plan.stored(task);
+    assert!(held.contains("<details>"), "held as literal text: {held}");
+    let read = task.content(&plan.sandbox);
+    let file = plan.file("read.md", &read);
+    ok(
+        &plan.sandbox,
+        &["task", "content", "set", &task.id, "--file", &file],
+    );
+    assert_eq!(plan.stored(task), held, "written back as Linear stored it");
+    assert_eq!(task.content(&plan.sandbox), read, "and read back as before");
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: two folders of Markdown and the loopback board.
+#[test]
+fn the_issues_body_set_on_a_folder_and_a_board_is_stored_byte_for_byte() {
+    let body = issue_body();
+    for kind in ["local-md", "github-projects"] {
+        let sandbox = Sandbox::new();
+        let authored_config = authored(&sandbox, "authored");
+        let (store, config) = destination(&sandbox, kind, "dest", None);
+        configure(
+            &sandbox,
+            &[("authored", &authored_config), ("dest", &config)],
+        );
+        let landed = copy_plan(&sandbox, &authored_ids("authored"), "dest");
+        let task = &landed["T"];
+        let file = sandbox.project().join("issue.md");
+        std::fs::write(&file, &body).expect("the body");
+        let file = file.display().to_string();
+        ok(
+            &sandbox,
+            &["task", "content", "set", &task.id, "--file", &file],
+        );
+        let held = match &store {
+            Store::Local => {
+                let file = std::fs::read_to_string(task.location(&sandbox)).expect("its file");
+                let after = file[3..].find("\n---\n").expect("front matter") + 3 + "\n---\n".len();
+                file[after..]
+                    .split("\n## Comments\n")
+                    .next()
+                    .unwrap_or_default()
+                    .to_owned()
+            }
+            _ => store.raw(task),
+        };
+        assert_eq!(
+            held.trim_end(),
+            body.trim_end(),
+            "{kind}: stored as authored"
+        );
+        assert_eq!(
+            task.content(&sandbox).trim_end(),
+            body.trim_end(),
+            "{kind}: read back"
+        );
+    }
+}
