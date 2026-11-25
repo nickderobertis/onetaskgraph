@@ -6216,7 +6216,13 @@ impl Engine {
                     })
                     .collect();
                 let ids = self
-                    .guarded(owned, journal, destination.source().write_tasks(&writes))
+                    .guarded(
+                        owned,
+                        journal,
+                        crate::expandable_blocks::authored(
+                            destination.source().write_tasks(&writes),
+                        ),
+                    )
                     .await?
                     .map_err(|error| create_refused(destination, Creating::Tasks, error))?;
                 journal
@@ -8574,9 +8580,14 @@ impl Engine {
                 .entry(item.source.clone())
                 .or_default()
                 .add(finished_counts);
-            let landed = self
-                .write_comments(destination, &item.source, &written.native, &plan, journal)
-                .await?;
+            let landed = crate::expandable_blocks::authored(self.write_comments(
+                destination,
+                &item.source,
+                &written.native,
+                &plan,
+                journal,
+            ))
+            .await?;
             // A comment whose link names a record not landed yet is finished once every write
             // of the copy has: see `Engine::finish_sections`.
             for (origin, links, still) in pending {
@@ -9530,13 +9541,12 @@ impl Engine {
             )
             .await?;
         rewrite.project(&mut member);
-        let created = there
-            .source()
-            .write_project(&ItemWrite {
+        let created =
+            crate::expandable_blocks::authored(there.source().write_project(&ItemWrite {
                 target: None,
                 item: member,
                 depends_on: Vec::new(),
-            })
+            }))
             .await
             .map_err(|error| create_refused(there, Creating::Project, error))?;
         journal.record(Undo::Created {
@@ -10205,73 +10215,77 @@ impl Engine {
         let composed = landing.clone();
         let owned = Self::owned_at(journal, Some(&item.source), destination.name());
         let landed = self
-            .guarded(owned, journal, async {
-                Ok::<NativeId, EngineError>(match landing {
-                    Item::Task(task) if carrying => destination
-                        .source()
-                        .write_task_with_assets(
-                            &ItemWrite {
+            .guarded(
+                owned,
+                journal,
+                crate::expandable_blocks::authored(async {
+                    Ok::<NativeId, EngineError>(match landing {
+                        Item::Task(task) if carrying => destination
+                            .source()
+                            .write_task_with_assets(
+                                &ItemWrite {
+                                    target: target.clone(),
+                                    item: *task,
+                                    depends_on: edges.to_vec(),
+                                },
+                                None,
+                                &assets::write_of(item.assets.clone(), recorded.clone()),
+                            )
+                            .await
+                            .map(|written| {
+                                sent = written.content;
+                                written.id
+                            })
+                            .map_err(|error| failed(Creating::Task, error))?,
+                        Item::Document(document) if carrying => destination
+                            .source()
+                            .write_document_with_assets(
+                                &ItemWrite {
+                                    target: target.clone(),
+                                    item: *document,
+                                    depends_on: Vec::new(),
+                                },
+                                None,
+                                &assets::write_of(item.assets.clone(), recorded.clone()),
+                            )
+                            .await
+                            .map(|written| {
+                                sent = written.content;
+                                written.id
+                            })
+                            .map_err(|error| failed(Creating::Document, error))?,
+                        Item::Task(task) => destination
+                            .source()
+                            .write_task(&ItemWrite {
                                 target: target.clone(),
                                 item: *task,
                                 depends_on: edges.to_vec(),
-                            },
-                            None,
-                            &assets::write_of(item.assets.clone(), recorded.clone()),
-                        )
-                        .await
-                        .map(|written| {
-                            sent = written.content;
-                            written.id
-                        })
-                        .map_err(|error| failed(Creating::Task, error))?,
-                    Item::Document(document) if carrying => destination
-                        .source()
-                        .write_document_with_assets(
-                            &ItemWrite {
+                            })
+                            .await
+                            .map_err(|error| failed(Creating::Task, error))?,
+                        Item::Project(project) => destination
+                            .source()
+                            .write_project(&ItemWrite {
+                                target: target.clone(),
+                                item: *project,
+                                depends_on: edges.to_vec(),
+                            })
+                            .await
+                            .map_err(|error| failed(Creating::Project, error))?,
+                        // No edges, and that is the contract: a document takes part in no dependency
+                        // graph, so there is nothing here for `depends_on` to carry.
+                        Item::Document(document) => destination
+                            .source()
+                            .write_document(&ItemWrite {
                                 target: target.clone(),
                                 item: *document,
                                 depends_on: Vec::new(),
-                            },
-                            None,
-                            &assets::write_of(item.assets.clone(), recorded.clone()),
-                        )
-                        .await
-                        .map(|written| {
-                            sent = written.content;
-                            written.id
-                        })
-                        .map_err(|error| failed(Creating::Document, error))?,
-                    Item::Task(task) => destination
-                        .source()
-                        .write_task(&ItemWrite {
-                            target: target.clone(),
-                            item: *task,
-                            depends_on: edges.to_vec(),
-                        })
-                        .await
-                        .map_err(|error| failed(Creating::Task, error))?,
-                    Item::Project(project) => destination
-                        .source()
-                        .write_project(&ItemWrite {
-                            target: target.clone(),
-                            item: *project,
-                            depends_on: edges.to_vec(),
-                        })
-                        .await
-                        .map_err(|error| failed(Creating::Project, error))?,
-                    // No edges, and that is the contract: a document takes part in no dependency
-                    // graph, so there is nothing here for `depends_on` to carry.
-                    Item::Document(document) => destination
-                        .source()
-                        .write_document(&ItemWrite {
-                            target: target.clone(),
-                            item: *document,
-                            depends_on: Vec::new(),
-                        })
-                        .await
-                        .map_err(|error| failed(Creating::Document, error))?,
-                })
-            })
+                            })
+                            .await
+                            .map_err(|error| failed(Creating::Document, error))?,
+                    })
+                }),
+            )
             .await??;
         // A created item can only be journalled here: its id is what the write answers
         // with. A create that fails leaves nothing behind — §4.9 makes taking the item

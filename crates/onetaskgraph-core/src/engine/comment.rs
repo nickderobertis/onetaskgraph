@@ -545,7 +545,9 @@ impl Engine {
             body: rewritten_body(source, &rewrite, &comment.body)?,
             author: comment.author.clone(),
         };
-        match source.source().add_comment(&task.native, comment).await {
+        match crate::expandable_blocks::authored(source.source().add_comment(&task.native, comment))
+            .await
+        {
             Ok(Some(added)) => Ok(added),
             Ok(None) => Err(no_such_task(task)),
             Err(error) => Err(failed(source, error)),
@@ -575,10 +577,12 @@ impl Engine {
             )
             .await?;
         let body = &rewritten_body(source, &rewrite, body)?;
-        match source
-            .source()
-            .edit_comment(&task.native, comment, body)
-            .await
+        match crate::expandable_blocks::authored(source.source().edit_comment(
+            &task.native,
+            comment,
+            body,
+        ))
+        .await
         {
             Ok(Some(edited)) => Ok(edited),
             Ok(None) => Err(missing(source, task, comment).await),

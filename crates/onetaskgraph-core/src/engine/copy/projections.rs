@@ -1575,13 +1575,12 @@ impl Engine {
         });
         // A create's answer the source mangled is no uncertainty here: the allocation names what
         // it stored, so taking the copy back takes the project with it.
-        let landed = destination
-            .source()
-            .write_project(&ItemWrite {
+        let landed =
+            crate::expandable_blocks::authored(destination.source().write_project(&ItemWrite {
                 target: None,
                 item: project,
                 depends_on: Vec::new(),
-            })
+            }))
             .await
             .and_then(|landed| answered_id(landed, "write_project"))
             .map_err(|error| refused(destination, error))?;
@@ -1958,22 +1957,25 @@ impl Engine {
         };
         // What an asset write said it stored, from which the assets it uploaded are read.
         let mut stored = None;
-        let landed = if !carrying {
-            destination.source().write_task(&write).await
-        } else {
-            destination
-                .source()
-                .write_task_with_assets(
-                    &write,
-                    None,
-                    &assets::write_of(task.assets.clone(), recorded),
-                )
-                .await
-                .map(|written| {
-                    stored = written.content;
-                    written.id
-                })
-        }
+        let landed = crate::expandable_blocks::authored(async {
+            if carrying {
+                destination
+                    .source()
+                    .write_task_with_assets(
+                        &write,
+                        None,
+                        &assets::write_of(task.assets.clone(), recorded),
+                    )
+                    .await
+                    .map(|written| {
+                        stored = written.content;
+                        written.id
+                    })
+            } else {
+                destination.source().write_task(&write).await
+            }
+        })
+        .await
         .and_then(|landed| answered_id(landed, "write_task"))
         .map_err(|error| match target {
             None => create_refused(destination, Creating::Task, error),
@@ -2010,26 +2012,31 @@ impl Engine {
                         item,
                         depends_on: write.depends_on.clone(),
                     };
-                    let finished = if carrying {
-                        // Its assets go with it, each the create uploaded reused rather than sent
-                        // again.
-                        let uploaded = super::super::stored::served(
-                            write.item.content.as_deref().unwrap_or_default(),
-                            stored.as_deref().unwrap_or_default(),
-                            &task.assets,
-                        );
-                        destination
-                            .source()
-                            .write_task_with_assets(
-                                &again,
-                                None,
-                                &assets::write_of(task.assets.clone(), uploaded),
-                            )
-                            .await
-                            .map(|written| written.id)
-                    } else {
-                        destination.source().write_task(&again).await
-                    }
+                    // The view as this copy composed it, its links finished: content it
+                    // authored, as its create was.
+                    let finished = crate::expandable_blocks::authored(async {
+                        if carrying {
+                            // Its assets go with it, each the create uploaded reused rather than sent
+                            // again.
+                            let uploaded = super::super::stored::served(
+                                write.item.content.as_deref().unwrap_or_default(),
+                                stored.as_deref().unwrap_or_default(),
+                                &task.assets,
+                            );
+                            destination
+                                .source()
+                                .write_task_with_assets(
+                                    &again,
+                                    None,
+                                    &assets::write_of(task.assets.clone(), uploaded),
+                                )
+                                .await
+                                .map(|written| written.id)
+                        } else {
+                            destination.source().write_task(&again).await
+                        }
+                    })
+                    .await
                     .and_then(|answered| answered_id(answered, "write_task"))
                     .map_err(|error| refused(destination, error))?;
                     // An update of the view it names, and an answer naming another is one this copy

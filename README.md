@@ -2041,6 +2041,23 @@ never Linear's editor shortcut `>>>`, which closes every open section at once wh
 normalizes the content inside a section as it normalizes any other ("Writing to a destination
 that rewrites Markdown", above).
 
+`+++ LSUMMARY` … `+++` is the canonical Linear form: it is what the store writes, and it is what
+Linear's API stores and answers for a collapsible section however the section was made. A `>>>`
+section sent through the API is stored as `+++` (`issue-linear-arrow.json`, below), and issue
+onetaskgraph#4087's body set with `task content set` on team `TES2` on 2026-11-25 was stored and
+answered as three `+++` sections, each a `collapsible_section` node of the issue's editor state.
+So no read through the store, or of Linear's API, hands back `>>>`. The `>>> Title` … `>>>`
+spelling that issue reported for its converted blocks is the editor shortcut, seen outside the
+store and Linear's API, and was no part of its defect.
+
+**Every block in the authored form is converted.** On every path that writes a body to Linear — a
+task, project or document created or replaced, `task content set`, `task update`, a comment added
+or edited, and each copy — every block in the authored form is written as a section wherever it
+stands (first, between others, last, alone, or ending a body that the item's metadata slot does or
+does not follow) and whatever its body holds, fenced code included. Neither its position, its
+neighbours nor what its body holds leaves a block as HTML: only the summaries and line endings
+listed below do, and a body written back, below.
+
 **What is carried as it stands.** Nothing but the authored form is translated. These reach a
 folder of Markdown and a GitHub issue byte for byte, and Linear as sent, subject only to Linear's
 own normalization:
@@ -2056,9 +2073,26 @@ own normalization:
 
 Linear stores each such block as literal paragraphs with its body expanded, as it stores every
 `<details>` block. Its own rewrite can give such a block the blank line it lacked, so that it reads
-back in the authored form; the Linear source remembers every block it read back as literal text
-and writes it back as it was stored, so a copy's follow-up never turns it into a section. A
-plugin served over the stdio protocol has no expandable form: it is sent the authored form.
+back in the authored form. So which form a block is written in depends on who wrote the body, and
+is decided by the item written alone: the Linear source keeps each item's body as Linear last
+answered storing it, and reads that item's own again just before writing it, so no other item's
+read — however alike its text — has any say.
+
+- **A body a caller wrote** — a create, a replace or a render of a task, project or document,
+  `task content set`, `task update`, a comment added or edited, and a copy's write of its
+  source's content — has every block written as a section, even one whose text the item already
+  holds as literal text. The one exception is a body that is, byte for byte, the body last read of
+  that same item: content set back exactly as it reads, which is written back as below. A body
+  differing from it anywhere — in prose around its blocks, or in one line break — is the caller's
+  own.
+- **A body the store writes back** — a copy's follow-up sending what Linear stored, and every other
+  write of content the store read rather than was given — carries as literal text each block the
+  last read of that item found Linear holding as literal text, so a follow-up never turns it into
+  a section; every other block is written as a section.
+- **A write in a new process** whose item was read only by an earlier one — and every create —
+  has no read of that item to go by, so every block in the authored form is written as a section.
+
+A plugin served over the stdio protocol has no expandable form: it is sent the authored form.
 
 **What the Linear form rests on.** What Linear stores for each form sent is recorded, not
 predicted: spike `spike-expandable-blocks` wrote every form to team `TES2` through the API and
