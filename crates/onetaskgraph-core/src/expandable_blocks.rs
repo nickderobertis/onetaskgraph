@@ -798,35 +798,65 @@ mod tests {
         );
     }
 
-    /// A body whose blocks are not those of one read is the caller's own: every block in it is
-    /// written as a section, one whose text Linear holds as literal text included, wherever it
-    /// stands, alone among them.
-    #[test]
-    fn a_callers_own_body_has_every_block_written_as_a_section_whatever_was_held_as_text() {
-        let fenced = "<details>\n<summary>Reproduction</summary>\n\nRun:\n\n```\nsome command\n```\n\n</details>";
-        let section = "+++ Reproduction\n\nRun:\n\n```\nsome command\n```\n\n+++";
-        let listed = "<details>\n<summary>Points</summary>\n\n- a point\n\n</details>";
-        let listed_section = "+++ Points\n\n- a point\n\n+++";
+    const FENCED: &str = "<details>\n<summary>Reproduction</summary>\n\nRun:\n\n```\nsome command\n```\n\n</details>";
+    const FENCED_SECTION: &str = "+++ Reproduction\n\nRun:\n\n```\nsome command\n```\n\n+++";
+    const LISTED: &str = "<details>\n<summary>Points</summary>\n\n- a point\n\n</details>";
+    const LISTED_SECTION: &str = "+++ Points\n\n- a point\n\n+++";
+
+    /// A markup that has read an item holding a list block and the fenced block as literal text,
+    /// as Linear stores them sent as HTML, and that body.
+    fn after_reading_them_as_text() -> (onetaskgraph_plugin_api::SharedBodyMarkup, String) {
         let markup = ExpandableForm::Linear.markup().expect("Linear's markup");
-        // The item holds the fenced block as literal text, and a read remembers it.
-        let stored = format!("Held.\n\n{listed}\n\n{fenced}").replace("- a", "* a");
-        assert_eq!(markup.read(&stored), stored);
-        // Written back as it was read, it stays as Linear stored it.
+        let stored = format!("Held.\n\n{LISTED}\n\n{FENCED}").replace("- a", "* a");
+        assert_eq!(
+            markup.read(&stored),
+            stored,
+            "held as literal text reads as stored"
+        );
+        (markup, stored)
+    }
+
+    /// The caller's own `body`, written after that read, lands every block as a section and reads
+    /// back as itself.
+    fn every_block_is_a_section(body: &str) {
+        let (markup, _) = after_reading_them_as_text();
+        let expected = body
+            .replace(FENCED, FENCED_SECTION)
+            .replace(LISTED, LISTED_SECTION);
+        assert_eq!(markup.written(body), expected, "{body}");
+        assert_eq!(ExpandableForm::Linear.read(&expected), body, "{body}");
+    }
+
+    #[test]
+    fn a_callers_block_held_as_text_elsewhere_is_a_section_first() {
+        every_block_is_a_section(&format!("{FENCED}\n\n{LISTED}\n"));
+    }
+
+    #[test]
+    fn a_callers_block_held_as_text_elsewhere_is_a_section_in_the_middle() {
+        every_block_is_a_section(&format!("{LISTED}\n\n{FENCED}\n\n{LISTED}\n"));
+    }
+
+    #[test]
+    fn a_callers_block_held_as_text_elsewhere_is_a_section_last() {
+        every_block_is_a_section(&format!("{LISTED}\n\n{FENCED}\n"));
+        every_block_is_a_section(&format!("New.\n\n{LISTED}\n\n{FENCED}"));
+    }
+
+    #[test]
+    fn a_callers_block_held_as_text_elsewhere_is_a_section_alone() {
+        every_block_is_a_section(&format!("{FENCED}\n"));
+        every_block_is_a_section(&format!("New.\n\n{FENCED}"));
+    }
+
+    /// Only a body whose blocks are exactly one read's is written back: as it was read, and
+    /// with its prose edited around them, each block stays as Linear stored it.
+    #[test]
+    fn a_genuine_read_back_keeps_every_block_linear_held_as_text() {
+        let (markup, stored) = after_reading_them_as_text();
         assert_eq!(markup.written(&stored), stored);
-        // A body of the caller's own, the held block first, between others and last.
-        for body in [
-            format!("{fenced}\n\n{listed}\n"),
-            format!("{listed}\n\n{fenced}\n\n{listed}\n"),
-            format!("{listed}\n\n{fenced}\n"),
-            format!("New.\n\n{fenced}\n\n{listed}"),
-            format!("{fenced}\n"),
-        ] {
-            let expected = body
-                .replace(fenced, section)
-                .replace(listed, listed_section);
-            assert_eq!(markup.written(&body), expected, "{body}");
-            assert_eq!(ExpandableForm::Linear.read(&expected), body, "{body}");
-        }
+        let edited = stored.replace("Held.", "Edited prose.");
+        assert_eq!(markup.written(&edited), edited);
     }
 
     /// The same blocks read as literal text and then, from a write's own answer, as sections are
