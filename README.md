@@ -2029,6 +2029,22 @@ never Linear's editor shortcut `>>>`, which closes every open section at once wh
 normalizes the content inside a section as it normalizes any other ("Writing to a destination
 that rewrites Markdown", above).
 
+`+++ LSUMMARY` … `+++` is the canonical Linear form: it is what the store writes, and it is what
+Linear's API stores and answers for a collapsible section however the section was made. A `>>>`
+section sent through the API is stored as `+++` (`issue-linear-arrow.json`, below), and issue
+onetaskgraph#4087's body set with `task content set` on team `TES2` on 2026-11-25 was stored and
+answered as three `+++` sections, each a `collapsible_section` node of the issue's editor state.
+So no read through the store, or of Linear's API, hands back `>>>`. The `>>> Title` … `>>>`
+spelling that issue reported for its converted blocks is the editor shortcut, seen outside the
+store and Linear's API, and was no part of its defect.
+
+**Every block in the authored form is converted.** On every path that writes a body to Linear — a
+task, project or document created or replaced, `task content set`, `task update`, a comment added
+or edited, and each copy — every block in the authored form is written as a section wherever it
+stands (first, between others, last, alone, or ending a body that the item's metadata slot does or
+does not follow) and whatever its body holds, fenced code included. Nothing about a block's
+position or content leaves it as HTML. The one body written otherwise is a body written back, below.
+
 **What is carried as it stands.** Nothing but the authored form is translated. These reach a
 folder of Markdown and a GitHub issue byte for byte, and Linear as sent, subject only to Linear's
 own normalization:
@@ -2044,9 +2060,15 @@ own normalization:
 
 Linear stores each such block as literal paragraphs with its body expanded, as it stores every
 `<details>` block. Its own rewrite can give such a block the blank line it lacked, so that it reads
-back in the authored form; the Linear source remembers every block it read back as literal text
-and writes it back as it was stored, so a copy's follow-up never turns it into a section. A
-plugin served over the stdio protocol has no expandable form: it is sent the authored form.
+back in the authored form. So the Linear source remembers each body a read gave back: its blocks,
+in order, and which of them Linear held as literal text, the latest read of the same blocks
+replacing an earlier one. A body whose blocks are exactly those of one such body is written back,
+each block as that read found it. That covers a copy's follow-up sending what Linear stored, and
+content a read gave set back as it reads. So a block Linear held as literal text stays literal text,
+and a follow-up never turns it into a section. Any other body is the caller's own, and every block
+in it in the authored form is written as a section, even one whose text the item already holds as
+literal text. A plugin served over the stdio protocol has no expandable form: it is sent the
+authored form.
 
 **What the Linear form rests on.** What Linear stores for each form sent is recorded, not
 predicted: spike `spike-expandable-blocks` wrote every form to team `TES2` through the API and
