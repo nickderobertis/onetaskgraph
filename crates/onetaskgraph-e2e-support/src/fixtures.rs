@@ -2792,6 +2792,17 @@ impl GitHubBoardFields {
         self.board.lock().unwrap().status_options.clone()
     }
 
+    /// Add an option named `name` to the end of the board's `Status` field, as a person adding a
+    /// column would.
+    pub fn add_status_option(&self, name: &str) {
+        let id = format!("OPT-{}", name.to_lowercase().replace(' ', "-"));
+        self.board
+            .lock()
+            .unwrap()
+            .status_options
+            .push(json!({"id": id, "name": name, "color": "GRAY", "description": ""}));
+    }
+
     /// Remove the board's Status field entirely.
     pub fn without_status_field(&self) {
         self.board.lock().unwrap().status_field_present = false;

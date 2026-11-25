@@ -2862,6 +2862,8 @@ pub enum StatusArg {
     Queued,
     /// Being worked on.
     InProgress,
+    /// Done and waiting on a reviewer before it is finished.
+    InReview,
     /// Finished.
     Done,
     /// Abandoned.
@@ -2880,6 +2882,7 @@ impl StatusArg {
             Self::Todo => StatusCategory::Todo,
             Self::Queued => StatusCategory::Queued,
             Self::InProgress => StatusCategory::InProgress,
+            Self::InReview => StatusCategory::InReview,
             Self::Done => StatusCategory::Done,
             Self::Cancelled => StatusCategory::Cancelled,
             Self::Unknown => StatusCategory::Unknown,

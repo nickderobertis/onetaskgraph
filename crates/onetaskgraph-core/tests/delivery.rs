@@ -14,12 +14,14 @@ use onetaskgraph_core::{
     TaskRequest, settled,
 };
 use onetaskgraph_plugin_api::{
-    SecretResolver, SourceName, StatusCategory, TaskRef, TextFields, TextQuery,
+    ItemKind, SecretResolver, SourceName, StatusCategory, TaskRef, TextFields, TextQuery,
 };
 use secrecy::SecretString;
 use serde_json::{Value, json};
 
-use StatusCategory::{Backlog, Cancelled, Done, Draft, InProgress, Queued, Todo, Unknown};
+use StatusCategory::{
+    Backlog, Cancelled, Done, Draft, InProgress, InReview, Queued, Todo, Unknown,
+};
 
 struct NoSecrets;
 impl SecretResolver for NoSecrets {
@@ -102,6 +104,12 @@ fn the_result_rule_is_decided_by_its_first_matching_branch() {
         (vec![InProgress], Some(InProgress)),
         (vec![InProgress, Cancelled], Some(InProgress)),
         (vec![InProgress, Queued], Some(InProgress)),
+        (vec![InReview], Some(InReview)),
+        (vec![InReview, InProgress], Some(InReview)),
+        (vec![InReview, Queued, Todo], Some(InReview)),
+        (vec![InReview, Done], Some(InReview)),
+        (vec![InReview, Cancelled], Some(InReview)),
+        (vec![InReview, Backlog], Some(InReview)),
         (vec![Queued], Some(Queued)),
         (vec![Queued, Todo], Some(Queued)),
         (vec![Done, Todo], Some(Todo)),
@@ -163,6 +171,98 @@ async fn a_delivered_task_follows_its_one_deliverer_and_records_it() {
             .collect::<Vec<_>>(),
         ["left Done"]
     );
+}
+
+#[tokio::test]
+async fn a_delivered_task_follows_its_deliverer_into_in_review_where_its_source_maps_it() {
+    let engine = engine_over(json!({
+        "plan": source(vec![task("P-1", InProgress, &["tickets:T-1"], &[])]),
+        "tickets": source(vec![task("T-1", InProgress, &[], &["plan:P-1"])]),
+    }));
+    assert!(
+        engine
+            .maps_status(
+                &SourceName::new("tickets").unwrap(),
+                ItemKind::Task,
+                InReview
+            )
+            .unwrap()
+    );
+    for (category, from, to) in [(InReview, InProgress, InReview), (Done, InReview, Done)] {
+        let set = engine
+            .set_task_status(&id("plan:P-1"), category)
+            .await
+            .expect("set");
+        assert_eq!(
+            set.delivered
+                .iter()
+                .map(outcome)
+                .map(|o| o.2)
+                .collect::<Vec<_>>(),
+            [format!("written {from:?}->{to:?}")]
+        );
+        assert_eq!(read(&engine, "tickets:T-1").await.0, to);
+    }
+}
+
+/// A folder of Markdown at `root` holding one task `T-1` at the word `word`, read through a
+/// mapping that has no word for `in-review`.
+fn unreviewed_folder(root: &std::path::Path, word: &str) -> Value {
+    std::fs::create_dir_all(root.join("tasks")).expect("the task folder");
+    std::fs::write(
+        root.join("tasks/T-1.md"),
+        format!("---\ntitle: Ticket\nstatus: {word}\ndelivered_by: [\"plan:P-1\"]\n---\n"),
+    )
+    .expect("the task file");
+    json!({"plugin": "local-md", "config": {"root": root, "status_mapping": {
+        "todo": "todo", "queued": "queued", "in progress": "in-progress", "done": "done",
+        "cancelled": "cancelled",
+    }}})
+}
+
+#[tokio::test]
+async fn a_delivered_task_whose_source_maps_no_in_review_is_written_in_progress_instead() {
+    for (word, said, after) in [
+        ("todo", "written Todo->InProgress", "in progress"),
+        ("queued", "written Queued->InProgress", "in progress"),
+        ("in progress", "unchanged InProgress", "in progress"),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let engine = engine_over(json!({
+            "plan": source(vec![task("P-1", Todo, &["tickets:T-1"], &[])]),
+            "tickets": unreviewed_folder(root.path(), word),
+        }));
+        assert!(
+            !engine
+                .maps_status(
+                    &SourceName::new("tickets").unwrap(),
+                    ItemKind::Task,
+                    InReview
+                )
+                .unwrap()
+        );
+        let set = engine
+            .set_task_status(&id("plan:P-1"), InReview)
+            .await
+            .expect("set");
+        assert_eq!(set.status.category, InReview);
+        assert_eq!(
+            set.delivered
+                .iter()
+                .map(outcome)
+                .map(|o| o.2)
+                .collect::<Vec<_>>(),
+            [said],
+            "{word}"
+        );
+        assert!(
+            !set.delivered.iter().any(Delivered::failed),
+            "no refused write: {:?}",
+            set.delivered
+        );
+        let file = std::fs::read_to_string(root.path().join("tasks/T-1.md")).unwrap();
+        assert!(file.contains(&format!("\nstatus: {after}\n")), "{file}");
+    }
 }
 
 #[tokio::test]
@@ -228,6 +328,9 @@ async fn a_ticket_the_rule_may_not_touch_is_left_and_keeps_its_status() {
 async fn two_deliverers_decide_a_ticket_together() {
     for (other, mine, expected) in [
         (InProgress, Cancelled, InProgress),
+        (InProgress, InReview, InReview),
+        (InReview, InProgress, InReview),
+        (InReview, Done, InReview),
         (Todo, Queued, Queued),
         (Todo, Done, Todo),
         (Queued, Done, Queued),

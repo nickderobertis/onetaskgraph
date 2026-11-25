@@ -3654,8 +3654,8 @@ pub struct GitHubProjectsConfig {
     /// does not mention keeps its shipped default for both kinds: `backlog` to "Backlog",
     /// `todo` to "Todo", `queued` to "Queued", `in-progress` to "In Progress", `done` to
     /// "Done" plus closed as completed, `cancelled` to "Cancelled" plus closed as not
-    /// planned, and `draft` and `unknown` unmapped. A category it does mention gets no
-    /// shipped default for a kind it leaves out. `done` and `cancelled` close the issue for
+    /// planned, and `draft`, `in-review` and `unknown` unmapped. A category it does mention
+    /// gets no shipped default for a kind it leaves out. `done` and `cancelled` close the issue for
     /// either kind. No two categories may name one option for the same kind, ignoring case.
     /// `unknown` may name one existing option; every unknown word then lands on it and
     /// reads back as `unknown` under its name. Unlike `local-md`, this source cannot keep
@@ -4333,12 +4333,13 @@ enum StatusTarget {
 /// generated from the variants rather than written beside them. The schema is what
 /// catches a list left one short — a list checking only the positions it already holds
 /// would pass while every mapping indexed by the new position panicked.
-pub const CATEGORIES: [StatusCategory; 8] = [
+pub const CATEGORIES: [StatusCategory; 9] = [
     StatusCategory::Draft,
     StatusCategory::Backlog,
     StatusCategory::Todo,
     StatusCategory::Queued,
     StatusCategory::InProgress,
+    StatusCategory::InReview,
     StatusCategory::Done,
     StatusCategory::Cancelled,
     StatusCategory::Unknown,
@@ -4353,9 +4354,10 @@ pub const fn category_position(category: StatusCategory) -> usize {
         StatusCategory::Todo => 2,
         StatusCategory::Queued => 3,
         StatusCategory::InProgress => 4,
-        StatusCategory::Done => 5,
-        StatusCategory::Cancelled => 6,
-        StatusCategory::Unknown => 7,
+        StatusCategory::InReview => 5,
+        StatusCategory::Done => 6,
+        StatusCategory::Cancelled => 7,
+        StatusCategory::Unknown => 8,
     }
 }
 
@@ -4367,6 +4369,7 @@ fn category_name(category: StatusCategory) -> &'static str {
         StatusCategory::Todo => "todo",
         StatusCategory::Queued => "queued",
         StatusCategory::InProgress => "in-progress",
+        StatusCategory::InReview => "in-review",
         StatusCategory::Done => "done",
         StatusCategory::Cancelled => "cancelled",
         StatusCategory::Unknown => "unknown",
@@ -4395,7 +4398,9 @@ fn shipped_default(category: StatusCategory) -> StatusTarget {
         StatusCategory::Cancelled => {
             StatusTarget::Terminal(shipped_column("Cancelled"), ClosedState::NotPlanned)
         }
-        StatusCategory::Draft | StatusCategory::Unknown => {
+        // No board ships a review column, so `in-review` is written and read only where a
+        // mapping names one, and a board without it reads exactly as before.
+        StatusCategory::Draft | StatusCategory::InReview | StatusCategory::Unknown => {
             StatusTarget::Disabled(UnmappedStatus::Unconfigured)
         }
     }
@@ -16100,6 +16105,16 @@ impl TaskSource for GitHubProjectsSource {
         };
         self.column_for(&fields, kind, category, &status)
             .map(|_| ())
+    }
+
+    /// Whether this instance's resolved mapping — its `status_mapping` over the shipped
+    /// defaults — gives `category` an option for `kind`. The board's `Status` field is not
+    /// read: an option the field lacks is the write's own refusal.
+    fn maps_status(&self, kind: ItemKind, category: StatusCategory) -> bool {
+        !matches!(
+            self.statuses.target(kind, category),
+            StatusTarget::Disabled(_)
+        )
     }
 
     /// What a write of `status` reads back as: the `Status` option its category maps to for

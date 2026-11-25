@@ -31,7 +31,7 @@ use super::wire::{
     HoldingsResult, IdParams, InitializeParams, InitializeResult, LabelParams, MetadataParams,
     PROTOCOL_VERSION, PriorityParams, ProjectQueryParams, ProjectWriteParams, Request, Response,
     ServedWriteParams, StatusParams, StoredStatusParams, StoredStatusResult, TaskDetailParams,
-    TaskQueryParams, UpdateParams, after_the_first_vocabulary, knows_every_category, vocabulary,
+    TaskQueryParams, UpdateParams, Vocabulary, vocabulary,
 };
 use crate::config::rebased;
 use crate::registry::PluginKind;
@@ -55,10 +55,10 @@ struct HostedSettings {
 struct Hosted {
     /// The built source.
     source: Box<dyn TaskSource>,
-    /// Whether the engine's `initialize` listed every status category this build knows
-    /// (§3.5). An engine that did not is told a category added after the first vocabulary
-    /// as `unknown`, keeping its name.
-    engine_knows_every_category: bool,
+    /// The status categories the engine's `initialize` listed (§3.5). An engine is told a
+    /// category added after the first vocabulary that it did not list as `unknown`, keeping
+    /// its name.
+    engine_vocabulary: Vocabulary,
 }
 
 /// Serve one connection until the engine closes its input.
@@ -192,7 +192,7 @@ async fn answer(
     };
     match dispatch(
         built.source.as_ref(),
-        built.engine_knows_every_category,
+        built.engine_vocabulary,
         &method,
         params,
     )
@@ -297,7 +297,7 @@ async fn initialize(
             };
             *source = Some(Hosted {
                 source: built,
-                engine_knows_every_category: knows_every_category(params.statuses.as_deref()),
+                engine_vocabulary: Vocabulary::listed(params.statuses.as_deref()),
             });
             Response::ok(
                 id,
@@ -401,8 +401,8 @@ impl SecretResolver for Handshake<'_> {
 }
 
 /// A status as an engine that knows `known` categories may be told it (§3.5).
-fn told(status: Status, known: bool) -> Status {
-    if known || !after_the_first_vocabulary(status.category) {
+fn told(status: Status, known: Vocabulary) -> Status {
+    if known.knows(status.category) {
         return status;
     }
     Status {
@@ -411,14 +411,14 @@ fn told(status: Status, known: bool) -> Status {
     }
 }
 
-fn told_task(task: Task, known: bool) -> Task {
+fn told_task(task: Task, known: Vocabulary) -> Task {
     Task {
         status: told(task.status.clone(), known),
         ..task
     }
 }
 
-fn told_project(project: Project, known: bool) -> Project {
+fn told_project(project: Project, known: Vocabulary) -> Project {
     Project {
         status: told(project.status.clone(), known),
         ..project
@@ -427,11 +427,11 @@ fn told_project(project: Project, known: bool) -> Project {
 
 /// One method call against the built source (§4).
 ///
-/// `known` is whether the engine listed every status category this build knows; every
-/// status this answers with passes through [`told`] on its way out.
+/// `known` is the status categories the engine listed; every status this answers with
+/// passes through [`told`] on its way out.
 async fn dispatch(
     source: &dyn TaskSource,
-    known: bool,
+    known: Vocabulary,
     method: &str,
     params: Value,
 ) -> Result<Value, SourceError> {

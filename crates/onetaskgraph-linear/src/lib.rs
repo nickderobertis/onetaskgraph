@@ -385,7 +385,7 @@
 //! | --- | --- | --- |
 //! | `backlog`, `draft` | `backlog` | `backlog` |
 //! | `todo`, `queued` | `unstarted` | `planned` |
-//! | `in-progress`, `unknown` | `started` | `started` |
+//! | `in-progress`, `in-review`, `unknown` | `started` | `started` |
 //! | `done` | `completed` | `completed` |
 //! | `cancelled` | `canceled` | `canceled` |
 //!
@@ -1415,9 +1415,10 @@ impl CreatedStatusType {
 /// is given, and the `ProjectStatusType` a project status it creates is given.
 ///
 /// One row per category, fixed: a category is created as the type whose meaning is nearest
-/// it, and `draft`, `queued` and `unknown` — which no type of either vocabulary means — as the
-/// nearest neighbour's. An exhaustive match, so a category the contract adds fails to compile
-/// here rather than being created as something unstated.
+/// it, and `draft`, `queued`, `in-review` and `unknown` — which no type of either vocabulary
+/// means — as the nearest neighbour's: `in-review` is work started and not yet completed, so
+/// `started`, beside `in-progress`. An exhaustive match, so a category the contract adds fails
+/// to compile here rather than being created as something unstated.
 const fn created_types(category: StatusCategory) -> (CreatedStateType, CreatedStatusType) {
     match category {
         StatusCategory::Backlog | StatusCategory::Draft => {
@@ -1426,7 +1427,7 @@ const fn created_types(category: StatusCategory) -> (CreatedStateType, CreatedSt
         StatusCategory::Todo | StatusCategory::Queued => {
             (CreatedStateType::Unstarted, CreatedStatusType::Planned)
         }
-        StatusCategory::InProgress | StatusCategory::Unknown => {
+        StatusCategory::InProgress | StatusCategory::InReview | StatusCategory::Unknown => {
             (CreatedStateType::Started, CreatedStatusType::Started)
         }
         StatusCategory::Done => (CreatedStateType::Completed, CreatedStatusType::Completed),
@@ -5477,6 +5478,12 @@ impl TaskSource for LinearSource {
             .await?;
         mutation_payload(&data, MutationRoot::CommentDelete)?;
         Ok(Some(comment.clone()))
+    }
+    /// Whether this instance's `status_mapping` names `category` for `kind`; Linear has no
+    /// built-in names, so a category the mapping leaves out has none. The team's workflow
+    /// states and the workspace's project statuses are not read.
+    fn maps_status(&self, kind: ItemKind, category: StatusCategory) -> bool {
+        self.statuses.name_for(category, kind).is_ok()
     }
     /// Resolved exactly as the write resolves it, through the instance's held vocabulary, so
     /// the write that follows sends no read this did not — and a project write the scope

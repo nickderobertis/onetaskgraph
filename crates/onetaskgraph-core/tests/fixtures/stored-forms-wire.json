@@ -12,6 +12,7 @@
         "todo",
         "queued",
         "in-progress",
+        "in-review",
         "done",
         "cancelled",
         "unknown"

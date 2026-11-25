@@ -68,7 +68,7 @@ pub(crate) fn listed(cached: &Cached, kind: &str, id: &str) -> String {
         .to_owned()
 }
 
-/// Every entry file the cache holds under its `directory` — `projects-v4`, `documents-v4`,
+/// Every entry file the cache holds under its `directory` — `projects-v5`, `documents-v5`,
 /// `tasks` — of `dir`.
 pub(crate) fn kind_entries(dir: &Path, directory: &str) -> Vec<PathBuf> {
     let Ok(listed) = std::fs::read_dir(dir.join(directory)) else {
@@ -105,7 +105,7 @@ fn a_pinned_project_read_is_answered_from_its_entry_and_a_newer_pin_from_the_boa
     let held = version(&first);
     assert!(held.starts_with(onetaskgraph_github_projects::change_token::PREFIX));
     assert_eq!(
-        kind_entries(&cache_dir(&cached).expect("a cache"), "projects-v4").len(),
+        kind_entries(&cache_dir(&cached).expect("a cache"), "projects-v5").len(),
         1
     );
 
@@ -212,7 +212,7 @@ fn an_item_read_too_soon_after_its_change_gives_no_token_and_fills_no_entry() {
         );
     }
     let dir = cache_dir(&cached);
-    for directory in ["projects-v4", "documents-v4"] {
+    for directory in ["projects-v5", "documents-v5"] {
         assert!(
             dir.as_deref()
                 .is_none_or(|dir| kind_entries(dir, directory).is_empty()),
@@ -235,7 +235,7 @@ fn a_listing_of_any_kind_fills_no_entry() {
         ]);
     }
     let dir = cache_dir(&cached);
-    for directory in ["tasks", "projects-v4", "documents-v4", "edges-v4"] {
+    for directory in ["tasks", "projects-v5", "documents-v5", "edges-v5"] {
         assert!(
             dir.as_deref()
                 .is_none_or(|dir| kind_entries(dir, directory).is_empty()),
@@ -250,7 +250,7 @@ fn an_entry_a_release_before_gh3_left_is_read_again_rather_than_served() {
     let (first, _) = show(&cached, "project", "board:P-1", None);
     let held = version(&first);
     let dir = cache_dir(&cached).expect("a cache");
-    let entry = kind_entries(&dir, "projects-v4").remove(0);
+    let entry = kind_entries(&dir, "projects-v5").remove(0);
     // What 0.6.0 would have keyed it on: the gh2 spelling of the same parts.
     let rest = held
         .strip_prefix(onetaskgraph_github_projects::change_token::PREFIX)
@@ -301,7 +301,7 @@ fn an_item_whose_labels_go_on_past_one_page_is_refused_and_leaves_the_entry_at_t
     );
     let dir = cache_dir(&cached).expect("a cache");
     let entry: Value = serde_json::from_slice(
-        &std::fs::read(kind_entries(&dir, "documents-v4").remove(0)).expect("the entry"),
+        &std::fs::read(kind_entries(&dir, "documents-v5").remove(0)).expect("the entry"),
     )
     .expect("JSON");
     assert_eq!(
@@ -609,7 +609,7 @@ fn an_entry_the_cache_directory_will_not_replace_is_served_to_no_pin_after_its_i
             "project",
             "board:P-1",
             "P-1",
-            "projects-v4",
+            "projects-v5",
             "Engine, renamed by a person".to_owned(),
             "Engine, renamed by a person",
         ),
@@ -617,7 +617,7 @@ fn an_entry_the_cache_directory_will_not_replace_is_served_to_no_pin_after_its_i
             "document",
             "board:D-1",
             "D-1",
-            "documents-v4",
+            "documents-v5",
             format!("{DESIGN_TITLE_PREFIX}Design, renamed by a person"),
             "Design, renamed by a person",
         ),

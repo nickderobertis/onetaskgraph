@@ -8,7 +8,10 @@
 //!    qualified id while the deliverer names it, and does not once the deliverer drops it.
 //! 2. **The status.** The delivered task is re-evaluated over every deliverer it names, by
 //!    [`settled`], and its status is written through the status-only write when it is at
-//!    `todo`, `queued` or `in-progress` and the result differs from what it holds.
+//!    `todo`, `queued`, `in-progress` or `in-review` and the result differs from what it
+//!    holds. A result of `in-review` is written as `in-progress` to a delivered task whose
+//!    own source has no name for `in-review` on a task, by [`Engine::maps_status`], decided
+//!    before any request — so delivery never sends a write refused for want of a name.
 //!
 //! Every write of such a task re-evaluates, a write that changes nothing about the deliverer
 //! included, so a retried write re-fires the rule. Nothing here is written down outside the
@@ -16,7 +19,7 @@
 //! evaluation reads the deliverers afresh.
 
 use onetaskgraph_plugin_api::{
-    Classification, SourceError, SourceName, Status, StatusCategory, Task, TaskRef,
+    Classification, ItemKind, SourceError, SourceName, Status, StatusCategory, Task, TaskRef,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -127,6 +130,34 @@ pub enum DeliveryOutcome {
 }
 
 impl Engine {
+    /// Whether `source` has a name to write `category` as on an item of `kind`, so a status
+    /// write of it would not be refused for want of one.
+    ///
+    /// Answered from the source's configuration alone, sending no request to any backend: its
+    /// `status_mapping` over that plugin's shipped defaults, every category a folder of
+    /// Markdown's mapping has a word for or the in-memory source writes, and for a stdio plugin
+    /// what its handshake lists (`docs/plugin-protocol.md` §3.5). `false` for a category the
+    /// mapping does not name, sets to `null`, or names for the other kind only, and for a
+    /// category a stdio plugin's handshake does not list. A mapped name the backend's own
+    /// vocabulary lacks still answers `true`: only a write discovers that.
+    ///
+    /// A caller deciding which category to write — `in-review` where a board has a review
+    /// column, `done` otherwise — asks this before its one write, rather than writing and
+    /// retrying on a refusal.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError::UnknownSource`] for a source nothing configures, and
+    /// [`EngineError::SourceUnavailable`] for one configured but not built.
+    pub fn maps_status(
+        &self,
+        source: &SourceName,
+        kind: ItemKind,
+        category: StatusCategory,
+    ) -> Result<bool, EngineError> {
+        Ok(self.built(source)?.source().maps_status(kind, category))
+    }
+
     /// Set one task's status, and nothing else about it, then keep every task it delivers in
     /// step with it.
     ///
@@ -360,7 +391,10 @@ impl Engine {
         // alone is left alone whatever they say.
         let active = matches!(
             from,
-            StatusCategory::Todo | StatusCategory::Queued | StatusCategory::InProgress
+            StatusCategory::Todo
+                | StatusCategory::Queued
+                | StatusCategory::InProgress
+                | StatusCategory::InReview
         );
         let mut categories = Vec::new();
         let mut pruned = Vec::new();
@@ -443,7 +477,23 @@ impl Engine {
         if !active {
             return entry(DeliveryOutcome::Left { from }, pruned);
         }
-        let Some(to) = settled(&categories).filter(|to| *to != from) else {
+        // A ticket whose own source has no name for `in-review` takes what the rules after it
+        // give a deliverer that is still working, `in-progress`: decided from configuration,
+        // before any request, so no write is sent that the source refuses for want of a name.
+        let Some(to) = settled(&categories)
+            .map(|to| {
+                if to == StatusCategory::InReview
+                    && !source
+                        .source()
+                        .maps_status(ItemKind::Task, StatusCategory::InReview)
+                {
+                    StatusCategory::InProgress
+                } else {
+                    to
+                }
+            })
+            .filter(|to| *to != from)
+        else {
             return entry(DeliveryOutcome::Unchanged { from }, pruned);
         };
         if let Err(error) = self
@@ -528,20 +578,30 @@ impl Engine {
 /// 1. `done` when every deliverer is `done` or `cancelled` and at least one is `done`. A
 ///    `cancelled` deliverer releases its claim and never counts as completion; it only stops
 ///    blocking a sibling's.
-/// 2. `in-progress` when any deliverer is `in-progress`.
-/// 3. `queued` when any deliverer is `queued`.
-/// 4. `todo` when any deliverer releases — `todo`, `cancelled`, `unknown` — or is `done`.
-/// 5. `todo` when no deliverer remains: the claim is released.
-/// 6. `None` when every remaining deliverer is `draft` or `backlog`, which count as nothing.
+/// 2. `in-review` when any deliverer is `in-review`.
+/// 3. `in-progress` when any deliverer is `in-progress`.
+/// 4. `queued` when any deliverer is `queued`.
+/// 5. `todo` when any deliverer releases — `todo`, `cancelled`, `unknown` — or is `done`.
+/// 6. `todo` when no deliverer remains: the claim is released.
+/// 7. `None` when every remaining deliverer is `draft` or `backlog`, which count as nothing.
+///
+/// So the ranking runs `done`, `in-review`, `in-progress`, `queued`, `todo`. This answers the
+/// category alone; a delivered task whose own source has no name for `in-review` is written
+/// `in-progress` in its place.
 #[must_use]
 pub fn settled(categories: &[StatusCategory]) -> Option<StatusCategory> {
-    use StatusCategory::{Backlog, Cancelled, Done, Draft, InProgress, Queued, Todo, Unknown};
+    use StatusCategory::{
+        Backlog, Cancelled, Done, Draft, InProgress, InReview, Queued, Todo, Unknown,
+    };
     if categories.contains(&Done)
         && categories
             .iter()
             .all(|category| matches!(category, Done | Cancelled))
     {
         return Some(Done);
+    }
+    if categories.contains(&InReview) {
+        return Some(InReview);
     }
     if categories.contains(&InProgress) {
         return Some(InProgress);

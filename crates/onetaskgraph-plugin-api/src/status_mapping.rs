@@ -35,12 +35,13 @@ use crate::{ItemKind, SourceError, SourceName, StatusCategory};
 
 /// Every status category, in the contract's own order — the order a mapping is held and
 /// reported in.
-const CATEGORIES: [StatusCategory; 8] = [
+const CATEGORIES: [StatusCategory; 9] = [
     StatusCategory::Draft,
     StatusCategory::Backlog,
     StatusCategory::Todo,
     StatusCategory::Queued,
     StatusCategory::InProgress,
+    StatusCategory::InReview,
     StatusCategory::Done,
     StatusCategory::Cancelled,
     StatusCategory::Unknown,
@@ -55,9 +56,10 @@ const fn position(category: StatusCategory) -> usize {
         StatusCategory::Todo => 2,
         StatusCategory::Queued => 3,
         StatusCategory::InProgress => 4,
-        StatusCategory::Done => 5,
-        StatusCategory::Cancelled => 6,
-        StatusCategory::Unknown => 7,
+        StatusCategory::InReview => 5,
+        StatusCategory::Done => 6,
+        StatusCategory::Cancelled => 7,
+        StatusCategory::Unknown => 8,
     }
 }
 
@@ -77,6 +79,7 @@ const fn category_key(category: StatusCategory) -> &'static str {
         StatusCategory::Todo => "todo",
         StatusCategory::Queued => "queued",
         StatusCategory::InProgress => "in-progress",
+        StatusCategory::InReview => "in-review",
         StatusCategory::Done => "done",
         StatusCategory::Cancelled => "cancelled",
         StatusCategory::Unknown => "unknown",

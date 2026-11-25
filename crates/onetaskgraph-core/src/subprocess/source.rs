@@ -36,8 +36,8 @@ use super::wire::{
     PROTOCOL_VERSION, PriorityParams, PriorityResult, ProjectQueryParams, ProjectResult,
     ProjectWriteParams, QuotaResult, Request, StatusParams, StatusResult, StoredStatusParams,
     StoredStatusResult, TaskAssetWriteParams, TaskDetailParams, TaskDetailResult, TaskQueryParams,
-    TaskResult, TaskWriteParams, UpdateParams, UpdateResult, WriteResult,
-    after_the_first_vocabulary, knows_every_category, spelled, vocabulary,
+    TaskResult, TaskWriteParams, UpdateParams, UpdateResult, Vocabulary, WriteResult, spelled,
+    vocabulary,
 };
 
 /// The id the handshake is sent under. §3 makes it the first request on a connection, so
@@ -112,11 +112,12 @@ pub struct SubprocessSource {
     /// Whether the plugin said it closes a task as a duplicate (§3.18), read at the same
     /// handshake. A plugin that said nothing is never sent `duplicate_of`.
     duplicate_closes: bool,
-    /// Whether the plugin's handshake listed every status category this build knows (§3.5).
+    /// The status categories the plugin's handshake says it was written against (§3.5).
     ///
-    /// A plugin that listed none was written against the first vocabulary, and is never
-    /// handed a category added after it: not in a query, not in a write.
-    knows_every_category: bool,
+    /// A plugin that listed none was written against the first vocabulary, and one that lists
+    /// some is written against exactly those: it is never handed a category added after the
+    /// first vocabulary that it did not list, not in a query, not in a write.
+    vocabulary: Vocabulary,
     /// Whether the plugin said it answers the two narrow task writes and holds a task's two
     /// lists (§3.6), read at the same handshake.
     task_updates: bool,
@@ -432,7 +433,7 @@ impl SubprocessSource {
             meters,
             quota,
             duplicate_closes,
-            knows_every_category: knows_every_category(statuses.as_deref()),
+            vocabulary: Vocabulary::listed(statuses.as_deref()),
             task_updates,
             metadata_updates,
             content_updates,
@@ -515,13 +516,13 @@ impl SubprocessSource {
     /// cannot report a row in it, so the rows the rest of the list matches are every row the
     /// whole list matches.
     fn statuses_for(&self, statuses: &[StatusCategory]) -> Option<Vec<StatusCategory>> {
-        if self.knows_every_category {
+        if self.vocabulary.knows_every() {
             return Some(statuses.to_vec());
         }
         let known: Vec<StatusCategory> = statuses
             .iter()
             .copied()
-            .filter(|category| !after_the_first_vocabulary(*category))
+            .filter(|category| self.vocabulary.knows(*category))
             .collect();
         (known.len() == statuses.len() || !known.is_empty()).then_some(known)
     }
@@ -529,7 +530,7 @@ impl SubprocessSource {
     /// Refuse a status this plugin's handshake says it was not written against, before it is
     /// sent (§3.5).
     fn knows(&self, category: StatusCategory) -> Result<(), SourceError> {
-        if self.knows_every_category || !after_the_first_vocabulary(category) {
+        if self.vocabulary.knows(category) {
             return Ok(());
         }
         Err(SourceError::Refused {
@@ -1019,6 +1020,13 @@ impl TaskSource for SubprocessSource {
             .await?;
         self.keep_stored(MetadataRecord::Project, &result.id, result.stored_content);
         Ok(result.id)
+    }
+
+    /// Whether the plugin's handshake lists `category` (§3.5): a category added after the
+    /// first vocabulary that it did not list is never handed it, so it has no name for one.
+    fn maps_status(&self, kind: ItemKind, category: StatusCategory) -> bool {
+        let _ = kind;
+        self.vocabulary.knows(category)
     }
 
     async fn set_task_status(

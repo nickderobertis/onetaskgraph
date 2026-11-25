@@ -17,6 +17,7 @@ const PUBLISHED_ENTRIES: &[(u32, u64)] = &[
     (2, 0x2616_f726_f856_0d98),
     (3, 0xabfb_68ff_ed88_0835),
     (4, 0xd0c5_7338_4fb1_bf48),
+    (5, 0xf9ba_ff13_dd87_b3cb),
 ];
 
 /// Every project, document, edge and byte entry schema number with the digest of the shapes it
@@ -26,6 +27,7 @@ const PUBLISHED_KIND_ENTRIES: &[(u32, u64)] = &[
     (2, 0x75c8_dae9_dbc6_b859),
     (3, 0xa942_830c_4051_d5ad),
     (4, 0x77ac_ae1a_58aa_189e),
+    (5, 0x3f1b_2fc2_8782_9ffd),
 ];
 
 #[test]

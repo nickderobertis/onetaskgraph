@@ -1,10 +1,10 @@
-//! The in-memory source's `queued` status, its status-only write, and a task's two lists,
-//! driven through the real trait.
+//! The in-memory source's `queued` and `in-review` statuses, its status-only write, and a
+//! task's two lists, driven through the real trait.
 
 use onetaskgraph_in_memory::{InMemoryConfig, InMemorySource};
 use onetaskgraph_plugin_api::{
-    ItemWrite, NativeId, PageRequest, SourceError, Status, StatusCategory, Task, TaskQuery,
-    TaskRef, TaskSource,
+    ItemKind, ItemWrite, NativeId, PageRequest, SourceError, Status, StatusCategory, Task,
+    TaskQuery, TaskRef, TaskSource,
 };
 use serde_json::{Value, json};
 
@@ -78,6 +78,38 @@ async fn a_queued_task_is_stored_and_filtered_as_queued() {
     let held = source.get_task(&id("T-1")).await.unwrap().expect("held");
     assert_eq!(held.delivers, vec![entry("T-2"), entry("other:X-1")]);
     assert_eq!(held.delivered_by, vec![entry("plan:P-1")]);
+}
+
+#[tokio::test]
+async fn an_in_review_task_is_set_read_back_and_filtered_as_in_review() {
+    let source = work("supported");
+    assert!(source.maps_status(ItemKind::Task, StatusCategory::InReview));
+    assert_eq!(
+        with_statuses(&source, &[StatusCategory::InReview]).await,
+        Vec::<String>::new()
+    );
+    let set = source
+        .set_task_status(&id("T-2"), StatusCategory::InReview)
+        .await
+        .unwrap();
+    assert_eq!(
+        set,
+        Some(Status {
+            category: StatusCategory::InReview,
+            name: "in-review".to_owned()
+        })
+    );
+    let held = source.get_task(&id("T-2")).await.unwrap().expect("held");
+    assert_eq!(held.status.category, StatusCategory::InReview);
+    assert_eq!(
+        with_statuses(&source, &[StatusCategory::InReview]).await,
+        ["T-2"]
+    );
+    assert_eq!(
+        with_statuses(&source, &[StatusCategory::InProgress, StatusCategory::Done]).await,
+        Vec::<String>::new(),
+        "in-review is a category of its own"
+    );
 }
 
 #[tokio::test]

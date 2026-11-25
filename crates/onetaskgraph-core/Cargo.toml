@@ -67,6 +67,10 @@ name = "engine"
 required-features = ["github-projects", "linear"]
 
 [[test]]
+name = "maps_status"
+required-features = ["github-projects", "linear"]
+
+[[test]]
 name = "query"
 required-features = ["linear"]
 

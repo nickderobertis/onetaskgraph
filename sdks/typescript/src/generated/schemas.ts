@@ -2106,6 +2106,11 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "const": "in-progress"
           },
           {
+            "description": "Done and waiting on a reviewer before it is finished.\n\nNo source ships a default name for it: a source writes and reads it only at the name its\n`status_mapping` gives it, so a board with no review column reads exactly as before.",
+            "type": "string",
+            "const": "in-review"
+          },
+          {
             "description": "Finished.",
             "type": "string",
             "const": "done"
@@ -3152,6 +3157,11 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "description": "Being worked on.",
             "type": "string",
             "const": "in-progress"
+          },
+          {
+            "description": "Done and waiting on a reviewer before it is finished.\n\nNo source ships a default name for it: a source writes and reads it only at the name its\n`status_mapping` gives it, so a board with no review column reads exactly as before.",
+            "type": "string",
+            "const": "in-review"
           },
           {
             "description": "Finished.",
@@ -4546,6 +4556,11 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "const": "in-progress"
           },
           {
+            "description": "Done and waiting on a reviewer before it is finished.\n\nNo source ships a default name for it: a source writes and reads it only at the name its\n`status_mapping` gives it, so a board with no review column reads exactly as before.",
+            "type": "string",
+            "const": "in-review"
+          },
+          {
             "description": "Finished.",
             "type": "string",
             "const": "done"
@@ -5523,6 +5538,11 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "const": "in-progress"
           },
           {
+            "description": "Done and waiting on a reviewer before it is finished.\n\nNo source ships a default name for it: a source writes and reads it only at the name its\n`status_mapping` gives it, so a board with no review column reads exactly as before.",
+            "type": "string",
+            "const": "in-review"
+          },
+          {
             "description": "Finished.",
             "type": "string",
             "const": "done"
@@ -6241,6 +6261,11 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "const": "in-progress"
           },
           {
+            "description": "Done and waiting on a reviewer before it is finished.\n\nNo source ships a default name for it: a source writes and reads it only at the name its\n`status_mapping` gives it, so a board with no review column reads exactly as before.",
+            "type": "string",
+            "const": "in-review"
+          },
+          {
             "description": "Finished.",
             "type": "string",
             "const": "done"
@@ -6626,6 +6651,11 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "const": "in-progress"
           },
           {
+            "description": "Done and waiting on a reviewer before it is finished.\n\nNo source ships a default name for it: a source writes and reads it only at the name its\n`status_mapping` gives it, so a board with no review column reads exactly as before.",
+            "type": "string",
+            "const": "in-review"
+          },
+          {
             "description": "Finished.",
             "type": "string",
             "const": "done"
@@ -6831,6 +6861,11 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "description": "Being worked on.",
             "type": "string",
             "const": "in-progress"
+          },
+          {
+            "description": "Done and waiting on a reviewer before it is finished.\n\nNo source ships a default name for it: a source writes and reads it only at the name its\n`status_mapping` gives it, so a board with no review column reads exactly as before.",
+            "type": "string",
+            "const": "in-review"
           },
           {
             "description": "Finished.",
@@ -8637,6 +8672,11 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "const": "in-progress"
           },
           {
+            "description": "Done and waiting on a reviewer before it is finished.\n\nNo source ships a default name for it: a source writes and reads it only at the name its\n`status_mapping` gives it, so a board with no review column reads exactly as before.",
+            "type": "string",
+            "const": "in-review"
+          },
+          {
             "description": "Finished.",
             "type": "string",
             "const": "done"
@@ -9158,6 +9198,11 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "const": "in-progress"
           },
           {
+            "description": "Done and waiting on a reviewer before it is finished.\n\nNo source ships a default name for it: a source writes and reads it only at the name its\n`status_mapping` gives it, so a board with no review column reads exactly as before.",
+            "type": "string",
+            "const": "in-review"
+          },
+          {
             "description": "Finished.",
             "type": "string",
             "const": "done"
@@ -9562,6 +9607,11 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "const": "in-progress"
           },
           {
+            "description": "Done and waiting on a reviewer before it is finished.\n\nNo source ships a default name for it: a source writes and reads it only at the name its\n`status_mapping` gives it, so a board with no review column reads exactly as before.",
+            "type": "string",
+            "const": "in-review"
+          },
+          {
             "description": "Finished.",
             "type": "string",
             "const": "done"
@@ -9858,6 +9908,11 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "description": "Being worked on.",
             "type": "string",
             "const": "in-progress"
+          },
+          {
+            "description": "Done and waiting on a reviewer before it is finished.\n\nNo source ships a default name for it: a source writes and reads it only at the name its\n`status_mapping` gives it, so a board with no review column reads exactly as before.",
+            "type": "string",
+            "const": "in-review"
           },
           {
             "description": "Finished.",
@@ -10599,6 +10654,11 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "const": "in-progress"
           },
           {
+            "description": "Done and waiting on a reviewer before it is finished.\n\nNo source ships a default name for it: a source writes and reads it only at the name its\n`status_mapping` gives it, so a board with no review column reads exactly as before.",
+            "type": "string",
+            "const": "in-review"
+          },
+          {
             "description": "Finished.",
             "type": "string",
             "const": "done"
@@ -11218,6 +11278,11 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "const": "in-progress"
           },
           {
+            "description": "Done and waiting on a reviewer before it is finished.\n\nNo source ships a default name for it: a source writes and reads it only at the name its\n`status_mapping` gives it, so a board with no review column reads exactly as before.",
+            "type": "string",
+            "const": "in-review"
+          },
+          {
             "description": "Finished.",
             "type": "string",
             "const": "done"
@@ -11747,6 +11812,11 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "description": "Being worked on.",
             "type": "string",
             "const": "in-progress"
+          },
+          {
+            "description": "Done and waiting on a reviewer before it is finished.\n\nNo source ships a default name for it: a source writes and reads it only at the name its\n`status_mapping` gives it, so a board with no review column reads exactly as before.",
+            "type": "string",
+            "const": "in-review"
           },
           {
             "description": "Finished.",
@@ -13007,6 +13077,11 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "const": "in-progress"
           },
           {
+            "description": "Done and waiting on a reviewer before it is finished.\n\nNo source ships a default name for it: a source writes and reads it only at the name its\n`status_mapping` gives it, so a board with no review column reads exactly as before.",
+            "type": "string",
+            "const": "in-review"
+          },
+          {
             "description": "Finished.",
             "type": "string",
             "const": "done"
@@ -14126,6 +14201,11 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "const": "in-progress"
           },
           {
+            "description": "Done and waiting on a reviewer before it is finished.\n\nNo source ships a default name for it: a source writes and reads it only at the name its\n`status_mapping` gives it, so a board with no review column reads exactly as before.",
+            "type": "string",
+            "const": "in-review"
+          },
+          {
             "description": "Finished.",
             "type": "string",
             "const": "done"
@@ -14450,6 +14530,11 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "description": "Being worked on.",
             "type": "string",
             "const": "in-progress"
+          },
+          {
+            "description": "Done and waiting on a reviewer before it is finished.\n\nNo source ships a default name for it: a source writes and reads it only at the name its\n`status_mapping` gives it, so a board with no review column reads exactly as before.",
+            "type": "string",
+            "const": "in-review"
           },
           {
             "description": "Finished.",
@@ -15322,6 +15407,11 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "const": "in-progress"
           },
           {
+            "description": "Done and waiting on a reviewer before it is finished.\n\nNo source ships a default name for it: a source writes and reads it only at the name its\n`status_mapping` gives it, so a board with no review column reads exactly as before.",
+            "type": "string",
+            "const": "in-review"
+          },
+          {
             "description": "Finished.",
             "type": "string",
             "const": "done"
@@ -16132,6 +16222,11 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "const": "in-progress"
           },
           {
+            "description": "Done and waiting on a reviewer before it is finished.\n\nNo source ships a default name for it: a source writes and reads it only at the name its\n`status_mapping` gives it, so a board with no review column reads exactly as before.",
+            "type": "string",
+            "const": "in-review"
+          },
+          {
             "description": "Finished.",
             "type": "string",
             "const": "done"
@@ -16229,6 +16324,11 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "description": "Being worked on.",
             "type": "string",
             "const": "in-progress"
+          },
+          {
+            "description": "Done and waiting on a reviewer before it is finished.\n\nNo source ships a default name for it: a source writes and reads it only at the name its\n`status_mapping` gives it, so a board with no review column reads exactly as before.",
+            "type": "string",
+            "const": "in-review"
           },
           {
             "description": "Finished.",
@@ -17099,6 +17199,11 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "const": "in-progress"
           },
           {
+            "description": "Done and waiting on a reviewer before it is finished.\n\nNo source ships a default name for it: a source writes and reads it only at the name its\n`status_mapping` gives it, so a board with no review column reads exactly as before.",
+            "type": "string",
+            "const": "in-review"
+          },
+          {
             "description": "Finished.",
             "type": "string",
             "const": "done"
@@ -17414,6 +17519,11 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "description": "Being worked on.",
             "type": "string",
             "const": "in-progress"
+          },
+          {
+            "description": "Done and waiting on a reviewer before it is finished.\n\nNo source ships a default name for it: a source writes and reads it only at the name its\n`status_mapping` gives it, so a board with no review column reads exactly as before.",
+            "type": "string",
+            "const": "in-review"
           },
           {
             "description": "Finished.",
@@ -19455,6 +19565,11 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "const": "in-progress"
           },
           {
+            "description": "Done and waiting on a reviewer before it is finished.\n\nNo source ships a default name for it: a source writes and reads it only at the name its\n`status_mapping` gives it, so a board with no review column reads exactly as before.",
+            "type": "string",
+            "const": "in-review"
+          },
+          {
             "description": "Finished.",
             "type": "string",
             "const": "done"
@@ -20285,6 +20400,11 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "const": "in-progress"
           },
           {
+            "description": "Done and waiting on a reviewer before it is finished.\n\nNo source ships a default name for it: a source writes and reads it only at the name its\n`status_mapping` gives it, so a board with no review column reads exactly as before.",
+            "type": "string",
+            "const": "in-review"
+          },
+          {
             "description": "Finished.",
             "type": "string",
             "const": "done"
@@ -21047,6 +21167,11 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "description": "Being worked on.",
             "type": "string",
             "const": "in-progress"
+          },
+          {
+            "description": "Done and waiting on a reviewer before it is finished.\n\nNo source ships a default name for it: a source writes and reads it only at the name its\n`status_mapping` gives it, so a board with no review column reads exactly as before.",
+            "type": "string",
+            "const": "in-review"
           },
           {
             "description": "Finished.",
@@ -22772,6 +22897,11 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "description": "Being worked on.",
             "type": "string",
             "const": "in-progress"
+          },
+          {
+            "description": "Done and waiting on a reviewer before it is finished.\n\nNo source ships a default name for it: a source writes and reads it only at the name its\n`status_mapping` gives it, so a board with no review column reads exactly as before.",
+            "type": "string",
+            "const": "in-review"
           },
           {
             "description": "Finished.",
@@ -24524,6 +24654,11 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "const": "in-progress"
           },
           {
+            "description": "Done and waiting on a reviewer before it is finished.\n\nNo source ships a default name for it: a source writes and reads it only at the name its\n`status_mapping` gives it, so a board with no review column reads exactly as before.",
+            "type": "string",
+            "const": "in-review"
+          },
+          {
             "description": "Finished.",
             "type": "string",
             "const": "done"
@@ -24571,6 +24706,11 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
         "description": "Being worked on.",
         "type": "string",
         "const": "in-progress"
+      },
+      {
+        "description": "Done and waiting on a reviewer before it is finished.\n\nNo source ships a default name for it: a source writes and reads it only at the name its\n`status_mapping` gives it, so a board with no review column reads exactly as before.",
+        "type": "string",
+        "const": "in-review"
       },
       {
         "description": "Finished.",
@@ -24841,6 +24981,11 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "description": "Being worked on.",
             "type": "string",
             "const": "in-progress"
+          },
+          {
+            "description": "Done and waiting on a reviewer before it is finished.\n\nNo source ships a default name for it: a source writes and reads it only at the name its\n`status_mapping` gives it, so a board with no review column reads exactly as before.",
+            "type": "string",
+            "const": "in-review"
           },
           {
             "description": "Finished.",
@@ -25132,6 +25277,11 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "const": "in-progress"
           },
           {
+            "description": "Done and waiting on a reviewer before it is finished.\n\nNo source ships a default name for it: a source writes and reads it only at the name its\n`status_mapping` gives it, so a board with no review column reads exactly as before.",
+            "type": "string",
+            "const": "in-review"
+          },
+          {
             "description": "Finished.",
             "type": "string",
             "const": "done"
@@ -25346,6 +25496,11 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "description": "Being worked on.",
             "type": "string",
             "const": "in-progress"
+          },
+          {
+            "description": "Done and waiting on a reviewer before it is finished.\n\nNo source ships a default name for it: a source writes and reads it only at the name its\n`status_mapping` gives it, so a board with no review column reads exactly as before.",
+            "type": "string",
+            "const": "in-review"
           },
           {
             "description": "Finished.",
@@ -25599,6 +25754,11 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "description": "Being worked on.",
             "type": "string",
             "const": "in-progress"
+          },
+          {
+            "description": "Done and waiting on a reviewer before it is finished.\n\nNo source ships a default name for it: a source writes and reads it only at the name its\n`status_mapping` gives it, so a board with no review column reads exactly as before.",
+            "type": "string",
+            "const": "in-review"
           },
           {
             "description": "Finished.",
@@ -26452,6 +26612,11 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "const": "in-progress"
           },
           {
+            "description": "Done and waiting on a reviewer before it is finished.\n\nNo source ships a default name for it: a source writes and reads it only at the name its\n`status_mapping` gives it, so a board with no review column reads exactly as before.",
+            "type": "string",
+            "const": "in-review"
+          },
+          {
             "description": "Finished.",
             "type": "string",
             "const": "done"
@@ -26809,6 +26974,11 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "description": "Being worked on.",
             "type": "string",
             "const": "in-progress"
+          },
+          {
+            "description": "Done and waiting on a reviewer before it is finished.\n\nNo source ships a default name for it: a source writes and reads it only at the name its\n`status_mapping` gives it, so a board with no review column reads exactly as before.",
+            "type": "string",
+            "const": "in-review"
           },
           {
             "description": "Finished.",
@@ -27251,6 +27421,11 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "description": "Being worked on.",
             "type": "string",
             "const": "in-progress"
+          },
+          {
+            "description": "Done and waiting on a reviewer before it is finished.\n\nNo source ships a default name for it: a source writes and reads it only at the name its\n`status_mapping` gives it, so a board with no review column reads exactly as before.",
+            "type": "string",
+            "const": "in-review"
           },
           {
             "description": "Finished.",
@@ -27808,6 +27983,11 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "description": "Being worked on.",
             "type": "string",
             "const": "in-progress"
+          },
+          {
+            "description": "Done and waiting on a reviewer before it is finished.\n\nNo source ships a default name for it: a source writes and reads it only at the name its\n`status_mapping` gives it, so a board with no review column reads exactly as before.",
+            "type": "string",
+            "const": "in-review"
           },
           {
             "description": "Finished.",
@@ -29003,6 +29183,11 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "const": "in-progress"
           },
           {
+            "description": "Done and waiting on a reviewer before it is finished.\n\nNo source ships a default name for it: a source writes and reads it only at the name its\n`status_mapping` gives it, so a board with no review column reads exactly as before.",
+            "type": "string",
+            "const": "in-review"
+          },
+          {
             "description": "Finished.",
             "type": "string",
             "const": "done"
@@ -30085,6 +30270,11 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "const": "in-progress"
           },
           {
+            "description": "Done and waiting on a reviewer before it is finished.\n\nNo source ships a default name for it: a source writes and reads it only at the name its\n`status_mapping` gives it, so a board with no review column reads exactly as before.",
+            "type": "string",
+            "const": "in-review"
+          },
+          {
             "description": "Finished.",
             "type": "string",
             "const": "done"
@@ -30491,6 +30681,11 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "const": "in-progress"
           },
           {
+            "description": "Done and waiting on a reviewer before it is finished.\n\nNo source ships a default name for it: a source writes and reads it only at the name its\n`status_mapping` gives it, so a board with no review column reads exactly as before.",
+            "type": "string",
+            "const": "in-review"
+          },
+          {
             "description": "Finished.",
             "type": "string",
             "const": "done"
@@ -30878,6 +31073,11 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "description": "Being worked on.",
             "type": "string",
             "const": "in-progress"
+          },
+          {
+            "description": "Done and waiting on a reviewer before it is finished.\n\nNo source ships a default name for it: a source writes and reads it only at the name its\n`status_mapping` gives it, so a board with no review column reads exactly as before.",
+            "type": "string",
+            "const": "in-review"
           },
           {
             "description": "Finished.",
@@ -31574,6 +31774,11 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "const": "in-progress"
           },
           {
+            "description": "Done and waiting on a reviewer before it is finished.\n\nNo source ships a default name for it: a source writes and reads it only at the name its\n`status_mapping` gives it, so a board with no review column reads exactly as before.",
+            "type": "string",
+            "const": "in-review"
+          },
+          {
             "description": "Finished.",
             "type": "string",
             "const": "done"
@@ -31958,6 +32163,11 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "description": "Being worked on.",
             "type": "string",
             "const": "in-progress"
+          },
+          {
+            "description": "Done and waiting on a reviewer before it is finished.\n\nNo source ships a default name for it: a source writes and reads it only at the name its\n`status_mapping` gives it, so a board with no review column reads exactly as before.",
+            "type": "string",
+            "const": "in-review"
           },
           {
             "description": "Finished.",
@@ -32446,6 +32656,11 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "description": "Being worked on.",
             "type": "string",
             "const": "in-progress"
+          },
+          {
+            "description": "Done and waiting on a reviewer before it is finished.\n\nNo source ships a default name for it: a source writes and reads it only at the name its\n`status_mapping` gives it, so a board with no review column reads exactly as before.",
+            "type": "string",
+            "const": "in-review"
           },
           {
             "description": "Finished.",
@@ -33874,6 +34089,11 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "const": "in-progress"
           },
           {
+            "description": "Done and waiting on a reviewer before it is finished.\n\nNo source ships a default name for it: a source writes and reads it only at the name its\n`status_mapping` gives it, so a board with no review column reads exactly as before.",
+            "type": "string",
+            "const": "in-review"
+          },
+          {
             "description": "Finished.",
             "type": "string",
             "const": "done"
@@ -34791,6 +35011,11 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "description": "Being worked on.",
             "type": "string",
             "const": "in-progress"
+          },
+          {
+            "description": "Done and waiting on a reviewer before it is finished.\n\nNo source ships a default name for it: a source writes and reads it only at the name its\n`status_mapping` gives it, so a board with no review column reads exactly as before.",
+            "type": "string",
+            "const": "in-review"
           },
           {
             "description": "Finished.",

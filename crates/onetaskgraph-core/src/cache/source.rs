@@ -1489,6 +1489,10 @@ impl TaskSource for CachedSource {
         self.inner.status_as_written(kind, status)
     }
 
+    fn maps_status(&self, kind: ItemKind, category: StatusCategory) -> bool {
+        self.inner.maps_status(kind, category)
+    }
+
     async fn set_task_status(
         &self,
         id: &NativeId,
