@@ -300,8 +300,9 @@ written before `"in-review"` is handed `"queued"` and never `"in-review"`.
 
 This build lists `"draft"`, `"backlog"`, `"todo"`, `"queued"`, `"in-progress"`, `"in-review"`,
 `"done"`, `"cancelled"` and `"unknown"`, in that order. What a plugin's member lists is also
-what `Engine::maps_status` answers for it: `false` for a category it did not list, with no
-request sent.
+what `Engine::maps_status` answers for it: the engine answers `TaskSource::maps_status` for a
+hosted source from this member, `false` for a category it did not list, and sends no message
+to ask it.
 
 Nothing crosses to a peer that did not list it without a refusal by name:
 
