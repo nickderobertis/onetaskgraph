@@ -1660,6 +1660,13 @@ them do; this is the inventory of what is owed, not a status board.
      KEY=null`, the board's cache warmed by the copy that put it there and cold — writes the
      moved statuses, removes the key, keeps every edge and link, and reads no task on its own:
      every request but the members listing's pages is the same at 3 tasks and at 27.
+173. A task at the name its source's `status_mapping.in-review` gives it reads `in-review` in
+     `task show` and `task list --status in-review`, and `task status set <ID> in-review` writes
+     that name, on a GitHub board and in Linear; a source mapping none reads the same item
+     `unknown` and refuses the write naming `status_mapping.in-review.task`, sending no mutation;
+     a folder of Markdown reads `in-review` and `in review` and writes `in-review`; and a
+     delivered task follows a deliverer into `in-review`, or into `in-progress` where its own
+     source has no name for it, with no refused write.
 
 ## The public boundary
 
