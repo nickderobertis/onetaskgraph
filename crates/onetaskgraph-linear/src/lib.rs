@@ -2032,6 +2032,11 @@ struct LinearSource {
     /// applied to every long form and comment body this source sends and receives; see
     /// [`TaskSource::attach_body_markup`] and [`marked`].
     body_markup: std::sync::OnceLock<onetaskgraph_plugin_api::SharedBodyMarkup>,
+    /// Each item's body as Linear last answered storing it — an issue's, project's or document's
+    /// long form above its slot, a comment's body — by the item's id and the body's member: read through the markup
+    /// again immediately before that item is written, so what the markup last read is that item's
+    /// own (see [`Self::sent`]).
+    stored_bodies: std::sync::Mutex<std::collections::HashMap<(String, String), String>>,
     /// What each item this instance wrote holds, as its latest write's own answer said — what
     /// [`TaskSource::written_task`] and [`TaskSource::written_version`] answer.
     answered: std::sync::Mutex<std::collections::HashMap<(MetadataRecord, NativeId), Answered>>,
@@ -2116,6 +2121,7 @@ impl LinearSource {
             quota: std::sync::Mutex::new(Vec::new()),
             headings: std::sync::Mutex::new(std::collections::HashMap::new()),
             body_markup: std::sync::OnceLock::new(),
+            stored_bodies: std::sync::Mutex::new(std::collections::HashMap::new()),
             answered: std::sync::Mutex::new(std::collections::HashMap::new()),
             origins_ahead: std::sync::Mutex::new(origins::OriginsAhead::default()),
             link_types,
@@ -8027,7 +8033,45 @@ impl LinearSource {
     /// spelling the long form held it in. Or the refusal of a long form that would be stored ending
     /// in what a read takes for that block, or of a value no `Fields` section can show.
     fn sent(&self, value: Value) -> Result<Value, SourceError> {
+        let Value::Object(variables) = value else {
+            return self.sent_for(value, None);
+        };
+        // A mutation names the item it writes as `id` beside its `input`, or as `id_<n>` beside
+        // `input_<n>` in an aliased document; a create names none, or its own id inside `input`.
+        let targets: std::collections::HashMap<String, String> = variables
+            .iter()
+            .filter_map(|(name, held)| {
+                let suffix = name.strip_prefix("id")?;
+                (suffix.is_empty() || suffix.starts_with('_'))
+                    .then(|| held.as_str().map(|id| (suffix.to_owned(), id.to_owned())))
+                    .flatten()
+            })
+            .collect();
+        let mut sent = serde_json::Map::new();
+        for (name, held) in variables {
+            let target = name
+                .strip_prefix("input")
+                .and_then(|suffix| targets.get(suffix).cloned())
+                .or_else(|| held.get("id").and_then(Value::as_str).map(str::to_owned));
+            sent.insert(name, self.sent_for(held, target.as_deref())?);
+        }
+        Ok(Value::Object(sent))
+    }
+
+    /// `value`, every body in it sent for the item `target` — after the markup reads that item's
+    /// own last stored body, or an empty one for a create or an item this source has not read.
+    fn sent_for(&self, value: Value, target: Option<&str>) -> Result<Value, SourceError> {
         transported(value, &|key, body| {
+            if let Some(markup) = self.body_markup.get() {
+                let stored = target.and_then(|id| {
+                    self.stored_bodies
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .get(&(id.to_owned(), key.to_owned()))
+                        .cloned()
+                });
+                let _ = markup.read(stored.as_deref().unwrap_or_default());
+            }
             if LONG_FORM_MEMBERS.contains(&key) {
                 self.sent_long_form(body)
             } else {
@@ -8077,11 +8121,45 @@ impl LinearSource {
         Ok(format!("{above}{tail}"))
     }
 
+    /// Hold, by its id, the body of every item `data` answers: what [`Self::sent_for`] reads
+    /// through the markup again before writing that item.
+    fn keep_stored_bodies(&self, data: &Value) {
+        match data {
+            Value::Object(object) => {
+                if let Some(id) = object.get("id").and_then(Value::as_str) {
+                    for (key, held) in object {
+                        let Value::String(body) = held else { continue };
+                        if !BODY_MEMBERS.contains(&key.as_str()) {
+                            continue;
+                        }
+                        let above = match LONG_FORM_MEMBERS.contains(&key.as_str()) {
+                            true => match slot::tail(body) {
+                                Ok(Some(tail)) => &body[..tail.start],
+                                _ => body.as_str(),
+                            },
+                            false => body.as_str(),
+                        };
+                        self.stored_bodies
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .insert((id.to_owned(), key.clone()), above.to_owned());
+                    }
+                }
+                object
+                    .values()
+                    .for_each(|held| self.keep_stored_bodies(held));
+            }
+            Value::Array(items) => items.iter().for_each(|item| self.keep_stored_bodies(item)),
+            _ => {}
+        }
+    }
+
     /// `data` as an answer is read above the transport: every body read out of the engine's
     /// markup, and every long form's tail taken off before the markup reads the rest and set back
     /// as the read side holds it — no `Fields` section, and the spelling it was stored in kept
     /// legible — so the block is never read as a caller's own, and never reaches one as content.
     fn received(&self, data: Value) -> Value {
+        self.keep_stored_bodies(&data);
         let markup = self.body_markup.get();
         let read = |text: &str| markup.map_or_else(|| text.to_owned(), |markup| markup.read(text));
         let answered = transported(data, &|key, body| {

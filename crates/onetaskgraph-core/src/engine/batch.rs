@@ -639,7 +639,7 @@ impl Engine {
             one_each(
                 source,
                 writes.len(),
-                resolved.source().add_comments(&writes).await,
+                crate::expandable_blocks::authored(resolved.source().add_comments(&writes)).await,
             )
         };
         for ((at, written), answer) in sent.into_iter().zip(answers) {
@@ -755,7 +755,7 @@ impl Engine {
             one_each(
                 source,
                 writes.len(),
-                resolved.source().update_tasks(&writes).await,
+                crate::expandable_blocks::authored(resolved.source().update_tasks(&writes)).await,
             )
         };
         for ((at, id, written), answer) in sent.into_iter().zip(answers) {
@@ -985,11 +985,15 @@ impl Engine {
             when_priority,
             when_assignees: None,
         }];
-        let answer = one_each(&id.source, 1, resolved.source().update_tasks(&batch).await)
-            .into_iter()
-            .next()
-            .unwrap_or(Ok(BatchAnswer::Missing))
-            .map_err(|error| super::delivery::source_failed(resolved, error))?;
+        let answer = one_each(
+            &id.source,
+            1,
+            crate::expandable_blocks::authored(resolved.source().update_tasks(&batch)).await,
+        )
+        .into_iter()
+        .next()
+        .unwrap_or(Ok(BatchAnswer::Missing))
+        .map_err(|error| super::delivery::source_failed(resolved, error))?;
         match answer {
             BatchAnswer::Written(outcome) => {
                 let mut updated = self

@@ -798,18 +798,22 @@ impl Engine {
             write.item.project = Some(member);
         }
         let mut sent = write.item.content.clone();
-        let written = match match (answers, carried.is_empty()) {
-            (answers, false) => source
-                .source()
-                .write_task_with_assets(&write, answers, &assets::write_of(carried, None))
-                .await
-                .map(|written| {
-                    sent = written.content;
-                    written.id
-                }),
-            (Some(answers), true) => source.source().write_task_rendered(&write, answers).await,
-            (None, true) => source.source().write_task(&write).await,
-        } {
+        let written = match crate::expandable_blocks::authored(async {
+            match (answers, carried.is_empty()) {
+                (answers, false) => source
+                    .source()
+                    .write_task_with_assets(&write, answers, &assets::write_of(carried, None))
+                    .await
+                    .map(|written| {
+                        sent = written.content;
+                        written.id
+                    }),
+                (Some(answers), true) => source.source().write_task_rendered(&write, answers).await,
+                (None, true) => source.source().write_task(&write).await,
+            }
+        })
+        .await
+        {
             Ok(written) => written,
             Err(error) => {
                 let error = source_failed(source, error);
@@ -1013,26 +1017,33 @@ impl Engine {
             stored::forget(source, MetadataRecord::Document, target);
         }
         let mut sent = write.item.content.clone();
-        let written = match (
-            answers,
-            carried.is_empty() && !assets::holds_any(&held_assets, recorded.as_ref()),
-        ) {
-            (answers, false) => source
-                .source()
-                .write_document_with_assets(&write, answers, &assets::write_of(carried, recorded))
-                .await
-                .map(|written| {
-                    sent = written.content;
-                    written.id
-                }),
-            (Some(answers), true) => {
-                source
+        let written = crate::expandable_blocks::authored(async {
+            match (
+                answers,
+                carried.is_empty() && !assets::holds_any(&held_assets, recorded.as_ref()),
+            ) {
+                (answers, false) => source
                     .source()
-                    .write_document_rendered(&write, answers)
+                    .write_document_with_assets(
+                        &write,
+                        answers,
+                        &assets::write_of(carried, recorded),
+                    )
                     .await
+                    .map(|written| {
+                        sent = written.content;
+                        written.id
+                    }),
+                (Some(answers), true) => {
+                    source
+                        .source()
+                        .write_document_rendered(&write, answers)
+                        .await
+                }
+                (None, true) => source.source().write_document(&write).await,
             }
-            (None, true) => source.source().write_document(&write).await,
-        }
+        })
+        .await
         .map_err(|error| source_failed(source, error))?;
         let reported = source
             .source()
@@ -1220,15 +1231,18 @@ impl Engine {
         if let Some(target) = &write.target {
             stored::forget(source, MetadataRecord::Project, target);
         }
-        let written = match answers {
-            Some(answers) => {
-                source
-                    .source()
-                    .write_project_rendered(&write, answers)
-                    .await
+        let written = crate::expandable_blocks::authored(async {
+            match answers {
+                Some(answers) => {
+                    source
+                        .source()
+                        .write_project_rendered(&write, answers)
+                        .await
+                }
+                None => source.source().write_project(&write).await,
             }
-            None => source.source().write_project(&write).await,
-        }
+        })
+        .await
         .map_err(|error| source_failed(source, error))?;
         let reported = source
             .source()
