@@ -2183,3 +2183,28 @@ fn a_copys_follow_up_keeps_literal_text_linear_stored_over_the_section_it_replac
     );
     assert_eq!(task.content(&plan.sandbox), section, "and read back so");
 }
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace.
+#[test]
+fn a_callers_body_differing_from_the_held_one_only_in_prose_lands_its_block_as_a_section() {
+    // The issue holds the fenced block alone as literal text, and the caller sets a line of prose
+    // and that same block: the caller's own body, so the block lands as a section.
+    let plan = LinearPlan::new();
+    let task = &plan.landed["T"];
+    let (summary, held) = ISSUE_BLOCKS[2];
+    let fenced = details(summary, held);
+    plan.hold_as_text(task, &format!("{fenced}\n"));
+    assert_eq!(plan.stored(task), fenced, "held as literal text");
+    let body = format!("New.\n\n{fenced}\n");
+    let file = plan.file("new.md", &body);
+    ok(
+        &plan.sandbox,
+        &["task", "content", "set", &task.id, "--file", &file],
+    );
+    lands_as_sections(&plan.stored(task), &[summary], "prose and the held block");
+    assert_eq!(
+        task.content(&plan.sandbox),
+        body.trim_end(),
+        "read back as authored"
+    );
+}

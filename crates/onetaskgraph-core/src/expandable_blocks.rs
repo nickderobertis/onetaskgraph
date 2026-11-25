@@ -597,6 +597,20 @@ fn linear_written(authored: &str, literal: &std::collections::HashSet<String>) -
     })
 }
 
+tokio::task_local! {
+    /// Set while the engine writes content a caller authored: see [`authored`].
+    static AUTHORED: ();
+}
+
+/// Run `call` — one write the engine sends a source — as a write of content a caller authored:
+/// a create, a replace, a render, `task content set`, `task update`, a comment added or edited,
+/// and a copy's write of its source's content. Every block in the authored form in what it sends
+/// is written in the destination's expandable form. A write sent outside it is the engine writing
+/// back what it read, as a copy's follow-up does.
+pub(crate) async fn authored<F: Future>(call: F) -> F::Output {
+    AUTHORED.scope((), call).await
+}
+
 /// Linear's collapsible sections, as the Linear source applies them to every body it sends and
 /// receives.
 ///
@@ -605,24 +619,26 @@ fn linear_written(authored: &str, literal: &std::collections::HashSet<String>) -
 /// that Linear's own rewrite sets apart with the blank line the form wants, so it reads back as an
 /// authored block though Linear shows it as paragraphs. Written back as it reads, as a copy's
 /// follow-up writes what the destination stored, it would be translated into a section the author
-/// never wrote. So every body a read gives back is remembered, for as long as this source lives,
-/// as its blocks in order, each with how Linear held it — the latest read of the same blocks
-/// replacing an earlier one — and a body written back carries each block as that read found it: a body read from Linear and written back is what Linear stored.
+/// never wrote. So, for as long as this source lives, every block a read gives back is remembered
+/// by its text with how the latest read of it found it held, and every body a read gives back is
+/// remembered whole.
 ///
-/// A body is written back only when its blocks, in order, are exactly the blocks of one body a
-/// read gave. Any other body is the caller's own, and every block in it is written as a section,
-/// one whose text Linear holds as literal text elsewhere included: what decides a block's form is
-/// the body it is written in, never its position, its neighbours or its content.
+/// A write of content a caller authored ([`authored`]) is written with every block as a section —
+/// one whose text Linear holds as literal text included — unless the body is, byte for byte, one
+/// a read gave back, which is that content set back as it reads. Any other write, and that one, is
+/// the engine writing back what it read: each block is carried as the latest read found it.
 #[derive(Default)]
 struct LinearSections {
-    /// Every body a read gave back, the latest last, no two holding the same blocks.
-    read: std::sync::Mutex<Vec<Vec<ReadBlock>>>,
+    held: std::sync::Mutex<Held>,
 }
 
-/// One block of a body a read gave back, in the authored form.
-struct ReadBlock {
-    text: String,
-    held: HeldAs,
+/// What [`LinearSections`] remembers of its reads.
+#[derive(Default)]
+struct Held {
+    /// Each block's whole text in the authored form, beside how the latest read found it.
+    blocks: std::collections::HashMap<String, HeldAs>,
+    /// Every body a read gave back, its line breaks at the end taken off.
+    bodies: std::collections::HashSet<String>,
 }
 
 /// How Linear held a block a read gave back in the authored form.
@@ -631,14 +647,6 @@ enum HeldAs {
     /// As literal text, which a write back keeps.
     Literal,
     Section,
-}
-
-fn holds_blocks(body: &[ReadBlock], texts: &[String]) -> bool {
-    body.len() == texts.len()
-        && body
-            .iter()
-            .zip(texts)
-            .all(|(block, text)| block.text == *text)
 }
 
 /// The whole text of every block of `content` in the authored form, in order.
@@ -651,49 +659,44 @@ fn block_texts(content: &str) -> Vec<String> {
         .collect()
 }
 
+/// `body` without the line breaks it ends in, which a backend may add or take off.
+fn unended(body: &str) -> &str {
+    body.trim_end_matches(['\n', '\r'])
+}
+
 impl BodyMarkup for LinearSections {
     fn written(&self, content: &str) -> String {
-        let texts = block_texts(content);
-        let read = self
-            .read
+        let held = self
+            .held
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let literal = read
-            .iter()
-            .find(|body| holds_blocks(body, &texts))
-            .map_or_else(Default::default, |body| {
-                body.iter()
-                    .filter(|block| block.held == HeldAs::Literal)
-                    .map(|block| block.text.clone())
-                    .collect()
-            });
+        let caller_authored = AUTHORED.try_with(|()| ()).is_ok();
+        if caller_authored && !held.bodies.contains(unended(content)) {
+            return linear_written(content, &std::collections::HashSet::new());
+        }
+        let literal = block_texts(content)
+            .into_iter()
+            .filter(|block| held.blocks.get(block) == Some(&HeldAs::Literal))
+            .collect();
         linear_written(content, &literal)
     }
 
     fn read(&self, content: &str) -> String {
         let literal = block_texts(content);
         let read = ExpandableForm::Linear.read(content);
-        let texts = block_texts(&read);
-        if !texts.is_empty() {
-            let mut bodies = self
-                .read
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            bodies.retain(|body| !holds_blocks(body, &texts));
-            bodies.push(
-                texts
-                    .into_iter()
-                    .map(|text| ReadBlock {
-                        held: if literal.contains(&text) {
-                            HeldAs::Literal
-                        } else {
-                            HeldAs::Section
-                        },
-                        text,
-                    })
-                    .collect(),
-            );
+        let mut held = self
+            .held
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for block in block_texts(&read) {
+            let how = if literal.contains(&block) {
+                HeldAs::Literal
+            } else {
+                HeldAs::Section
+            };
+            held.blocks.insert(block, how);
         }
+        held.bodies.insert(unended(&read).to_owned());
         read
     }
 }
@@ -803,6 +806,11 @@ mod tests {
     const LISTED: &str = "<details>\n<summary>Points</summary>\n\n- a point\n\n</details>";
     const LISTED_SECTION: &str = "+++ Points\n\n- a point\n\n+++";
 
+    /// `write` as a write of content a caller authored, as [`super::authored`] marks one.
+    fn authored<T>(write: impl FnOnce() -> T) -> T {
+        super::AUTHORED.sync_scope((), write)
+    }
+
     /// A markup that has read an item holding a list block and the fenced block as literal text,
     /// as Linear stores them sent as HTML, and that body.
     fn after_reading_them_as_text() -> (onetaskgraph_plugin_api::SharedBodyMarkup, String) {
@@ -823,7 +831,7 @@ mod tests {
         let expected = body
             .replace(FENCED, FENCED_SECTION)
             .replace(LISTED, LISTED_SECTION);
-        assert_eq!(markup.written(body), expected, "{body}");
+        assert_eq!(authored(|| markup.written(body)), expected, "{body}");
         assert_eq!(ExpandableForm::Linear.read(&expected), body, "{body}");
     }
 
@@ -849,14 +857,57 @@ mod tests {
         every_block_is_a_section(&format!("New.\n\n{FENCED}"));
     }
 
-    /// Only a body whose blocks are exactly one read's is written back: as it was read, and
-    /// with its prose edited around them, each block stays as Linear stored it.
+    /// Prose is what tells a caller's body from the one read: the item held the fenced block
+    /// alone, and the caller's body is a line of prose and that same block.
+    #[test]
+    fn a_callers_body_differing_from_the_read_only_in_prose_is_the_callers_own() {
+        let markup = ExpandableForm::Linear.markup().expect("Linear's markup");
+        assert_eq!(markup.read(FENCED), FENCED);
+        let body = format!("New.\n\n{FENCED}");
+        assert_eq!(
+            authored(|| markup.written(&body)),
+            format!("New.\n\n{FENCED_SECTION}")
+        );
+        // Set back byte for byte as it reads, it is written back as Linear stored it.
+        assert_eq!(
+            authored(|| markup.written(&format!("{FENCED}\n"))),
+            format!("{FENCED}\n")
+        );
+    }
+
+    /// Content a read gave, set back byte for byte, keeps every block Linear held as literal
+    /// text; with its prose edited it is the caller's own, and every block is a section.
     #[test]
     fn a_genuine_read_back_keeps_every_block_linear_held_as_text() {
         let (markup, stored) = after_reading_them_as_text();
-        assert_eq!(markup.written(&stored), stored);
+        assert_eq!(authored(|| markup.written(&stored)), stored);
         let edited = stored.replace("Held.", "Edited prose.");
-        assert_eq!(markup.written(&edited), edited);
+        assert_eq!(
+            authored(|| markup.written(&edited)),
+            edited.replace(FENCED, FENCED_SECTION).replace(
+                &LISTED.replace("- a", "* a"),
+                &LISTED_SECTION.replace("- a", "* a")
+            )
+        );
+    }
+
+    /// An engine write-back that changed another block — a link finished in it — keeps the
+    /// block Linear held as literal text as it was stored, block by block.
+    #[test]
+    fn a_write_back_editing_another_block_keeps_the_literal_one() {
+        let (markup, stored) = after_reading_them_as_text();
+        let listed = LISTED.replace("- a", "* a");
+        let edited = stored.replace(
+            &listed,
+            &listed.replace("a point", "a [point](https://x.test)"),
+        );
+        assert_eq!(
+            markup.written(&edited),
+            edited.replace(
+                &listed.replace("a point", "a [point](https://x.test)"),
+                &LISTED_SECTION.replace("- a point", "* a [point](https://x.test)")
+            )
+        );
     }
 
     /// The same blocks read as literal text and then, from a write's own answer, as sections are

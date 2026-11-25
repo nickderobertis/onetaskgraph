@@ -226,7 +226,8 @@ impl Engine {
             item: task.clone(),
             depends_on: Vec::new(),
         };
-        let id = match source.source().write_task(&write).await {
+        let id = match crate::expandable_blocks::authored(source.source().write_task(&write)).await
+        {
             Ok(id) => id,
             Err(error) => {
                 // What it held may be what the tracker refused; the next create reads afresh.

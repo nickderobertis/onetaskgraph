@@ -300,9 +300,7 @@ impl Engine {
             .await?;
         let content = &rewrite.text(content);
         super::stored::forget(source, MetadataRecord::Task, &id.native);
-        source
-            .source()
-            .set_task_content(&id.native, content)
+        crate::expandable_blocks::authored(source.source().set_task_content(&id.native, content))
             .await
             .map_err(|error| source_failed(source, error))?
             .ok_or_else(|| EngineError::NoSuchTask { id: id.to_string() })?;

@@ -94,12 +94,11 @@ impl Engine {
         let source = self.updatable(&id.source)?;
         let update = self.prepared_update(source, id, update).await?;
         let before = readings(&[source]).await;
-        let outcome = source
-            .source()
-            .update_task(&id.native, &update)
-            .await
-            .map_err(|error| source_failed(source, error))?
-            .ok_or_else(|| EngineError::NoSuchTask { id: id.to_string() })?;
+        let outcome =
+            crate::expandable_blocks::authored(source.source().update_task(&id.native, &update))
+                .await
+                .map_err(|error| source_failed(source, error))?
+                .ok_or_else(|| EngineError::NoSuchTask { id: id.to_string() })?;
         self.updated(source, id, &update, outcome, &before).await
     }
 

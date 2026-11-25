@@ -2061,15 +2061,21 @@ own normalization:
 
 Linear stores each such block as literal paragraphs with its body expanded, as it stores every
 `<details>` block. Its own rewrite can give such a block the blank line it lacked, so that it reads
-back in the authored form. So the Linear source remembers each body a read gave back: its blocks,
-in order, and which of them Linear held as literal text, the latest read of the same blocks
-replacing an earlier one. A body whose blocks are exactly those of one such body is written back,
-each block as that read found it. That covers a copy's follow-up sending what Linear stored, and
-content a read gave set back as it reads. So a block Linear held as literal text stays literal text,
-and a follow-up never turns it into a section. Any other body is the caller's own, and every block
-in it in the authored form is written as a section, even one whose text the item already holds as
-literal text. A plugin served over the stdio protocol has no expandable form: it is sent the
-authored form.
+back in the authored form. So which form a block is written in depends on who wrote the body:
+
+- **A body a caller wrote** — a create, a replace or a render of a task, project or document,
+  `task content set`, `task update`, a comment added or edited, and a copy's write of its
+  source's content — has every block written as a section, even one whose text the item already
+  holds as literal text. The one exception is a body that is, byte for byte, one a read through
+  the same source gave back: content set back exactly as it reads, which is written back as below.
+  A body differing from it anywhere, in prose around its blocks included, is the caller's own.
+- **A body the store writes back** — a copy's follow-up sending what Linear stored, and every other
+  write of content the store read rather than was given — carries each block as the latest read
+  found it, block by block: one Linear held as literal text stays literal text, so a follow-up
+  never turns it into a section, while a block that changed, or that Linear held as a section,
+  is written as a section.
+
+A plugin served over the stdio protocol has no expandable form: it is sent the authored form.
 
 **What the Linear form rests on.** What Linear stores for each form sent is recorded, not
 predicted: spike `spike-expandable-blocks` wrote every form to team `TES2` through the API and
