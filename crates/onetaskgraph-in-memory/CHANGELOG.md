@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-in-memory-v0.15.1...onetaskgraph-in-memory-v0.16.0) - 2026-11-25
+
+### Added
+
+- *(status)* [**breaking**] add an in-review status category every source maps, reads and writes ([#4091](https://github.com/nickderobertis/onetaskgraph/pull/4091))
+
 ## [0.14.14](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-in-memory-v0.14.13...onetaskgraph-in-memory-v0.14.14) - 2026-11-12
 
 ### Added

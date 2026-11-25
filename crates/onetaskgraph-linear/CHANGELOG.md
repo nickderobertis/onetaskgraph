@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-linear-v0.15.1...onetaskgraph-linear-v0.16.0) - 2026-11-25
+
+### Added
+
+- *(status)* [**breaking**] add an in-review status category every source maps, reads and writes ([#4091](https://github.com/nickderobertis/onetaskgraph/pull/4091))
+
+### Fixed
+
+- *(linear)* convert every authored details block a write sends to Linear ([#4092](https://github.com/nickderobertis/onetaskgraph/pull/4092))
+
 ## [0.15.1](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-linear-v0.15.0...onetaskgraph-linear-v0.15.1) - 2026-11-22
 
 ### Added
