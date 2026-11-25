@@ -623,7 +623,6 @@ struct LinearSections {
 struct ReadBlock {
     /// Its whole text.
     text: String,
-    /// How Linear held it.
     held: HeldAs,
 }
 
@@ -632,11 +631,9 @@ struct ReadBlock {
 enum HeldAs {
     /// As literal text, which a write back keeps.
     Literal,
-    /// As a collapsible section.
     Section,
 }
 
-/// Whether `body`'s blocks, in order, are exactly `texts`.
 fn holds_blocks(body: &[ReadBlock], texts: &[String]) -> bool {
     body.len() == texts.len()
         && body
