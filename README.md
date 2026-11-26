@@ -419,12 +419,18 @@ on its own; their documents are `onetaskgraph schema`'s `FindRequest` and `Found
 from standard input with `-`.
 
 - `task find <SOURCE> --queries FILE` runs many searches, `{"schema_version": 1, "queries":
-  [{"key", "text", "in", "metadata", "origin", "status"}]}`, each narrowed by at least one of
-  `text` (in the `title`, the `content` or `both`), `metadata` (`{"<KEY>[/<SEGMENT>…]":
+  [{"key", "text", "in", "metadata", "origin", "status", "limit"}]}`, each narrowed by at least
+  one of `text` (in the `title`, the `content` or `both`), `metadata` (`{"<KEY>[/<SEGMENT>…]":
   "<value>"}`) and `origin` — one narrowed by none is refused naming its key, and nothing is
   read. Each answer holds every match across every page, as `task list` reports a task; one
   whose page the source refused is answered `complete: false` with a `reason` naming the page,
-  every other search goes on, and the command exits `4`.
+  every other search goes on, and the command exits `4`. A search naming a `limit` (an integer
+  of at least 1; `0` is refused naming its key, reading nothing) answers the first `limit` of
+  the matches its unlimited answer lists, in that order: its walk asks each page for no more
+  rows than the limit still leaves and asks no page once it holds that many, on every source
+  kind. Its answer is `limited: true` when the walk stopped there while the source offered a
+  next page, so more may match — still `complete: true` — and `limited: false` when no limit was
+  named or the walk ran out first; every other search walks as it would without it.
 - `task comment add-many <SOURCE> --input FILE` adds `{"schema_version": 1, "comments":
   [{"item", "body", "if_version"}]}`, answering each `written` with the comment's id, URL and
   version, `version-moved` with the version its task is at, or `error` with a reason naming it.

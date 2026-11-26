@@ -137,6 +137,57 @@ def test_many_searches_answer_each_key_with_every_match_across_pages(
         asyncio.run(client.task_find("plan", {"schema_version": 1, "queries": [{"kye": "x"}]}))
 
 
+def test_a_limited_search_answers_the_first_matches_and_older_documents_still_parse(
+    binary: Path, store: Path
+) -> None:
+    """A `limit` reaches the binary; a document written before limits reads as unlimited."""
+    client = client_at(binary, store)
+    found = asyncio.run(
+        client.task_find(
+            "plan",
+            {
+                "schema_version": 1,
+                "queries": [
+                    {"key": "every", "text": "batch", "in": "title"},
+                    {"key": "three", "text": "batch", "in": "title", "limit": 3},
+                    {"key": "roomy", "text": "batch", "in": "title", "limit": 10},
+                ],
+            },
+            page_size=2,
+        )
+    )
+    every = [item.id.root for item in found.answers[0].items]
+    assert len(every) == 4
+    assert [
+        (answer.key, [item.id.root for item in answer.items], answer.complete, answer.limited)
+        for answer in found.answers
+    ] == [
+        ("every", every, True, False),
+        ("three", every[:3], True, True),
+        ("roomy", every, True, False),
+    ]
+    # The model holds a limit to at least 1, so a mapping naming 0 never reaches the binary.
+    with pytest.raises(TypeError, match="not a FindRequest"):
+        asyncio.run(
+            client.task_find(
+                "plan",
+                {"schema_version": 1, "queries": [{"key": "zero", "text": "batch", "limit": 0}]},
+            )
+        )
+
+    request = FindRequest.model_validate(
+        {"schema_version": 1, "queries": [{"key": "old", "text": "batch"}]}
+    )
+    assert request.queries[0].limit is None
+    answered = FoundTasks.model_validate(
+        {
+            "schema_version": 1,
+            "answers": [{"key": "old", "items": [], "complete": True, "reason": None}],
+        }
+    )
+    assert answered.answers[0].limited is False
+
+
 def test_a_copy_holds_each_counterpart_to_its_own_version(binary: Path, store: Path) -> None:
     """A counterpart another writer moved is `version-moved` with its version; others copy."""
     client = client_at(binary, store)

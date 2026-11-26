@@ -14,7 +14,7 @@ use std::path::Path;
 use onetaskgraph_core::{
     BATCH_SCHEMA_VERSION, BatchOutcome, CommentBatch, CommentBatchItem, Config, CopyAction,
     CopyItems, CopyRequest, CopyScope, Engine, EngineError, FindIn, FindQuery, FindRequest,
-    GlobalId, GuardOutcome, UpdateBatch, UpdateBatchItem,
+    FoundTasks, GlobalId, GuardOutcome, UpdateBatch, UpdateBatchItem,
 };
 use onetaskgraph_plugin_api::{
     MetadataKey, Priority, SecretResolver, SourceName, StatusCategory, Task, TaskUpdate,
@@ -143,6 +143,7 @@ fn query(key: &str) -> FindQuery {
         metadata: BTreeMap::new(),
         origin: None,
         status: Vec::new(),
+        limit: None,
     }
 }
 
@@ -574,6 +575,9 @@ enum Miscount {
     Short,
     /// The first item's answer given twice.
     Long,
+    /// Every answer counted right, but each batched search page answered as though it had
+    /// asked for a hundred rows, whatever it asked.
+    Wide,
 }
 
 /// A real folder of Markdown whose batched writes are made as the folder makes them and then
@@ -591,6 +595,7 @@ impl Miscounted {
                 answers.pop();
             }
             Miscount::Long => answers.push(answers[0].clone()),
+            Miscount::Wide => {}
         }
         answers
     }
@@ -691,6 +696,19 @@ impl onetaskgraph_plugin_api::TaskSource for Miscounted {
         )],
     ) -> Vec<Result<onetaskgraph_plugin_api::Page<Task>, onetaskgraph_plugin_api::SourceError>>
     {
+        if matches!(self.miscount, Miscount::Wide) {
+            let wide: Vec<_> = asks
+                .iter()
+                .map(|(query, page)| {
+                    let page = onetaskgraph_plugin_api::PageRequest {
+                        cursor: page.cursor.clone(),
+                        limit: 100,
+                    };
+                    (query.clone(), page)
+                })
+                .collect();
+            return self.inner.query_tasks_batch(&wide).await;
+        }
         self.miscounted(self.inner.query_tasks_batch(asks).await)
     }
     async fn get_task_details(
@@ -889,6 +907,76 @@ async fn a_source_answering_too_few_searches_leaves_the_last_one_incomplete_and_
     assert!(
         reason.contains("answered 1 answers to the 2 items"),
         "{reason}"
+    );
+}
+
+#[tokio::test]
+async fn a_source_answering_more_rows_than_asked_is_cut_to_the_limit_and_limited_only_when_a_page_follows()
+ {
+    let root = tempfile::tempdir().expect("a folder");
+    let engine = miscounted(root.path(), Miscount::Wide);
+    let limited = |key: &str, limit: u32| FindQuery {
+        key: key.to_owned(),
+        limit: NonZeroU32::new(limit),
+        ..two_searches().queries[0].clone()
+    };
+    let request = FindRequest {
+        schema_version: BATCH_SCHEMA_VERSION,
+        queries: vec![
+            two_searches().queries[0].clone(),
+            limited("two", 2),
+            limited("four", 4),
+        ],
+    };
+    let found = engine
+        .find_tasks(&name("plan"), &request, NonZeroU32::new(1).expect("a page"))
+        .await
+        .expect("answered");
+    let every: Vec<String> = found.answers[0]
+        .items
+        .iter()
+        .map(|item| item.id.to_string())
+        .collect();
+    assert_eq!(every.len(), 4, "one wide page holds every match: {found:?}");
+    let answered: Vec<(Vec<String>, bool, bool)> = found
+        .answers
+        .iter()
+        .map(|answer| {
+            (
+                answer
+                    .items
+                    .iter()
+                    .map(|item| item.id.to_string())
+                    .collect(),
+                answer.complete,
+                answer.limited,
+            )
+        })
+        .collect();
+    assert_eq!(
+        answered,
+        [
+            (every.clone(), true, false),
+            // Cut to the first two, but `limited` says only that the source offered a next
+            // page, and this one offered none.
+            (every[..2].to_vec(), true, false),
+            (every.clone(), true, false),
+        ]
+    );
+
+    // The same folder answering pages as asked: the limit is reached with a next page offered.
+    let paged = engine_over(json!({"sources": {"plan": {
+        "plugin": "local-md", "config": {"root": root.path().join("plan")}}}}));
+    let found = paged
+        .find_tasks(&name("plan"), &request, NonZeroU32::new(1).expect("a page"))
+        .await
+        .expect("answered");
+    let two = &found.answers[1];
+    let ids: Vec<String> = two.items.iter().map(|item| item.id.to_string()).collect();
+    assert_eq!(
+        (ids, two.complete, two.limited),
+        (every[..2].to_vec(), true, true),
+        "{found:?}"
     );
 }
 
@@ -1127,4 +1215,82 @@ async fn a_guard_a_versionless_source_cannot_hold_is_decided_again_by_the_source
     assert_eq!(guard.outcome(), GuardOutcome::Held, "{guard:?}");
     assert!(updated.written.is_empty(), "{updated:?}");
     assert_eq!(task(&engine, "plan:c").await.title, "Charlie batch");
+}
+
+#[test]
+fn a_find_document_written_before_limits_reads_as_unlimited_and_a_limit_of_zero_names_its_key() {
+    let request: FindRequest = serde_json::from_value(json!({"schema_version": 1, "queries": [
+        {"key": "old", "text": "batch"},
+        {"key": "new", "text": "batch", "limit": 3},
+        {"key": "null", "text": "batch", "limit": null},
+    ]}))
+    .expect("a request written before limits, and one naming them");
+    let limits: Vec<Option<u32>> = request
+        .queries
+        .iter()
+        .map(|query| query.limit.map(NonZeroU32::get))
+        .collect();
+    assert_eq!(limits, [None, Some(3), None]);
+    // A search naming no limit is written as it was before limits existed.
+    assert_eq!(
+        serde_json::to_value(&request.queries[0]).expect("JSON"),
+        json!({"key": "old", "text": "batch", "in": "both", "metadata": {}, "origin": null,
+               "status": []})
+    );
+    assert_eq!(
+        serde_json::to_value(&request.queries[1]).expect("JSON")["limit"],
+        3
+    );
+
+    // `FindQuery` is read through a shadow of its members, so every member it writes, each set,
+    // reads back as itself: a member renamed, dropped or defaulted on one side alone fails here.
+    let whole = FindQuery {
+        key: "whole".to_owned(),
+        text: Some("batch".to_owned()),
+        fields: FindIn::Content,
+        metadata: BTreeMap::from([("myapp.colour".to_owned(), "red".to_owned())]),
+        origin: Some(id("elsewhere:B-1")),
+        status: vec![StatusCategory::Todo],
+        limit: NonZeroU32::new(7),
+    };
+    let written = serde_json::to_value(&whole).expect("JSON");
+    assert_eq!(
+        written.as_object().map(serde_json::Map::len),
+        Some(7),
+        "every member is written: {written}"
+    );
+    assert_eq!(
+        serde_json::from_value::<FindQuery>(written).expect("read back"),
+        whole
+    );
+    assert_eq!(
+        serde_json::from_value::<FindQuery>(json!({"key": "bare"})).expect("only a key"),
+        query("bare"),
+        "every member but the key defaults on both sides alike"
+    );
+
+    let refused = serde_json::from_value::<FindRequest>(json!({"schema_version": 1, "queries": [
+        {"key": "zero", "text": "batch", "limit": 0},
+    ]}))
+    .expect_err("a limit of 0 is refused");
+    assert!(
+        refused
+            .to_string()
+            .contains("query \"zero\" asks for a limit of 0"),
+        "{refused}"
+    );
+    let unknown = serde_json::from_value::<FindRequest>(json!({"schema_version": 1, "queries": [
+        {"key": "k", "text": "batch", "colour": "red"},
+    ]}))
+    .expect_err("an unknown member is still refused");
+    assert!(
+        unknown.to_string().contains("unknown field `colour`"),
+        "{unknown}"
+    );
+
+    let answered: FoundTasks = serde_json::from_value(json!({"schema_version": 1, "answers": [
+        {"key": "old", "items": [], "complete": true, "reason": null},
+    ]}))
+    .expect("an answer written before `limited`");
+    assert!(!answered.answers[0].limited);
 }

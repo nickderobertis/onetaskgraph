@@ -215,13 +215,13 @@ class FindAnswer(BaseModel):
     items: Annotated[
         list[QualifiedTask],
         Field(
-            description="Every task it matched, across every page, each as `task list` reports it."
+            description="Every task it matched, across every page, each as `task list` reports it — or, for a\nsearch naming a `limit`, the first `limit` of them."
         ),
     ]
     complete: Annotated[
         bool,
         Field(
-            description="Whether `items` is every match: `false` when a page of this search could not be read,\nand `items` holds what the pages before it answered."
+            description="Whether `items` is every match, or the first `limit` of them: `false` when a page of\nthis search could not be read, and `items` holds what the pages before it answered."
         ),
     ]
     reason: Annotated[
@@ -230,6 +230,12 @@ class FindAnswer(BaseModel):
             description="Why the answer is incomplete, naming the page refused — `null` when it is complete."
         ),
     ] = None
+    limited: Annotated[
+        bool,
+        Field(
+            description="Whether the walk stopped because `items` reached the search's `limit` while the source\nstill offered a next page, so more tasks may match. `false` for a search naming no\nlimit, and for one whose walk ran out before reaching it; an answer written before\nthis member existed reads `false`."
+        ),
+    ] = False
 
 
 class FoundTasks(BaseModel):
