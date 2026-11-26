@@ -1063,6 +1063,29 @@ fn a_limited_find_answers_the_first_matches_of_its_unlimited_answer_and_says_whe
             "{source}: the unlimited search answers exactly as it does alone"
         );
 
+        // The human rendering says which answer stopped at its limit, and only that one.
+        let (rendered, _) = store.human(
+            &["task", "find", source, "--queries", "-"],
+            &json!({"schema_version": 1, "queries": [
+                {"key": "three", "text": "batch", "in": "title", "limit": 3},
+                {"key": "ten", "text": "batch", "in": "title", "limit": 10},
+            ]})
+            .to_string(),
+            0,
+        );
+        let headers: Vec<&str> = rendered
+            .lines()
+            .filter(|line| !line.starts_with(' '))
+            .collect();
+        assert_eq!(
+            headers,
+            [
+                "three: 3 task(s) — limited: more may match",
+                "ten: 4 task(s)"
+            ],
+            "{source}: {rendered}"
+        );
+
         // A limit of 0 answers nothing, and is refused by its key before anything is read.
         let zero = json!({"schema_version": 1, "queries": [
             {"key": "named", "text": "batch"},

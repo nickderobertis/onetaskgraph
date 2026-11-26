@@ -395,6 +395,42 @@ fn a_refused_page_of_one_query_cuts_that_answer_short_and_completes_the_others()
 }
 
 #[test]
+fn a_refused_page_of_a_limited_query_cuts_it_short_and_does_not_call_it_limited() {
+    let board = searched_board();
+    board.board.refuse_search_page("\"release\"", 1);
+    let request = json!({"schema_version": 1, "queries": [
+        {"key": "releases", "text": "release", "limit": 10},
+        {"key": "deploying", "text": "deploy", "status": ["in-progress"], "limit": 2},
+    ]})
+    .to_string();
+    let answered = board.run(
+        &["task", "find", "board", "--queries", "-", "--json"],
+        &request,
+    );
+    assert_eq!(answered.code, Some(4), "{}", answered.stderr);
+    let answers = in_order(&answered.json);
+    assert_eq!(
+        (&answers[0].2, &answers[0].3),
+        (&json!(false), &json!(false)),
+        "a refused page is incomplete, not limited: {:#}",
+        answered.json
+    );
+    assert!(
+        answered.json["answers"][0]["reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("page 2")),
+        "{:#}",
+        answered.json
+    );
+    assert_eq!(
+        answers[1].1.len(),
+        2,
+        "the other search still stops at its limit"
+    );
+    assert_eq!((&answers[1].2, &answers[1].3), (&json!(true), &json!(true)));
+}
+
+#[test]
 fn a_copy_holding_two_items_writes_the_one_at_its_version_and_refuses_the_moved_one() {
     let board = Board::of(Vec::new());
     for id in ["c0", "c1", "c2", "c3"] {

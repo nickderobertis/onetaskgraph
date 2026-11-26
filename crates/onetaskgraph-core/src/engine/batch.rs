@@ -83,7 +83,9 @@ pub struct FindQuery {
     pub limit: Option<NonZeroU32>,
 }
 
-/// A [`FindQuery`] as it is read, before its `limit` is held to at least one.
+/// A [`FindQuery`] as it is read, before its `limit` is held to at least one. The two are held
+/// to one wire shape by `a_find_document_written_before_limits_reads_as_unlimited_and_a_limit_of_zero_names_its_key`
+/// in `tests/batch.rs`, which reads back every member `FindQuery` writes.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct FindQueryRead {
@@ -471,7 +473,6 @@ struct Search {
     key: String,
     pushed: onetaskgraph_plugin_api::TaskQuery,
     local: super::local::LocalTasks,
-    /// The most matches it answers, if it names a limit.
     limit: Option<NonZeroU32>,
 }
 
@@ -485,7 +486,6 @@ impl Search {
         })
     }
 
-    /// Whether `held` matches reach its limit.
     fn reached(&self, held: usize) -> bool {
         self.limit
             .is_some_and(|limit| held >= usize::try_from(limit.get()).unwrap_or(usize::MAX))

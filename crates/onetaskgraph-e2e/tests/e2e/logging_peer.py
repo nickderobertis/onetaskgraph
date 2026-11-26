@@ -73,10 +73,12 @@ def main() -> None:
         try:
             request = json.loads(line)
             method = request.get("method", "")
-            if method == "update_task" and "duplicate_of" in json.dumps(request.get("params")):
-                method = "update_task duplicate_of"
-            elif method == "query_tasks":
-                method = f"query_tasks\t{json.dumps(request.get('params'), sort_keys=True)}"
+            params = request.get("params")
+            match method:
+                case "update_task" if "duplicate_of" in json.dumps(params):
+                    method = "update_task duplicate_of"
+                case "query_tasks":
+                    method = f"query_tasks\t{json.dumps(params, sort_keys=True)}"
         except ValueError:
             method = ""
         with open(log, "a", encoding="utf-8") as handle:
