@@ -302,7 +302,14 @@ fn schema_emits_a_bundle_covering_every_contract_root_and_plugin_config() {
     let bundle: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("schema output is valid JSON");
 
-    assert_eq!(bundle["version"], 70);
+    assert_eq!(bundle["version"], 71);
+    // Version 71: a find search's `limit`, at least 1, and its answer's `limited`.
+    let find_query =
+        bundle["roots"]["FindRequest"]["$defs"]["FindQuery"]["properties"]["limit"].clone();
+    assert_eq!(find_query["minimum"], 1, "{find_query:#}");
+    let limited =
+        bundle["roots"]["FoundTasks"]["$defs"]["FindAnswer"]["properties"]["limited"].clone();
+    assert_eq!(limited["default"], false, "{limited:#}");
     // Version 70: the `in-review` status category, right after `in-progress`.
     let words: Vec<&str> = bundle["roots"]["StatusCategory"]["oneOf"]
         .as_array()

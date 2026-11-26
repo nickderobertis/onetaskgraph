@@ -293,7 +293,12 @@ def test_the_generated_package_is_built_from_the_schema_bundle_this_sdk_expects(
     # read from the raw document and the roots from the validated one.
     bundle = generate.validate_schema_bundle(emitted_bundle)
 
-    assert emitted_bundle["version"] == 70
+    assert emitted_bundle["version"] == 71
+    # Version 71: a find search's `limit` and its answer's `limited`.
+    find_query = emitted_bundle["roots"]["FindRequest"]["$defs"]["FindQuery"]["properties"]
+    assert find_query["limit"]["minimum"] == 1
+    find_answer = emitted_bundle["roots"]["FoundTasks"]["$defs"]["FindAnswer"]["properties"]
+    assert find_answer["limited"]["default"] is False
     # Version 70: the `in-review` status category.
     status_words = [
         branch["const"] for branch in emitted_bundle["roots"]["StatusCategory"]["oneOf"]
