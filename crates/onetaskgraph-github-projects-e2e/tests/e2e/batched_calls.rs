@@ -1361,3 +1361,248 @@ fn a_written_version_is_answered_for_the_command_that_wrote_it_and_no_longer() {
     board.board.pass_time(120);
     assert_eq!(board.versions(&["U-0"]), [again]);
 }
+
+/// Every page the board was asked for a search whose query holds `word`, in the order served:
+/// the request's index, the row offset it resumes from and the rows it asks — from a
+/// [`graphql::SEARCH_BATCH`] slot or a search's own read alike.
+fn pages_of(served: &[(String, Value)], word: &str) -> Vec<(usize, usize, usize)> {
+    let offset = |after: &Value| {
+        after.as_str().map_or(0, |after| {
+            after.parse().expect("a loopback cursor is an offset")
+        })
+    };
+    let rows = |first: &Value| usize::try_from(first.as_u64().expect("a page size")).unwrap();
+    let mut pages = Vec::new();
+    for (at, (document, variables)) in served.iter().enumerate() {
+        if document == graphql::SEARCH_BATCH {
+            for slot in 0..onetaskgraph_github_projects::SEARCH_BATCH {
+                let search = variables[format!("search{slot}")].as_str().unwrap_or("");
+                if variables[format!("ask{slot}")] == true && search.contains(word) {
+                    pages.push((
+                        at,
+                        offset(&variables[format!("after{slot}")]),
+                        rows(&variables[format!("first{slot}")]),
+                    ));
+                }
+            }
+        } else if variables["search"]
+            .as_str()
+            .is_some_and(|search| search.contains(word))
+        {
+            pages.push((at, offset(&variables["after"]), rows(&variables["first"])));
+        }
+    }
+    pages
+}
+
+/// The keys and board ids of a `task find`'s answers, in the order answered, each with its
+/// `complete` and `limited`.
+fn in_order(answer: &Value) -> Vec<(String, Vec<String>, Value, Value)> {
+    answer["answers"]
+        .as_array()
+        .expect("the answers")
+        .iter()
+        .map(|one| {
+            (
+                one["key"].as_str().expect("a key").to_owned(),
+                one["items"]
+                    .as_array()
+                    .expect("the items")
+                    .iter()
+                    .map(|item| {
+                        item["id"]
+                            .as_str()
+                            .expect("an id")
+                            .trim_start_matches("board:")
+                            .to_owned()
+                    })
+                    .collect(),
+                one["complete"].clone(),
+                one["limited"].clone(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn a_limited_find_on_a_board_asks_no_more_rows_than_it_lacks_and_none_once_it_holds_them() {
+    // Thirty lanterns and seven beacons, every other one in progress, and sixty fillers that
+    // keep the batch walking after both limited searches stop.
+    let mut items: Vec<Value> = (0..30)
+        .map(|n| {
+            let status = if n % 2 == 0 { "Doing" } else { "Todo" };
+            issue(
+                &format!("L-{n}"),
+                &format!("Lantern {n}"),
+                "a light",
+                status,
+            )
+        })
+        .collect();
+    items.extend((0..7).map(|n| {
+        let status = if n % 2 == 0 { "Doing" } else { "Todo" };
+        issue(
+            &format!("B-{n}"),
+            &format!("Beacon {n}"),
+            "a signal",
+            status,
+        )
+    }));
+    items.extend(
+        (0..60).map(|n| issue(&format!("P-{n}"), &format!("Filler {n}"), "padding", "Todo")),
+    );
+    let board = Board::of(items);
+    board.board.pass_time(120);
+    let find = |lanterns: Option<u32>, beacons: Option<u32>| {
+        let request = json!({"schema_version": 1, "queries": [
+            {"key": "lanterns", "text": "lantern", "in": "title", "status": ["in-progress"],
+             "limit": lanterns},
+            {"key": "beacons", "text": "beacon", "in": "title", "status": ["in-progress"],
+             "limit": beacons},
+            {"key": "fillers", "text": "filler", "in": "title"},
+        ]})
+        .to_string();
+        let (answered, served) = board.measured(
+            &["task", "find", "board", "--queries", "-", "--json"],
+            &request,
+        );
+        assert_eq!(answered.code, Some(0), "{}", answered.stderr);
+        (in_order(&answered.json), served)
+    };
+    let (unlimited, _) = find(None, None);
+    let (every_lantern, every_beacon) = (unlimited[0].1.clone(), unlimited[1].1.clone());
+    assert_eq!(every_lantern.len(), 15, "{unlimited:?}");
+    assert_eq!(every_beacon.len(), 4, "{unlimited:?}");
+
+    let (limited, served) = find(Some(7), Some(4));
+    assert_eq!(
+        limited[..2],
+        [
+            (
+                "lanterns".to_owned(),
+                every_lantern[..7].to_vec(),
+                json!(true),
+                json!(true)
+            ),
+            (
+                "beacons".to_owned(),
+                every_beacon,
+                json!(true),
+                json!(false)
+            ),
+        ],
+        "the first seven lanterns, more offered; every beacon, the board run out"
+    );
+    assert_eq!(limited[2], unlimited[2], "the fillers walk as they did");
+
+    // What the source keeps of a search's first `end` candidates: those in progress.
+    let kept = |end: usize| (0..end).filter(|n| n % 2 == 0).count();
+    for (word, limit, candidates) in [("lantern", 7, 30), ("beacon", 4, 7)] {
+        let pages = pages_of(&served, word);
+        assert!(pages.len() > 1, "{word}: its matches span pages: {pages:?}");
+        for (at, (request, offset, rows)) in pages.iter().enumerate() {
+            let lacking = limit - kept(*offset);
+            assert!(
+                *rows <= lacking,
+                "{word}: request {request} asked {rows} rows while lacking {lacking}: {pages:?}"
+            );
+            assert_eq!(
+                kept((offset + rows).min(candidates)) >= limit,
+                at + 1 == pages.len(),
+                "{word}: no request after the one bringing it to {limit} carries it: {pages:?}"
+            );
+        }
+        assert!(
+            pages
+                .iter()
+                .all(|(request, _, _)| served[*request].0 == graphql::SEARCH_BATCH),
+            "{word}: every page is a slot of a batched round: {pages:?}"
+        );
+    }
+}
+
+#[test]
+fn a_search_limited_to_21_of_1000_matches_stops_its_slot_and_leaves_its_neighbours_unchanged() {
+    let mut items: Vec<Value> = (0..1000)
+        .map(|n| {
+            issue(
+                &format!("C-{n}"),
+                &format!("Common word {n}"),
+                "ordinary",
+                "Todo",
+            )
+        })
+        .collect();
+    items.extend((0..5).map(|n| issue(&format!("R-{n}"), &format!("Rare {n}"), "seldom", "Todo")));
+    items.extend((0..2).map(|n| issue(&format!("U-{n}"), &format!("Unique {n}"), "once", "Doing")));
+    let board = Board::of(items);
+    board.board.pass_time(120);
+    let neighbours = [
+        json!({"key": "rare", "text": "rare", "in": "title"}),
+        json!({"key": "unique", "text": "unique", "in": "title"}),
+    ];
+    let find = |queries: Vec<Value>| {
+        let request = json!({"schema_version": 1, "queries": queries}).to_string();
+        let (answered, served) = board.measured(
+            &["task", "find", "board", "--queries", "-", "--json"],
+            &request,
+        );
+        assert_eq!(answered.code, Some(0), "{}", answered.stderr);
+        (answered.json, served)
+    };
+    let (without, _) = find(neighbours.to_vec());
+    let mut queries = vec![json!({"key": "common", "text": "common", "in": "title", "limit": 21})];
+    queries.extend(neighbours.iter().cloned());
+    let (with, served) = find(queries);
+
+    let common = &with["answers"][0];
+    assert_eq!(common["key"], "common");
+    assert_eq!(
+        common["items"].as_array().expect("items").len(),
+        21,
+        "{common:#}"
+    );
+    assert_eq!(common["limited"], true, "{common:#}");
+    assert_eq!(common["complete"], true, "{common:#}");
+    assert_eq!(
+        with["answers"].as_array().expect("answers")[1..],
+        without["answers"].as_array().expect("answers")[..],
+        "the unlimited searches answer exactly as they do without the limited one"
+    );
+
+    // Every common row matches, so a page brings it to `offset + rows` kept. Its first pages
+    // are slots of batched rounds; a page of its own read once it walks alone is GitHub's
+    // fixed twenty rows, which that read slices to what the search lacks.
+    let pages = pages_of(&served, "common");
+    assert_eq!(
+        served[pages[0].0].0,
+        graphql::SEARCH_BATCH,
+        "it starts in a batched round: {pages:?}"
+    );
+    let reached = pages
+        .iter()
+        .find(|(_, offset, rows)| offset + rows >= 21)
+        .map(|(request, _, _)| *request)
+        .unwrap_or_else(|| panic!("a page brought it to 21: {pages:?}"));
+    assert_eq!(
+        pages.last().map(|(request, _, _)| *request),
+        Some(reached),
+        "no page of it is asked after the one bringing it to 21: {pages:?}"
+    );
+    let batched_after = served[reached + 1..]
+        .iter()
+        .filter(|(document, variables)| {
+            document == graphql::SEARCH_BATCH
+                && (0..onetaskgraph_github_projects::SEARCH_BATCH).any(|slot| {
+                    variables[format!("ask{slot}")] == true
+                        && variables[format!("search{slot}")]
+                            .as_str()
+                            .is_some_and(|search| search.contains("common"))
+                })
+        })
+        .count();
+    assert_eq!(
+        batched_after, 0,
+        "no round after it reached 21 carries its slot: {served:#?}"
+    );
+}

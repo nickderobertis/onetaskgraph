@@ -1080,3 +1080,177 @@ fn a_limited_find_answers_the_first_matches_of_its_unlimited_answer_and_says_whe
         assert_eq!(refused["failure"]["kind"], "invalid-batch", "{refused:#}");
     }
 }
+
+/// The in-memory tasks of the stdio journey: twelve `Needle` titles alternating `todo` and
+/// `done`, then five `Haystack` titles of which the first, third and fifth are `todo`.
+fn needles_and_haystacks() -> Vec<(String, &'static str)> {
+    let mut tasks: Vec<(String, &'static str)> = (0..12)
+        .map(|n| {
+            (
+                format!("Needle {n}"),
+                if n % 2 == 0 { "todo" } else { "done" },
+            )
+        })
+        .collect();
+    tasks.extend((0..5).map(|n| {
+        (
+            format!("Haystack {n}"),
+            if n % 2 == 0 { "todo" } else { "done" },
+        )
+    }));
+    tasks
+}
+
+/// Every `query_tasks` page request the relay logged for the search of `terms`, as its row
+/// offset and its row limit, in the order sent.
+fn pages_asked(log: &std::path::Path, terms: &str) -> Vec<(usize, usize)> {
+    std::fs::read_to_string(log)
+        .expect("the relay's log")
+        .lines()
+        .filter_map(|line| line.strip_prefix("query_tasks\t"))
+        .map(|params| serde_json::from_str::<Value>(params).expect("logged params"))
+        .filter(|params| params["query"]["text"]["terms"] == terms)
+        .map(|params| {
+            let offset = params["page"]["cursor"].as_str().map_or(0, |cursor| {
+                cursor.parse().expect("an in-memory cursor is an offset")
+            });
+            let rows = params["page"]["limit"].as_u64().expect("a row limit");
+            (offset, usize::try_from(rows).expect("rows fit"))
+        })
+        .collect()
+}
+
+#[test]
+fn a_limited_find_over_a_stdio_peer_asks_no_more_rows_than_it_lacks_and_stops_at_its_limit() {
+    let sandbox = Sandbox::new();
+    let log = sandbox.subdirectory("peer").join("sent.log");
+    let tasks: Vec<Value> = needles_and_haystacks()
+        .into_iter()
+        .enumerate()
+        .map(|(n, (title, status))| {
+            json!({"id": format!("t{n:02}"), "title": title, "labels": [],
+                   "status": {"category": status, "name": status}})
+        })
+        .collect();
+    let proxy = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/e2e/logging_peer.py");
+    let document = json!({
+        "page_size": 50,
+        "sources": {"peer": {"plugin": "subprocess", "config": {
+            "command": crate::document_store::interpreter().to_string_lossy(),
+            "args": [proxy.to_string_lossy(), log.to_string_lossy(),
+                     onetaskgraph_e2e_support::binary().to_string_lossy(),
+                     "plugin-serve", "in-memory"],
+            // The source answers every status, so the engine's own status predicate rejects
+            // the `done` rows of each page of two.
+            "settings": {"capabilities": {"filter_by_status": "unsupported",
+                                          "search_title": "native", "max_page_size": 2},
+                         "tasks": tasks},
+        }}},
+    });
+    sandbox.project_document(&serde_json::to_string_pretty(&document).expect("JSON"));
+    let find = |queries: Value| -> Value {
+        let output = sandbox
+            .command()
+            .args(["--json", "task", "find", "peer", "--queries", "-"])
+            .write_stdin(json!({"schema_version": 1, "queries": queries}).to_string())
+            .assert()
+            .get_output()
+            .clone();
+        assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+        serde_json::from_str(&stdout(&output)).expect("the answers")
+    };
+    let search = |key: &str, terms: &str, limit: Option<u32>| json!({"key": key, "text": terms, "in": "title", "status": ["todo"], "limit": limit});
+
+    let unlimited = answered_in_order(&find(json!([
+        search("needles", "Needle", None),
+        search("haystacks", "Haystack", None),
+    ])));
+    let (every_needle, every_haystack) = (unlimited[0].1.clone(), unlimited[1].1.clone());
+    assert_eq!(every_needle.len(), 6, "{unlimited:?}");
+    assert_eq!(every_haystack.len(), 3, "{unlimited:?}");
+
+    std::fs::write(&log, "").expect("an empty log");
+    let limited = answered_in_order(&find(json!([
+        search("needles", "Needle", Some(4)),
+        search("haystacks", "Haystack", Some(3)),
+    ])));
+    assert_eq!(
+        limited,
+        vec![
+            (
+                "needles".to_owned(),
+                every_needle[..4].to_vec(),
+                json!(true),
+                json!(true)
+            ),
+            (
+                "haystacks".to_owned(),
+                every_haystack.clone(),
+                json!(true),
+                json!(false)
+            ),
+        ],
+        "the first four needles, more offered; every haystack, the source run out"
+    );
+
+    // What the engine keeps of the rows before `offset` of a search's candidates.
+    let titles = needles_and_haystacks();
+    let kept_before = |terms: &str, end: usize| {
+        titles
+            .iter()
+            .filter(|(title, _)| title.starts_with(terms))
+            .take(end)
+            .filter(|(_, status)| *status == "todo")
+            .count()
+    };
+    for (terms, limit) in [("Needle", 4), ("Haystack", 3)] {
+        let pages = pages_asked(&log, terms);
+        assert!(
+            pages.len() > 1,
+            "{terms}: its matches span pages: {pages:?}"
+        );
+        for (at, (offset, rows)) in pages.iter().enumerate() {
+            let lacking = limit - kept_before(terms, *offset);
+            assert!(
+                *rows <= lacking,
+                "{terms}: page {at} asked {rows} rows while lacking {lacking}: {pages:?}"
+            );
+            let reached = kept_before(terms, offset + rows) >= limit;
+            assert_eq!(
+                reached,
+                at + 1 == pages.len(),
+                "{terms}: no page is asked after the one that brought it to {limit}: {pages:?}"
+            );
+        }
+    }
+    let needles = pages_asked(&log, "Needle");
+    assert_eq!(
+        needles,
+        [(0, 2), (2, 2), (4, 2), (6, 1)],
+        "pages of the source's two rows, the last asking the one match it lacks"
+    );
+
+    // A limit of 0 is refused by its key, and the peer is never started.
+    std::fs::write(&log, "").expect("an empty log");
+    let output = sandbox
+        .command()
+        .args(["--json", "task", "find", "peer", "--queries", "-"])
+        .write_stdin(
+            json!({"schema_version": 1, "queries": [search("zero", "Needle", Some(0))]})
+                .to_string(),
+        )
+        .assert()
+        .get_output()
+        .clone();
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("query \"zero\""),
+        "{}",
+        stderr(&output)
+    );
+    assert_eq!(
+        std::fs::read_to_string(&log).expect("the log"),
+        "",
+        "nothing was sent"
+    );
+}

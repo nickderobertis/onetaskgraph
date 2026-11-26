@@ -918,6 +918,61 @@ test("several fields of one task are updated in one call through the real binary
   }
 });
 
+test("a limited search answers the first matches and an answer written before limits still validates", async () => {
+  const limitRoot = metadataFolder();
+  try {
+    writeFileSync(
+      resolve(limitRoot, "work/tasks/T-2.md"),
+      "---\ntitle: Two\nstatus: todo\n---\nsecond body\n",
+    );
+    const limitClient = new OnetaskgraphClient({ binaryPath: binary, cwd: limitRoot });
+    const found = await limitClient.taskFind("work", {
+      schema_version: 1,
+      queries: [
+        { key: "every", text: "body", in: "content" },
+        { key: "first", text: "body", in: "content", limit: 1 },
+        { key: "roomy", text: "body", in: "content", limit: 5 },
+      ],
+    });
+    const every = found.answers[0]?.items.map((item) => item.id) ?? [];
+    expect(every).toHaveLength(2);
+    expect(
+      found.answers.map((answer) => [
+        answer.key,
+        answer.items.map((item) => item.id),
+        answer.complete,
+        answer.limited,
+      ]),
+    ).toEqual([
+      ["every", every, true, false],
+      ["first", every.slice(0, 1), true, true],
+      ["roomy", every, true, false],
+    ]);
+    await expect(
+      limitClient.taskFind("work", {
+        schema_version: 1,
+        queries: [{ key: "zero", text: "body", limit: 0 }],
+      }),
+    ).rejects.toThrow('query "zero" asks for a limit of 0');
+
+    const ajv = new Ajv2020({ strict: false });
+    expect(
+      ajv.validate(runtimeSchemas.FoundTasks, {
+        schema_version: 1,
+        answers: [{ key: "old", items: [], complete: true, reason: null }],
+      }),
+    ).toBe(true);
+    expect(
+      ajv.validate(runtimeSchemas.FindRequest, {
+        schema_version: 1,
+        queries: [{ key: "old", text: "body" }],
+      }),
+    ).toBe(true);
+  } finally {
+    rmSync(limitRoot, { recursive: true, force: true });
+  }
+});
+
 test("batched searches, updates and comments drive the real binary, each answered on its own", async () => {
   const batchRoot = metadataFolder();
   try {

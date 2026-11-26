@@ -67,6 +67,13 @@ class FindQuery(BaseModel):
         list[StatusCategory],
         Field(description="The status categories to keep; empty keeps every one."),
     ] = []
+    limit: Annotated[
+        int | None,
+        Field(
+            description="The most matches to answer: the walk stops once it holds this many, answering the first\n`limit` of the matches an unlimited search lists, in that order. Absent or `null`\nanswers every match; `0` is refused, naming the key.",
+            ge=1,
+        ),
+    ] = None
 
 
 class FindRequest(BaseModel):
