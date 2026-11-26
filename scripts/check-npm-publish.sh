@@ -33,7 +33,14 @@ scratch="$(mktemp -d)" || fatal \
 REGISTRY_PID=""
 cleanup() {
   # Only the process this script started, by the pid it was given.
-  [ -z "$REGISTRY_PID" ] || kill "$REGISTRY_PID" 2>/dev/null || true
+  # Waited for, not only signalled, as scripts/test-distribution.sh's stop_server does: on
+  # Windows a registry still exiting holds its working directory, $scratch/checkout, open,
+  # and the rm below then fails 'Device or resource busy', which under set -e turned a
+  # passing check red on test-windows.
+  if [ -n "$REGISTRY_PID" ]; then
+    kill "$REGISTRY_PID" 2>/dev/null || true
+    wait "$REGISTRY_PID" 2>/dev/null || true
+  fi
   rm -rf "$scratch"
 }
 trap cleanup EXIT
