@@ -911,7 +911,8 @@ async fn a_source_answering_too_few_searches_leaves_the_last_one_incomplete_and_
 }
 
 #[tokio::test]
-async fn a_source_answering_more_rows_than_asked_is_cut_to_the_limit_and_answered_limited() {
+async fn a_source_answering_more_rows_than_asked_is_cut_to_the_limit_and_limited_only_when_a_page_follows()
+ {
     let root = tempfile::tempdir().expect("a folder");
     let engine = miscounted(root.path(), Miscount::Wide);
     let limited = |key: &str, limit: u32| FindQuery {
@@ -956,10 +957,26 @@ async fn a_source_answering_more_rows_than_asked_is_cut_to_the_limit_and_answere
         answered,
         [
             (every.clone(), true, false),
-            // The matches dropped past the limit are more that match, though no page follows.
-            (every[..2].to_vec(), true, true),
+            // Cut to the first two, but `limited` says only that the source offered a next
+            // page, and this one offered none.
+            (every[..2].to_vec(), true, false),
             (every.clone(), true, false),
         ]
+    );
+
+    // The same folder answering pages as asked: the limit is reached with a next page offered.
+    let paged = engine_over(json!({"sources": {"plan": {
+        "plugin": "local-md", "config": {"root": root.path().join("plan")}}}}));
+    let found = paged
+        .find_tasks(&name("plan"), &request, NonZeroU32::new(1).expect("a page"))
+        .await
+        .expect("answered");
+    let two = &found.answers[1];
+    let ids: Vec<String> = two.items.iter().map(|item| item.id.to_string()).collect();
+    assert_eq!(
+        (ids, two.complete, two.limited),
+        (every[..2].to_vec(), true, true),
+        "{found:?}"
     );
 }
 

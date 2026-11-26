@@ -648,20 +648,15 @@ impl Engine {
                         );
                         let search = &searches[at];
                         // A source answering more rows than it was asked may hand over more
-                        // matches than the limit leaves; only the first are kept, and the
-                        // ones dropped are matches the answer does not hold.
-                        let mut cut = false;
+                        // matches than the limit leaves; only the first are kept. `limited`
+                        // says the source offered a next page, so a cut page with none is
+                        // answered complete and not limited.
                         if let Some(limit) = search.limit {
-                            let limit = usize::try_from(limit.get()).unwrap_or(usize::MAX);
-                            cut = walk.items.len() > limit;
-                            walk.items.truncate(limit);
+                            walk.items
+                                .truncate(usize::try_from(limit.get()).unwrap_or(usize::MAX));
                         }
                         walk.stand = match page.next {
-                            _ if search.reached(walk.items.len())
-                                && (cut || page.next.is_some()) =>
-                            {
-                                Stand::Limited
-                            }
+                            Some(_) if search.reached(walk.items.len()) => Stand::Limited,
                             None => Stand::Complete,
                             Some(next) if !walk.followed.insert(next.0.clone()) => {
                                 Stand::Stopped(format!(
