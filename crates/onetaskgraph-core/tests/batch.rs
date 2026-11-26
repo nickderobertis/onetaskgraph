@@ -14,7 +14,7 @@ use std::path::Path;
 use onetaskgraph_core::{
     BATCH_SCHEMA_VERSION, BatchOutcome, CommentBatch, CommentBatchItem, Config, CopyAction,
     CopyItems, CopyRequest, CopyScope, Engine, EngineError, FindIn, FindQuery, FindRequest,
-    GlobalId, GuardOutcome, UpdateBatch, UpdateBatchItem,
+    FoundTasks, GlobalId, GuardOutcome, UpdateBatch, UpdateBatchItem,
 };
 use onetaskgraph_plugin_api::{
     MetadataKey, Priority, SecretResolver, SourceName, StatusCategory, Task, TaskUpdate,
@@ -143,6 +143,7 @@ fn query(key: &str) -> FindQuery {
         metadata: BTreeMap::new(),
         origin: None,
         status: Vec::new(),
+        limit: None,
     }
 }
 
@@ -1127,4 +1128,55 @@ async fn a_guard_a_versionless_source_cannot_hold_is_decided_again_by_the_source
     assert_eq!(guard.outcome(), GuardOutcome::Held, "{guard:?}");
     assert!(updated.written.is_empty(), "{updated:?}");
     assert_eq!(task(&engine, "plan:c").await.title, "Charlie batch");
+}
+
+#[test]
+fn a_find_document_written_before_limits_reads_as_unlimited_and_a_limit_of_zero_names_its_key() {
+    let request: FindRequest = serde_json::from_value(json!({"schema_version": 1, "queries": [
+        {"key": "old", "text": "batch"},
+        {"key": "new", "text": "batch", "limit": 3},
+        {"key": "null", "text": "batch", "limit": null},
+    ]}))
+    .expect("a request written before limits, and one naming them");
+    let limits: Vec<Option<u32>> = request
+        .queries
+        .iter()
+        .map(|query| query.limit.map(NonZeroU32::get))
+        .collect();
+    assert_eq!(limits, [None, Some(3), None]);
+    // A search naming no limit is written as it was before limits existed.
+    assert_eq!(
+        serde_json::to_value(&request.queries[0]).expect("JSON"),
+        json!({"key": "old", "text": "batch", "in": "both", "metadata": {}, "origin": null,
+               "status": []})
+    );
+    assert_eq!(
+        serde_json::to_value(&request.queries[1]).expect("JSON")["limit"],
+        3
+    );
+
+    let refused = serde_json::from_value::<FindRequest>(json!({"schema_version": 1, "queries": [
+        {"key": "zero", "text": "batch", "limit": 0},
+    ]}))
+    .expect_err("a limit of 0 is refused");
+    assert!(
+        refused
+            .to_string()
+            .contains("query \"zero\" asks for a limit of 0"),
+        "{refused}"
+    );
+    let unknown = serde_json::from_value::<FindRequest>(json!({"schema_version": 1, "queries": [
+        {"key": "k", "text": "batch", "colour": "red"},
+    ]}))
+    .expect_err("an unknown member is still refused");
+    assert!(
+        unknown.to_string().contains("unknown field `colour`"),
+        "{unknown}"
+    );
+
+    let answered: FoundTasks = serde_json::from_value(json!({"schema_version": 1, "answers": [
+        {"key": "old", "items": [], "complete": true, "reason": null},
+    ]}))
+    .expect("an answer written before `limited`");
+    assert!(!answered.answers[0].limited);
 }

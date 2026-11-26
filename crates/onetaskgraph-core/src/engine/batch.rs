@@ -51,9 +51,10 @@ pub struct FindRequest {
 /// One search of a [`FindRequest`]: every task matching all it names.
 ///
 /// It must be narrowed by at least one of `text`, `metadata` and `origin`; one narrowed by none
-/// would answer the whole source, and is refused naming its key.
+/// would answer the whole source, and is refused naming its key. A `limit` of `0` is refused
+/// as it is read, naming the key, so a request holding one reads nothing.
 // llmlint: ignore[invalid_states_unrepresentable] This is the wire document `task find` reads, its members the contract states literally; `Engine::find_tasks` turns each into the search it walks only once it is narrowed, refusing one that is not by its key before anything is read (`a_search_narrowed_by_nothing_is_refused_by_its_key_reading_nothing`).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct FindQuery {
     /// The caller's own name for this search, which its answer carries back. Unique within the
@@ -75,6 +76,57 @@ pub struct FindQuery {
     /// The status categories to keep; empty keeps every one.
     #[serde(default)]
     pub status: Vec<StatusCategory>,
+    /// The most matches to answer: the walk stops once it holds this many, answering the first
+    /// `limit` of the matches an unlimited search lists, in that order. Absent or `null`
+    /// answers every match; `0` is refused, naming the key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<NonZeroU32>,
+}
+
+/// A [`FindQuery`] as it is read, before its `limit` is held to at least one.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FindQueryRead {
+    key: String,
+    #[serde(default)]
+    text: Option<String>,
+    #[serde(default, rename = "in")]
+    fields: FindIn,
+    #[serde(default)]
+    metadata: BTreeMap<String, String>,
+    #[serde(default)]
+    origin: Option<GlobalId>,
+    #[serde(default)]
+    status: Vec<StatusCategory>,
+    #[serde(default)]
+    limit: Option<u32>,
+}
+
+/// Read through [`FindQueryRead`] rather than serde's own `NonZeroU32`, which refuses a `0`
+/// without naming the search it belongs to — and the key is what a caller has to go and fix.
+impl<'de> Deserialize<'de> for FindQuery {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let read = FindQueryRead::deserialize(deserializer)?;
+        let limit = match read.limit {
+            None => None,
+            Some(limit) => Some(NonZeroU32::new(limit).ok_or_else(|| {
+                serde::de::Error::custom(format!(
+                    "query {:?} asks for a limit of 0, which answers nothing; a limit is at \
+                     least 1, or absent for every match",
+                    read.key
+                ))
+            })?),
+        };
+        Ok(Self {
+            key: read.key,
+            text: read.text,
+            fields: read.fields,
+            metadata: read.metadata,
+            origin: read.origin,
+            status: read.status,
+            limit,
+        })
+    }
 }
 
 /// Which fields a [`FindQuery`]'s text is looked for in.
@@ -104,14 +156,21 @@ pub struct FoundTasks {
 pub struct FindAnswer {
     /// The search's key.
     pub key: String,
-    /// Every task it matched, across every page, each as `task list` reports it.
+    /// Every task it matched, across every page, each as `task list` reports it — or, for a
+    /// search naming a `limit`, the first `limit` of them.
     pub items: Vec<Qualified<Task>>,
-    // llmlint: ignore-block[invalid_states_unrepresentable] The answer's shape is the contract this task states literally — `complete` and `reason` side by side, `reason` null when complete — which other nodes build against; `FindAnswer::complete_with` and `FindAnswer::cut_short` are the only constructors, and they set the pair together.
-    /// Whether `items` is every match: `false` when a page of this search could not be read,
-    /// and `items` holds what the pages before it answered.
+    // llmlint: ignore-block[invalid_states_unrepresentable] The answer's shape is the contract this task states literally — `complete` and `reason` side by side, `reason` null when complete, and `limited` beside them — which other nodes build against; `FindAnswer::complete_with` and `FindAnswer::cut_short` are the only constructors, and they set the members together.
+    /// Whether `items` is every match, or the first `limit` of them: `false` when a page of
+    /// this search could not be read, and `items` holds what the pages before it answered.
     pub complete: bool,
     /// Why the answer is incomplete, naming the page refused — `null` when it is complete.
     pub reason: Option<String>,
+    /// Whether the walk stopped because `items` reached the search's `limit` while the source
+    /// still offered a next page, so more tasks may match. `false` for a search naming no
+    /// limit, and for one whose walk ran out before reaching it; an answer written before
+    /// this member existed reads `false`.
+    #[serde(default)]
+    pub limited: bool,
     // llmlint: ignore-end[invalid_states_unrepresentable]
 }
 
@@ -314,12 +373,13 @@ impl BatchOutcome {
 }
 
 impl FindAnswer {
-    fn complete_with(key: String, items: Vec<Qualified<Task>>) -> Self {
+    fn complete_with(key: String, items: Vec<Qualified<Task>>, limited: bool) -> Self {
         Self {
             key,
             items,
             complete: true,
             reason: None,
+            limited,
         }
     }
 
@@ -329,6 +389,7 @@ impl FindAnswer {
             items,
             complete: false,
             reason: Some(reason),
+            limited: false,
         }
     }
 }
@@ -410,6 +471,25 @@ struct Search {
     key: String,
     pushed: onetaskgraph_plugin_api::TaskQuery,
     local: super::local::LocalTasks,
+    /// The most matches it answers, if it names a limit.
+    limit: Option<NonZeroU32>,
+}
+
+impl Search {
+    /// The rows its next page asks for: `page`, or fewer when the limit leaves fewer to find
+    /// after the `held` matches already kept.
+    fn rows(&self, page: u32, held: usize) -> u32 {
+        self.limit.map_or(page, |limit| {
+            let held = u32::try_from(held).unwrap_or(u32::MAX);
+            page.min(limit.get().saturating_sub(held)).max(1)
+        })
+    }
+
+    /// Whether `held` matches reach its limit.
+    fn reached(&self, held: usize) -> bool {
+        self.limit
+            .is_some_and(|limit| held >= usize::try_from(limit.get()).unwrap_or(usize::MAX))
+    }
 }
 
 /// One search's walk: where it stands, the cursors it has followed, and what it has found.
@@ -426,6 +506,8 @@ enum Stand {
     Walking(Option<Cursor>),
     /// Its last page has been read.
     Complete,
+    /// It holds as many matches as its limit while the source offered a next page.
+    Limited,
     /// It was stopped before its last page, for this reason.
     Stopped(String),
 }
@@ -441,7 +523,9 @@ impl Engine {
     /// [`TaskSource::query_tasks_batch`](onetaskgraph_plugin_api::TaskSource::query_tasks_batch),
     /// and every predicate the source declares unsupported is applied here, as `task list`
     /// applies it. A page the source refuses ends that search's walk and answers it
-    /// `complete: false`, naming the page; every other search goes on.
+    /// `complete: false`, naming the page; every other search goes on. A search naming a
+    /// `limit` asks each page for no more rows than the limit still leaves and asks no page
+    /// once it holds that many matches, answering `limited` when the source offered more.
     ///
     /// # Errors
     ///
@@ -506,6 +590,7 @@ impl Engine {
                 key: query.key.clone(),
                 pushed: shape.pushed,
                 local: shape.local,
+                limit: query.limit,
             });
         }
         let limit = page_size.get().min(capabilities.max_page_size.max(1));
@@ -529,11 +614,11 @@ impl Engine {
                             searches[at].pushed.clone(),
                             PageRequest {
                                 cursor: cursor.clone(),
-                                limit,
+                                limit: searches[at].rows(limit, walk.items.len()),
                             },
                         ),
                     )),
-                    Stand::Complete | Stand::Stopped(_) => None,
+                    Stand::Complete | Stand::Limited | Stand::Stopped(_) => None,
                 })
                 .collect();
             if asks.is_empty() {
@@ -561,13 +646,28 @@ impl Engine {
                                     )
                                 }),
                         );
+                        let search = &searches[at];
+                        // A source answering more rows than it was asked may hand over more
+                        // matches than the limit leaves; only the first are kept, and the
+                        // ones dropped are matches the answer does not hold.
+                        let mut cut = false;
+                        if let Some(limit) = search.limit {
+                            let limit = usize::try_from(limit.get()).unwrap_or(usize::MAX);
+                            cut = walk.items.len() > limit;
+                            walk.items.truncate(limit);
+                        }
                         walk.stand = match page.next {
+                            _ if search.reached(walk.items.len())
+                                && (cut || page.next.is_some()) =>
+                            {
+                                Stand::Limited
+                            }
                             None => Stand::Complete,
                             Some(next) if !walk.followed.insert(next.0.clone()) => {
                                 Stand::Stopped(format!(
                                     "page {} of query {:?} answered the cursor {:?}, which this \
                                      search had already followed, so its walk was stopped there",
-                                    walk.pages, searches[at].key, next.0
+                                    walk.pages, search.key, next.0
                                 ))
                             }
                             Some(next) => Stand::Walking(Some(next)),
@@ -588,8 +688,9 @@ impl Engine {
             .map(|(search, walk)| match walk.stand {
                 Stand::Stopped(reason) => FindAnswer::cut_short(search.key, walk.items, reason),
                 // The walk above ends only once no search is still walking.
+                Stand::Limited => FindAnswer::complete_with(search.key, walk.items, true),
                 Stand::Complete | Stand::Walking(_) => {
-                    FindAnswer::complete_with(search.key, walk.items)
+                    FindAnswer::complete_with(search.key, walk.items, false)
                 }
             })
             .collect();

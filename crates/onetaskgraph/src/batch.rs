@@ -142,9 +142,14 @@ fn found_text(found: &FoundTasks) -> String {
     let mut text = String::new();
     for answer in &found.answers {
         text.push_str(&format!(
-            "{}: {} task(s){}\n",
+            "{}: {} task(s){}{}\n",
             answer.key,
             answer.items.len(),
+            if answer.limited {
+                " — limited: more may match"
+            } else {
+                ""
+            },
             answer
                 .reason
                 .as_ref()

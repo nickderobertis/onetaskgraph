@@ -991,3 +991,92 @@ fn a_find_in_content_matches_bodies_and_never_titles() {
         assert_eq!(ids(2), [format!("{source}:c")], "{source}: {found:#}");
     }
 }
+
+/// Each answer of a `task find` under its key: its ids in the order answered, `complete` and
+/// `limited`.
+fn answered_in_order(found: &Value) -> Vec<(String, Vec<String>, Value, Value)> {
+    found["answers"]
+        .as_array()
+        .expect("answers")
+        .iter()
+        .map(|answer| {
+            (
+                answer["key"].as_str().expect("a key").to_owned(),
+                answer["items"]
+                    .as_array()
+                    .expect("items")
+                    .iter()
+                    .map(|item| item["id"].as_str().expect("an id").to_owned())
+                    .collect(),
+                answer["complete"].clone(),
+                answer["limited"].clone(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn a_limited_find_answers_the_first_matches_of_its_unlimited_answer_and_says_when_it_stopped() {
+    let store = Store::new();
+    for source in ["plan", "memory"] {
+        // Four titles hold `batch`, over pages of two.
+        let alone = store.exited(
+            &["task", "find", source, "--queries", "-"],
+            Some(
+                &json!({"schema_version": 1, "queries": [
+                    {"key": "every", "text": "batch", "in": "title"},
+                ]})
+                .to_string(),
+            ),
+            0,
+        );
+        let every = answered_in_order(&alone).remove(0).1;
+        assert_eq!(every.len(), 4, "{source}: {alone:#}");
+        let found = store.exited(
+            &["task", "find", source, "--queries", "-"],
+            Some(
+                &json!({"schema_version": 1, "queries": [
+                    {"key": "three", "text": "batch", "in": "title", "limit": 3},
+                    {"key": "ten", "text": "batch", "in": "title", "limit": 10},
+                    {"key": "every", "text": "batch", "in": "title", "limit": null},
+                ]})
+                .to_string(),
+            ),
+            0,
+        );
+        assert_eq!(
+            answered_in_order(&found),
+            vec![
+                (
+                    "three".to_owned(),
+                    every[..3].to_vec(),
+                    json!(true),
+                    json!(true)
+                ),
+                ("ten".to_owned(), every.clone(), json!(true), json!(false)),
+                ("every".to_owned(), every.clone(), json!(true), json!(false)),
+            ],
+            "{source}: the first three of every match, in order, then every match: {found:#}"
+        );
+        assert_eq!(
+            found["answers"][2], alone["answers"][0],
+            "{source}: the unlimited search answers exactly as it does alone"
+        );
+
+        // A limit of 0 answers nothing, and is refused by its key before anything is read.
+        let zero = json!({"schema_version": 1, "queries": [
+            {"key": "named", "text": "batch"},
+            {"key": "nothing at all", "text": "batch", "limit": 0},
+        ]})
+        .to_string();
+        let output = store.run(&["task", "find", source, "--queries", "-"], Some(&zero));
+        assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+        assert!(
+            stderr(&output).contains("query \"nothing at all\" asks for a limit of 0"),
+            "{source}: the refusal names the key: {}",
+            stderr(&output)
+        );
+        let refused: Value = serde_json::from_str(&stdout(&output)).expect("a failure document");
+        assert_eq!(refused["failure"]["kind"], "invalid-batch", "{refused:#}");
+    }
+}

@@ -1667,6 +1667,14 @@ them do; this is the inventory of what is owed, not a status board.
      a folder of Markdown reads `in-review` and `in review` and writes `in-review`; and a
      delivered task follows a deliverer into `in-review`, or into `in-progress` where its own
      source has no name for it, with no refused write.
+174. A `task find` search naming a `limit` answers exactly the first `limit` matches its
+     unlimited answer lists, in order, `complete: true` and `limited: true` when the source
+     offered more, and every match `limited: false` when it ran out first — over a folder of
+     Markdown, an in-memory source, an in-memory source over the stdio protocol whose status the
+     engine applies, and a GitHub board whose status the source applies — each page asking no
+     more rows than the hits it still lacks and none asked once it holds them, one limited to 21
+     of a term matching 1,000 issues leaving its neighbours' answers as they were; a `limit` of
+     `0` is refused naming its key, reading nothing; an answer without `limited` reads `false`.
 
 ## The public boundary
 
