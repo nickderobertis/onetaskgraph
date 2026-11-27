@@ -13,17 +13,13 @@
 #       run, and each feature set it is built with), and of those older than the window
 #       keeps only the newest; a directory restored from a cache holds the ordinary builds
 #       at their old modification times, so a pass would remove some the gate still needs
-#       and the next build would make them anew — about five minutes of the release pull
-#       request's step. So before each pass the entries of every unit the ordinary build
-#       reports using are marked as just used, which is what they are;
+#       and the next build would make them anew. So before each pass the entries of every
+#       unit the ordinary build reports using are marked as just used, which is what they are;
 #   (b) copies every entry of the ordinary build under a stand-in metadata hash in the same
-#       profile directory — one sibling of each unit, this repository's own crates
-#       included, byte for byte its ordinary build — then backdates exactly the entries the
-#       copies created to a date past the 2-day window and older than anything a slot
-#       holds, so they stand in for a run's builds that have since been superseded. The
-#       pruner reads only names and modification times, so a copy is to it the same
-#       superseded build a recompile under another profile was, for a copy's cost; that
-#       recompile was most of the release pull request's step;
+#       profile directory, then backdates exactly the entries the copies created to a date
+#       past the 2-day window and older than anything a slot holds. The pruner reads only
+#       names and modification times, so each copy is to it a superseded build of its unit,
+#       the same size as the build a later run would supersede;
 #   (c) runs the ordinary gate build, so each unit's newest build is the ordinary one;
 #   (d) times one declared pass, which removes the stand-in builds.
 # Both passes are the justfile's `pool-maintenance` recipe, the command onevcs.toml declares.
