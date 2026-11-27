@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Copied from dero-skills' create-repo skill and edited only there, never in a copy.
 # source: github.com/nickderobertis/dero-skills/skills/bootstrap/create-repo/assets/budgets/actions-budget-figures.sh
-# version: 14
-# sha256: 7b4797774493989f6a1e914dfec581af1352da0dff759ad3e1dea81915dce850
+# version: 15
+# sha256: d296b37139ae0c3cf80df8bc8c6730f676e10179586fbe42c5f24d7f493b7992
 #
 # The GitHub Actions budget figures, measured from onevcs's read-only host answers
 # and reported to `onebudgetspec check` (a `measure: reported` budget's command).
@@ -30,8 +30,10 @@
 # `cache-use` and `cache-headroom` are the shared nx-remote-cache.mjs beside this
 # script. `cache-use` measures only CI attempts that finished and uploaded their jobs'
 # artifacts: an attempt still queued or in progress, a job skipped by its condition and
-# a job a partial re-run carried are named in the detail and contribute nothing, and a
-# report left with nothing measurable is missing data naming the runs it skipped.
+# a job a partial re-run carried are named in the detail and contribute nothing, as are
+# the partial artifact a cancelled or timed-out job uploaded and a run on a head its pull
+# request later moved past; a report left with nothing measurable is missing data naming
+# the runs it skipped. A run tied to no pull request of the repository still errors.
 #
 # This script names no workflow of its own: which push workflows deliver nothing is
 # each repository's to say, with --exclude-workflow in its CD budgets' commands. A
