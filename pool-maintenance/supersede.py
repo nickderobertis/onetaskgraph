@@ -25,6 +25,8 @@ def sibling(old: str) -> str:
     return "".join(BASE36[b % 36] for b in digest[: len(old)])
 
 
+if len(sys.argv) != 2:
+    sys.exit("usage: python3 pool-maintenance/supersede.py LISTING")
 with open(sys.argv[1], encoding="utf-8") as listing:
     entries = [line.rstrip("\n") for line in listing if line.strip()]
 for entry in entries:
