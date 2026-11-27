@@ -2651,6 +2651,51 @@ fn a_nested_block_lands_on_linear_as_a_section_inside_a_section_and_reads_back_a
     }
 }
 
+/// Set the issue `at`'s description to `content` as another client of Linear does: one
+/// `issueUpdate` sent to the workspace's own GraphQL endpoint, with the metadata slot the issue
+/// holds kept after `content`, which Linear stores as it stores anything it is sent.
+fn another_client_sets_the_description(plan: &LinearPlan, at: &Landed, content: &str) {
+    use std::io::{Read as _, Write as _};
+    let configured: Value = serde_json::from_str(
+        &std::fs::read_to_string(plan.sandbox.project().join("onetaskgraph.yaml"))
+            .expect("the configuration"),
+    )
+    .expect("the configuration is JSON");
+    let endpoint = configured["sources"]["dest"]["config"]["endpoint"]
+        .as_str()
+        .expect("the workspace's endpoint");
+    let address = endpoint
+        .strip_prefix("http://")
+        .and_then(|rest| rest.strip_suffix("/graphql"))
+        .expect("a loopback endpoint");
+    let raw = plan
+        .workspace
+        .long_form(at.collection(), at.native())
+        .expect("the record");
+    let slot = raw
+        .find("\n\n+++ onetaskgraph metadata\n\n")
+        .map_or("", |start| &raw[start..]);
+    let body = json!({
+        "query": onetaskgraph_linear::graphql::ISSUE_UPDATE,
+        "variables": {"id": at.native(), "input": {"description": format!("{content}{slot}")}},
+    })
+    .to_string();
+    let mut stream = std::net::TcpStream::connect(address).expect("the workspace listens");
+    write!(
+        stream,
+        "POST /graphql HTTP/1.1\r\nHost: {address}\r\nAuthorization: fixture-key\r\n\
+         Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+    .expect("the request is sent");
+    let mut response = String::new();
+    stream.read_to_string(&mut response).expect("an answer");
+    assert!(
+        response.starts_with("HTTP/1.1 200 OK") && response.contains("\"success\":true"),
+        "the issueUpdate lands: {response}"
+    );
+}
+
 // llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace.
 #[test]
 fn a_nested_block_linear_cannot_spell_or_holds_as_text_stays_as_it_stands_inside_its_section() {
@@ -2685,9 +2730,10 @@ fn a_nested_block_linear_cannot_spell_or_holds_as_text_stays_as_it_stands_inside
     // An inner block Linear holds as literal text inside a section reads back inside the outer
     // block, and set back as it reads it is written back as Linear stored it.
     let literal = "<details>\n<summary>Held as text</summary>\n\n- a list\n\n</details>";
-    plan.hold_as_text(
+    another_client_sets_the_description(
+        &plan,
         task,
-        &format!("+++ Outer\n\nOuter text.\n\n{literal}\n\n+++\n"),
+        &format!("+++ Outer\n\nOuter text.\n\n{literal}\n\n+++"),
     );
     let held = plan.stored(task);
     let stored_literal = literal.replace("- a list", "* a list");
