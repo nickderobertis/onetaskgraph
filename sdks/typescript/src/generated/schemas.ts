@@ -9500,7 +9500,7 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
     ],
     "$defs": {
       "FindQuery": {
-        "description": "One search of a [`FindRequest`]: every task matching all it names.\n\nIt must be narrowed by at least one of `text`, `metadata` and `origin`; one narrowed by none\nwould answer the whole source, and is refused naming its key.",
+        "description": "One search of a [`FindRequest`]: every task matching all it names.\n\nIt must be narrowed by at least one of `text`, `metadata` and `origin`; one narrowed by none\nwould answer the whole source, and is refused naming its key. A `limit` of `0` is refused\nas it is read, naming the key, so a request holding one reads nothing.",
         "type": "object",
         "properties": {
           "key": {
@@ -9547,6 +9547,15 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
               "$ref": "#/$defs/StatusCategory"
             },
             "default": []
+          },
+          "limit": {
+            "description": "The most matches to answer: the walk stops once it holds this many, answering the first\n`limit` of the matches an unlimited search lists, in that order. Absent or `null`\nanswers every match; `0` is refused, naming the key.",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint32",
+            "minimum": 1
           }
         },
         "additionalProperties": false,
@@ -9664,14 +9673,14 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
             "type": "string"
           },
           "items": {
-            "description": "Every task it matched, across every page, each as `task list` reports it.",
+            "description": "Every task it matched, across every page, each as `task list` reports it — or, for a\nsearch naming a `limit`, the first `limit` of them.",
             "type": "array",
             "items": {
               "$ref": "#/$defs/Qualified"
             }
           },
           "complete": {
-            "description": "Whether `items` is every match: `false` when a page of this search could not be read,\nand `items` holds what the pages before it answered.",
+            "description": "Whether `items` is every match, or the first `limit` of them: `false` when a page of\nthis search could not be read, and `items` holds what the pages before it answered.",
             "type": "boolean"
           },
           "reason": {
@@ -9680,6 +9689,11 @@ export const runtimeSchemas: { readonly [Root in RuntimeSchemaRoot]: JsonSchemaD
               "string",
               "null"
             ]
+          },
+          "limited": {
+            "description": "Whether the walk stopped because `items` reached the search's `limit` while the source\nstill offered a next page, so more tasks may match. `false` for a search naming no\nlimit, and for one whose walk ran out before reaching it; an answer written before\nthis member existed reads `false`.",
+            "type": "boolean",
+            "default": false
           }
         },
         "required": [

@@ -6,7 +6,9 @@ It starts COMMAND — the shipped host, `onetaskgraph plugin-serve <kind>` — h
 the engine sends, and hands the engine every line the host answers, unchanged. Before forwarding
 a request it appends the request's method to LOG, one per line, so a journey can say exactly
 which methods the peer was sent and that none followed a refusal — an `update_task` naming
-`duplicate_of` written as `update_task duplicate_of`. Each `--declare MEMBER` adds `MEMBER: true`
+`duplicate_of` written as `update_task duplicate_of`, and a `query_tasks` followed by a tab and
+its params as one line of JSON, so a journey can read each page request's cursor and row limit
+beside the query it pages. Each `--declare MEMBER` adds `MEMBER: true`
 to the host's handshake answer and each `--withhold MEMBER` removes `MEMBER` from it, so a journey
 can stand up a peer declaring what this build's own host does not, or not what it does. The
 engine spawns a plugin with a cleared environment (§3.1), so every path arrives as an argument.
@@ -71,8 +73,12 @@ def main() -> None:
         try:
             request = json.loads(line)
             method = request.get("method", "")
-            if method == "update_task" and "duplicate_of" in json.dumps(request.get("params")):
-                method = "update_task duplicate_of"
+            params = request.get("params")
+            match method:
+                case "update_task" if "duplicate_of" in json.dumps(params):
+                    method = "update_task duplicate_of"
+                case "query_tasks":
+                    method = f"query_tasks\t{json.dumps(params, sort_keys=True)}"
         except ValueError:
             method = ""
         with open(log, "a", encoding="utf-8") as handle:
