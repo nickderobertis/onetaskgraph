@@ -170,11 +170,9 @@ test("the release commit runs release-plz and the warmer, and visual-docs skips 
   );
 });
 
-// release-plz titles a release that updates one crate `chore(<crate>): release v…` unless
-// release-plz.toml names `pr_name`. The v0.14.20 and v0.14.21 squash commits were titled that
-// way, visual-docs ran on them and was cancelled, and the release tail counted that run's job
-// listing: release-read-requests read 7 against 6. The template may name `version` alone,
-// because release-plz gives `package` to a one-crate update only.
+// Without `pr_name` release-plz titles a one-crate release `chore(<crate>): release v…`, which
+// visual-docs does not skip. The template may name `version` alone: release-plz gives `package`
+// to a one-crate update only.
 test("every release pull request is titled as visual-docs skips its squash commit", () => {
   const config = readFileSync(new URL("../../release-plz.toml", import.meta.url), "utf8");
   const template = config.match(/^pr_name = "(.*)"$/m)?.[1];

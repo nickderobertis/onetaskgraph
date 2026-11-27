@@ -32,10 +32,9 @@ scratch="$(mktemp -d)" || fatal \
   "check the permissions of \$TMPDIR and 'df -h' for free space, then rerun"
 REGISTRY_PID=""
 cleanup() {
-  # Only the process this script started, by the pid it was given, and waited for before the
-  # tree goes: the registry was started inside it, and on Windows a process not yet exited
-  # still holds that directory, so removing it failed `Device or resource busy` and turned a
-  # passing check red (test-windows, run 45906264975). Leave the tree for the same reason.
+  # Only the process this script started, by the pid it was given. On Windows a process that
+  # has not exited still holds the directory it runs in, so wait for the registry and leave the
+  # tree before removing it.
   if [ -n "$REGISTRY_PID" ]; then
     kill "$REGISTRY_PID" 2>/dev/null || true
     wait "$REGISTRY_PID" 2>/dev/null || true
