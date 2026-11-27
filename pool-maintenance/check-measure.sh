@@ -262,6 +262,47 @@ if ! { [ -s "$evidence/removed.txt" ] && [ ! -s "$evidence/removed-not-alternati
     "fix measure.sh's setup so the timed pass faces one run's superseded builds and nothing else"
 fi
 
+# The superseded builds are one ordinary run's worth over the whole directory, not the leaf
+# crates' alone: the non-leaf member `a` and the dependency `c`, under both of its feature
+# sets, each have a superseded build the timed pass removes, beside the leaf `b`'s.
+superseded_problem="$(python3 - "$evidence" <<'PY'
+import os
+import re
+import sys
+
+evidence = sys.argv[1]
+
+
+def units(listing, directory):
+    """The metadata hashes of each unit's entries in one directory of one listing."""
+    found = {}
+    with open(os.path.join(evidence, listing), encoding="utf-8") as lines:
+        for line in lines:
+            parent, name = os.path.split(line.strip())
+            named = re.match(r"^(.+)-([0-9a-f]{16})$", name)
+            if named and os.path.basename(parent) == directory:
+                found.setdefault(named[1], set()).add(named[2])
+    return found
+
+
+created = units("alternative-created.txt", ".fingerprint")
+removed = units("removed.txt", ".fingerprint")
+settled = units("before-alternative.txt", ".fingerprint")
+for unit, wanted in (("a", "the non-leaf member a"), ("b", "the leaf b"), ("c", "the dependency c")):
+    if not created.get(unit):
+        print(f"{wanted} has no superseded build: the setup supersedes {sorted(created)} alone")
+        break
+    if created[unit] - removed.get(unit, set()):
+        print(f"the timed pass left {wanted}'s superseded build")
+        break
+else:
+    if len(created["c"]) < len(settled.get("c", ())) or len(settled.get("c", ())) < 2:
+        print(f"the dependency c's {len(settled.get('c', ()))} settled builds have {len(created['c'])} superseded ones, not one each")
+PY
+)" || superseded_problem="the evidence lists could not be read from $evidence"
+[ -z "$superseded_problem" ] || warm_fatal "the timed pass did not face one ordinary run's superseded builds of the whole directory: $superseded_problem" \
+  "make measure.sh supersede every unit of the settled directory, members and dependencies alike, not only the leaf crates'"
+
 # 2-4. Each departure is an error naming its cause, never a figure.
 for case in \
   "timed-removes-nothing|the timed pass removed nothing" \
