@@ -26,7 +26,7 @@ readonly ROOT
 
 scratch="$(mktemp -d)" || fatal "could not create a scratch directory" \
   "check the permissions of \$TMPDIR and 'df -h' for free space, then rerun"
-trap 'rm -rf "$scratch"' EXIT
+trap 'rm -rf "$scratch" || echo "check-npm-publish-cleanup: could not remove $scratch; next: delete it by hand" >&2' EXIT
 
 # The path below is built from $ROOT at run time, so ShellCheck cannot follow it.
 # shellcheck source=scripts/scratch-clone.sh
@@ -44,7 +44,7 @@ copy_tracked_files "$ROOT" "$scratch/repo" scripts npm sdks/typescript || fatal 
   "confirm 'git ls-files' answers in $ROOT and 'df -h' for free space, then rerun"
 launcher="$scratch/repo/scripts/loopback-npm-registry.py"
 cp "$launcher" "$scratch/registry.py" || fatal "could not keep the real registry" "check \$TMPDIR, then rerun"
-cat > "$launcher" <<'PY'
+cat > "$launcher" <<'PY' || fatal "could not write the stand-in registry launcher $launcher" "check \$TMPDIR permissions and 'df -h', then rerun"
 """The real registry, behind a shutdown that is slow on purpose and says what it found."""
 import os
 import runpy
@@ -72,9 +72,10 @@ runpy.run_path(registry, run_name="__main__")
 PY
 # An npm that refuses everything: check-npm-publish.sh only asks whether npm exists before
 # its registry starts, so the first `npm pack` after it is where the failure exit begins.
-mkdir -p "$scratch/failing-npm"
-printf '#!/usr/bin/env bash\nexit 1\n' > "$scratch/failing-npm/npm"
-chmod +x "$scratch/failing-npm/npm"
+{ mkdir -p "$scratch/failing-npm" &&
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$scratch/failing-npm/npm" &&
+  chmod +x "$scratch/failing-npm/npm"; } || fatal \
+  "could not create the refusing npm in $scratch/failing-npm" "check \$TMPDIR permissions and 'df -h', then rerun"
 
 # Run the clone's check: $1 names the case, $2 is `ordinary` or `failure`, $3 the record the
 # registry must leave.
@@ -99,11 +100,11 @@ drive() {
   # A cleanup that did not wait has returned while the registry is still shutting down, so its
   # answer arrives up to its two seconds later.
   local found tries=0
-  found="$(tr -d '\r' < "$record")"
+  found="$(tr -d '\r' < "$record")" || fatal "$case_name: could not read $record" "check \$TMPDIR permissions, then rerun"
   while [ "$found" = started ] && [ "$tries" -lt 50 ]; do
     sleep 0.2
     tries=$((tries + 1))
-    found="$(tr -d '\r' < "$record")"
+    found="$(tr -d '\r' < "$record")" || fatal "$case_name: could not read $record again" "check \$TMPDIR permissions, then rerun"
   done
   [ "$found" = "$expected" ] || fatal \
     "$case_name: the registry recorded '$found' where '$expected' belongs (present: its working directory outlived it; removed: the cleanup took the tree before it exited; started: it was never sent SIGTERM)" \
@@ -118,5 +119,6 @@ check="$scratch/repo/scripts/check-npm-publish.sh"
 grep -q '^    wait "\$REGISTRY_PID" 2>/dev/null || true$' "$check" || fatal \
   "cleanup() in scripts/check-npm-publish.sh no longer waits with the line this check removes, so its control case cannot be built" \
   "update the line this check deletes to the cleanup's own wait, then rerun"
-sed -i.bak '/^    wait "\$REGISTRY_PID" 2>\/dev\/null || true$/d' "$check"
+sed -i.bak '/^    wait "\$REGISTRY_PID" 2>\/dev\/null || true$/d' "$check" || fatal \
+  "could not remove the wait from the clone's $check for the control case" "check \$TMPDIR permissions, then rerun"
 drive cleanup-without-wait failure removed
