@@ -171,17 +171,17 @@ const eventFile = (file) =>
   );
 
 // Biome excludes exactly these upstream-owned copies; this drift test holds them byte-identical.
-// Full-file digests, including headers: remote cache v10 from dero-skills
-// 27a6b4950bd7582363eebdfbb8b93a0daf85fc21; figures v13 and cache prune v1 from
+// Full-file digests, including headers: remote cache v11 and figures v14 from dero-skills
+// 6cc889b591fc4de2e1019f023c47258c90df7739; cache prune v1 from
 // dero-skills afc6829981dc31ad4221fc7cf706916d078ada35; version-free inputs v3 from
 // fe20052d06406bb07869c5236147b6693489d52f (owned Cargo and Python pins); coverage unit v3 and
 // merge v2 from 2cf5ec7ab8d2353f4c67bb1518b9984ffb8491a0.
 const copies = {
   "scripts/actions-budget-figures.sh":
-    "f4dbf47e81ce3baf9acf92d4e92f284614bf9c6a3774a76f18ed89893ce7d3b0",
+    "8e4cc7ea0bfc653e75ca61a5152212517cdc33590b2af84782b9abec989819f4",
   "scripts/actions-cache-prune.mjs":
     "4c7bfd986ddb7e59b395a00eb3bb74892b44b76234d0c2a61d63ddf7a49b37a7",
-  "scripts/nx-remote-cache.mjs": "21a6ba436f59d7bd21d1659bf928b0123a6ac0003d5993747e9f216b020d3526",
+  "scripts/nx-remote-cache.mjs": "78516d0e2bcc94f25951c0e9d99ce96505e13e5ea6f17cdc2d28a2ed2738d3ca",
   "scripts/coverage-merge.mjs": "1fbe006859079d27738cefceddef22e1132c7932f1a6ee5cabc2f6eb265091ef",
   "scripts/coverage-unit.sh": "e94bd694c2313f24017ac01375c37a3de7ff8fb83d301cacd9acb6b1f76f1d36",
   "scripts/nx-version-free-inputs.mjs":

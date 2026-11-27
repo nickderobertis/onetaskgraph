@@ -388,9 +388,9 @@ const FAMILIES = {
   "test-windows": ["v0-rust-test-windows-Windows_NT-x64-"],
   "test-macos": ["v0-rust-test-macos-Darwin-arm64-"],
 };
-// create-repo's commit afc6829981dc31ad4221fc7cf706916d078ada35, which holds its landing commit
-// 270bea5d287f6fe6a844fd6b882922eacadf6ecf's prune and remote cache unchanged and figures v13,
-// v12 and the pull request's own run together.
+// The prune as create-repo's commit afc6829981dc31ad4221fc7cf706916d078ada35 holds it, and the
+// remote cache v11 and figures v14 as commit 6cc889b591fc4de2e1019f023c47258c90df7739 first holds
+// them, measuring only the finished CI attempts that uploaded the cache-use artifact.
 const COPIES = {
   "scripts/actions-cache-prune.mjs": {
     source: "assets/ci/actions-cache-prune.mjs",
@@ -399,13 +399,13 @@ const COPIES = {
   },
   "scripts/actions-budget-figures.sh": {
     source: "assets/budgets/actions-budget-figures.sh",
-    version: 13,
-    sha256: "d530d435aead03a443b1ea528db96eef9b97cc343d7eb3fade0b09099bd112ef",
+    version: 14,
+    sha256: "7b4797774493989f6a1e914dfec581af1352da0dff759ad3e1dea81915dce850",
   },
   "scripts/nx-remote-cache.mjs": {
     source: "assets/ci/nx-remote-cache.mjs",
-    version: 10,
-    sha256: "f8ee98c7b95c9e2afe7cab4539183dabce85d92c67506215b052782d849923e8",
+    version: 11,
+    sha256: "462c849527466a94c6a8c75c496191a5a10aa98a3549661cec5d8a8ef88377f1",
   },
 };
 const versionsOf = (file) => file.replace(/\.[^.]+$/, ".versions");
@@ -671,17 +671,17 @@ test("each way of losing the copies, the cleanup, the saves or the guards is ref
       },
     ],
     "another version of a copy": [
-      /nx-remote-cache\.mjs is not version 10/,
+      /nx-remote-cache\.mjs is not version 11/,
       (all) => {
         all.copies["scripts/nx-remote-cache.mjs"] = all.copies[
           "scripts/nx-remote-cache.mjs"
-        ].replace("// version: 10", "// version: 7");
+        ].replace("// version: 11", "// version: 7");
       },
     ],
     "a versions file behind": [
       /actions-budget-figures\.versions does not end at this copy/,
       (all) => {
-        all.copies["scripts/actions-budget-figures.versions"] += "14 feed\n";
+        all.copies["scripts/actions-budget-figures.versions"] += "15 feed\n";
       },
     ],
     "a leg without its cleanup": [
