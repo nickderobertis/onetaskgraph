@@ -157,18 +157,19 @@ pub fn nested() -> Vec<NestedRecord> {
         .collect()
 }
 
-/// The `plus-in-plus` record of `kind` — the spelling the store writes — from the nested
-/// recording.
+/// The `uploads.linear.app` address the nested recording's image `name` — `after.png` or
+/// `before.png` — was uploaded to and its records name.
 ///
 /// # Panics
 ///
-/// When the recording holds none.
+/// When the recording names no such image.
 #[must_use]
-pub fn nested_plus(kind: &str) -> NestedRecord {
-    nested()
-        .into_iter()
-        .find(|record| record.kind == kind && record.form == "plus-in-plus")
-        .unwrap_or_else(|| panic!("no plus-in-plus {kind} in the nested recording"))
+pub fn nested_image(name: &str) -> String {
+    let file: Value = serde_json::from_str(NESTED).expect("the nested recording is JSON");
+    file["images"][name]
+        .as_str()
+        .unwrap_or_else(|| panic!("the nested recording names no image {name}"))
+        .to_owned()
 }
 
 /// Every recorded fixture, in name order.

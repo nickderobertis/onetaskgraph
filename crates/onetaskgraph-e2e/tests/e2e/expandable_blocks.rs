@@ -2372,17 +2372,8 @@ fn nested_body(what: &str, (after, before): (&str, &str)) -> String {
 /// spike uploaded to Linear by their addresses.
 fn nested_images(key: &str) -> (String, String) {
     if key == "P" {
-        let images: Value = serde_json::from_str(include_str!(
-            "../../../onetaskgraph-e2e-support/fixtures/expandable_blocks/nested/observations.json"
-        ))
-        .expect("the nested recording");
-        let url = |name: &str| {
-            images["images"][name]
-                .as_str()
-                .expect("an image")
-                .to_owned()
-        };
-        (url("after.png"), url("before.png"))
+        use onetaskgraph_e2e_support::linear_normalizations::nested_image;
+        (nested_image("after.png"), nested_image("before.png"))
     } else {
         ("./after.png".to_owned(), "./before.png".to_owned())
     }
