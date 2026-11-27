@@ -21,6 +21,8 @@ IssueId = NewType('IssueId', str)
 ItemId = NewType('ItemId', str)
 LabelName = NewType('LabelName', str)
 RunId = NewType('RunId', int)
+# GitHub's opaque `after` pagination cursor, which its issue listing's next links carry.
+Cursor = NewType('Cursor', str)
 Token = NewType('Token', str)
 
 JANITOR = (Path(__file__).resolve().parents[1] / 'src/lib.rs').read_text(encoding="utf-8")
@@ -231,6 +233,8 @@ class Github:
         self.board_fail_after = None
         self.board_reads = 0
         self.link_override = None
+        # The first page whose answer carries `link_override` instead of the stand-in's own link.
+        self.link_override_from_page = 1
         self.board_transform = None
         self.delete_response: dict[Deletion, object] = {}
         self.boards: set[Board] = set()
@@ -259,7 +263,7 @@ class Github:
         # `page` (observed on the scratch repository on 2026-11-26), and its description does
         # not list the parameter. The stand-in issues one per page it links to, and admits a
         # request's cursor only when it is the one issued for that page.
-        self.cursors: dict[tuple[Repository, int], str] = {}
+        self.cursors: dict[tuple[Repository, int], Cursor] = {}
         # The repository read misanswered: an HTTP status, or a body without its id.
         self.repository_fault: int | dict | None = None
 
@@ -420,14 +424,19 @@ class Github:
                 nodes = copy.deepcopy(nodes[(page - 1) * state.page_size:page * state.page_size])
                 query['page'] = [str(page + 1)]
                 if kind == 'issues':
-                    cursor = base64.b64encode(f'cursor:v2:{repository}:{page * state.page_size}'.encode()).decode()
+                    cursor = Cursor(base64.b64encode(f'cursor:v2:{repository}:{page * state.page_size}'.encode()).decode())
                     state.cursors[(repository, page + 1)] = cursor
                     query['after'] = [cursor]
                 next_url = canonical + '?' + urlencode(query, doseq=True)
                 link = f'<http://127.0.0.1:{self.server.server_port}{next_url}>; rel="next"' if page * state.page_size < count else None
-                if state.link_override is not None:
+                if state.link_override is not None and page >= state.link_override_from_page:
+                    # `filters` carries the cursor issued for the next page, `requested` the one
+                    # this page was asked at, and `cursorless` neither.
                     filters = urlencode({k: v for k, v in query.items() if k != 'page'}, doseq=True)
-                    link = state.link_override.format(origin=f'http://127.0.0.1:{self.server.server_port}', path=path, filters=filters)
+                    requested = urlencode({k: v for k, v in parse_qs(parsed.query).items() if k != 'page'}, doseq=True)
+                    cursorless = urlencode({k: v for k, v in query.items() if k not in ('page', 'after')}, doseq=True)
+                    link = state.link_override.format(origin=f'http://127.0.0.1:{self.server.server_port}', path=path,
+                                                      filters=filters, requested=requested, cursorless=cursorless)
                 value = nodes
                 self.reply(value, link=link)
 
@@ -876,9 +885,8 @@ class Journeys(unittest.TestCase):
         self.assertNotIn(issue, [v['node_id'] for v in state.issues[SCRATCH]])
 
     def test_cursor_paged_issue_links_are_walked_and_the_cancelled_run_cleaned(self):
-        # Run 45913208966's cancellation cleanup stopped at the first issue page: GitHub's
-        # next link carried an `after` cursor the request had not, which the janitor read as
-        # a changed filter. Every later page is read at the cursor GitHub linked to.
+        # GitHub's issue listing links each later page with an `after` cursor beside `page`, which
+        # is no filter: every later page is read at the cursor GitHub linked to, to the last.
         state = Github()
         state.page_size = 10
         for n in range(25):
@@ -896,6 +904,25 @@ class Journeys(unittest.TestCase):
         # The artifact on the last page is this attempt's and goes; the other run's stays.
         self.assertIn(Write('POST', IssueDelete(own)), state.writes)
         self.assertNotIn(Write('POST', IssueDelete(other)), state.writes)
+
+    def test_each_cursor_refusal_is_reached_over_http(self):
+        # A cursor may be added or replaced, never emptied, repeated or dropped; each such link
+        # ends the pass before any write, through the real executable and the stand-in.
+        for link, from_page in (('<{origin}{path}?{cursorless}&page=2&after=>; rel="next"', 1),
+                                ('<{origin}{path}?{requested}&page=3>; rel="next"', 2),
+                                ('<{origin}{path}?{cursorless}&page=3>; rel="next"', 2)):
+            with self.subTest(link=link):
+                state = workload()
+                state.page_size = 10
+                for n in range(25):
+                    state.issues[SCRATCH].append({'node_id': IssueId(f'o:{n}'), 'title': 'Ordinary'})
+                state.link_override, state.link_override_from_page = link, from_page
+                result = state.run()
+                self.assert_failed(result)
+                self.assertIn('pagination Link changed enumeration filters or did not advance', result.stderr)
+                pages = [target for method, target in state.requests if method == 'GET' and '/issues?' in target]
+                self.assertEqual(len(pages), from_page)
+                self.assertFalse(state.writes)
 
     def test_a_cursor_github_did_not_link_to_is_refused_by_the_stand_in(self):
         # The stand-in's own check, so the journey above cannot pass on a cursor it ignored.
