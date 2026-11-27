@@ -836,6 +836,9 @@ impl Endpoint {
     }
 }
 
+/// The opaque cursor GitHub's next links carry beside `page` on a repository's issue listing.
+const CURSOR: &str = "after";
+
 // Follow only this same origin and list endpoint. A malformed or redirected page
 // fails closed rather than sending either credential to an unrelated host or repository.
 // A refusal names paths alone: a link's query, user info and the token never reach it.
@@ -896,7 +899,16 @@ fn next_page(
         };
         let previous = page(before.remove("page"))?;
         let following = page(after.remove("page"))?;
-        if previous.checked_add(1) != Some(following) || before != after {
+        // GitHub's issue listing pages by an opaque `after` cursor beside `page`: its first
+        // next link adds one and each later link replaces it. A cursor is no filter, so it
+        // may be added or replaced, but never dropped, emptied or repeated.
+        let advances = match (before.remove(CURSOR), after.remove(CURSOR)) {
+            (_, Some(cursor)) if cursor.is_empty() => false,
+            (Some(previous), Some(cursor)) => previous != cursor,
+            (Some(_), None) => false,
+            (None, _) => true,
+        };
+        if previous.checked_add(1) != Some(following) || before != after || !advances {
             return Err("pagination Link changed enumeration filters or did not advance".into());
         }
         if next.is_some() {
@@ -1039,6 +1051,44 @@ mod tests {
             next("https://api.github.com/repositories/42/issues?state=open&per_page=100&page=2"),
             Err("pagination Link changed enumeration filters or did not advance".into())
         );
+    }
+
+    #[test]
+    fn a_next_link_carrying_github_s_cursor_is_followed_while_it_advances() {
+        // The shape GitHub answered for the scratch repository's issue listing on 2026-11-26.
+        const FIRST: &str =
+            "/repos/owner/scratch/issues?state=all&sort=created&direction=asc&per_page=100&page=1";
+        const SECOND: &str = "/repositories/42/issues?state=all&sort=created&direction=asc&per_page=100&page=2&after=Y3Vyc29yOnYyOpLPAAABobudt7DPAAAAAXXYNZo%3D";
+        let link = |target: &str, current: &str| {
+            next_page(
+                &format!("<https://api.github.com{target}>; rel=\"next\""),
+                API_BASE,
+                current,
+                &scratch(),
+            )
+        };
+        assert_eq!(link(SECOND, FIRST), Ok(Some(SECOND.into())));
+        let third = "/repositories/42/issues?state=all&sort=created&direction=asc&per_page=100&page=3&after=Y3Vyc29yOnYyOjIwMA%3D%3D";
+        assert_eq!(link(third, SECOND), Ok(Some(third.into())));
+        let refused = Err("pagination Link changed enumeration filters or did not advance".into());
+        for (target, current) in [
+            // The same cursor again, a cursor dropped, an empty one.
+            (SECOND.replace("page=2", "page=3"), SECOND.to_string()),
+            (
+                "/repositories/42/issues?state=all&sort=created&direction=asc&per_page=100&page=3"
+                    .into(),
+                SECOND.into(),
+            ),
+            (
+                SECOND.replace("after=Y3Vyc29yOnYyOpLPAAABobudt7DPAAAAAXXYNZo%3D", "after="),
+                FIRST.into(),
+            ),
+            // A cursor never excuses a filter change or a page that does not advance.
+            (SECOND.replace("state=all", "state=open"), FIRST.into()),
+            (SECOND.replace("page=2", "page=1"), FIRST.into()),
+        ] {
+            assert_eq!(link(&target, &current), refused, "{target}");
+        }
     }
 
     #[test]

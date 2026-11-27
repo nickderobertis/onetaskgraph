@@ -17,5 +17,6 @@ budgets:
     unit: seconds
     direction: max
     threshold: 20
-    # The measurement builds the workspace's test targets twice before the timed pass.
+    # The measurement builds the leaf crates' test targets before the timed pass, from cold
+    # where nothing is built yet, and copies every build the target directory then holds.
     timeout_seconds: 3600

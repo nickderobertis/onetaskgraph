@@ -9,12 +9,10 @@
 # sees rival builds of one unit name. One pass over that state removes builds the gate still
 # needs, which is how the measurement once refused its own release pull request. Four cases:
 #   1. that warm directory measures a figure, inside the budget, with the timed pass removing
-#      the stand-in copies and nothing else;
+#      the alternative build and nothing else;
 #   2. a timed pass that removes nothing is an error, not a figure;
 #   3. a timed pass that removes an ordinary build is an error, not a figure;
-#   4. a backlog that never settles is an error, not a figure;
-#   5. the helper's stand-in copies are byte for byte their builds, symlinks kept as links,
-#      and a stand-in already present is left as it is while every other entry is copied.
+#   4. a backlog that never settles is an error, not a figure.
 # Cases 2 to 4 put a stand-in pruner first on PATH that runs the real one and then departs
 # from it, so each refusal is reached by the state it exists for.
 set -euo pipefail
@@ -62,7 +60,7 @@ printf '[build]\nbuild-dir = "%s/outside-build-dir"\n' "$scratch" >"$scratch/.ca
 unset CARGO_TARGET_DIR CARGO_BUILD_TARGET_DIR CARGO_BUILD_BUILD_DIR RUSTUP_TOOLCHAIN ONEBUDGETSPEC_RESULT
 
 # Older than the pruner's 2-day window, and newer than the date measure.sh backdates the
-# stand-in copies to, as a cache restored from an earlier run is.
+# alternative build to, as a cache restored from an earlier run is.
 readonly RESTORED_AT="2020-01-01T00:00:00"
 
 # A warm workspace at $1. `c` under two feature sets gives the pruner rival builds of one
@@ -73,8 +71,7 @@ make_fixture() {
   mkdir -p "$fx/.cargo" "$fx/pool-maintenance" "$fx/crates/a/src" "$fx/crates/b/src" \
     "$fx/vendor/c/src"
   cp "$ROOT/justfile" "$ROOT/rust-toolchain.toml" "$fx/"
-  cp "$ROOT/pool-maintenance/measure.sh" "$ROOT/pool-maintenance/ordinary_builds.py" \
-    "$ROOT/pool-maintenance/budgets.yaml" \
+  cp "$ROOT/pool-maintenance/measure.sh" "$ROOT/pool-maintenance/budgets.yaml" \
     "$fx/pool-maintenance/"
   # build-dir beside target-dir, so no configuration above the fixture (a CARGO_HOME or a
   # directory over the scratch tree) can move its intermediates out of the target the pruner
@@ -143,11 +140,11 @@ EOF
 }
 
 # A stand-in pruner first on PATH: it runs the real one, then departs from it as $1 says.
-#   timed-removes-nothing   the pass that faces the stand-in copies only reports.
+#   timed-removes-nothing   the pass that faces the alternative build only reports.
 #   timed-removes-ordinary  that pass also removes the ordinary build of `b`.
 #   backlog-never-settles   every other pass also removes the ordinary build of `b`.
-# The pass that faces the stand-in copies is the one whose target holds a build dated
-# before 2002, where measure.sh's header puts the stand-in copies.
+# The pass that faces the alternative build is the one whose target holds a build dated
+# before 2002, where measure.sh's header puts the alternative build.
 install_stand_in() {
   mkdir -p "$scratch/bin"
   cat >"$scratch/bin/cargo-prune-superseded" <<EOF
@@ -253,36 +250,63 @@ PY
 )" || report_problem="the report could not be read: $(cat "$scratch/out")"
 [ -z "$report_problem" ] || warm_fatal "onebudgetspec's result is not the figure measure.sh owes: $report_problem" \
   "check that measure.sh still leaves the pruner's own report as the figure and appends each untimed pass's seconds"
-# The fixture faced what it exists for: rival restored builds of crate c, both of which the
-# ordinary build uses, so a pass that did not know they were in use would remove one and the
-# next build would make it anew. measure.sh marks them used, so no backlog pass removes a
-# build the ordinary build reported, and the backlog settles by its second pass (a stale
-# incremental build, which CI never makes, is all a first pass may find).
-rivals="$(grep -cE '^target/debug/\.fingerprint/c-' "$evidence/backlog-before-1.txt" || true)"
-if [ "${rivals:-0}" -lt 2 ]; then
-  warm_fatal "the fixture held $rivals build(s) of crate c, so it no longer reproduces a warm, cache-restored directory" \
+# The fixture faced what it exists for: the first untimed pass removed builds, and so did
+# one after it, which a single pass would have left for the timed pass to remove.
+if ! { [ -s "$evidence/backlog-removed-1.txt" ] && [ -s "$evidence/backlog-removed-2.txt" ]; }; then
+  warm_fatal "the fixture's backlog settled in one pass, so it no longer reproduces a warm, cache-restored directory" \
     "restore the fixture's rival builds of one unit (crate c under two feature sets) and its restored dates"
-fi
-removed_in_use="$(cat "$evidence"/backlog-removed-*.txt \
-  | python3 "$ROOT/pool-maintenance/ordinary_builds.py" entries "$evidence/ordinary-hashes.txt")"
-if [ -n "$removed_in_use" ]; then
-  warm_fatal "an untimed pass removed builds the ordinary build uses: $removed_in_use" \
-    "restore measure.sh's marking of the ordinary build's entries as used before each backlog pass"
-fi
-if [ -f "$evidence/backlog-removed-3.txt" ]; then
-  warm_fatal "the backlog did not settle after its first pass" \
-    "restore measure.sh's marking of the ordinary build's entries as used before each backlog pass"
 fi
 if ! { [ -s "$evidence/removed.txt" ] && [ ! -s "$evidence/removed-not-alternative.txt" ] \
   && [ ! -s "$evidence/ordinary-missing.txt" ]; }; then
-  warm_fatal "the timed pass did not remove exactly the stand-in copies" \
+  warm_fatal "the timed pass did not remove exactly the alternative build" \
     "fix measure.sh's setup so the timed pass faces one run's superseded builds and nothing else"
 fi
+
+# The superseded builds are one ordinary run's worth over the whole directory, not the leaf
+# crates' alone: the non-leaf member `a` and the dependency `c`, under both of its feature
+# sets, each have a superseded build the timed pass removes, beside the leaf `b`'s.
+superseded_problem="$(python3 - "$evidence" <<'PY'
+import os
+import re
+import sys
+
+evidence = sys.argv[1]
+
+
+def units(listing, directory):
+    """The metadata hashes of each unit's entries in one directory of one listing."""
+    found = {}
+    with open(os.path.join(evidence, listing), encoding="utf-8") as lines:
+        for line in lines:
+            parent, name = os.path.split(line.strip())
+            named = re.match(r"^(.+)-([0-9a-f]{16})$", name)
+            if named and os.path.basename(parent) == directory:
+                found.setdefault(named[1], set()).add(named[2])
+    return found
+
+
+created = units("alternative-created.txt", ".fingerprint")
+removed = units("removed.txt", ".fingerprint")
+settled = units("before-alternative.txt", ".fingerprint")
+for unit, wanted in (("a", "the non-leaf member a"), ("b", "the leaf b"), ("c", "the dependency c")):
+    if not created.get(unit):
+        print(f"{wanted} has no superseded build: the setup supersedes {sorted(created)} alone")
+        break
+    if created[unit] - removed.get(unit, set()):
+        print(f"the timed pass left {wanted}'s superseded build")
+        break
+else:
+    if len(created["c"]) < len(settled.get("c", ())) or len(settled.get("c", ())) < 2:
+        print(f"the dependency c's {len(settled.get('c', ()))} settled builds have {len(created['c'])} superseded ones, not one each")
+PY
+)" || superseded_problem="the evidence lists could not be read from $evidence"
+[ -z "$superseded_problem" ] || warm_fatal "the timed pass did not face one ordinary run's superseded builds of the whole directory: $superseded_problem" \
+  "make measure.sh supersede every unit of the settled directory, members and dependencies alike, not only the leaf crates'"
 
 # 2-4. Each departure is an error naming its cause, never a figure.
 for case in \
   "timed-removes-nothing|the timed pass removed nothing" \
-  "timed-removes-ordinary|the timed pass removed entries the stand-in copies did not create" \
+  "timed-removes-ordinary|the timed pass removed entries the alternative build did not create" \
   "backlog-never-settles|never reached a steady state"; do
   mode="${case%%|*}"
   expected="${case#*|}"
@@ -298,43 +322,3 @@ for case in \
       "restore the refusal in measure.sh that reports '$expected'"
   fi
 done
-
-# 5. The copies measure.sh times the removal of are the builds themselves: same bytes, links
-#    as links, an existing stand-in untouched, entries of other builds not copied.
-tree="$scratch/copies"
-mkdir -p "$tree/target/debug/deps" "$tree/target/debug/.fingerprint/a-1111111111111111"
-printf 'library bytes\n' > "$tree/target/debug/deps/liba-1111111111111111.rlib"
-printf 'fingerprint\n' > "$tree/target/debug/.fingerprint/a-1111111111111111/lib-a"
-ln -s lib-a "$tree/target/debug/.fingerprint/a-1111111111111111/link"
-printf 'other build\n' > "$tree/target/debug/deps/libb-2222222222222222.rlib"
-mkdir -p "$tree/target/llvm-cov-target/debug/deps"
-printf 'same hash, another target\n' > "$tree/target/llvm-cov-target/debug/deps/liba-1111111111111111.rlib"
-printf '1111111111111111\n' > "$tree/hashes.txt"
-stand_in="$(printf '1111111111111111' | sha256sum | cut -c1-16)"
-mkdir "$tree/target/debug/.fingerprint/a-$stand_in"
-printf 'already here\n' > "$tree/target/debug/.fingerprint/a-$stand_in/kept"
-(cd "$tree" && find target/debug/deps target/debug/.fingerprint target/llvm-cov-target/debug/deps -mindepth 1 -maxdepth 1 \
-  | LC_ALL=C sort | python3 "$ROOT/pool-maintenance/ordinary_builds.py" copy hashes.txt) \
-  || fatal "the helper's copy failed over a small tree" "run pool-maintenance/ordinary_builds.py copy by hand over $tree"
-cmp -s "$tree/target/debug/deps/liba-1111111111111111.rlib" "$tree/target/debug/deps/liba-$stand_in.rlib" \
-  || fatal "a stand-in copy is not byte for byte its build" "restore the byte copy in ordinary_builds.py"
-[ "$(readlink "$tree/target/debug/.fingerprint/a-$stand_in/link" 2>/dev/null)" = "" ] \
-  || fatal "the existing stand-in was overwritten by a copy" "restore ordinary_builds.py's skip of a stand-in already present"
-[ "$(cat "$tree/target/debug/.fingerprint/a-$stand_in/kept")" = "already here" ] \
-  || fatal "the existing stand-in did not keep its own contents" "restore ordinary_builds.py's skip of a stand-in already present"
-rm -rf "$tree/target/debug/.fingerprint/a-$stand_in"
-(cd "$tree" && find target/debug/.fingerprint -mindepth 1 -maxdepth 1 \
-  | python3 "$ROOT/pool-maintenance/ordinary_builds.py" copy hashes.txt) \
-  || fatal "the helper's copy of a directory failed" "run pool-maintenance/ordinary_builds.py copy by hand over $tree"
-[ "$(readlink "$tree/target/debug/.fingerprint/a-$stand_in/link")" = "lib-a" ] \
-  || fatal "a symlink inside a build was not copied as a link" "restore copytree(symlinks=True) in ordinary_builds.py"
-cmp -s "$tree/target/debug/.fingerprint/a-1111111111111111/lib-a" "$tree/target/debug/.fingerprint/a-$stand_in/lib-a" \
-  || fatal "a file inside a copied build is not byte for byte its original" "restore the byte copy in ordinary_builds.py"
-if [ "$(ls "$tree/target/llvm-cov-target/debug/deps")" != "liba-1111111111111111.rlib" ]; then
-  fatal "the helper copied an entry outside target/debug, which the ordinary build never writes" \
-    "restore ordinary_builds.py's selection of target/debug alone"
-fi
-if ls "$tree/target/debug/deps" | grep -qv -e '^liba-' -e '^libb-2222222222222222.rlib$'; then
-  fatal "the helper copied an entry of a build the ordinary build did not report: $(ls "$tree/target/debug/deps")" \
-    "restore ordinary_builds.py's selection by the reported hashes"
-fi
