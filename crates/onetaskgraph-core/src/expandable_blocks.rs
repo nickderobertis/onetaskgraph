@@ -14,20 +14,24 @@
 //!
 //! outside any fenced code block and not indented, `<details>` with no attribute, SUMMARY on one
 //! line with `<code>`, `<strong>` and the entities `&amp;`, `&lt;` and `&gt;` as its only markup,
-//! one blank line on either side of a BODY of one or more lines, and no block inside another. The
-//! README's "Expandable blocks" states it for a consumer, and [`blocks`] is what recognises it.
+//! one blank line on either side of a BODY of one or more lines. A BODY may hold further blocks in
+//! the authored form, each meeting every one of those rules, to any depth. The README's
+//! "Expandable blocks" states it for a consumer, and [`blocks`] is what recognises it.
 //!
 //! Each destination kind has exactly one [`ExpandableForm`] entry, and every path that writes or
 //! reads a block for that kind reads it: [`ExpandableForm::written`] writes the destination's form
 //! from the authored one, [`ExpandableForm::read`] reads it back, and [`ExpandableForm::markup`]
 //! hands a plugin both as the [`BodyMarkup`] it applies to every body it sends and receives, so
 //! no plugin holds a copy of any form. A folder of Markdown and a GitHub issue keep the authored
-//! form byte for byte; Linear keeps a collapsible section, `+++ <summary>` … `+++`.
+//! form byte for byte; Linear keeps a collapsible section, `+++ <summary>` … `+++`, and a block
+//! nested in another as a section inside that block's section, every section closed by a bare
+//! `+++` line.
 //!
 //! A shape that is not the authored form — an attribute on `<details>`, a missing blank line, an
-//! indented or fenced block, a nested block, a summary holding another tag — is never translated,
-//! and neither is a block whose Linear form would not read back as itself — one written with
-//! carriage returns among them: see [`ExpandableForm::written`].
+//! indented or fenced block, a summary holding another tag — is never translated, and a block
+//! holding such a shape anywhere inside it is carried whole as it stands. Neither is a block whose
+//! Linear form would not read back as itself — one written with carriage returns among them: see
+//! [`ExpandableForm::written`].
 
 use std::sync::Arc;
 
@@ -44,7 +48,9 @@ pub enum ExpandableForm {
     /// block's body as it reaches any other.
     GithubProjects,
     /// Linear issues, projects, documents and comments: a collapsible section, `+++ LSUMMARY`
-    /// alone on its line, a blank line, the body, a blank line, and `+++` alone on its line.
+    /// alone on its line, a blank line, the body, a blank line, and `+++` alone on its line. A
+    /// block nested in the body is a section of its own inside it, written the same way — never
+    /// with `>>>`, whose first bare line Linear reads as closing every section open.
     /// LSUMMARY is SUMMARY with `<code>TEXT</code>` as `` `TEXT` ``, `<strong>TEXT</strong>` as
     /// `**TEXT**`, and each entity as the character it stands for, which is how Linear stores it.
     Linear,
@@ -69,30 +75,26 @@ impl ExpandableForm {
     /// by [`Self::read`], as the very block it was written from. A summary whose plain text holds
     /// a backtick or a `*`, which Linear would read as a code or a strong mark, or a raw `&`, `<`
     /// or `>`, which Linear's stored text cannot tell from an escaped one, fails that test, and
-    /// its block is carried as it stands.
+    /// its block is carried as it stands. A block nested in another is written inside its outer
+    /// section by the same test, so an inner block failing it is carried as it stands inside a
+    /// section that reads back as the outer block.
     #[must_use]
     pub fn written(self, authored: &str) -> String {
         match self {
             Self::LocalMd | Self::GithubProjects => authored.to_owned(),
-            Self::Linear => linear_written(authored, &std::collections::HashSet::new()),
+            Self::Linear => linear_written(authored, &std::collections::HashSet::new(), true),
         }
     }
 
     /// `stored`, as this kind's backend holds it, with every block in this kind's form read back
     /// into the authored form: exactly what [`Self::written`] translates, and a section a person
-    /// made in the tracker whose authored block would be written as that same section.
+    /// made in the tracker whose authored block would be written as that same section. A section
+    /// inside a section is read back as a block inside the outer one's block.
     #[must_use]
     pub fn read(self, stored: &str) -> String {
         match self {
             Self::LocalMd | Self::GithubProjects => stored.to_owned(),
-            Self::Linear => rewritten(stored, &linear_regions(stored), |region| {
-                let Shape::Section(section) = &region.shape else {
-                    return None;
-                };
-                let block = authored_block(section)?;
-                (linear_section(&block).as_ref() == Some(section))
-                    .then(|| block.render(region.ending))
-            }),
+            Self::Linear => linear_read(stored),
         }
     }
 
@@ -110,7 +112,8 @@ impl ExpandableForm {
 // llmlint: ignore-end[code_lands_in_the_domain_that_owns_it]
 
 /// One expandable block in the authored form: made only by [`authored_parts`], which holds it to
-/// the form, and by [`authored_block`], which reads it out of a Linear section.
+/// the form, and by [`authored_block`], which reads it out of a Linear section. Its body holds any
+/// block nested in it in the authored form.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Block {
     /// SUMMARY, as written between `<summary>` and `</summary>`.
@@ -130,8 +133,9 @@ impl Block {
     }
 }
 
-/// How many blocks of `content` are in the authored form. A block-like shape that is not the
-/// form — see the module documentation — is not one, and nor is anything inside it.
+/// How many outermost blocks of `content` are in the authored form, a block nested in one counted
+/// with it. A block-like shape that is not the form — see the module documentation — is not one,
+/// nor is anything inside it, nor a block holding it.
 #[must_use]
 pub fn blocks(content: &str) -> usize {
     authored_regions(content)
@@ -218,8 +222,8 @@ fn fenced(lines: &[Line<'_>]) -> Vec<bool> {
 
 /// Every region of `content` an unindented `<details` line outside fenced code opens, through
 /// the `</details>` line that closes it, a `<details` line between them nesting one level deeper.
-/// A region that is exactly one authored block carries it; any other, the nested shape among
-/// them, carries none, and nothing inside it is a block either.
+/// A region that is exactly one authored block, every region of its body one too, carries it; any
+/// other carries none, and nothing inside it is a block either.
 fn authored_regions(content: &str) -> Vec<Region> {
     let lines = lines(content);
     let fenced = fenced(&lines);
@@ -252,16 +256,20 @@ fn authored_regions(content: &str) -> Vec<Region> {
             index += 1;
             continue;
         };
-        let nested = (index + 1..close).any(opens);
         // A block written with carriage returns would not read back from Linear byte for byte —
         // Linear keeps none — so it is no block to translate.
         let returned = lines[index..=close]
             .iter()
             .any(|line| line.ending != "\n" && !line.ending.is_empty());
-        let block = (!nested && !returned && lines[index].text == "<details>")
+        let block = (!returned && lines[index].text == "<details>")
             .then(|| authored_parts(&lines[index..=close]))
             .flatten()
-            .filter(|block| summary_markup(&block.summary).is_some());
+            .filter(|block| summary_markup(&block.summary).is_some())
+            .filter(|block| {
+                authored_regions(&block.body)
+                    .iter()
+                    .all(|inner| matches!(inner.shape, Shape::Block(_)))
+            });
         regions.push(Region {
             lines: (index, close),
             ending: lines[close].ending,
@@ -538,17 +546,6 @@ fn linear_section(block: &Block) -> Option<Section> {
     })
 }
 
-/// `section`'s rendering read back as one section, which a rendering of one always is.
-fn section_parts(section: &Section) -> Option<Section> {
-    linear_regions(&section.render(""))
-        .into_iter()
-        .next()
-        .and_then(|region| match region.shape {
-            Shape::Section(section) => Some(section),
-            Shape::Block(_) | Shape::Other => None,
-        })
-}
-
 /// The authored block a Linear section reads back as: its summary's backtick spans as `<code>`,
 /// its `**` spans as `<strong>`, and every `&`, `<` and `>` of its text escaped again, because
 /// Linear stores entities decoded.
@@ -580,20 +577,51 @@ fn authored_block(section: &Section) -> Option<Block> {
     (summary_markup(&block.summary).is_some()).then_some(block)
 }
 
-/// `authored` with every authored block written as a Linear section — but for a block whose
-/// whole text is in `literal`, which is carried as it stands.
-fn linear_written(authored: &str, literal: &std::collections::HashSet<String>) -> String {
+/// `authored` with every authored block written as a Linear section, each block nested in one
+/// as a section inside its section — but for a block whose whole text is in `literal`, which is
+/// carried as it stands.
+///
+/// `checked` holds each section to reading back, by [`linear_read`], as the very block it was
+/// written from, and carries a block failing that as it stands. [`linear_read`] asks for none:
+/// it holds a section to being what its block is written as, which a check of its own would
+/// make each ask the other without end.
+fn linear_written(
+    authored: &str,
+    literal: &std::collections::HashSet<String>,
+    checked: bool,
+) -> String {
     let lines = lines(authored);
     rewritten(authored, &authored_regions(authored), |region| {
         let Shape::Block(block) = &region.shape else {
             return None;
         };
-        if literal.contains(&region_text(&lines, region)) {
+        let text = region_text(&lines, region);
+        if literal.contains(&text) {
             return None;
         }
-        let section = linear_section(block)?;
-        (authored_block(&section_parts(&section)?)? == *block)
+        let mut section = linear_section(block)?;
+        section.body = linear_written(&block.body, literal, checked);
+        (!checked || linear_read(&section.render("")) == text)
             .then(|| section.render(region.ending))
+    })
+}
+
+/// `stored` with every Linear section read back as the authored block it is written from, each
+/// section inside one as a block inside its block. A section is read back only when that block,
+/// written again, is the section byte for byte — each block of its text Linear held as literal
+/// text carried as it stands, as a write-back carries it — and is otherwise left as it is stored.
+fn linear_read(stored: &str) -> String {
+    let lines = lines(stored);
+    rewritten(stored, &linear_regions(stored), |region| {
+        let Shape::Section(section) = &region.shape else {
+            return None;
+        };
+        let mut block = authored_block(section)?;
+        block.body = linear_read(&section.body);
+        let text = region_text(&lines, region);
+        let literal = block_texts(&text).into_iter().collect();
+        (linear_written(&block.render(""), &literal, false) == text)
+            .then(|| block.render(region.ending))
     })
 }
 
@@ -660,9 +688,9 @@ impl BodyMarkup for LinearSections {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if AUTHORED.try_with(|()| ()).is_ok() && latest.body != content {
-            return linear_written(content, &std::collections::HashSet::new());
+            return linear_written(content, &std::collections::HashSet::new(), true);
         }
-        linear_written(content, &latest.literal)
+        linear_written(content, &latest.literal, true)
     }
 
     fn read(&self, content: &str) -> String {
@@ -710,8 +738,16 @@ mod tests {
             "<details>\n<summary>S</summary>\nBody.\n\n</details>\n",
             "```\n<details>\n<summary>S</summary>\n\nBody.\n\n</details>\n```\n",
             "  <details>\n  <summary>S</summary>\n\n  Body.\n\n  </details>\n",
-            "<details>\n<summary>S</summary>\n\nOuter.\n\n<details>\n<summary>I</summary>\n\n\
+            // A nested block breaking a rule carries its outermost block as it stands.
+            "<details>\n<summary>S</summary>\n\nOuter.\n\n<details>\n<summary>I</summary>\n\
              Inner.\n\n</details>\n\n</details>\n",
+            "<details>\n<summary>S</summary>\n\nOuter.\n\n<details>\n<summary>I <em>x</em>\
+             </summary>\n\nInner.\n\n</details>\n\n</details>\n",
+            "<details>\n<summary>S</summary>\n\n<details open>\n<summary>I</summary>\n\n\
+             Inner.\n\n</details>\n\n</details>\n",
+            "<details>\n<summary>S</summary>\n\nOuter.\n\n<details>\n<summary>I</summary>\n\n\
+             <details>\n<summary>J</summary>\nDeepest.\n\n</details>\n\n</details>\n\n\
+             </details>\n",
             "<details>\n<summary>S <em>x</em></summary>\n\nBody.\n\n</details>\n",
             "<details>\n<summary>A `tick`</summary>\n\nBody.\n\n</details>\n",
             "<details>\n<summary>A * star</summary>\n\nBody.\n\n</details>\n",
@@ -729,15 +765,24 @@ mod tests {
             ExpandableForm::Linear.read("+++ Made in Linear\n\nBody.\n\n+++"),
             "<details>\n<summary>Made in Linear</summary>\n\nBody.\n\n</details>"
         );
-        // Linear's own nested section stays as it is inside the block it reads back as.
+        // A section made inside another in Linear reads back as a block inside its block.
         let nested = "+++ Outer\n\nOuter.\n\n+++ Inner\n\nInner.\n\n+++\n\n+++\n";
         let read = ExpandableForm::Linear.read(nested);
         assert_eq!(
             read,
-            "<details>\n<summary>Outer</summary>\n\nOuter.\n\n+++ Inner\n\nInner.\n\n+++\n\n\
-             </details>\n"
+            "<details>\n<summary>Outer</summary>\n\nOuter.\n\n<details>\n<summary>Inner\
+             </summary>\n\nInner.\n\n</details>\n\n</details>\n"
         );
         assert_eq!(ExpandableForm::Linear.written(&read), nested);
+        // An inner section that is no block — its summary empty — stays as it is stored inside
+        // the block the outer one reads back as.
+        let unread = "+++ Outer\n\nOuter.\n\n+++ \n\nInner.\n\n+++\n\n+++\n";
+        let read = ExpandableForm::Linear.read(unread);
+        assert_eq!(
+            read,
+            "<details>\n<summary>Outer</summary>\n\nOuter.\n\n+++ \n\nInner.\n\n+++\n\n\
+             </details>\n"
+        );
         // An empty summary, as Linear writes after a stray `>>>`, is no block.
         let empty = "+++ \n\nBody.\n\n+++";
         assert_eq!(ExpandableForm::Linear.read(empty), empty);
@@ -911,6 +956,70 @@ mod tests {
         );
         assert_eq!(markup.read(block), block);
         assert_eq!(markup.written(block), block, "and literal text again");
+    }
+
+    /// The design document's case, as spike `spike-linear-nested-blocks` sent it to Linear: an
+    /// outer block holding a paragraph, an image and an inner block holding an image.
+    const NESTED: &str = "Nested.\n\n<details>\n<summary>Visual <strong>change</strong></summary>\
+                          \n\nParagraph.\n\n![After](./after.png)\n\n<details>\n<summary>\
+                          Before</summary>\n\n![Before](./before.png)\n\n</details>\n\n\
+                          </details>\n\nAfter both.\n";
+    const NESTED_SECTIONS: &str = "Nested.\n\n+++ Visual **change**\n\nParagraph.\n\n\
+                                   ![After](./after.png)\n\n+++ Before\n\n![Before](./before.png)\
+                                   \n\n+++\n\n+++\n\nAfter both.\n";
+
+    #[test]
+    fn a_nested_block_is_a_section_inside_a_section_and_reads_back_byte_for_byte() {
+        assert_eq!(ExpandableForm::Linear.written(NESTED), NESTED_SECTIONS);
+        assert_eq!(ExpandableForm::Linear.read(NESTED_SECTIONS), NESTED);
+        for kind in [ExpandableForm::LocalMd, ExpandableForm::GithubProjects] {
+            assert_eq!(kind.written(NESTED), NESTED);
+        }
+        assert_eq!(blocks(NESTED), 1);
+        // Three levels, and two blocks side by side inside one.
+        let deep = "<details>\n<summary>A</summary>\n\n<details>\n<summary>B</summary>\n\n\
+                    <details>\n<summary>C</summary>\n\nC.\n\n</details>\n\n</details>\n\n\
+                    <details>\n<summary>D</summary>\n\nD.\n\n</details>\n\n</details>";
+        let sections = "+++ A\n\n+++ B\n\n+++ C\n\nC.\n\n+++\n\n+++\n\n+++ D\n\nD.\n\n\
+                        +++\n\n+++";
+        assert_eq!(ExpandableForm::Linear.written(deep), sections);
+        assert_eq!(ExpandableForm::Linear.read(sections), deep);
+        assert!(!ExpandableForm::Linear.written(deep).contains(">>>"));
+    }
+
+    /// An inner block whose Linear form would not read back as itself — a backtick in its
+    /// summary's text — is carried as it stands inside the outer section, and the whole reads back.
+    #[test]
+    fn an_inner_block_linear_cannot_spell_is_carried_inside_its_outer_section() {
+        let inner = "<details>\n<summary>A `tick`</summary>\n\nInner.\n\n</details>";
+        let authored = format!("<details>\n<summary>Outer</summary>\n\n{inner}\n\n</details>\n");
+        let linear = ExpandableForm::Linear.written(&authored);
+        assert_eq!(linear, format!("+++ Outer\n\n{inner}\n\n+++\n"));
+        assert_eq!(ExpandableForm::Linear.read(&linear), authored);
+        // A body holding Linear's own section lines as text would read back as a block, so its
+        // block is carried as it stands.
+        let lines = "<details>\n<summary>Outer</summary>\n\n+++ X\n\nY.\n\n+++\n\n</details>\n";
+        assert_eq!(ExpandableForm::Linear.written(lines), lines);
+    }
+
+    /// A nested block Linear held as literal text inside a section is written back as it was
+    /// stored, the section around it written as a section.
+    #[test]
+    fn a_nested_block_linear_holds_as_literal_text_is_written_back_as_it_was_stored() {
+        let markup = ExpandableForm::Linear.markup().expect("Linear's markup");
+        let literal = "<details>\n<summary>Held as text</summary>\n\n* a list\n\n</details>";
+        let stored = format!("+++ Outer\n\nOuter.\n\n{literal}\n\n+++");
+        let read = markup.read(&stored);
+        assert_eq!(
+            read,
+            format!("<details>\n<summary>Outer</summary>\n\nOuter.\n\n{literal}\n\n</details>")
+        );
+        assert_eq!(markup.written(&read), stored);
+        // Authored by a caller, the same text is a section inside a section.
+        assert_eq!(
+            authored(|| markup.written(&format!("{read}\n"))),
+            "+++ Outer\n\nOuter.\n\n+++ Held as text\n\n* a list\n\n+++\n\n+++\n"
+        );
     }
 
     #[test]
