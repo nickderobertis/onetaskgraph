@@ -9,7 +9,7 @@
 # sees rival builds of one unit name. One pass over that state removes builds the gate still
 # needs, which is how the measurement once refused its own release pull request. Four cases:
 #   1. that warm directory measures a figure, inside the budget, with the timed pass removing
-#      the alternative build and nothing else;
+#      the stand-in copies and nothing else;
 #   2. a timed pass that removes nothing is an error, not a figure;
 #   3. a timed pass that removes an ordinary build is an error, not a figure;
 #   4. a backlog that never settles is an error, not a figure.
@@ -60,7 +60,7 @@ printf '[build]\nbuild-dir = "%s/outside-build-dir"\n' "$scratch" >"$scratch/.ca
 unset CARGO_TARGET_DIR CARGO_BUILD_TARGET_DIR CARGO_BUILD_BUILD_DIR RUSTUP_TOOLCHAIN ONEBUDGETSPEC_RESULT
 
 # Older than the pruner's 2-day window, and newer than the date measure.sh backdates the
-# alternative build to, as a cache restored from an earlier run is.
+# stand-in copies to, as a cache restored from an earlier run is.
 readonly RESTORED_AT="2020-01-01T00:00:00"
 
 # A warm workspace at $1. `c` under two feature sets gives the pruner rival builds of one
@@ -71,7 +71,8 @@ make_fixture() {
   mkdir -p "$fx/.cargo" "$fx/pool-maintenance" "$fx/crates/a/src" "$fx/crates/b/src" \
     "$fx/vendor/c/src"
   cp "$ROOT/justfile" "$ROOT/rust-toolchain.toml" "$fx/"
-  cp "$ROOT/pool-maintenance/measure.sh" "$ROOT/pool-maintenance/budgets.yaml" \
+  cp "$ROOT/pool-maintenance/measure.sh" "$ROOT/pool-maintenance/ordinary_builds.py" \
+    "$ROOT/pool-maintenance/budgets.yaml" \
     "$fx/pool-maintenance/"
   # build-dir beside target-dir, so no configuration above the fixture (a CARGO_HOME or a
   # directory over the scratch tree) can move its intermediates out of the target the pruner
@@ -140,11 +141,11 @@ EOF
 }
 
 # A stand-in pruner first on PATH: it runs the real one, then departs from it as $1 says.
-#   timed-removes-nothing   the pass that faces the alternative build only reports.
+#   timed-removes-nothing   the pass that faces the stand-in copies only reports.
 #   timed-removes-ordinary  that pass also removes the ordinary build of `b`.
 #   backlog-never-settles   every other pass also removes the ordinary build of `b`.
-# The pass that faces the alternative build is the one whose target holds a build dated
-# before 2002, where measure.sh's header puts the alternative build.
+# The pass that faces the stand-in copies is the one whose target holds a build dated
+# before 2002, where measure.sh's header puts the stand-in copies.
 install_stand_in() {
   mkdir -p "$scratch/bin"
   cat >"$scratch/bin/cargo-prune-superseded" <<EOF
@@ -250,22 +251,36 @@ PY
 )" || report_problem="the report could not be read: $(cat "$scratch/out")"
 [ -z "$report_problem" ] || warm_fatal "onebudgetspec's result is not the figure measure.sh owes: $report_problem" \
   "check that measure.sh still leaves the pruner's own report as the figure and appends each untimed pass's seconds"
-# The fixture faced what it exists for: the first untimed pass removed builds, and so did
-# one after it, which a single pass would have left for the timed pass to remove.
-if ! { [ -s "$evidence/backlog-removed-1.txt" ] && [ -s "$evidence/backlog-removed-2.txt" ]; }; then
-  warm_fatal "the fixture's backlog settled in one pass, so it no longer reproduces a warm, cache-restored directory" \
+# The fixture faced what it exists for: rival restored builds of crate c, both of which the
+# ordinary build uses, so a pass that did not know they were in use would remove one and the
+# next build would make it anew. measure.sh marks them used, so no backlog pass removes a
+# build the ordinary build reported, and the backlog settles by its second pass (a stale
+# incremental build, which CI never makes, is all a first pass may find).
+rivals="$(grep -cE '^target/debug/\.fingerprint/c-' "$evidence/backlog-before-1.txt" || true)"
+if [ "${rivals:-0}" -lt 2 ]; then
+  warm_fatal "the fixture held $rivals build(s) of crate c, so it no longer reproduces a warm, cache-restored directory" \
     "restore the fixture's rival builds of one unit (crate c under two feature sets) and its restored dates"
+fi
+removed_in_use="$(cat "$evidence"/backlog-removed-*.txt \
+  | python3 "$ROOT/pool-maintenance/ordinary_builds.py" entries "$evidence/ordinary-hashes.txt")"
+if [ -n "$removed_in_use" ]; then
+  warm_fatal "an untimed pass removed builds the ordinary build uses: $removed_in_use" \
+    "restore measure.sh's marking of the ordinary build's entries as used before each backlog pass"
+fi
+if [ -f "$evidence/backlog-removed-3.txt" ]; then
+  warm_fatal "the backlog did not settle after its first pass" \
+    "restore measure.sh's marking of the ordinary build's entries as used before each backlog pass"
 fi
 if ! { [ -s "$evidence/removed.txt" ] && [ ! -s "$evidence/removed-not-alternative.txt" ] \
   && [ ! -s "$evidence/ordinary-missing.txt" ]; }; then
-  warm_fatal "the timed pass did not remove exactly the alternative build" \
+  warm_fatal "the timed pass did not remove exactly the stand-in copies" \
     "fix measure.sh's setup so the timed pass faces one run's superseded builds and nothing else"
 fi
 
 # 2-4. Each departure is an error naming its cause, never a figure.
 for case in \
   "timed-removes-nothing|the timed pass removed nothing" \
-  "timed-removes-ordinary|the timed pass removed entries the alternative build did not create" \
+  "timed-removes-ordinary|the timed pass removed entries the stand-in copies did not create" \
   "backlog-never-settles|never reached a steady state"; do
   mode="${case%%|*}"
   expected="${case#*|}"

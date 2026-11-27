@@ -12,22 +12,26 @@
 #       named for one unit (a crate's library, its test binary, its build script and its
 #       run, and each feature set it is built with), and of those older than the window
 #       keeps only the newest; a directory restored from a cache holds the ordinary builds
-#       at their old modification times, so a pass removes some the gate still needs, the
-#       next build makes them anew, and that build supersedes the old sibling the pass
-#       had kept. Left there, the timed pass in (d) removed those siblings too;
-#   (b) builds the workspace's test targets under an alternative profile setting that gives
-#       every unit, this repository's own crates included, a new metadata hash in the same
-#       profile directory, then backdates exactly the entries that build created to a date
-#       past the 2-day window and older than anything a slot holds, so they stand in for a
-#       run's builds that have since been superseded;
+#       at their old modification times, so a pass would remove some the gate still needs
+#       and the next build would make them anew — about five minutes of the release pull
+#       request's step. So before each pass the entries of every unit the ordinary build
+#       reports using are marked as just used, which is what they are;
+#   (b) copies every entry of the ordinary build under a stand-in metadata hash in the same
+#       profile directory — one sibling of each unit, this repository's own crates
+#       included, byte for byte its ordinary build — then backdates exactly the entries the
+#       copies created to a date past the 2-day window and older than anything a slot
+#       holds, so they stand in for a run's builds that have since been superseded. The
+#       pruner reads only names and modification times, so a copy is to it the same
+#       superseded build a recompile under another profile was, for a copy's cost; that
+#       recompile was most of the release pull request's step;
 #   (c) runs the ordinary gate build, so each unit's newest build is the ordinary one;
-#   (d) times one declared pass, which removes the alternative build.
+#   (d) times one declared pass, which removes the stand-in builds.
 # Both passes are the justfile's `pool-maintenance` recipe, the command onevcs.toml declares.
 # Only (d) reports the figure, through cargo-prune-superseded's own onebudgetspec report;
 # (a)'s seconds are appended to that report's detail as separate evidence, and the figure is
 # left as the pruner wrote it. onebudgetspec alone judges it.
 #
-# It really prunes this checkout's target directory and builds it twice: run it only in a
+# It really prunes and copies this checkout's target directory: run it only in a
 # worktree whose target directory is idle.
 set -euo pipefail
 
@@ -65,16 +69,23 @@ list_entries() {
   done | LC_ALL=C sort
 }
 
-# The gate's own test build of every crate, without running a test.
+# The gate's own test build of every crate, without running a test, writing down the
+# metadata hash of every unit it uses, fresh or rebuilt, as cargo itself reports them.
+readonly HELPER="$ROOT/pool-maintenance/ordinary_builds.py"
 ordinary_build() {
-  cargo test --quiet --workspace --all-features --locked --no-run
+  cargo test --quiet --workspace --all-features --locked --no-run --message-format=json \
+    | python3 "$HELPER" hashes > "$EVIDENCE/ordinary-hashes.txt"
+  if [ ! -s "$EVIDENCE/ordinary-hashes.txt" ]; then
+    echo "pool-maintenance/measure.sh: cargo reported no unit of the ordinary build; check that 'cargo test --message-format=json' still names each artifact." >&2
+    exit 1
+  fi
 }
-
-# The same build with line-table debuginfo in place of .cargo/config.toml's none. The
-# profile is part of every unit's metadata hash, so each unit gets a new build beside the
-# ordinary one, in the same target/debug the ordinary build writes.
-alternative_build() {
-  CARGO_PROFILE_DEV_DEBUG=line-tables-only cargo test --quiet --workspace --all-features --locked --no-run
+# Mark the ordinary build's entries as just used — which they are — so a pass keeps them.
+mark_ordinary_used() {
+  list_entries | python3 "$HELPER" entries "$EVIDENCE/ordinary-hashes.txt" \
+    | while IFS= read -r entry; do
+      find "$entry" -exec touch -h {} +
+    done
 }
 
 seconds_reported() {
@@ -96,6 +107,7 @@ while :; do
     exit 1
   fi
   ordinary_build
+  mark_ordinary_used
   list_entries > "$EVIDENCE/backlog-before-$pass.txt"
   ONEBUDGETSPEC_RESULT="$scratch/backlog-$pass.json" just pool-maintenance >&2
   list_entries > "$EVIDENCE/backlog-after-$pass.txt"
@@ -105,14 +117,14 @@ while :; do
   [ -s "$EVIDENCE/backlog-removed-$pass.txt" ] || break
 done
 
-# (b) One run's worth of builds that the next ordinary build supersedes.
+# (b) One run's worth of builds that the ordinary build supersedes.
 list_entries > "$EVIDENCE/before-alternative.txt"
-alternative_build
+list_entries | python3 "$HELPER" copy "$EVIDENCE/ordinary-hashes.txt"
 list_entries > "$EVIDENCE/after-alternative.txt"
 LC_ALL=C comm -13 "$EVIDENCE/before-alternative.txt" "$EVIDENCE/after-alternative.txt" \
   > "$EVIDENCE/alternative-created.txt"
 if [ ! -s "$EVIDENCE/alternative-created.txt" ]; then
-  echo "pool-maintenance/measure.sh: the alternative build created no new entry, so there is nothing superseded to time; check that CARGO_PROFILE_DEV_DEBUG still changes metadata hashes." >&2
+  echo "pool-maintenance/measure.sh: the stand-in copies created no new entry, so there is nothing superseded to time; see $EVIDENCE/ordinary-hashes.txt for the hashes the ordinary build reported." >&2
   exit 1
 fi
 while IFS= read -r entry; do
@@ -142,10 +154,10 @@ if [ ! -s "$EVIDENCE/removed.txt" ]; then
   exit 1
 fi
 if [ -s "$EVIDENCE/removed-not-alternative.txt" ] || [ -s "$EVIDENCE/ordinary-missing.txt" ]; then
-  echo "pool-maintenance/measure.sh: the timed pass removed entries the alternative build did not create; see $EVIDENCE/removed-not-alternative.txt and $EVIDENCE/ordinary-missing.txt." >&2
+  echo "pool-maintenance/measure.sh: the timed pass removed entries the stand-in copies did not create; see $EVIDENCE/removed-not-alternative.txt and $EVIDENCE/ordinary-missing.txt." >&2
   exit 1
 fi
-echo "pool-maintenance/measure.sh: the timed pass removed $(wc -l < "$EVIDENCE/removed.txt" | tr -d ' ') of the alternative build's $(wc -l < "$EVIDENCE/alternative-created.txt" | tr -d ' ') entries and none of the ordinary build's $(wc -l < "$EVIDENCE/ordinary.txt" | tr -d ' '); lists in $EVIDENCE." >&2
+echo "pool-maintenance/measure.sh: the timed pass removed $(wc -l < "$EVIDENCE/removed.txt" | tr -d ' ') of the stand-in copies' $(wc -l < "$EVIDENCE/alternative-created.txt" | tr -d ' ') entries and none of the ordinary build's $(wc -l < "$EVIDENCE/ordinary.txt" | tr -d ' '); lists in $EVIDENCE." >&2
 
 if [ -n "${ONEBUDGETSPEC_RESULT:-}" ]; then
   python3 - "$ONEBUDGETSPEC_RESULT" "$backlog_seconds" <<'PY'

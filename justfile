@@ -42,7 +42,7 @@ pool-maintenance:
     @cargo-prune-superseded --keep-within 2d target
 
 # The pool-maintenance pass-time budget. Deliberately outside `check` and `gate`: its
-# measurement builds the workspace twice. The release pull request runs it after its gate.
+# measurement builds the workspace and copies it. The release pull request runs it after its gate.
 # It runs onebudgetspec directly, as the pool-maintenance project's own `budgets-host`
 # target does, because a recipe naming an Nx target is read as a stage every gate runs.
 
