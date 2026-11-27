@@ -1,4 +1,5 @@
 """Real janitor subprocess journeys against a fully paginated loopback GitHub."""
+import base64
 import copy
 import http.server
 import json
@@ -13,7 +14,7 @@ import unittest
 from enum import StrEnum
 from typing import NamedTuple, NewType, TypedDict, cast
 
-from urllib.parse import parse_qs, urlparse, urlencode
+from urllib.parse import parse_qs, parse_qsl, urlparse, urlencode
 
 Repository = NewType('Repository', str)
 IssueId = NewType('IssueId', str)
@@ -254,6 +255,11 @@ class Github:
         # by that id, `/repositories/{id}/…`, rather than by the `/repos/{owner}/{repo}/…`
         # path requested, so the stand-in links that way too.
         self.repository_ids: dict[Repository, int] = {CORE: 1_296_269, SCRATCH: 1_300_192}
+        # GitHub's issue listing links each later page with an opaque `after` cursor beside
+        # `page` (observed on the scratch repository on 2026-11-26), and its description does
+        # not list the parameter. The stand-in issues one per page it links to, and admits a
+        # request's cursor only when it is the one issued for that page.
+        self.cursors: dict[tuple[Repository, int], str] = {}
         # The repository read misanswered: an HTTP status, or a body without its id.
         self.repository_fault: int | dict | None = None
 
@@ -266,8 +272,25 @@ class Github:
                     return f'/repos/{found[0]}/{rest}'
         return target
 
+    def issued(self, target: str) -> bool:
+        """Whether this request's `after` cursor, if any, is the one the stand-in linked to."""
+        parsed = urlparse(self.named(target))
+        query = parse_qs(parsed.query)
+        if 'after' not in query:
+            return True
+        match parsed.path.split('/'):
+            case ['', 'repos', owner, name, 'issues']:
+                page = int(query.get('page', ['1'])[0])
+                return query['after'] == [self.cursors.get((Repository(f'{owner}/{name}'), page))]
+        return False
+
     def pin(self, method, target):
         target = self.named(target)
+        if self.issued(target):
+            # A cursor GitHub itself linked to is GitHub's to describe, not the janitor's.
+            parsed = urlparse(target)
+            kept = [(k, v) for k, v in parse_qsl(parsed.query, keep_blank_values=True) if k != 'after']
+            target = parsed._replace(query=urlencode(kept)).geturl()
         found = unpinned_request(method, target)
         if found:
             self.unpinned.append(found)
@@ -387,11 +410,19 @@ class Github:
                     case _:
                         self.reply({'message': 'Not Found'}, 404)
                         return
+                if not state.issued(self.path):
+                    self.operation = None
+                    self.reply({'message': 'Validation Failed'}, 422)
+                    return
                 if state.repeat and state.repeat in path:
                     page = 1
                 count = len(nodes)
                 nodes = copy.deepcopy(nodes[(page - 1) * state.page_size:page * state.page_size])
                 query['page'] = [str(page + 1)]
+                if kind == 'issues':
+                    cursor = base64.b64encode(f'cursor:v2:{repository}:{page * state.page_size}'.encode()).decode()
+                    state.cursors[(repository, page + 1)] = cursor
+                    query['after'] = [cursor]
                 next_url = canonical + '?' + urlencode(query, doseq=True)
                 link = f'<http://127.0.0.1:{self.server.server_port}{next_url}>; rel="next"' if page * state.page_size < count else None
                 if state.link_override is not None:
@@ -835,14 +866,48 @@ class Journeys(unittest.TestCase):
         self.assertEqual(listings, [
             f'/repos/{SCRATCH}',
             f'/repos/{SCRATCH}/issues?state=all&sort=created&direction=asc&per_page=100&page=1',
-            f'/repositories/{identity}/issues?state=all&sort=created&direction=asc&per_page=100&page=2',
-            f'/repositories/{identity}/issues?state=all&sort=created&direction=asc&per_page=100&page=3',
+            f'/repositories/{identity}/issues?state=all&sort=created&direction=asc&per_page=100&page=2&{urlencode({"after": state.cursors[(SCRATCH, 2)]})}',
+            f'/repositories/{identity}/issues?state=all&sort=created&direction=asc&per_page=100&page=3&{urlencode({"after": state.cursors[(SCRATCH, 3)]})}',
             f'/repos/{SCRATCH}/labels?&per_page=100&page=1',
             f'/repositories/{identity}/labels?per_page=100&page=2',
         ])
         # The artifact on the last issue page was listed, and so was removed.
         self.assertIn(Write('POST', IssueDelete(issue)), state.writes)
         self.assertNotIn(issue, [v['node_id'] for v in state.issues[SCRATCH]])
+
+    def test_cursor_paged_issue_links_are_walked_and_the_cancelled_run_cleaned(self):
+        # Run 45913208966's cancellation cleanup stopped at the first issue page: GitHub's
+        # next link carried an `after` cursor the request had not, which the janitor read as
+        # a changed filter. Every later page is read at the cursor GitHub linked to.
+        state = Github()
+        state.page_size = 10
+        for n in range(25):
+            state.issues[SCRATCH].append({'node_id': IssueId(f'o:{n}'), 'title': 'Ordinary'})
+        own = state.artifact(SCRATCH, f'ci-123-1-{NOW - DAY}')
+        other = state.artifact(SCRATCH, f'ci-124-1-{NOW - DAY}')
+        result = state.run(
+            overrides={'GITHUB_ACTIONS': 'true', 'GITHUB_RUN_ID': '123', 'GITHUB_RUN_ATTEMPT': '1', 'GITHUB_TOKEN': None},
+            arguments=['--cancelled-run', '--loopback', '{origin}', '--virtual-clock'])
+        self.assert_success(result)
+        pages = [target for method, target in state.requests if method == 'GET' and '/issues?' in target]
+        self.assertEqual(len(pages), 3)
+        for page, target in enumerate(pages[1:], start=2):
+            self.assertIn(urlencode({'after': state.cursors[(SCRATCH, page)]}), target)
+        # The artifact on the last page is this attempt's and goes; the other run's stays.
+        self.assertIn(Write('POST', IssueDelete(own)), state.writes)
+        self.assertNotIn(Write('POST', IssueDelete(other)), state.writes)
+
+    def test_a_cursor_github_did_not_link_to_is_refused_by_the_stand_in(self):
+        # The stand-in's own check, so the journey above cannot pass on a cursor it ignored.
+        state = Github()
+        state.page_size = 10
+        for n in range(15):
+            state.issues[SCRATCH].append({'node_id': IssueId(f'o:{n}'), 'title': 'Ordinary'})
+        state.link_override = '<{origin}{path}?state=all&sort=created&direction=asc&per_page=100&page=2&after=Zm9yZ2Vk>; rel="next"'
+        # Answered 422, and held a departure from GitHub's description besides.
+        with self.assertRaisesRegex(AssertionError, 'issues sends after, which GitHub does not describe'):
+            state.run()
+        self.assertFalse(state.writes)
 
     def test_a_link_to_another_repository_id_is_refused_naming_both_paths(self):
         for link, rejected in (('<{origin}/repositories/{other}/issues?{filters}&page=2>; rel="next"', '/repositories/{other}/issues'),

@@ -14,7 +14,10 @@ loopback stand-in serves on success may carry only fields it names. One journey 
 asserts the janitor sends every operation the pin names, so a stale entry fails as well.
 GitHub's next links name a repository's listing as `/repositories/{id}/…`, a form its
 description does not list; the journeys hold such a request to the `/repos/{owner}/{repo}/…`
-operation of the repository that id belongs to.
+operation of the repository that id belongs to. Their issue listing's next links also carry an
+opaque `after` cursor beside `page` (observed on the scratch repository on 2026-11-26), which
+the description does not list either; the stand-in admits a request's cursor only when it is
+the one the stand-in itself linked to, and holds the rest of the request to the pin.
 
 The upstream source is immutable commit `734bc9c1030b774eb3fc909cce477aceea21cf77` of
 `github/rest-api-description`, file `descriptions/api.github.com/api.github.com.json`, read
