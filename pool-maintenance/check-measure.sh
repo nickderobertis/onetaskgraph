@@ -7,12 +7,14 @@
 # restored with old modification times, as a cache restore leaves them, and one crate is
 # built under two feature sets (once for a build script, once for a library), so the pruner
 # sees rival builds of one unit name. One pass over that state removes builds the gate still
-# needs, which is how the measurement once refused its own release pull request. Four cases:
+# needs, which is how the measurement once refused its own release pull request. Five cases:
 #   1. that warm directory measures a figure, inside the budget, with the timed pass removing
 #      the alternative build and nothing else;
 #   2. a timed pass that removes nothing is an error, not a figure;
 #   3. a timed pass that removes an ordinary build is an error, not a figure;
-#   4. a backlog that never settles is an error, not a figure.
+#   4. a backlog that never settles is an error, not a figure;
+#   5. the stand-in copies measure.sh supersedes builds with are, to the pruner, what a real
+#      superseded build is: it removes the same entries from each.
 # Cases 2 to 4 put a stand-in pruner first on PATH that runs the real one and then departs
 # from it, so each refusal is reached by the state it exists for.
 set -euo pipefail
@@ -71,7 +73,8 @@ make_fixture() {
   mkdir -p "$fx/.cargo" "$fx/pool-maintenance" "$fx/crates/a/src" "$fx/crates/b/src" \
     "$fx/vendor/c/src"
   cp "$ROOT/justfile" "$ROOT/rust-toolchain.toml" "$fx/"
-  cp "$ROOT/pool-maintenance/measure.sh" "$ROOT/pool-maintenance/budgets.yaml" \
+  cp "$ROOT/pool-maintenance/measure.sh" "$ROOT/pool-maintenance/supersede.py" \
+    "$ROOT/pool-maintenance/budgets.yaml" \
     "$fx/pool-maintenance/"
   # build-dir beside target-dir, so no configuration above the fixture (a CARGO_HOME or a
   # directory over the scratch tree) can move its intermediates out of the target the pruner
@@ -322,3 +325,63 @@ for case in \
       "restore the refusal in measure.sh that reports '$expected'"
   fi
 done
+
+# 5. The stand-in copies measure.sh times the removal of are, to the pinned pruner, a real
+#    superseded build. Two fixtures, each settled as measure.sh settles one: in the first a
+#    real rebuild under another profile setting supersedes every unit, in the second
+#    supersede.py copies every build, and in each the next ordinary build and one pass follow.
+#    Each pass removes exactly what its step created, and the two remove the same entries —
+#    the same units, in the same directories, under the same file names — hash for hash.
+superseded_pass() {
+  local fx="$1" how="$2" pass=0
+  local lists="$fx/target/pair-evidence"
+  mkdir -p "$lists"
+  list_fixture() {
+    (cd "$fx" && find target/debug/deps target/debug/.fingerprint target/debug/build \
+      target/debug/incremental -mindepth 1 -maxdepth 1 2>/dev/null | LC_ALL=C sort)
+  }
+  ordinary() { (cd "$fx" && cargo test --quiet -p b --all-features --locked --no-run); }
+  while :; do
+    pass=$((pass + 1))
+    [ "$pass" -le 5 ] || fatal "the $how fixture's backlog never settled" \
+      "check that make_fixture still leaves a backlog one or two passes clear"
+    ordinary
+    list_fixture >"$lists/before-settle"
+    (cd "$fx" && "$real_pruner" --keep-within 2d target) >/dev/null
+    list_fixture >"$lists/after-settle"
+    cmp -s "$lists/before-settle" "$lists/after-settle" && break
+  done
+  case "$how" in
+    real) (cd "$fx" && CARGO_PROFILE_DEV_DEBUG=line-tables-only \
+      cargo test --quiet -p b --all-features --locked --no-run) ;;
+    stand-in) (cd "$fx" && python3 pool-maintenance/supersede.py "$lists/after-settle") ;;
+  esac
+  list_fixture >"$lists/after-supersede"
+  LC_ALL=C comm -13 "$lists/after-settle" "$lists/after-supersede" >"$lists/created"
+  while IFS= read -r entry; do
+    (cd "$fx" && find "$entry" -exec touch -h -d "2001-01-01T00:00:00" {} +)
+  done <"$lists/created"
+  ordinary
+  list_fixture >"$lists/before-pass"
+  (cd "$fx" && "$real_pruner" --keep-within 2d target) >/dev/null
+  list_fixture >"$lists/after-pass"
+  LC_ALL=C comm -23 "$lists/before-pass" "$lists/after-pass" >"$lists/removed"
+  [ -s "$lists/created" ] || fatal "the $how superseded build created no entry in $fx" \
+    "check that the $how step of case 5 still gives every unit a new metadata hash"
+  cmp -s "$lists/created" "$lists/removed" || fatal \
+    "the pass over the $how superseded build did not remove exactly what it created: $(LC_ALL=C comm -3 "$lists/created" "$lists/removed" | tr '\n' ' ')" \
+    "compare $lists/created with $lists/removed"
+}
+# An entry without its metadata hash, as supersede.py names a unit and the rest of its name.
+unhashed() {
+  sed -E 's/-([0-9a-f]{16}|[0-9a-z]{13})(\.[^/]*)?$/-<hash>\2/' "$1" | LC_ALL=C sort
+}
+for how in real stand-in; do
+  make_fixture "$scratch/pair-$how"
+  superseded_pass "$scratch/pair-$how" "$how"
+done
+if ! diff <(unhashed "$scratch/pair-real/target/pair-evidence/removed") \
+  <(unhashed "$scratch/pair-stand-in/target/pair-evidence/removed") >"$scratch/pair.diff"; then
+  fatal "the pruner removed other entries from the stand-in copies than from a real superseded build (< real, > stand-in): $(tr '\n' ' ' <"$scratch/pair.diff")" \
+    "make supersede.py copy exactly the entries a real rebuild under another profile creates"
+fi

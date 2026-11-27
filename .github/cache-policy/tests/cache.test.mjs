@@ -15,7 +15,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:net";
-import { tmpdir } from "node:os";
+import { availableParallelism, tmpdir } from "node:os";
 import { delimiter, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -171,17 +171,17 @@ const eventFile = (file) =>
   );
 
 // Biome excludes exactly these upstream-owned copies; this drift test holds them byte-identical.
-// Full-file digests, including headers: remote cache v10 from dero-skills
-// 27a6b4950bd7582363eebdfbb8b93a0daf85fc21; figures v13 and cache prune v1 from
+// Full-file digests, including headers: remote cache v11 and figures v14 from dero-skills
+// 6cc889b591fc4de2e1019f023c47258c90df7739; cache prune v1 from
 // dero-skills afc6829981dc31ad4221fc7cf706916d078ada35; version-free inputs v3 from
 // fe20052d06406bb07869c5236147b6693489d52f (owned Cargo and Python pins); coverage unit v3 and
 // merge v2 from 2cf5ec7ab8d2353f4c67bb1518b9984ffb8491a0.
 const copies = {
   "scripts/actions-budget-figures.sh":
-    "f4dbf47e81ce3baf9acf92d4e92f284614bf9c6a3774a76f18ed89893ce7d3b0",
+    "8e4cc7ea0bfc653e75ca61a5152212517cdc33590b2af84782b9abec989819f4",
   "scripts/actions-cache-prune.mjs":
     "4c7bfd986ddb7e59b395a00eb3bb74892b44b76234d0c2a61d63ddf7a49b37a7",
-  "scripts/nx-remote-cache.mjs": "21a6ba436f59d7bd21d1659bf928b0123a6ac0003d5993747e9f216b020d3526",
+  "scripts/nx-remote-cache.mjs": "78516d0e2bcc94f25951c0e9d99ce96505e13e5ea6f17cdc2d28a2ed2738d3ca",
   "scripts/coverage-merge.mjs": "1fbe006859079d27738cefceddef22e1132c7932f1a6ee5cabc2f6eb265091ef",
   "scripts/coverage-unit.sh": "e94bd694c2313f24017ac01375c37a3de7ff8fb83d301cacd9acb6b1f76f1d36",
   "scripts/nx-version-free-inputs.mjs":
@@ -518,6 +518,35 @@ async function until(predicate) {
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
 }
+// `spawnSync`'s result, from a child that does not block the event loop while it runs.
+function run(program, args, { timeout, ...options }) {
+  return new Promise((done, failed) => {
+    const child = spawn(program, args, { ...options, stdio: ["ignore", "pipe", "pipe"] });
+    const out = { stdout: "", stderr: "" };
+    child.stdout.setEncoding("utf8").on("data", (chunk) => (out.stdout += chunk));
+    child.stderr.setEncoding("utf8").on("data", (chunk) => (out.stderr += chunk));
+    const timer = setTimeout(() => child.kill("SIGKILL"), timeout);
+    child.on("error", failed);
+    child.on("close", (status, signal) => {
+      clearTimeout(timer);
+      done({ ...out, status, signal });
+    });
+  });
+}
+// Capped at the core count because each scenario is a CLI that spawns `gh` per read, and more of
+// them than cores only queue on a loaded runner; answers keep input order for in-order assertions.
+async function inParallel(items, work) {
+  const answers = [];
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const index = next++;
+      answers[index] = await work(items[index]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(items.length, availableParallelism()) }, worker));
+  return answers;
+}
 async function unusedPort() {
   const server = createServer();
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -748,7 +777,7 @@ function selectionRoutes(answers, repository, pr, execution, run) {
 
 // Release selection is simulated; executions, task hashes, cache payloads and the
 // promotion receipt below are produced by this journey's real Nx/sidecar/CLI runs.
-function proveCacheBudget({ dir, workspace, env, pr, laterPr, routes, stage }) {
+async function proveCacheBudget({ dir, workspace, env, pr, laterPr, routes, stage }) {
   const repository = env.GITHUB_REPOSITORY;
   const prefix = `/repos/${repository}`;
   const end = new Date(Date.now() + 60_000).toISOString();
@@ -898,16 +927,12 @@ function proveCacheBudget({ dir, workspace, env, pr, laterPr, routes, stage }) {
     specification,
     JSON.stringify({ schema_version: document.schema_version, budgets: [budget] }),
   );
-  // Each scenario rewrites every document before the CLI reads it. The unchanged
-  // payload archives are copied once; all four ZIPs share one Python invocation.
-  const budgetFolders = reports.map((record, index) => {
-    const folder = join(dir, `budget-report-${index}`);
-    cpSync(record.path, folder, { recursive: true });
-    return folder;
-  });
-  const receiptFolder = join(dir, "budget-receipt");
-  mkdirSync(receiptFolder);
+  // Each scenario writes its own documents and archives under `scenario-<name>/`, which the
+  // double serves under `/scenario/<name>`, so the CLIs run at once rather than one by one: run
+  // in turn, eighteen of them took most of this test's timeout on an idle runner.
   stage("budget fixture prepared");
+  const prepared = [];
+  const zips = [];
   for (const scenario of [
     "replayed",
     "evicted",
@@ -1047,35 +1072,46 @@ function proveCacheBudget({ dir, workspace, env, pr, laterPr, routes, stage }) {
         for (const task of doc.execution.tasks) task.result = "local_hit";
       }
     }
-    for (const [index, folder] of budgetFolders.entries()) {
+    const scenarioDir = join(dir, `scenario-${scenario}`);
+    const receiptFolder = join(scenarioDir, "budget-receipt");
+    mkdirSync(receiptFolder, { recursive: true });
+    const folders = reports.map((record, index) => {
+      const folder = join(scenarioDir, `budget-report-${index}`);
+      cpSync(record.path, folder, { recursive: true });
       writeFileSync(join(folder, "executions.json"), JSON.stringify(documents[index].execution));
       writeFileSync(join(folder, "manifest.json"), JSON.stringify(documents[index].manifest));
-    }
+      return [folder, join(scenarioDir, `budget-report-${index}.zip`)];
+    });
     writeFileSync(join(receiptFolder, "receipt.json"), JSON.stringify(currentReceipt));
-    zip([
-      ...budgetFolders.map((folder, index) => [folder, join(dir, `budget-report-${index}.zip`)]),
-      [receiptFolder, join(dir, "budget-receipt.zip")],
-    ]);
-    writeFileSync(join(dir, "routes.json"), JSON.stringify(answers));
-    stage(`budget ${scenario} archives`);
-    const result = spawnSync(
+    zips.push(...folders, [receiptFolder, join(scenarioDir, "budget-receipt.zip")]);
+    writeFileSync(join(scenarioDir, "routes.json"), JSON.stringify(answers));
+    prepared.push(scenario);
+  }
+  zip(zips);
+  stage("budget archives");
+  const outcomes = await inParallel(prepared, (scenario) =>
+    run(
       process.execPath,
       [join(root, "node_modules/@onebudgetspec/cli/bin/onebudgetspec.js"), "check", specification],
       {
         cwd: workspace,
-        encoding: "utf8",
         timeout: 120_000,
         env: {
           ...fixtureEnvironment(),
           ...env,
+          GITHUB_API_URL: `${env.GITHUB_API_URL}/scenario/${scenario}`,
           GITHUB_REF_NAME: "v-cache-journey-simulated",
           RUNNER_TEMP: join(dir, `budget-${scenario}-temp`),
           NODE_TEST_CONTEXT: undefined,
         },
       },
-    );
+    ),
+  );
+  stage("budget CLIs");
+  for (const [position, scenario] of prepared.entries()) {
+    const result = outcomes[position];
     const output = result.stdout + result.stderr;
-    stage(`budget ${scenario} CLI`);
+    assert.equal(result.signal, null, `${scenario}: the CLI was stopped by a signal: ${output}`);
     if (
       [
         "missing-job",
@@ -1390,7 +1426,7 @@ async function provePromotion({ dir, workspace, action, sourceEnv, stage }) {
     },
   );
   stage("later PR replay");
-  proveCacheBudget({ dir, workspace, env: sourceEnv, pr, laterPr, routes, stage });
+  await proveCacheBudget({ dir, workspace, env: sourceEnv, pr, laterPr, routes, stage });
 }
 
 test("CI and release-plz promote a replay-only run, share it with a later PR, and report cache-use with simulated release selection", {

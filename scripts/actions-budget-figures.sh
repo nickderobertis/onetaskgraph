@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Copied from dero-skills' create-repo skill and edited only there, never in a copy.
 # source: github.com/nickderobertis/dero-skills/skills/bootstrap/create-repo/assets/budgets/actions-budget-figures.sh
-# version: 13
-# sha256: d530d435aead03a443b1ea528db96eef9b97cc343d7eb3fade0b09099bd112ef
+# version: 14
+# sha256: 7b4797774493989f6a1e914dfec581af1352da0dff759ad3e1dea81915dce850
 #
 # The GitHub Actions budget figures, measured from onevcs's read-only host answers
 # and reported to `onebudgetspec check` (a `measure: reported` budget's command).
@@ -26,6 +26,12 @@
 # same counting rules. A job still in progress, which is the budgets job itself,
 # counts toward the job count and not toward the longest job. Every other invocation
 # reads onevcs's answers for a release.
+#
+# `cache-use` and `cache-headroom` are the shared nx-remote-cache.mjs beside this
+# script. `cache-use` measures only CI attempts that finished and uploaded their jobs'
+# artifacts: an attempt still queued or in progress, a job skipped by its condition and
+# a job a partial re-run carried are named in the detail and contribute nothing, and a
+# report left with nothing measurable is missing data naming the runs it skipped.
 #
 # This script names no workflow of its own: which push workflows deliver nothing is
 # each repository's to say, with --exclude-workflow in its CD budgets' commands. A

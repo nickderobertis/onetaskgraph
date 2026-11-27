@@ -40,7 +40,8 @@
       "options": {
         "commands": [
           "bash -n pool-maintenance/measure.sh",
-          "bash -n pool-maintenance/check-measure.sh"
+          "bash -n pool-maintenance/check-measure.sh",
+          "bash -n pool-maintenance/stop.sh"
         ],
         "parallel": false
       },

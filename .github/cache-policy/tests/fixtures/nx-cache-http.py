@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 import threading
 import xml.etree.ElementTree as ET
@@ -177,13 +178,18 @@ class GithubCache:
 
             def do_GET(self) -> None:
                 try:
-                    parsed = urlparse(self.path)
+                    path, root = self.path, directory
+                    # `/scenario/<name>/repos/...` reads `scenario-<name>/` instead, so callers
+                    # running at once each read their own routes through the one server.
+                    if scoped := re.fullmatch(r"/scenario/([a-z0-9-]+)(/repos/.*)", path):
+                        path, root = scoped[2], directory / f"scenario-{scoped[1]}"
+                    parsed = urlparse(path)
                     if parsed.path.startswith("/repos/"):
-                        metadata_file = directory / "routes.json"
+                        metadata_file = root / "routes.json"
                         routes = json.loads(metadata_file.read_text()) if metadata_file.exists() else {}
                         if not isinstance(routes, dict):
                             raise ValueError("fixture routes must be an object")
-                        value = routes.get(self.path, routes.get(parsed.path))
+                        value = routes.get(path, routes.get(parsed.path))
                         if value is None:
                             self.reply({"message": "No fixture route: " + self.path}, 404)
                             return
@@ -191,7 +197,7 @@ class GithubCache:
                         page, size = query.get("page", ["1"]), query.get("per_page", ["100"])
                         if any(len(v) != 1 or not v[0].isdecimal() or not 0 < int(v[0]) <= 1000 for v in [page, size]):
                             raise ValueError("invalid pagination")
-                        if self.path not in routes and "page" in query:
+                        if path not in routes and "page" in query:
                             start, count = (int(page[0]) - 1) * int(size[0]), int(size[0])
                             match value:
                                 case list():
@@ -202,7 +208,7 @@ class GithubCache:
                             file = value["fixture_file"]
                             if not isinstance(file, str) or Path(file).name != file:
                                 raise ValueError("invalid fixture file")
-                            self.reply((directory / file).read_bytes())
+                            self.reply((root / file).read_bytes())
                         else:
                             self.reply(value)
                         return

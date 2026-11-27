@@ -18,6 +18,7 @@
       "{workspaceRoot}/scripts/release_products.py",
       "{workspaceRoot}/rust-toolchain.toml",
       "{workspaceRoot}/scripts/ci-job.sh",
+      "{workspaceRoot}/pool-maintenance/stop.sh",
       "{workspaceRoot}/budgets.yaml",
       "{workspaceRoot}/scripts/actions-budget-figures.sh",
       "{workspaceRoot}/scripts/actions-cache-prune.mjs",

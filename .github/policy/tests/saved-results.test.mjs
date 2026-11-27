@@ -1,6 +1,18 @@
 import "../../test-setup.mjs";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import { parse } from "yaml";
 import { evaluate, graph, read, root } from "../../workflow-graph.mjs";
@@ -84,7 +96,8 @@ test("test-linux uploads what its targets saved however the job ended, on every 
 test("test-linux measures the pool maintenance on a release pull request alone, before its one upload", () => {
   const { steps } = ci().jobs["test-linux"];
   const [upload] = uploads({ steps });
-  const measuring = steps.find((step) => step.run === "just pool-maintenance-budget");
+  const measuring = steps.find((step) => step.id === "pool-maintenance");
+  assert.match(measuring.run, /exec just pool-maintenance-budget'$/);
   assert.equal(evaluate(measuring.if, context("pull_request", "release-plz-2026-11-07")), true);
   assert.equal(evaluate(measuring.if, context("pull_request", "feature")), false);
   assert.ok(steps.indexOf(upload) > steps.indexOf(measuring), "the upload follows what it uploads");
@@ -138,4 +151,152 @@ test("the budgets job reads every saved artifact and leaves the labelled budgets
   assert.equal(given["saved-results-artifacts"], "budget-check-results-*");
   assert.equal(given["omit-labels"], "not-measured-on-pr");
   assert.equal(given["enforcement-exclude-labels"], "release-tail,report-only");
+});
+
+// A cancel stops a step's shell and leaves what it started running, so the stop has to end the
+// measurement's whole group before the cleanup builds beside it.
+const stopping = () => {
+  const { steps } = ci().jobs["test-linux"];
+  const measuring = steps.findIndex((step) => step.id === "pool-maintenance");
+  const stop = steps.findIndex(
+    (step) => step.name === "Stop the cancelled pool-maintenance measurement",
+  );
+  return { steps, measuring, stop };
+};
+
+test("a cancelled measurement is stopped before any cleanup step builds, and only then", () => {
+  const { steps, measuring, stop } = stopping();
+  assert.ok(stop > measuring, "the stop follows the measurement");
+  const builds = steps.findIndex((step) => String(step.run ?? "").startsWith("cargo "));
+  assert.ok(builds > measuring, "a cleanup build follows the measurement");
+  assert.ok(stop < builds, "the stop precedes every cleanup that builds into target/");
+  const [upload] = uploads({ steps });
+  assert.ok(stop < steps.indexOf(upload), "the stop precedes the upload of what it removes");
+  const at = (job, step) => ({
+    ...context("pull_request", "release-plz-2026-11-07"),
+    needs: { job: { result: job } },
+    steps: { "pool-maintenance": { conclusion: step } },
+  });
+  assert.equal(evaluate(steps[stop].if, at("cancelled", "cancelled")), true);
+  assert.equal(evaluate(steps[stop].if, at("cancelled", "success")), false);
+  assert.equal(evaluate(steps[stop].if, at("cancelled", "skipped")), false);
+  assert.equal(evaluate(steps[stop].if, at("success", "success")), false);
+});
+
+const alive = (pid) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+const until = async (condition, seconds, what) => {
+  const deadline = Date.now() + seconds * 1000;
+  while (!condition()) {
+    assert.ok(Date.now() < deadline, what);
+    await new Promise((settle) => setTimeout(settle, 100));
+  }
+};
+
+test("the stop step ends a measurement that outlived its step's shell, and nothing it writes is uploaded", async () => {
+  const { steps, measuring, stop } = stopping();
+  const scratch = mkdtempSync(
+    join(process.env.ONEPIPELINE_NODE_SCRATCH_DIR || tmpdir(), "pool-stop-"),
+  );
+  try {
+    const bin = join(scratch, "bin");
+    const runnerTemp = join(scratch, "runner-temp");
+    mkdirSync(bin);
+    mkdirSync(runnerTemp);
+    mkdirSync(join(scratch, "pool-maintenance"));
+    copyFileSync(
+      new URL("pool-maintenance/stop.sh", root),
+      join(scratch, "pool-maintenance/stop.sh"),
+    );
+    const saved = join(scratch, "target/budget-results/pool-maintenance-budget-results.json");
+    const writer = join(scratch, "writer.pid");
+    // A stand-in for the measurement: a member of its group that writes the saved result late,
+    // as onebudgetspec did minutes after the cancel, and a leader that waits on it.
+    writeFileSync(
+      join(bin, "just"),
+      `#!/usr/bin/env bash
+[ "$1" = pool-maintenance-budget ] || exit 64
+( sleep 4; mkdir -p target/budget-results; echo '{"verdict":"error"}' > target/budget-results/pool-maintenance-budget-results.json ) &
+echo "$!" > ${JSON.stringify(writer)}
+wait
+`,
+    );
+    chmodSync(join(bin, "just"), 0o755);
+    const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, RUNNER_TEMP: runnerTemp };
+    const shell = spawn("bash", ["-e", "-c", steps[measuring].run], {
+      cwd: scratch,
+      env,
+      stdio: "ignore",
+    });
+    await until(
+      () => existsSync(writer) && readFileSync(writer, "utf8").trim() !== "",
+      10,
+      "the measurement started",
+    );
+    const member = Number(readFileSync(writer, "utf8"));
+    // The runner stops the step's shell; what it started runs on, which is the defect.
+    shell.kill("SIGKILL");
+    await new Promise((settle) => shell.once("exit", settle));
+    assert.ok(alive(member), "the measurement outlives its step's shell, as on the hosted runner");
+    const stopped = spawnSync("bash", ["-e", "-c", steps[stop].run], {
+      cwd: scratch,
+      env,
+      encoding: "utf8",
+    });
+    assert.equal(stopped.status, 0, stopped.stderr);
+    assert.equal(alive(member), false, "no member of the measurement's group is left");
+    await new Promise((settle) => setTimeout(settle, 5000));
+    assert.equal(
+      existsSync(saved),
+      false,
+      "nothing the stopped measurement would have saved is left to upload",
+    );
+    assert.match(stopped.stderr, /stopped the cancelled measurement/);
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+});
+
+test("the stop step with no measurement to stop removes a stale result and signals nothing", () => {
+  const { steps, stop } = stopping();
+  const scratch = mkdtempSync(
+    join(process.env.ONEPIPELINE_NODE_SCRATCH_DIR || tmpdir(), "pool-stop-"),
+  );
+  try {
+    mkdirSync(join(scratch, "pool-maintenance"));
+    copyFileSync(
+      new URL("pool-maintenance/stop.sh", root),
+      join(scratch, "pool-maintenance/stop.sh"),
+    );
+    mkdirSync(join(scratch, "target/budget-results"), { recursive: true });
+    const saved = join(scratch, "target/budget-results/pool-maintenance-budget-results.json");
+    writeFileSync(saved, "{}");
+    const env = { ...process.env, RUNNER_TEMP: join(scratch, "absent") };
+    const stopped = spawnSync("bash", ["-e", "-c", steps[stop].run], {
+      cwd: scratch,
+      env,
+      encoding: "utf8",
+    });
+    assert.equal(stopped.status, 0, stopped.stderr);
+    assert.equal(stopped.stderr, "");
+    assert.equal(existsSync(saved), false);
+    // A session file that names no group is refused rather than read as a process id.
+    mkdirSync(join(scratch, "absent"));
+    writeFileSync(join(scratch, "absent/pool-maintenance.session"), "1\n");
+    const refused = spawnSync("bash", ["-e", "-c", steps[stop].run], {
+      cwd: scratch,
+      env,
+      encoding: "utf8",
+    });
+    assert.equal(refused.status, 1);
+    assert.match(refused.stderr, /not a session's process group id/);
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
 });
