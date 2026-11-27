@@ -9,6 +9,10 @@ release_commits = "(?s)^(feat|fix|perf)(\\([^)]+\\))?!?:|BREAKING CHANGE:"
 # Run on every main push so an ordinary fix can resume a partly failed publish. If false,
 # failure after versions are bumped wedges the release because no later release PR exists.
 release_always = true
+# One title for every release pull request, and so one subject for its squash commit:
+# visual-docs.yml skips `chore: release v…` alone. Unset, a release updating one crate is titled
+# `chore(<crate>): release v…`, which visual-docs ran on and the release tail then counted.
+pr_name = "chore: release v{{ version }}"
 semver_check = true
 git_tag_name = "v{{ version }}"
 git_release_name = "v{{ version }}"

@@ -170,6 +170,24 @@ test("the release commit runs release-plz and the warmer, and visual-docs skips 
   );
 });
 
+// release-plz titles a release that updates one crate `chore(<crate>): release v…` unless
+// release-plz.toml names `pr_name`. The v0.14.20 and v0.14.21 squash commits were titled that
+// way, visual-docs ran on them and was cancelled, and the release tail counted that run's job
+// listing: release-read-requests read 7 against 6. The template may name `version` alone,
+// because release-plz gives `package` to a one-crate update only.
+test("every release pull request is titled as visual-docs skips its squash commit", () => {
+  const config = readFileSync(new URL("../../release-plz.toml", import.meta.url), "utf8");
+  const template = config.match(/^pr_name = "(.*)"$/m)?.[1];
+  assert.ok(template, "release-plz.toml names no pr_name, so a one-crate release is scoped");
+  const title = template.replace(/\{\{ *version *\}\}/g, "0.14.20");
+  assert.match(title, /^chore: release v\d+\.\d+\.\d+$/);
+  const runs = graph(
+    { ...push(RELEASE_COMMIT), headCommitMessage: `${title} (#4074)` },
+    { macosRequired: false },
+  );
+  assert.deepEqual(runs.find((run) => run.workflow === "visual-docs.yml").rows, []);
+});
+
 test("another job or workflow on a pull request or on the release commit is refused", () => {
   const cases = {
     "notignored.yml runs": (all) => {
