@@ -533,7 +533,8 @@ function run(program, args, { timeout, ...options }) {
     });
   });
 }
-// Each of `items` through `work`, at most one per available core at a time, answers in order.
+// Capped at the core count because each scenario is a CLI that spawns `gh` per read, and more of
+// them than cores only queue on a loaded runner; answers keep input order for in-order assertions.
 async function inParallel(items, work) {
   const answers = [];
   let next = 0;
