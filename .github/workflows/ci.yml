@@ -445,7 +445,9 @@ jobs:
         run: just ci-test-linux
       # The release pull request alone: after this job's tests, because the pool maintenance
       # prunes and rebuilds the target directory they use, and not in lint, where beside the
-      # distribution journey it ran that job past its timeout.
+      # distribution journey it ran that job past its timeout. Its builds are the leaf crates'
+      # test builds those tests just made, so it adds little more than the pruner's passes:
+      # when it rebuilt the whole workspace twice, it ran this job past its own (run 45913208966).
       - name: Pool-maintenance pass-time budget on the release pull request
         if: startsWith(github.head_ref, 'release-plz-')
         run: just pool-maintenance-budget

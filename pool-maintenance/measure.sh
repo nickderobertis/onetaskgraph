@@ -4,30 +4,34 @@
 #
 # The figure is the pass a regular post-run maintenance faces — one ordinary run's worth of
 # new superseded builds — never a first pass over accumulated history, so this sets that
-# state up before it times anything:
-#   (a) runs the ordinary gate build, so a build a source change since this checkout last
-#       built has superseded is backlog too, and then the declared maintenance, untimed, to
-#       clear that backlog — repeating the two until a pass removes nothing, because one
-#       pass over a warm directory is not a steady state. The pruner groups every build
-#       named for one unit (a crate's library, its test binary, its build script and its
-#       run, and each feature set it is built with), and of those older than the window
-#       keeps only the newest; a directory restored from a cache holds the ordinary builds
-#       at their old modification times, so a pass removes some the gate still needs, the
-#       next build makes them anew, and that build supersedes the old sibling the pass
-#       had kept. Left there, the timed pass in (d) removed those siblings too;
-#   (b) builds the workspace's test targets under an alternative profile setting that gives
-#       every unit, this repository's own crates included, a new metadata hash in the same
-#       profile directory, then backdates exactly the entries that build created to a date
-#       past the 2-day window and older than anything a slot holds, so they stand in for a
-#       run's builds that have since been superseded;
-#   (c) runs the ordinary gate build, so each unit's newest build is the ordinary one;
+# state up before it times anything. It reuses the target directory as the run before it
+# left it, and builds only the workspace's leaf crates — the members no other member
+# depends on — each as its own `test` target builds it, so on the release pull request,
+# straight after that job's tests, those builds are already fresh and each step below costs
+# little more than the pruner:
+#   (a) runs the ordinary build, and then the declared maintenance, untimed, to clear the
+#       backlog — repeating the two until a pass removes nothing, because one pass over a
+#       warm directory is not a steady state. The pruner groups every build named for one
+#       unit (a crate's library, its test binary, its build script and its run, and each
+#       feature set it is built with), and of those older than the window keeps only the
+#       newest; a directory restored from a cache holds the ordinary builds at their old
+#       modification times, so a pass removes some the build still needs, the next build
+#       makes them anew, and that build supersedes the old sibling the pass had kept. Left
+#       there, the timed pass in (d) removed those siblings too;
+#   (b) builds the leaf crates under a profile override naming only those packages, which
+#       gives each of their units a new metadata hash in the same profile directory and
+#       leaves every unit they depend on as it is — the units a run that moved those crates
+#       (a version bump, a feature change) leaves superseded — then backdates exactly the
+#       entries that build created to a date past the 2-day window and older than anything
+#       a slot holds, so they stand in for a run's builds that have since been superseded;
+#   (c) runs the ordinary build, so each unit's newest build is the ordinary one;
 #   (d) times one declared pass, which removes the alternative build.
 # Both passes are the justfile's `pool-maintenance` recipe, the command onevcs.toml declares.
 # Only (d) reports the figure, through cargo-prune-superseded's own onebudgetspec report;
 # (a)'s seconds are appended to that report's detail as separate evidence, and the figure is
 # left as the pruner wrote it. onebudgetspec alone judges it.
 #
-# It really prunes this checkout's target directory and builds it twice: run it only in a
+# It really prunes this checkout's target directory and builds into it: run it only in a
 # worktree whose target directory is idle.
 set -euo pipefail
 
@@ -65,16 +69,47 @@ list_entries() {
   done | LC_ALL=C sort
 }
 
-# The gate's own test build of every crate, without running a test.
+# The workspace's leaf crates: every member no member depends on, in any dependency kind.
+# Nothing builds them into another unit, so a new build of one supersedes its own units alone.
+leaf_packages() {
+  cargo metadata --no-deps --format-version 1 --locked | python3 -c '
+import json, sys
+packages = json.load(sys.stdin)["packages"]
+names = {package["name"] for package in packages}
+used = {d["name"] for package in packages for d in package["dependencies"] if d["name"] in names}
+sys.stdout.write("".join(name + "\n" for name in sorted(names - used)))
+' | tr -d '\r'
+}
+LEAVES=()
+while IFS= read -r leaf; do
+  [ -n "$leaf" ] && LEAVES+=("$leaf")
+done < <(leaf_packages)
+if [ "${#LEAVES[@]}" -eq 0 ]; then
+  echo "pool-maintenance/measure.sh: cargo metadata named no leaf crate, so there is nothing to build a run's superseded builds of; run 'cargo metadata --no-deps' and check the workspace members." >&2
+  exit 1
+fi
+readonly LEAVES
+
+# Each leaf crate's test build, without running a test, exactly as its own `test` target
+# builds it: one package per invocation, because features are resolved for the packages one
+# invocation names, and a unit set other than the tests' would rebuild what they built.
 ordinary_build() {
-  cargo test --quiet --workspace --all-features --locked --no-run
+  local leaf
+  for leaf in "${LEAVES[@]}"; do
+    cargo test --quiet -p "$leaf" --all-features --locked --no-run
+  done
 }
 
-# The same build with line-table debuginfo in place of .cargo/config.toml's none. The
-# profile is part of every unit's metadata hash, so each unit gets a new build beside the
-# ordinary one, in the same target/debug the ordinary build writes.
+# The same builds with line-table debuginfo in place of .cargo/config.toml's none, for the
+# leaf package alone. The profile is part of a unit's metadata hash, so each of its units
+# gets a new build beside the ordinary one, in the same target/debug the ordinary build
+# writes, and no unit it depends on is built again.
 alternative_build() {
-  CARGO_PROFILE_DEV_DEBUG=line-tables-only cargo test --quiet --workspace --all-features --locked --no-run
+  local leaf
+  for leaf in "${LEAVES[@]}"; do
+    cargo test --quiet -p "$leaf" --all-features --locked --no-run \
+      --config "profile.dev.package.\"$leaf\".debug = \"line-tables-only\""
+  done
 }
 
 seconds_reported() {
@@ -112,7 +147,7 @@ list_entries > "$EVIDENCE/after-alternative.txt"
 LC_ALL=C comm -13 "$EVIDENCE/before-alternative.txt" "$EVIDENCE/after-alternative.txt" \
   > "$EVIDENCE/alternative-created.txt"
 if [ ! -s "$EVIDENCE/alternative-created.txt" ]; then
-  echo "pool-maintenance/measure.sh: the alternative build created no new entry, so there is nothing superseded to time; check that CARGO_PROFILE_DEV_DEBUG still changes metadata hashes." >&2
+  echo "pool-maintenance/measure.sh: the alternative build created no new entry, so there is nothing superseded to time; check that a profile.dev.package override still changes a unit's metadata hash." >&2
   exit 1
 fi
 while IFS= read -r entry; do
