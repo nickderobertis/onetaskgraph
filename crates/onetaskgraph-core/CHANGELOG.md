@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.16.0...onetaskgraph-core-v0.17.0) - 2026-11-27
+
+### Added
+
+- *(find)* [**breaking**] stop each batched search at the hit limit it names, reading no page past it ([#4097](https://github.com/nickderobertis/onetaskgraph/pull/4097))
+
 ## [0.16.0](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.15.1...onetaskgraph-core-v0.16.0) - 2026-11-25
 
 ### Added
