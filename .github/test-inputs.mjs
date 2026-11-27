@@ -56,6 +56,8 @@ export const policyJourneyReadSet = [
   "scripts/ci-job.sh",
   "scripts/project.json",
   "justfile",
+  // saved-results.test.mjs runs ci.yml's cancellation stop of the pool-maintenance measurement.
+  "pool-maintenance/stop.sh",
   // rust-cache-warm.test.mjs runs the copied prune and headroom over a recorded listing.
   "budgets.yaml",
   "scripts/actions-cache-prune.mjs",

@@ -448,9 +448,21 @@ jobs:
       # distribution journey it ran that job past its timeout. It compiles nothing these tests did
       # not: its build is the leaf crates' test builds they just made, and its superseded builds
       # are copies of every build in the directory, so it fits inside this job's limit.
+      #
+      # It runs in a session of its own, whose id it records, because cancelling this step stops
+      # the step's shell and nothing under it, and the cleanup below builds into the directory it
+      # walks.
       - name: Pool-maintenance pass-time budget on the release pull request
+        id: pool-maintenance
         if: startsWith(github.head_ref, 'release-plz-')
-        run: just pool-maintenance-budget
+        run: setsid --wait bash -c 'echo "$$" > "$RUNNER_TEMP/pool-maintenance.session"; exec just pool-maintenance-budget'
+      # A cancelled measurement is stopped, and what it would have saved removed, before
+      # anything below builds into the target directory it prunes: a measurement the job's end
+      # cut short is no figure. pool-maintenance/stop.sh says how.
+      - name: Stop the cancelled pool-maintenance measurement
+        if: cancelled() && steps.pool-maintenance.conclusion == 'cancelled'
+        timeout-minutes: 2
+        run: bash pool-maintenance/stop.sh "$RUNNER_TEMP/pool-maintenance.session" target/budget-results/pool-maintenance-budget-results.json
       # A cancelled run's live journeys die before their own cleanup, leaving their board
       # copies, scratch issues and pool leases behind. On cancellation this job, the one that
       # carries the credentials, removes exactly this run attempt's and opens no session; the
