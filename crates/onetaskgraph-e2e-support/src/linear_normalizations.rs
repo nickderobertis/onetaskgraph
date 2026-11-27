@@ -12,6 +12,10 @@
 //!   [`unaccounted`], which finds the one recorded entry each changed line is an instance of;
 //! - a journey that sends a shape the authored form does not recognise, which reads the
 //!   fixture holding that shape, by [`fixture`].
+//!
+//! Beside it, [`nested`] reads the records spike `spike-linear-nested-blocks` left in `TES2` —
+//! a collapsible section inside another, in each spelling — from
+//! `fixtures/expandable_blocks/nested/observations.json`, which the loopback is held to as well.
 
 use std::collections::BTreeSet;
 
@@ -103,6 +107,101 @@ const FIXTURES: [(&str, &str); 17] = [
 ];
 
 const NORMALIZATIONS: &str = include_str!("../fixtures/expandable_blocks/normalizations.json");
+
+const NESTED: &str = include_str!("../fixtures/expandable_blocks/nested/observations.json");
+
+/// One record spike `spike-linear-nested-blocks` wrote to `TES2`: a section nested in another, or
+/// its control of one section, and what Linear stored of it.
+#[derive(Debug, Clone)]
+pub struct NestedRecord {
+    /// What Linear record it is.
+    pub kind: NestedKind,
+    /// The spelling it was sent in.
+    pub form: NestedForm,
+    /// The Markdown sent.
+    pub sent: String,
+    /// The Markdown Linear stored.
+    pub stored: String,
+    /// The editor state Linear stored it as: base64 Yjs.
+    pub encoded_state: String,
+}
+
+/// The kind of Linear record the nested recording holds one of.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum NestedKind {
+    /// A Linear issue, its `description` written.
+    Issue,
+    /// A team document, its `content` written.
+    Document,
+}
+
+/// The spelling a nested record was sent in: the outer section's opener and closer, then the
+/// inner one's, each `+++` or Linear's editor shortcut `>>>`; or the control of one `+++`
+/// section.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum NestedForm {
+    /// `+++ Outer` … `+++ Before` … `+++` … `+++`: the spelling the store writes.
+    PlusInPlus,
+    /// `>>> Outer` … `>>> Before` … `>>>` … `>>>`.
+    ArrowInArrow,
+    /// `+++ Outer` … `>>> Before` … `>>>` … `+++`.
+    ArrowInPlus,
+    /// `>>> Outer` … `+++ Before` … `+++` … `>>>`.
+    PlusInArrow,
+    /// One `+++ Section` holding a paragraph and an image.
+    Control,
+}
+
+/// Every record of the nested recording, in its file's order.
+///
+/// # Panics
+///
+/// When the committed recording is not the JSON the spike's records were read back as.
+#[must_use]
+pub fn nested() -> Vec<NestedRecord> {
+    let file: Value = serde_json::from_str(NESTED).expect("the nested recording is JSON");
+    file["records"]
+        .as_array()
+        .expect("the nested recording's records")
+        .iter()
+        .map(|record| {
+            let field = |key: &str| {
+                record[key]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("a nested record records {key}"))
+                    .to_owned()
+            };
+            fn named<T: serde::de::DeserializeOwned>(record: &Value, key: &str) -> T {
+                serde_json::from_value(record[key].clone())
+                    .unwrap_or_else(|error| panic!("a nested record's {key}: {error}"))
+            }
+            NestedRecord {
+                kind: named(record, "kind"),
+                form: named(record, "form"),
+                sent: field("sent"),
+                stored: field("stored"),
+                encoded_state: field("encoded_state"),
+            }
+        })
+        .collect()
+}
+
+/// The `uploads.linear.app` address the nested recording's image `name` — `after.png` or
+/// `before.png` — was uploaded to and its records name.
+///
+/// # Panics
+///
+/// When the recording names no such image.
+#[must_use]
+pub fn nested_image(name: &str) -> String {
+    let file: Value = serde_json::from_str(NESTED).expect("the nested recording is JSON");
+    file["images"][name]
+        .as_str()
+        .unwrap_or_else(|| panic!("the nested recording names no image {name}"))
+        .to_owned()
+}
 
 /// Every recorded fixture, in name order.
 ///
@@ -386,8 +485,86 @@ pub fn unaccounted(sent: &str, stored: &str) -> Vec<Hunk> {
 
 #[cfg(test)]
 mod tests {
-    use super::{fixture, normalizations, recorded, unaccounted};
+    use super::{NestedForm, fixture, nested, normalizations, recorded, unaccounted};
+    use crate::linear_editor::{decoded_tree, node_tree};
     use crate::linear_markdown::stored;
+    use serde_json::Value;
+
+    /// Each section of `nodes`, at any depth, as its summary, the image addresses directly in it,
+    /// and the sections in it: an `image` node's `src`, or an uploaded image a paragraph's text
+    /// names, as the loopback's tree keeps an image.
+    fn outline(nodes: &Value) -> Vec<String> {
+        fn walk(nodes: &Value, depth: usize, found: &mut Vec<String>) {
+            for node in nodes.as_array().into_iter().flatten() {
+                let indent = "  ".repeat(depth);
+                match node["type"].as_str() {
+                    Some("collapsible_section") => {
+                        let content = node["content"].as_array().cloned().unwrap_or_default();
+                        let heading = content
+                            .first()
+                            .map(|heading| text(heading).trim().to_owned())
+                            .unwrap_or_default();
+                        found.push(format!("{indent}section {heading:?}"));
+                        walk(&Value::Array(content[1..].to_vec()), depth + 1, found);
+                    }
+                    Some("image") => found.push(format!(
+                        "{indent}image {}",
+                        node["attrs"]["src"].as_str().unwrap_or_default()
+                    )),
+                    _ => {
+                        let text = text(node);
+                        for (at, _) in text.match_indices("](https://uploads.linear.app/") {
+                            let src = &text[at + 2..];
+                            let end = src.find(')').unwrap_or(src.len());
+                            found.push(format!("{indent}image {}", &src[..end]));
+                        }
+                    }
+                }
+            }
+        }
+        fn text(node: &Value) -> String {
+            let runs = node["runs"].as_array().into_iter().flatten();
+            let own: String = runs.filter_map(|run| run["text"].as_str()).collect();
+            node["content"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .fold(own, |held, child| held + &text(child))
+        }
+        let mut found = Vec::new();
+        walk(nodes, 0, &mut found);
+        found
+    }
+
+    /// The loopback stores every nested record's sent Markdown exactly as Linear stored it, and
+    /// storing that again changes nothing; and the tree it answers holds each section inside the
+    /// section and each image inside the section Linear's own editor state held them in.
+    #[test]
+    fn the_loopback_stores_every_nested_record_as_linear_did() {
+        let all = nested();
+        assert_eq!(all.len(), 6);
+        for record in all {
+            let name = format!("{:?} {:?}", record.kind, record.form);
+            assert_eq!(
+                stored(&record.sent),
+                record.stored,
+                "{name}: stored as Linear"
+            );
+            assert_eq!(stored(&record.stored), record.stored, "{name}: and again");
+            let recorded = decoded_tree(&record.encoded_state).expect("a recorded state decodes");
+            let recorded = outline(&recorded["content"]);
+            assert!(
+                record.form == NestedForm::Control
+                    || recorded.iter().any(|line| line.starts_with("  section")),
+                "{name}: Linear held a section inside a section: {recorded:#?}"
+            );
+            assert_eq!(
+                outline(&node_tree(&record.stored, "nested")["content"]),
+                recorded,
+                "{name}: the loopback's tree nests as Linear's did"
+            );
+        }
+    }
 
     /// The loopback Linear stores every recorded fixture's sent Markdown exactly as Linear
     /// stored it, and storing that again changes nothing, as the spike recorded of Linear.
