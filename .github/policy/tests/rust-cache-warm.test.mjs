@@ -389,8 +389,8 @@ const FAMILIES = {
   "test-macos": ["v0-rust-test-macos-Darwin-arm64-"],
 };
 // The prune as create-repo's commit afc6829981dc31ad4221fc7cf706916d078ada35 holds it, and the
-// remote cache v11 and figures v14 as commit 6cc889b591fc4de2e1019f023c47258c90df7739 first holds
-// them, measuring only the finished CI attempts that uploaded the cache-use artifact.
+// remote cache v12 and figures v15 as commit 6ba469d669edbda120afae3eabb764466f13eed9 first holds
+// them, skipping cancelled attempts and runs on a superseded pull request head.
 const COPIES = {
   "scripts/actions-cache-prune.mjs": {
     source: "assets/ci/actions-cache-prune.mjs",
@@ -399,13 +399,13 @@ const COPIES = {
   },
   "scripts/actions-budget-figures.sh": {
     source: "assets/budgets/actions-budget-figures.sh",
-    version: 14,
-    sha256: "7b4797774493989f6a1e914dfec581af1352da0dff759ad3e1dea81915dce850",
+    version: 15,
+    sha256: "d296b37139ae0c3cf80df8bc8c6730f676e10179586fbe42c5f24d7f493b7992",
   },
   "scripts/nx-remote-cache.mjs": {
     source: "assets/ci/nx-remote-cache.mjs",
-    version: 11,
-    sha256: "462c849527466a94c6a8c75c496191a5a10aa98a3549661cec5d8a8ef88377f1",
+    version: 12,
+    sha256: "f28fbbbe9980cae5213dfd4166562dfc254c46d358e5cb27b4728049c44581c2",
   },
 };
 const versionsOf = (file) => file.replace(/\.[^.]+$/, ".versions");
@@ -671,11 +671,11 @@ test("each way of losing the copies, the cleanup, the saves or the guards is ref
       },
     ],
     "another version of a copy": [
-      /nx-remote-cache\.mjs is not version 11/,
+      /nx-remote-cache\.mjs is not version 12/,
       (all) => {
         all.copies["scripts/nx-remote-cache.mjs"] = all.copies[
           "scripts/nx-remote-cache.mjs"
-        ].replace("// version: 11", "// version: 7");
+        ].replace("// version: 12", "// version: 7");
       },
     ],
     "a versions file behind": [

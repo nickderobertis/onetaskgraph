@@ -1,7 +1,7 @@
 // Copied from dero-skills' create-repo skill; edit only the source.
 // source: github.com/nickderobertis/dero-skills/skills/bootstrap/create-repo/assets/ci/nx-remote-cache.mjs
-// version: 11
-// sha256: 462c849527466a94c6a8c75c496191a5a10aa98a3549661cec5d8a8ef88377f1
+// version: 12
+// sha256: f28fbbbe9980cae5213dfd4166562dfc254c46d358e5cb27b4728049c44581c2
 import {
   appendFileSync,
   readFileSync,
@@ -797,6 +797,8 @@ function artifactIdentity(artifact, run) {
     `artifact ${artifact.name} has wrong head repository`,
   );
 }
+const stopped = (conclusion) =>
+  conclusion === 'cancelled' || conclusion === 'timed_out';
 function attemptRun(gh, id, attempt) {
   const run = gh.read(
     `repos/${gh.repo}/actions/runs/${id}/attempts/${attempt}`,
@@ -861,10 +863,30 @@ function artifactsFor(
   const records = [];
   for (const job of expected) {
     const cancelled =
-      job.conclusion === 'cancelled' ||
-      (run.conclusion === 'cancelled' &&
+      stopped(job.conclusion) ||
+      (stopped(run.conclusion) &&
         job.conclusion !== 'failure' &&
         job.conclusion !== 'skipped');
+    // A job stopped mid-run uploads what it had written so far, so evidence it never
+    // finished is named rather than read; from a job that finished it is a fault, and
+    // the error names the artifact. Identity, trust and timing refuse either way.
+    const interrupted = stopped(job.conclusion ?? run.conclusion)
+      ? (job.conclusion ?? run.conclusion)
+      : null;
+    const partial = (artifact, step) => {
+      try {
+        return step();
+      } catch (error) {
+        if (!interrupted)
+          throw new Error(
+            `${error.message}: artifact ${artifact.name} (id ${artifact.id}) of run ${run.id}/${run.run_attempt}`,
+          );
+        detail.push(
+          `skipped run ${run.id}/${run.run_attempt} job ${job.name}: the job ${interrupted === 'timed_out' ? 'timed out' : 'was cancelled'}, so artifact ${artifact.name} (id ${artifact.id}) is partial evidence (${error.message}); excluded from numerator and denominator`,
+        );
+        return null;
+      }
+    };
     const candidates = selected.filter(
       (a) => a.name === `nx-cache-entries-${job.name}`,
     );
@@ -939,16 +961,14 @@ function artifactsFor(
         );
         continue;
       }
-      const execution = validateExecutions(fileJson(files, 'executions.json'));
+      const execution = partial(artifact, () =>
+        validateExecutions(fileJson(files, 'executions.json')),
+      );
+      if (!execution) continue;
       check(
         !incompleteTelemetry(execution) || cancelled,
         'Nx run telemetry is incomplete',
       );
-      if (execution.schema === 2)
-        for (const invocation of execution.cancelled_invocations ?? [])
-          detail.push(
-            `cancelled run ${run.id}/${run.run_attempt} job ${job.name} invocation ${invocation.id} argv ${JSON.stringify(invocation.argv)}: unfinished tasks are not individually known; excluded from numerator and denominator`,
-          );
       validateSelection(gh, execution, run);
       check(
         execution.repository === gh.repo &&
@@ -999,30 +1019,41 @@ function artifactsFor(
         os && execution.os === os,
         'execution OS mismatches workflow runner metadata',
       );
-      const manifest = validateManifest(
-        fileJson(files, 'manifest.json'),
-        files,
-        job.name,
-      );
-      for (const t of execution.tasks.filter((t) => t.result === 'remote_hit'))
-        check(
-          manifest.entries.some((e) => e.hash === t.hash),
-          'remote replay has no recorded body',
+      const manifest = partial(artifact, () => {
+        const manifest = validateManifest(
+          fileJson(files, 'manifest.json'),
+          files,
+          job.name,
         );
-      for (const e of manifest.entries)
-        check(
-          execution.tasks.some(
-            (t) =>
-              t.hash === e.hash &&
-              t.cacheable &&
-              (e.source === 'replayed'
-                ? t.result === 'remote_hit'
-                : execution.store_attempts.some(
-                    (a) => a.hash === e.hash && a.status === 'stored',
-                  )),
-          ),
-          'manifest has no matching task evidence',
-        );
+        for (const t of execution.tasks.filter(
+          (t) => t.result === 'remote_hit',
+        ))
+          check(
+            manifest.entries.some((e) => e.hash === t.hash),
+            'remote replay has no recorded body',
+          );
+        for (const e of manifest.entries)
+          check(
+            execution.tasks.some(
+              (t) =>
+                t.hash === e.hash &&
+                t.cacheable &&
+                (e.source === 'replayed'
+                  ? t.result === 'remote_hit'
+                  : execution.store_attempts.some(
+                      (a) => a.hash === e.hash && a.status === 'stored',
+                    )),
+            ),
+            'manifest has no matching task evidence',
+          );
+        return manifest;
+      });
+      if (!manifest) continue;
+      if (execution.schema === 2)
+        for (const invocation of execution.cancelled_invocations ?? [])
+          detail.push(
+            `cancelled run ${run.id}/${run.run_attempt} job ${job.name} invocation ${invocation.id} argv ${JSON.stringify(invocation.argv)}: unfinished tasks are not individually known; excluded from numerator and denominator`,
+          );
       if (record)
         check(
           JSON.stringify(record.execution) === JSON.stringify(execution) &&
@@ -1292,6 +1323,28 @@ async function promote(opts) {
   }
 }
 
+// A push that replaces a pull request's head leaves the old head in no pull request,
+// so GitHub ties the CI run on it to none. A run on this pull request's branch, by its
+// author, created while it was open, is its run on a head it later moved past. A run
+// that meets none of that still goes to associatedPrs, which refuses it.
+function supersededHead(gh, run, pr) {
+  if (!Array.isArray(run.pull_requests) || run.pull_requests.length) return false;
+  if (run.head_sha === pr.head.sha || !/^[a-f0-9]{40}$/.test(run.head_sha))
+    return false;
+  if (gh.pages(`repos/${gh.repo}/commits/${run.head_sha}/pulls`).length)
+    return false;
+  const created = Date.parse(run.created_at);
+  return (
+    run.event === 'pull_request' &&
+    run.head_branch === pr.head.ref &&
+    run.actor?.login === pr.user?.login &&
+    utc(run.created_at) &&
+    utc(pr.created_at) &&
+    utc(pr.merged_at) &&
+    created >= Date.parse(pr.created_at) &&
+    created <= Date.parse(pr.merged_at)
+  );
+}
 function associatedPrs(gh, run) {
   check(
     Array.isArray(run.pull_requests),
@@ -1565,7 +1618,8 @@ async function cacheUse(opts) {
     carriedJobs = new Map(),
     latestRuns = new Map(),
     adoption = telemetryAdoption();
-  const skippedRuns = [];
+  const skippedRuns = [],
+    supersededRuns = [];
   // An attempt's evidence, with each job it carried read from the attempt that ran it.
   function attemptEvidence(pr, id, attempt) {
     const own = evidence.filter(
@@ -1597,11 +1651,17 @@ async function cacheUse(opts) {
         `repos/${gh.repo}/actions/workflows/ci.yml/runs?event=pull_request&branch=${encodeURIComponent(pr.head.ref)}`,
         'workflow_runs',
       )
-      .filter(
-        (r) =>
-          r.head_repository.full_name === gh.repo &&
-          associatedPrs(gh, r).some((p) => p.number === pr.number),
-      );
+      .filter((r) => {
+        if (r.head_repository.full_name !== gh.repo) return false;
+        if (supersededHead(gh, r, pr)) {
+          detail.push(
+            `skipped run ${r.id}: it ran on head ${r.head_sha}, which #${pr.number} moved past to its merged head ${pr.head.sha}, so none of its artifacts is read`,
+          );
+          supersededRuns.push(`${r.id} (superseded head ${r.head_sha})`);
+          return false;
+        }
+        return associatedPrs(gh, r).some((p) => p.number === pr.number);
+      });
     const attempts = [];
     for (const run of runs)
       for (let attempt = 1; attempt <= run.run_attempt; attempt++) {
@@ -1942,8 +2002,8 @@ async function cacheUse(opts) {
     }
   check(
     eligible > 0,
-    skippedRuns.length
-      ? `zero eligible executions; skipped runs: ${skippedRuns.join(', ')}`
+    skippedRuns.length + supersededRuns.length
+      ? `zero eligible executions; skipped runs: ${[...skippedRuns, ...supersededRuns].join(', ')}`
       : 'zero eligible executions',
   );
   const value = (100 * hits) / eligible;
