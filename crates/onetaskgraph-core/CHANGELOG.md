@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.2](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.17.1...onetaskgraph-core-v0.17.2) - 2026-11-27
+
+### Added
+
+- *(linear)* copy a block nested in another as a nested collapsible section ([#4106](https://github.com/nickderobertis/onetaskgraph/pull/4106))
+
 ## [0.17.0](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-core-v0.16.0...onetaskgraph-core-v0.17.0) - 2026-11-27
 
 ### Added
