@@ -12,15 +12,21 @@ what it observed as evidence. Nothing selects it; `just` and Nx never run it.
 2. Writes a project into a scratch folder — its description, a task and a design document, each
    holding authored blocks whose summaries carry `<code>`, `<strong>` and `&amp;`, `&lt;`,
    `&gt;`, and whose bodies hold a list, a heading, fenced code and a table — every title
-   carrying `onetaskgraph live cleanup <stamp>`.
+   carrying `onetaskgraph live cleanup <stamp>`. The task and the document hold one more: a
+   block nested in another, as spike `spike-linear-nested-blocks` probed it (its
+   `scripts/live-nested-blocks.py`) — the outer holding a paragraph and the after image, the
+   inner the before image — each image one of the record's own image assets, so the store
+   uploads it as a copy does.
 3. Copies it to that board, and from the board onward to Linear team `LINEAR_WRITE_TEAM`
    (which must be `TES2`): a real tracker-to-tracker hop.
 4. Reads every stored body back through each tracker's own API: on GitHub each block in the
    authored form, byte for byte; on Linear each as `+++ <summary>` … `+++` with its summary
    translated, no authored markup left, and each stored as a `collapsible_section` node of the
    record's editor state, decoded here with `pycrdt` rather than with the plugin's decoder, its
-   `collapsible_heading` holding the summary's text. Then reads each Linear record back through
-   the store, which has to give the authored blocks back.
+   `collapsible_heading` holding the summary's text — the nested block as a section inside its
+   outer section, each closed by a bare `+++`, each image an `image` node inside the section it
+   was written in. Then reads each Linear record back through the store, which has to give the
+   authored blocks back, the nested ones nested.
 5. Deletes everything it created — the issues, the board copy, the Linear records — however it
    ended, and names on stderr anything it could not.
 
@@ -48,10 +54,12 @@ import os
 import pathlib
 import re
 import socket
+import struct
 import subprocess
 import sys
 import time
 import urllib.request
+import zlib
 from typing import NewType
 
 PREFIX = "onetaskgraph live cleanup "
@@ -83,9 +91,47 @@ def block(summary: Summary, n: int) -> str:
     )
 
 
-def body(what: str) -> str:
-    """A record's authored body: a line naming it, then every block."""
-    return f"The {what}.\n\n" + "\n\n".join(block(summary, n + 1) for n, summary in enumerate(SUMMARIES)) + "\n"
+def body(what: str, nested: bool = False) -> str:
+    """A record's authored body: a line naming it, then every block, and the nested one when asked."""
+    blocks = [block(summary, n + 1) for n, summary in enumerate(SUMMARIES)] + ([NESTED] if nested else [])
+    return f"The {what}.\n\n" + "\n\n".join(blocks) + "\n"
+
+
+# The design document's collapsed visual change, as spike `spike-linear-nested-blocks` probed it.
+NESTED_OUTER, NESTED_INNER = "Visual change", "Before"
+NESTED = (
+    f"<details>\n<summary>{NESTED_OUTER}</summary>\n\nParagraph inside the change.\n\n![After](./after.png)\n\n"
+    f"<details>\n<summary>{NESTED_INNER}</summary>\n\n![Before](./before.png)\n\n</details>\n\n</details>"
+)
+# The nested block as Linear's form writes it and the store reads it back, each image at the
+# address its destination serves it from.
+NESTED_LINEAR = re.compile(
+    rf"\+\+\+ {NESTED_OUTER}\n\nParagraph inside the change\.\n\n!\[After\]\(<?(?P<after>[^)>]+)>?\)\n\n"
+    rf"\+\+\+ {NESTED_INNER}\n\n!\[Before\]\(<?(?P<before>[^)>]+)>?\)\n\n\+\+\+\n\n\+\+\+(\n|$)")
+NESTED_AUTHORED = re.compile(
+    re.escape(NESTED).replace(re.escape("./after.png"), r"(?P<after>[^)]+)").replace(re.escape("./before.png"), r"(?P<before>[^)]+)"))
+
+
+def png(width: int, height: int, colour: tuple[int, int, int], stripe: tuple[int, int, int]) -> bytes:
+    """A small PNG: `colour` with a diagonal `stripe`, so the two images are told apart on sight —
+    the spike's own `png`, from `scripts/live-nested-blocks.py` on its branch."""
+    rows = b"".join(
+        b"\x00" + b"".join(bytes(stripe if (x + y) % 24 < 6 else colour) for x in range(width))
+        for y in range(height))
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
+
+
+IMAGES = {
+    "after.png": png(160, 80, (46, 125, 50), (200, 230, 201)),
+    "before.png": png(160, 80, (198, 40, 40), (255, 205, 210)),
+}
+# The records holding the nested block, and so the two images as their own assets.
+NESTING = ("T", "D")
 
 
 class Verb(enum.StrEnum):
@@ -125,12 +171,15 @@ class Outcome:
 
 @dataclasses.dataclass(frozen=True)
 class Section:
-    """One `collapsible_section` node of a Linear editor state: its heading's text and marks, and
-    the types of the nodes inside it beside the heading."""
+    """One `collapsible_section` node of a Linear editor state: its heading's text and marks, the
+    types of the nodes inside it beside the heading, the heading of the section it sits in, if
+    any, and the `src` of each `image` node directly inside it."""
 
     summary: str
     marks: tuple[str, ...]
     body: tuple[str, ...]
+    parent: str | None = None
+    images: tuple[str, ...] = ()
 
 
 @dataclasses.dataclass
@@ -228,7 +277,7 @@ def scratch_issue(url: str) -> str:
 
 
 def sections_of(state: str | None) -> list[Section]:
-    """Every `collapsible_section` node of a Linear editor state."""
+    """Every `collapsible_section` node of a Linear editor state, at any depth, in document order."""
     import pycrdt
 
     if not state:
@@ -251,19 +300,21 @@ def sections_of(state: str | None) -> list[Section]:
                     marks |= inner
         return held, marks
 
-    def walk(node) -> None:
+    def walk(node, parent: str | None) -> None:
         if isinstance(node, pycrdt.XmlElement):
             if node.tag == "collapsible_section":
                 children = list(node.children)
                 heading = next((child for child in children if isinstance(child, pycrdt.XmlElement) and child.tag == "collapsible_heading"), None)
                 shown, marks = text(heading) if heading is not None else ("", set())
-                found.append(Section(shown.strip(), tuple(sorted(marks)),
-                                     tuple(child.tag for child in children if isinstance(child, pycrdt.XmlElement) and child is not heading)))
+                inside = [child for child in children if isinstance(child, pycrdt.XmlElement) and child is not heading]
+                images = tuple(str(dict(child.attributes).get("src")) for child in inside if child.tag == "image")
+                found.append(Section(shown.strip(), tuple(sorted(marks)), tuple(child.tag for child in inside), parent, images))
+                parent = shown.strip()
             for child in node.children:
-                walk(child)
+                walk(child, parent)
 
     for child in doc.get("prosemirror", type=pycrdt.XmlFragment).children:
-        walk(child)
+        walk(child, None)
     return found
 
 
@@ -354,13 +405,18 @@ def observe() -> int:
         def title(what: str) -> str:
             return f"{PREFIX}{run.stamp} {what}"
 
-        bodies = {"P": body("project"), "T": body("task"), "D": body("document")}
+        bodies = {"P": body("project"), "T": body("task", nested=True), "D": body("document", nested=True)}
         for path, front, key_name in (
             ("projects/P.md", f"title: {title('Block plan')}\nstatus: todo", "P"),
             ("tasks/T.md", f"title: {title('Blocks')}\nstatus: todo\nproject: P", "T"),
             ("documents/D.md", f"title: {title('Block design')}\nproject: P", "D"),
         ):
             (authored / path).write_text(f"---\n{front}\n---\n{bodies[key_name]}")
+            if key_name in NESTING:
+                assets = authored / path.replace(".md", ".assets")
+                assets.mkdir(exist_ok=True)
+                for name, data in IMAGES.items():
+                    (assets / name).write_bytes(data)
         (sandbox / "config").mkdir(exist_ok=True)
         (sandbox / "onetaskgraph.yaml").write_text(json.dumps({"sources": {
             authored_name: {"plugin": "local-md", "config": {"root": str(authored)}},
@@ -438,6 +494,8 @@ def observe() -> int:
                 heading = f"### Detail of block {n}"
                 anchored = block(summary, n).replace(heading, f'<a id="detail-of-block-{n}"></a>\n{heading}')
                 run.check(f"GitHub {name}: block {n} is stored whole in the authored form, its heading anchored", anchored in stored, stored[:400])
+            if name in NESTING:
+                run.check(f"GitHub {name}: the nested block is stored whole in the authored form", NESTED_AUTHORED.search(stored) is not None, stored[-600:])
 
         # Linear: every block a collapsible section, stored as one in its editor state.
         for name, record in onward.items():
@@ -450,16 +508,31 @@ def observe() -> int:
                     stored, state = optional_text_at(held, "content"), optional_text_at(held, "contentState")
             run.linear[name] = re.sub(r"https://linear\.app/[^/]+/", "https://linear.app/<workspace>/", text_at(held, "url"))
             run.linear_bodies[name] = stored
-            sections = sections_of(state or None)
+            # The metadata slot is a collapsed block of its own after the content: judge what is above it.
+            stored = stored.rsplit("\n\n+++ onetaskgraph metadata\n\n", 1)[0]
+            sections = [section for section in sections_of(state or None) if section.summary != "onetaskgraph metadata"]
             run.linear_sections[name] = sections
             lines = stored.split("\n")
+            nesting = name in NESTING
             for n, summary in enumerate(SUMMARIES, start=1):
                 header = f"+++ {summary.linear}"
                 run.check(f"Linear {name}: block {n} is stored as `{header}`, a blank line after it", header in lines and lines[lines.index(header) + 1] == "", stored[:400])
-            run.check(f"Linear {name}: every section is closed by `+++`", lines.count("+++") == len(SUMMARIES), stored[:400])
-            run.check(f"Linear {name}: no authored markup is left", not any(line.startswith(("<details", "<summary>")) or line == "</details>" for line in lines), stored[:400])
-            run.check(f"Linear {name}: its editor state holds one collapsible_section per block, its heading the summary", [section.summary for section in sections] == [summary.shown for summary in SUMMARIES], str(sections))
-            for n, section in enumerate(sections, start=1):
+            run.check(f"Linear {name}: every section is closed by `+++`", lines.count("+++") == len(SUMMARIES) + (2 if nesting else 0), stored[:400])
+            run.check(f"Linear {name}: no authored markup is left, and no `>>>`", not any(line.startswith(("<details", "<summary>", ">>>")) or line == "</details>" for line in lines), stored[:400])
+            shown_summaries = [summary.shown for summary in SUMMARIES] + ([NESTED_OUTER, NESTED_INNER] if nesting else [])
+            run.check(f"Linear {name}: its editor state holds one collapsible_section per block, its heading the summary", [section.summary for section in sections] == shown_summaries, str(sections))
+            if nesting:
+                match = NESTED_LINEAR.search(stored)
+                run.check(f"Linear {name}: the nested block is stored as `+++ {NESTED_OUTER}` … `+++ {NESTED_INNER}` … `+++` … `+++`, each image inside its own", match is not None, stored[-600:])
+                by_summary = {section.summary: section for section in sections}
+                outer, inner = by_summary.get(NESTED_OUTER), by_summary.get(NESTED_INNER)
+                run.check(f"Linear {name}: its editor state holds the `{NESTED_INNER}` section inside the `{NESTED_OUTER}` one",
+                          outer is not None and inner is not None and outer.parent is None and inner.parent == NESTED_OUTER and "collapsible_section" in outer.body, str(sections))
+                run.check(f"Linear {name}: the after image is an image node of the outer section and the before image of the inner one, each at the address the body names",
+                          match is not None and outer is not None and inner is not None and outer.images == (match["after"],) and inner.images == (match["before"],), str(sections))
+                run.check(f"Linear {name}: each image is uploaded to uploads.linear.app",
+                          match is not None and all(match[image].startswith("https://uploads.linear.app/") for image in ("after", "before")), stored[-600:])
+            for n, section in enumerate(sections[: len(SUMMARIES)], start=1):
                 for kind in ("paragraph", "heading", "code_block", "table"):
                     run.check(f"Linear {name}: section {n} keeps a {kind} inside it", kind in section.body, str(section))
                 run.check(f"Linear {name}: section {n} keeps its list inside it", any(kind.endswith("_list") for kind in section.body), str(section))
@@ -469,7 +542,9 @@ def observe() -> int:
             content = optional_text_at(shown(record), "content")
             run.read_back[name] = content
             for n, summary in enumerate(SUMMARIES, start=1):
-                run.check(f"store read of Linear {name}: block {n} reads back in the authored form", f"<details>\n<summary>{summary.authored}</summary>\n\nParagraph of block {n}." in content and content.count("</details>") == len(SUMMARIES), content[:400])
+                run.check(f"store read of Linear {name}: block {n} reads back in the authored form", f"<details>\n<summary>{summary.authored}</summary>\n\nParagraph of block {n}." in content and content.count("</details>") == len(SUMMARIES) + (2 if name in NESTING else 0), content[:400])
+            if name in NESTING:
+                run.check(f"store read of Linear {name}: the nested block reads back as the authored nested blocks", NESTED_AUTHORED.search(content) is not None, content[-600:])
     finally:
         for url in created_issues:
             try:
