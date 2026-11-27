@@ -947,7 +947,8 @@ fn every_copied_item_reads_back_through_the_store_as_authored() {
         // A shape Linear holds that is not one section in its form reads back as it is stored:
         // a section with an empty summary — Linear's own after a stray `>>>` — one missing a
         // margin, and one never closed; and sections nested in Linear read back as a block
-        // inside a block.
+        // inside a block — an inner one that is no section in Linear's form left as it is
+        // stored inside the outer one's block.
         for (stored, read) in [
             ("+++ \n\nUnder no summary.\n\n+++", None),
             ("+++ Tight\nNo margin above.\n\n+++", None),
@@ -957,6 +958,13 @@ fn every_copied_item_reads_back_through_the_store_as_authored() {
                 Some(
                     "<details>\n<summary>Outer</summary>\n\nOuter text.\n\n<details>\n\
                      <summary>Inner</summary>\n\nInner text.\n\n</details>\n\n</details>",
+                ),
+            ),
+            (
+                "+++ Outer\n\nOuter text.\n\n+++ \n\nUnder no summary.\n\n+++\n\n+++",
+                Some(
+                    "<details>\n<summary>Outer</summary>\n\nOuter text.\n\n+++ \n\nUnder no \
+                     summary.\n\n+++\n\n</details>",
                 ),
             ),
         ] {
@@ -2353,8 +2361,6 @@ fn another_items_read_of_the_same_block_never_changes_what_a_write_back_keeps() 
     }
 }
 
-// A block nested in another: Linear's section inside a section, the authored form elsewhere.
-
 /// A design document's collapsed visual change, as spike `spike-linear-nested-blocks` probed it:
 /// an outer block holding a paragraph and the after image, and inside it a block holding the
 /// before image — each image `after` and `before` names.
@@ -2643,4 +2649,68 @@ fn a_nested_block_lands_on_linear_as_a_section_inside_a_section_and_reads_back_a
             &[],
         );
     }
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: a folder of Markdown and the loopback Linear workspace.
+#[test]
+fn a_nested_block_linear_cannot_spell_or_holds_as_text_stays_as_it_stands_inside_its_section() {
+    let plan = LinearPlan::new();
+    let task = &plan.landed["T"];
+    let set = |name: &str, body: &str| {
+        let file = plan.file(name, body);
+        ok(
+            &plan.sandbox,
+            &["task", "content", "set", &task.id, "--file", &file],
+        );
+    };
+
+    // An inner block whose summary's text holds a literal backtick, which Linear would read as a
+    // code mark: carried as HTML inside the outer block's section, and read back as authored.
+    let unspellable = "<details>\n<summary>A `tick` inside</summary>\n\nInner text.\n\n</details>";
+    let body = format!(
+        "<details>\n<summary>Outer</summary>\n\nOuter text.\n\n{unspellable}\n\n</details>"
+    );
+    set("unspellable.md", &body);
+    assert_eq!(
+        plan.stored(task),
+        format!("+++ Outer\n\nOuter text.\n\n{unspellable}\n\n+++"),
+        "the outer block is a section, the inner one carried as it stands inside it"
+    );
+    assert_eq!(
+        task.content(&plan.sandbox),
+        body,
+        "and it reads back as authored"
+    );
+
+    // An inner block Linear holds as literal text inside a section reads back inside the outer
+    // block, and set back as it reads it is written back as Linear stored it.
+    let literal = "<details>\n<summary>Held as text</summary>\n\n- a list\n\n</details>";
+    plan.hold_as_text(
+        task,
+        &format!("+++ Outer\n\nOuter text.\n\n{literal}\n\n+++\n"),
+    );
+    let held = plan.stored(task);
+    let stored_literal = literal.replace("- a list", "* a list");
+    assert_eq!(
+        held,
+        format!("+++ Outer\n\nOuter text.\n\n{stored_literal}\n\n+++"),
+        "held as literal text inside the section"
+    );
+    let read = task.content(&plan.sandbox);
+    assert_eq!(
+        read,
+        format!(
+            "<details>\n<summary>Outer</summary>\n\nOuter text.\n\n{stored_literal}\n\n</details>"
+        ),
+        "the section reads back as the outer block, the literal one inside it"
+    );
+    set("read.md", &read);
+    assert_eq!(plan.stored(task), held, "written back as Linear stored it");
+    // Edited, it is the caller's own: the inner block is a section inside the outer one.
+    set("edited.md", &read.replace("Outer text.", "Edited text."));
+    assert_eq!(
+        plan.stored(task),
+        "+++ Outer\n\nEdited text.\n\n+++ Held as text\n\n* a list\n\n+++\n\n+++",
+        "a caller's own body lands the inner block as a section"
+    );
 }

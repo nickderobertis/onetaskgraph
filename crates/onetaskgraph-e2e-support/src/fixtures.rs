@@ -7796,20 +7796,26 @@ fn linear_serve(
                 .unwrap_or_default()
                 .trim_end_matches('\r');
             // An image's bytes, sent to the signed URL `fileUpload` answered: held as Linear's
-            // storage holds the file, by the upload's number.
+            // storage holds the file, by the upload's number. A URL no `fileUpload` answered, or
+            // one already sent its bytes, is not found; bytes of another length than the size
+            // `fileUpload` was given are refused.
             if let Some(upload) = request_line
                 .strip_prefix("PUT /upload/")
                 .and_then(|rest| rest.strip_suffix(" HTTP/1.1"))
             {
                 let mut held = state.lock().unwrap();
-                let known = held["_linear_uploads"]
+                let pending = held["_linear_uploads"]
                     .get(upload)
-                    .is_some_and(|file| file["bytes"].is_null());
-                let status = if known {
-                    held["_linear_uploads"][upload]["bytes"] = json!(bytes.len() - split);
-                    "200 OK"
-                } else {
-                    "404 Not Found"
+                    .filter(|file| file["bytes"].is_null())
+                    .and_then(|file| file["size"].as_u64());
+                let sent = (bytes.len() - split) as u64;
+                let status = match pending {
+                    Some(size) if size == sent => {
+                        held["_linear_uploads"][upload]["bytes"] = json!(sent);
+                        "200 OK"
+                    }
+                    Some(_) => "400 Bad Request",
+                    None => "404 Not Found",
                 };
                 drop(held);
                 let _ = write!(
@@ -7853,6 +7859,22 @@ fn linear_serve(
             // the bytes to, and the `uploads.linear.app` address the image is served at, as
             // Linear answers `fileUpload`.
             if request["query"].as_str() == Some(onetaskgraph_linear::graphql::FILE_UPLOAD) {
+                let variables = &request["variables"];
+                let named =
+                    |key: &str| variables[key].as_str().is_some_and(|text| !text.is_empty());
+                let well_formed = named("filename")
+                    && named("contentType")
+                    && variables["size"].as_u64().is_some_and(|size| size > 0)
+                    && variables.as_object().is_some_and(|held| held.len() == 3);
+                if !well_formed {
+                    let text = r#"{"errors":[{"message":"fileUpload takes a filename, a contentType and a positive size"}]}"#;
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{text}",
+                        text.len()
+                    );
+                    continue;
+                }
                 let mut held = state.lock().unwrap();
                 if !held["_linear_uploads"].is_object() {
                     held["_linear_uploads"] = json!({});
@@ -10103,6 +10125,68 @@ fn linear_fixture_rejects_invalid_variables_and_unknown_operations() {
     let _ = stream.read_to_string(&mut response);
     assert!(response.starts_with("HTTP/1.1 413 Content Too Large"));
 }
+#[test]
+// llmlint: ignore[tests_mirror_real_usage] A failure test of the loopback Linear's own upload boundary, which the Linear plugin cannot exercise malformedly because it always sends a typed fileUpload and the bytes it declared; it sends raw requests through the real socket, as the test above does, rather than calling the server's logic.
+fn linear_fixture_refuses_a_malformed_upload_and_bytes_it_did_not_ask_for() {
+    let sandbox = Sandbox::new();
+    let config = linear_block(&sandbox);
+    let endpoint = config["endpoint"].as_str().unwrap();
+    let address = endpoint
+        .strip_prefix("http://")
+        .unwrap()
+        .strip_suffix("/graphql")
+        .unwrap();
+    let send = |head: &str, body: &[u8]| -> String {
+        let mut stream = std::net::TcpStream::connect(address).unwrap();
+        write!(
+            stream,
+            "{head}\r\nHost: {address}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        )
+        .unwrap();
+        stream.write_all(body).unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).unwrap();
+        response
+    };
+    let upload = |variables: Value| {
+        let body =
+            json!({"query": onetaskgraph_linear::graphql::FILE_UPLOAD, "variables": variables});
+        send("POST /graphql HTTP/1.1", body.to_string().as_bytes())
+    };
+    for variables in [
+        json!({"contentType": "image/png", "filename": "a.png"}),
+        json!({"contentType": "image/png", "filename": "a.png", "size": 0}),
+        json!({"contentType": "image/png", "filename": 7, "size": 4}),
+        json!({"contentType": "", "filename": "a.png", "size": 4}),
+        json!({"contentType": "image/png", "filename": "a.png", "size": 4, "extra": true}),
+    ] {
+        let response = upload(variables.clone());
+        assert!(
+            response.starts_with("HTTP/1.1 400 Bad Request"),
+            "{variables}: {response}"
+        );
+    }
+    let response = upload(json!({"contentType": "image/png", "filename": "a.png", "size": 4}));
+    assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+    let answer: Value =
+        serde_json::from_str(&response[response.find("\r\n\r\n").unwrap() + 4..]).unwrap();
+    let target = answer["data"]["fileUpload"]["uploadFile"]["uploadUrl"]
+        .as_str()
+        .unwrap()
+        .strip_prefix(&format!("http://{address}"))
+        .unwrap()
+        .to_owned();
+    assert!(send("PUT /upload/99 HTTP/1.1", b"abcd").starts_with("HTTP/1.1 404 Not Found"));
+    let put = format!("PUT {target} HTTP/1.1");
+    assert!(send(&put, b"abc").starts_with("HTTP/1.1 400 Bad Request"));
+    assert!(send(&put, b"abcd").starts_with("HTTP/1.1 200 OK"));
+    assert!(
+        send(&put, b"abcd").starts_with("HTTP/1.1 404 Not Found"),
+        "sent once"
+    );
+}
+
 /// The far ends `id` records under the reserved key, for a source with no native way to
 /// name one: every qualified endpoint the dataset gives that item at `key`.
 fn recorded_far_ends(key: &str, id: &Value) -> Vec<Value> {

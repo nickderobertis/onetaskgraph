@@ -114,17 +114,44 @@ const NESTED: &str = include_str!("../fixtures/expandable_blocks/nested/observat
 /// its control of one section, and what Linear stored of it.
 #[derive(Debug, Clone)]
 pub struct NestedRecord {
-    /// `issue` or `document`.
-    pub kind: String,
-    /// The spelling sent: `plus-in-plus`, `arrow-in-arrow`, `arrow-in-plus`, `plus-in-arrow` or
-    /// `control`.
-    pub form: String,
+    /// What Linear record it is.
+    pub kind: NestedKind,
+    /// The spelling it was sent in.
+    pub form: NestedForm,
     /// The Markdown sent.
     pub sent: String,
     /// The Markdown Linear stored.
     pub stored: String,
     /// The editor state Linear stored it as: base64 Yjs.
     pub encoded_state: String,
+}
+
+/// The kind of Linear record the nested recording holds one of.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum NestedKind {
+    /// A Linear issue, its `description` written.
+    Issue,
+    /// A team document, its `content` written.
+    Document,
+}
+
+/// The spelling a nested record was sent in: the outer section's opener and closer, then the
+/// inner one's, each `+++` or Linear's editor shortcut `>>>`; or the control of one `+++`
+/// section.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum NestedForm {
+    /// `+++ Outer` … `+++ Before` … `+++` … `+++`: the spelling the store writes.
+    PlusInPlus,
+    /// `>>> Outer` … `>>> Before` … `>>>` … `>>>`.
+    ArrowInArrow,
+    /// `+++ Outer` … `>>> Before` … `>>>` … `+++`.
+    ArrowInPlus,
+    /// `>>> Outer` … `+++ Before` … `+++` … `>>>`.
+    PlusInArrow,
+    /// One `+++ Section` holding a paragraph and an image.
+    Control,
 }
 
 /// Every record of the nested recording, in its file's order.
@@ -146,9 +173,13 @@ pub fn nested() -> Vec<NestedRecord> {
                     .unwrap_or_else(|| panic!("a nested record records {key}"))
                     .to_owned()
             };
+            fn named<T: serde::de::DeserializeOwned>(record: &Value, key: &str) -> T {
+                serde_json::from_value(record[key].clone())
+                    .unwrap_or_else(|error| panic!("a nested record's {key}: {error}"))
+            }
             NestedRecord {
-                kind: field("kind"),
-                form: field("form"),
+                kind: named(record, "kind"),
+                form: named(record, "form"),
                 sent: field("sent"),
                 stored: field("stored"),
                 encoded_state: field("encoded_state"),
@@ -454,7 +485,7 @@ pub fn unaccounted(sent: &str, stored: &str) -> Vec<Hunk> {
 
 #[cfg(test)]
 mod tests {
-    use super::{fixture, nested, normalizations, recorded, unaccounted};
+    use super::{NestedForm, fixture, nested, normalizations, recorded, unaccounted};
     use crate::linear_editor::{decoded_tree, node_tree};
     use crate::linear_markdown::stored;
     use serde_json::Value;
@@ -513,7 +544,7 @@ mod tests {
         let all = nested();
         assert_eq!(all.len(), 6);
         for record in all {
-            let name = format!("{} {}", record.kind, record.form);
+            let name = format!("{:?} {:?}", record.kind, record.form);
             assert_eq!(
                 stored(&record.sent),
                 record.stored,
@@ -523,7 +554,7 @@ mod tests {
             let recorded = decoded_tree(&record.encoded_state).expect("a recorded state decodes");
             let recorded = outline(&recorded["content"]);
             assert!(
-                record.form == "control"
+                record.form == NestedForm::Control
                     || recorded.iter().any(|line| line.starts_with("  section")),
                 "{name}: Linear held a section inside a section: {recorded:#?}"
             );
