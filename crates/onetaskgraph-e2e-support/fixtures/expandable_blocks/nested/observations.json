@@ -1,0 +1,440 @@
+{
+  "captured": "2026-11-27",
+  "team": "TES2",
+  "spike": "spike-linear-nested-blocks",
+  "about": "The records spike spike-linear-nested-blocks left in Linear team TES2 under its stamp, read back through Linear's GraphQL API by their titles: per record the Markdown sent (recomposed by the spike's own FORMS from the image URLs the stored Markdown names, which is how the spike composed it), the Markdown Linear stored, its editor state as Linear encoded it (`encoded_state`, base64 Yjs) and as the spike's pycrdt decoding reads it (`editor_state`, `outline`). Each record's URL is left out: it names the workspace.",
+  "stamp": "U-17UN402ICR95C-4150265-1795791873",
+  "images": {
+    "after.png": "https://uploads.linear.app/d8b4a4c3-5fea-4568-9fdc-e08b7b8ab846/7d1c1808-dfe7-4377-867a-3a504e1fa380/d2a1d2d4-3fad-49ea-b684-164071e63266",
+    "before.png": "https://uploads.linear.app/d8b4a4c3-5fea-4568-9fdc-e08b7b8ab846/b51b010f-fe9d-430c-b5e6-5533afa610a2/dea0c140-b875-4e44-b8ba-de902eb5ad06"
+  },
+  "records": [
+    {
+      "kind": "issue",
+      "form": "plus-in-plus",
+      "id": "a74c18d3-12ee-4d61-a89e-990e2e525376",
+      "identifier": "TES2-3867",
+      "created": "2026-11-27T15:04:34.925Z",
+      "spelling": "`+++ Outer` … `+++ Before` … `+++` … `+++`",
+      "sent": "Nested probe.\n\n+++ Outer\n\nParagraph inside Outer.\n\n![After](https://uploads.linear.app/d8b4a4c3-5fea-4568-9fdc-e08b7b8ab846/7d1c1808-dfe7-4377-867a-3a504e1fa380/d2a1d2d4-3fad-49ea-b684-164071e63266)\n\n+++ Before\n\n![Before](https://uploads.linear.app/d8b4a4c3-5fea-4568-9fdc-e08b7b8ab846/b51b010f-fe9d-430c-b5e6-5533afa610a2/dea0c140-b875-4e44-b8ba-de902eb5ad06)\n\n+++\n\n+++\n\nParagraph after both.\n",
+      "stored": "Nested probe.\n\n+++ Outer\n\nParagraph inside Outer.\n\n![After](https://uploads.linear.app/d8b4a4c3-5fea-4568-9fdc-e08b7b8ab846/7d1c1808-dfe7-4377-867a-3a504e1fa380/d2a1d2d4-3fad-49ea-b684-164071e63266)\n\n+++ Before\n\n![Before](https://uploads.linear.app/d8b4a4c3-5fea-4568-9fdc-e08b7b8ab846/b51b010f-fe9d-430c-b5e6-5533afa610a2/dea0c140-b875-4e44-b8ba-de902eb5ad06)\n\n+++\n\n+++\n\nParagraph after both.",
+      "encoded_state": "AS39rsqUAwAHAQtwcm9zZW1pcnJvcgMJcGFyYWdyYXBoBwD9rsqUAwAGBgD9rsqUAwELYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2E/a7KlAMCDU5lc3RlZCBwcm9iZS6G/a7KlAMPC2F0dHJpYnV0aW9uBG51bGyH/a7KlAMAAxNjb2xsYXBzaWJsZV9zZWN0aW9uBwD9rsqUAxEDE2NvbGxhcHNpYmxlX2hlYWRpbmcHAP2uypQDEgMJcGFyYWdyYXBoBwD9rsqUAxMGBgD9rsqUAxQLYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2E/a7KlAMVBU91dGVyhv2uypQDGgthdHRyaWJ1dGlvbgRudWxsh/2uypQDEgMJcGFyYWdyYXBoBwD9rsqUAxwGBgD9rsqUAx0LYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2E/a7KlAMeF1BhcmFncmFwaCBpbnNpZGUgT3V0ZXIuhv2uypQDNQthdHRyaWJ1dGlvbgRudWxsh/2uypQDHAMFaW1hZ2UoAP2uypQDNwRlZGl0AX8oAP2uypQDNwt1cGxvYWRTdGF0ZQF3CGZpbmlzaGVkKAD9rsqUAzcDc3JjAXeJAWh0dHBzOi8vdXBsb2Fkcy5saW5lYXIuYXBwL2Q4YjRhNGMzLTVmZWEtNDU2OC05ZmRjLWUwOGI3YjhhYjg0Ni83ZDFjMTgwOC1kZmU3LTQzNzctODY3YS0zYTUwNGUxZmEzODAvZDJhMWQyZDQtM2ZhZC00OWVhLWI2ODQtMTY0MDcxZTYzMjY2KAD9rsqUAzcDYWx0AXcFQWZ0ZXIoAP2uypQDNxJjb250ZW50QXR0cmlidXRpb24BdgIGdXNlcklkdyRiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzcJYWN0b3JUeXBldwR1c2Vyh/2uypQDNwMTY29sbGFwc2libGVfc2VjdGlvbgcA/a7KlAM9AxNjb2xsYXBzaWJsZV9oZWFkaW5nBwD9rsqUAz4DCXBhcmFncmFwaAcA/a7KlAM/BgYA/a7KlANAC2F0dHJpYnV0aW9uRHsidXNlcklkIjoiYjc2MDdiMjEtMTYzMS00MzVlLTkyZDgtZDZhNjUyODZmZjc3IiwiYWN0b3JUeXBlIjoidXNlciJ9hP2uypQDQQZCZWZvcmWG/a7KlANHC2F0dHJpYnV0aW9uBG51bGyH/a7KlAM+AwVpbWFnZSgA/a7KlANJBGVkaXQBfygA/a7KlANJC3VwbG9hZFN0YXRlAXcIZmluaXNoZWQoAP2uypQDSQNzcmMBd4kBaHR0cHM6Ly91cGxvYWRzLmxpbmVhci5hcHAvZDhiNGE0YzMtNWZlYS00NTY4LTlmZGMtZTA4YjdiOGFiODQ2L2I1MWIwMTBmLWZlOWQtNDMwYy1iNWU2LTU1MzNhZmE2MTBhMi9kZWEwYzE0MC1iODc1LTRlNDQtYjhiYS1kZTkwMmViNWFkMDYoAP2uypQDSQNhbHQBdwZCZWZvcmUoAP2uypQDSRJjb250ZW50QXR0cmlidXRpb24BdgIGdXNlcklkdyRiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzcJYWN0b3JUeXBldwR1c2VyKAD9rsqUAz0CaWQBdyQzYzRlZDZiNC1jMDM0LTQ2M2UtOGQ5My0xZjM5MDk0ZmE3NGQoAP2uypQDPRJ3YXNDb3BpZWRXaGlsZU9wZW4BfygA/a7KlAMRAmlkAXckOTg2NzRlZjEtNGExYi00NjliLThhNGEtMDZiMDlhOGM4NjAwKAD9rsqUAxESd2FzQ29waWVkV2hpbGVPcGVuAX+H/a7KlAMRAwlwYXJhZ3JhcGgHAP2uypQDUwYGAP2uypQDVAthdHRyaWJ1dGlvbkR7InVzZXJJZCI6ImI3NjA3YjIxLTE2MzEtNDM1ZS05MmQ4LWQ2YTY1Mjg2ZmY3NyIsImFjdG9yVHlwZSI6InVzZXIifYT9rsqUA1UVUGFyYWdyYXBoIGFmdGVyIGJvdGguhv2uypQDagthdHRyaWJ1dGlvbgRudWxsAA==",
+      "editor_state": [
+        {
+          "tag": "paragraph",
+          "text": "Nested probe."
+        },
+        {
+          "tag": "collapsible_section",
+          "children": [
+            {
+              "tag": "collapsible_heading",
+              "text": "Outer",
+              "children": [
+                {
+                  "tag": "paragraph",
+                  "text": "Outer"
+                }
+              ]
+            },
+            {
+              "tag": "paragraph",
+              "text": "Paragraph inside Outer."
+            },
+            {
+              "tag": "image",
+              "src": "https://uploads.linear.app/d8b4a4c3-5fea-4568-9fdc-e08b7b8ab846/7d1c1808-dfe7-4377-867a-3a504e1fa380/d2a1d2d4-3fad-49ea-b684-164071e63266"
+            },
+            {
+              "tag": "collapsible_section",
+              "children": [
+                {
+                  "tag": "collapsible_heading",
+                  "text": "Before",
+                  "children": [
+                    {
+                      "tag": "paragraph",
+                      "text": "Before"
+                    }
+                  ]
+                },
+                {
+                  "tag": "image",
+                  "src": "https://uploads.linear.app/d8b4a4c3-5fea-4568-9fdc-e08b7b8ab846/b51b010f-fe9d-430c-b5e6-5533afa610a2/dea0c140-b875-4e44-b8ba-de902eb5ad06"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "paragraph",
+          "text": "Paragraph after both."
+        }
+      ],
+      "outline": [
+        "paragraph 'Nested probe.'",
+        "section 'Outer'",
+        "  paragraph 'Paragraph inside Outer.'",
+        "  image after.png",
+        "  section 'Before'",
+        "    image before.png",
+        "paragraph 'Paragraph after both.'"
+      ]
+    },
+    {
+      "kind": "issue",
+      "form": "arrow-in-arrow",
+      "id": "b9acb132-4566-4a71-b6c0-e21c14b230e7",
+      "identifier": "TES2-3868",
+      "created": "2026-11-27T15:04:35.372Z",
+      "spelling": "`>>> Outer` … `>>> Before` … `>>>` … `>>>`",
+      "sent": "Nested probe.\n\n>>> Outer\n\nParagraph inside Outer.\n\n![After](https://uploads.linear.app/d8b4a4c3-5fea-4568-9fdc-e08b7b8ab846/7d1c1808-dfe7-4377-867a-3a504e1fa380/d2a1d2d4-3fad-49ea-b684-164071e63266)\n\n>>> Before\n\n![Before](https://uploads.linear.app/d8b4a4c3-5fea-4568-9fdc-e08b7b8ab846/b51b010f-fe9d-430c-b5e6-5533afa610a2/dea0c140-b875-4e44-b8ba-de902eb5ad06)\n\n>>>\n\n>>>\n\nParagraph after both.\n",
+      "stored": "Nested probe.\n\n+++ Outer\n\nParagraph inside Outer.\n\n![After](https://uploads.linear.app/d8b4a4c3-5fea-4568-9fdc-e08b7b8ab846/7d1c1808-dfe7-4377-867a-3a504e1fa380/d2a1d2d4-3fad-49ea-b684-164071e63266)\n\n+++ Before\n\n![Before](https://uploads.linear.app/d8b4a4c3-5fea-4568-9fdc-e08b7b8ab846/b51b010f-fe9d-430c-b5e6-5533afa610a2/dea0c140-b875-4e44-b8ba-de902eb5ad06)\n\n+++\n\n+++\n\n+++ \n\nParagraph after both.\n\n+++",
+      "encoded_state": "ATKi0f78BgAHAQtwcm9zZW1pcnJvcgMJcGFyYWdyYXBoBwCi0f78BgAGBgCi0f78BgELYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2EotH+/AYCDU5lc3RlZCBwcm9iZS6GotH+/AYPC2F0dHJpYnV0aW9uBG51bGyHotH+/AYAAxNjb2xsYXBzaWJsZV9zZWN0aW9uBwCi0f78BhEDE2NvbGxhcHNpYmxlX2hlYWRpbmcHAKLR/vwGEgMJcGFyYWdyYXBoBwCi0f78BhMGBgCi0f78BhQLYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2EotH+/AYVBU91dGVyhqLR/vwGGgthdHRyaWJ1dGlvbgRudWxsh6LR/vwGEgMJcGFyYWdyYXBoBwCi0f78BhwGBgCi0f78Bh0LYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2EotH+/AYeF1BhcmFncmFwaCBpbnNpZGUgT3V0ZXIuhqLR/vwGNQthdHRyaWJ1dGlvbgRudWxsh6LR/vwGHAMFaW1hZ2UoAKLR/vwGNwRlZGl0AX8oAKLR/vwGNwt1cGxvYWRTdGF0ZQF3CGZpbmlzaGVkKACi0f78BjcDc3JjAXeJAWh0dHBzOi8vdXBsb2Fkcy5saW5lYXIuYXBwL2Q4YjRhNGMzLTVmZWEtNDU2OC05ZmRjLWUwOGI3YjhhYjg0Ni83ZDFjMTgwOC1kZmU3LTQzNzctODY3YS0zYTUwNGUxZmEzODAvZDJhMWQyZDQtM2ZhZC00OWVhLWI2ODQtMTY0MDcxZTYzMjY2KACi0f78BjcDYWx0AXcFQWZ0ZXIoAKLR/vwGNxJjb250ZW50QXR0cmlidXRpb24BdgIGdXNlcklkdyRiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzcJYWN0b3JUeXBldwR1c2Vyh6LR/vwGNwMTY29sbGFwc2libGVfc2VjdGlvbgcAotH+/AY9AxNjb2xsYXBzaWJsZV9oZWFkaW5nBwCi0f78Bj4DCXBhcmFncmFwaAcAotH+/AY/BgYAotH+/AZAC2F0dHJpYnV0aW9uRHsidXNlcklkIjoiYjc2MDdiMjEtMTYzMS00MzVlLTkyZDgtZDZhNjUyODZmZjc3IiwiYWN0b3JUeXBlIjoidXNlciJ9hKLR/vwGQQZCZWZvcmWGotH+/AZHC2F0dHJpYnV0aW9uBG51bGyHotH+/AY+AwVpbWFnZSgAotH+/AZJBGVkaXQBfygAotH+/AZJC3VwbG9hZFN0YXRlAXcIZmluaXNoZWQoAKLR/vwGSQNzcmMBd4kBaHR0cHM6Ly91cGxvYWRzLmxpbmVhci5hcHAvZDhiNGE0YzMtNWZlYS00NTY4LTlmZGMtZTA4YjdiOGFiODQ2L2I1MWIwMTBmLWZlOWQtNDMwYy1iNWU2LTU1MzNhZmE2MTBhMi9kZWEwYzE0MC1iODc1LTRlNDQtYjhiYS1kZTkwMmViNWFkMDYoAKLR/vwGSQNhbHQBdwZCZWZvcmUoAKLR/vwGSRJjb250ZW50QXR0cmlidXRpb24BdgIGdXNlcklkdyRiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzcJYWN0b3JUeXBldwR1c2VyKACi0f78Bj0CaWQBdyQ3OTczYjA5MS0yZGRkLTRhYTAtYjgxMy02ZmQ2MTYzZDU5YzYoAKLR/vwGPRJ3YXNDb3BpZWRXaGlsZU9wZW4BfygAotH+/AYRAmlkAXckZjgwMjg1OWQtMGZjYS00MTY0LWI2MDktYzg5ZjFhOTM1Mjc1KACi0f78BhESd2FzQ29waWVkV2hpbGVPcGVuAX+HotH+/AYRAxNjb2xsYXBzaWJsZV9zZWN0aW9uBwCi0f78BlMDE2NvbGxhcHNpYmxlX2hlYWRpbmcHAKLR/vwGVAMJcGFyYWdyYXBoh6LR/vwGVAMJcGFyYWdyYXBoBwCi0f78BlYGBgCi0f78BlcLYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2EotH+/AZYFVBhcmFncmFwaCBhZnRlciBib3RoLoai0f78Bm0LYXR0cmlidXRpb24EbnVsbCgAotH+/AZTAmlkAXckMjgzNDhhYzItZmJjOS00MThlLThmZjktZmViZjI2MmI3YTA5KACi0f78BlMSd2FzQ29waWVkV2hpbGVPcGVuAX8A",
+      "editor_state": [
+        {
+          "tag": "paragraph",
+          "text": "Nested probe."
+        },
+        {
+          "tag": "collapsible_section",
+          "children": [
+            {
+              "tag": "collapsible_heading",
+              "text": "Outer",
+              "children": [
+                {
+                  "tag": "paragraph",
+                  "text": "Outer"
+                }
+              ]
+            },
+            {
+              "tag": "paragraph",
+              "text": "Paragraph inside Outer."
+            },
+            {
+              "tag": "image",
+              "src": "https://uploads.linear.app/d8b4a4c3-5fea-4568-9fdc-e08b7b8ab846/7d1c1808-dfe7-4377-867a-3a504e1fa380/d2a1d2d4-3fad-49ea-b684-164071e63266"
+            },
+            {
+              "tag": "collapsible_section",
+              "children": [
+                {
+                  "tag": "collapsible_heading",
+                  "text": "Before",
+                  "children": [
+                    {
+                      "tag": "paragraph",
+                      "text": "Before"
+                    }
+                  ]
+                },
+                {
+                  "tag": "image",
+                  "src": "https://uploads.linear.app/d8b4a4c3-5fea-4568-9fdc-e08b7b8ab846/b51b010f-fe9d-430c-b5e6-5533afa610a2/dea0c140-b875-4e44-b8ba-de902eb5ad06"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "collapsible_section",
+          "children": [
+            {
+              "tag": "collapsible_heading",
+              "text": "",
+              "children": [
+                {
+                  "tag": "paragraph",
+                  "text": ""
+                }
+              ]
+            },
+            {
+              "tag": "paragraph",
+              "text": "Paragraph after both."
+            }
+          ]
+        }
+      ],
+      "outline": [
+        "paragraph 'Nested probe.'",
+        "section 'Outer'",
+        "  paragraph 'Paragraph inside Outer.'",
+        "  image after.png",
+        "  section 'Before'",
+        "    image before.png",
+        "section ''",
+        "  paragraph 'Paragraph after both.'"
+      ]
+    },
+    {
+      "kind": "issue",
+      "form": "arrow-in-plus",
+      "id": "58f64d40-5378-40b6-b7c3-97c1b6b4510e",
+      "identifier": "TES2-3869",
+      "created": "2026-11-27T15:04:35.800Z",
+      "spelling": "`+++ Outer` … `>>> Before` … `>>>` … `+++`",
+      "sent": "Nested probe.\n\n+++ Outer\n\nParagraph inside Outer.\n\n![After](https://uploads.linear.app/d8b4a4c3-5fea-4568-9fdc-e08b7b8ab846/7d1c1808-dfe7-4377-867a-3a504e1fa380/d2a1d2d4-3fad-49ea-b684-164071e63266)\n\n>>> Before\n\n![Before](https://uploads.linear.app/d8b4a4c3-5fea-4568-9fdc-e08b7b8ab846/b51b010f-fe9d-430c-b5e6-5533afa610a2/dea0c140-b875-4e44-b8ba-de902eb5ad06)\n\n>>>\n\n+++\n\nParagraph after both.\n",
+      "stored": "Nested probe.\n\n+++ Outer\n\nParagraph inside Outer.\n\n![After](https://uploads.linear.app/d8b4a4c3-5fea-4568-9fdc-e08b7b8ab846/7d1c1808-dfe7-4377-867a-3a504e1fa380/d2a1d2d4-3fad-49ea-b684-164071e63266)\n\n+++ Before\n\n![Before](https://uploads.linear.app/d8b4a4c3-5fea-4568-9fdc-e08b7b8ab846/b51b010f-fe9d-430c-b5e6-5533afa610a2/dea0c140-b875-4e44-b8ba-de902eb5ad06)\n\n+++\n\n+++\n\nParagraph after both.",
+      "encoded_state": "AS2MyZ2qBgAHAQtwcm9zZW1pcnJvcgMJcGFyYWdyYXBoBwCMyZ2qBgAGBgCMyZ2qBgELYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2EjMmdqgYCDU5lc3RlZCBwcm9iZS6GjMmdqgYPC2F0dHJpYnV0aW9uBG51bGyHjMmdqgYAAxNjb2xsYXBzaWJsZV9zZWN0aW9uBwCMyZ2qBhEDE2NvbGxhcHNpYmxlX2hlYWRpbmcHAIzJnaoGEgMJcGFyYWdyYXBoBwCMyZ2qBhMGBgCMyZ2qBhQLYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2EjMmdqgYVBU91dGVyhozJnaoGGgthdHRyaWJ1dGlvbgRudWxsh4zJnaoGEgMJcGFyYWdyYXBoBwCMyZ2qBhwGBgCMyZ2qBh0LYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2EjMmdqgYeF1BhcmFncmFwaCBpbnNpZGUgT3V0ZXIuhozJnaoGNQthdHRyaWJ1dGlvbgRudWxsh4zJnaoGHAMFaW1hZ2UoAIzJnaoGNwRlZGl0AX8oAIzJnaoGNwt1cGxvYWRTdGF0ZQF3CGZpbmlzaGVkKACMyZ2qBjcDc3JjAXeJAWh0dHBzOi8vdXBsb2Fkcy5saW5lYXIuYXBwL2Q4YjRhNGMzLTVmZWEtNDU2OC05ZmRjLWUwOGI3YjhhYjg0Ni83ZDFjMTgwOC1kZmU3LTQzNzctODY3YS0zYTUwNGUxZmEzODAvZDJhMWQyZDQtM2ZhZC00OWVhLWI2ODQtMTY0MDcxZTYzMjY2KACMyZ2qBjcDYWx0AXcFQWZ0ZXIoAIzJnaoGNxJjb250ZW50QXR0cmlidXRpb24BdgIGdXNlcklkdyRiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzcJYWN0b3JUeXBldwR1c2Vyh4zJnaoGNwMTY29sbGFwc2libGVfc2VjdGlvbgcAjMmdqgY9AxNjb2xsYXBzaWJsZV9oZWFkaW5nBwCMyZ2qBj4DCXBhcmFncmFwaAcAjMmdqgY/BgYAjMmdqgZAC2F0dHJpYnV0aW9uRHsidXNlcklkIjoiYjc2MDdiMjEtMTYzMS00MzVlLTkyZDgtZDZhNjUyODZmZjc3IiwiYWN0b3JUeXBlIjoidXNlciJ9hIzJnaoGQQZCZWZvcmWGjMmdqgZHC2F0dHJpYnV0aW9uBG51bGyHjMmdqgY+AwVpbWFnZSgAjMmdqgZJBGVkaXQBfygAjMmdqgZJC3VwbG9hZFN0YXRlAXcIZmluaXNoZWQoAIzJnaoGSQNzcmMBd4kBaHR0cHM6Ly91cGxvYWRzLmxpbmVhci5hcHAvZDhiNGE0YzMtNWZlYS00NTY4LTlmZGMtZTA4YjdiOGFiODQ2L2I1MWIwMTBmLWZlOWQtNDMwYy1iNWU2LTU1MzNhZmE2MTBhMi9kZWEwYzE0MC1iODc1LTRlNDQtYjhiYS1kZTkwMmViNWFkMDYoAIzJnaoGSQNhbHQBdwZCZWZvcmUoAIzJnaoGSRJjb250ZW50QXR0cmlidXRpb24BdgIGdXNlcklkdyRiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzcJYWN0b3JUeXBldwR1c2VyKACMyZ2qBj0CaWQBdyQ4OWRiMGRjNC0wNjNmLTQ3ZDEtYmU5NS01YmQzMTE1OGM4NDgoAIzJnaoGPRJ3YXNDb3BpZWRXaGlsZU9wZW4BfygAjMmdqgYRAmlkAXckMWMxNmRjNWEtYTkwZS00MWEyLWFjNDgtM2YzYTE3NTU1ZjUxKACMyZ2qBhESd2FzQ29waWVkV2hpbGVPcGVuAX+HjMmdqgYRAwlwYXJhZ3JhcGgHAIzJnaoGUwYGAIzJnaoGVAthdHRyaWJ1dGlvbkR7InVzZXJJZCI6ImI3NjA3YjIxLTE2MzEtNDM1ZS05MmQ4LWQ2YTY1Mjg2ZmY3NyIsImFjdG9yVHlwZSI6InVzZXIifYSMyZ2qBlUVUGFyYWdyYXBoIGFmdGVyIGJvdGguhozJnaoGagthdHRyaWJ1dGlvbgRudWxsAA==",
+      "editor_state": [
+        {
+          "tag": "paragraph",
+          "text": "Nested probe."
+        },
+        {
+          "tag": "collapsible_section",
+          "children": [
+            {
+              "tag": "collapsible_heading",
+              "text": "Outer",
+              "children": [
+                {
+                  "tag": "paragraph",
+                  "text": "Outer"
+                }
+              ]
+            },
+            {
+              "tag": "paragraph",
+              "text": "Paragraph inside Outer."
+            },
+            {
+              "tag": "image",
+              "src": "https://uploads.linear.app/d8b4a4c3-5fea-4568-9fdc-e08b7b8ab846/7d1c1808-dfe7-4377-867a-3a504e1fa380/d2a1d2d4-3fad-49ea-b684-164071e63266"
+            },
+            {
+              "tag": "collapsible_section",
+              "children": [
+                {
+                  "tag": "collapsible_heading",
+                  "text": "Before",
+                  "children": [
+                    {
+                      "tag": "paragraph",
+                      "text": "Before"
+                    }
+                  ]
+                },
+                {
+                  "tag": "image",
+                  "src": "https://uploads.linear.app/d8b4a4c3-5fea-4568-9fdc-e08b7b8ab846/b51b010f-fe9d-430c-b5e6-5533afa610a2/dea0c140-b875-4e44-b8ba-de902eb5ad06"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "paragraph",
+          "text": "Paragraph after both."
+        }
+      ],
+      "outline": [
+        "paragraph 'Nested probe.'",
+        "section 'Outer'",
+        "  paragraph 'Paragraph inside Outer.'",
+        "  image after.png",
+        "  section 'Before'",
+        "    image before.png",
+        "paragraph 'Paragraph after both.'"
+      ]
+    },
+    {
+      "kind": "issue",
+      "form": "plus-in-arrow",
+      "id": "c74ea037-da97-4558-8527-d6f1e5b1f7ce",
+      "identifier": "TES2-3870",
+      "created": "2026-11-27T15:04:36.227Z",
+      "spelling": "`>>> Outer` … `+++ Before` … `+++` … `>>>`",
+      "sent": "Nested probe.\n\n>>> Outer\n\nParagraph inside Outer.\n\n![After](https://uploads.linear.app/d8b4a4c3-5fea-4568-9fdc-e08b7b8ab846/7d1c1808-dfe7-4377-867a-3a504e1fa380/d2a1d2d4-3fad-49ea-b684-164071e63266)\n\n+++ Before\n\n![Before](https://uploads.linear.app/d8b4a4c3-5fea-4568-9fdc-e08b7b8ab846/b51b010f-fe9d-430c-b5e6-5533afa610a2/dea0c140-b875-4e44-b8ba-de902eb5ad06)\n\n+++\n\n>>>\n\nParagraph after both.\n",
+      "stored": "Nested probe.\n\n+++ Outer\n\nParagraph inside Outer.\n\n![After](https://uploads.linear.app/d8b4a4c3-5fea-4568-9fdc-e08b7b8ab846/7d1c1808-dfe7-4377-867a-3a504e1fa380/d2a1d2d4-3fad-49ea-b684-164071e63266)\n\n+++ Before\n\n![Before](https://uploads.linear.app/d8b4a4c3-5fea-4568-9fdc-e08b7b8ab846/b51b010f-fe9d-430c-b5e6-5533afa610a2/dea0c140-b875-4e44-b8ba-de902eb5ad06)\n\n+++\n\n+++\n\nParagraph after both.",
+      "encoded_state": "AS3Y/O6+AQAHAQtwcm9zZW1pcnJvcgMJcGFyYWdyYXBoBwDY/O6+AQAGBgDY/O6+AQELYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2E2PzuvgECDU5lc3RlZCBwcm9iZS6G2PzuvgEPC2F0dHJpYnV0aW9uBG51bGyH2PzuvgEAAxNjb2xsYXBzaWJsZV9zZWN0aW9uBwDY/O6+AREDE2NvbGxhcHNpYmxlX2hlYWRpbmcHANj87r4BEgMJcGFyYWdyYXBoBwDY/O6+ARMGBgDY/O6+ARQLYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2E2PzuvgEVBU91dGVyhtj87r4BGgthdHRyaWJ1dGlvbgRudWxsh9j87r4BEgMJcGFyYWdyYXBoBwDY/O6+ARwGBgDY/O6+AR0LYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2E2PzuvgEeF1BhcmFncmFwaCBpbnNpZGUgT3V0ZXIuhtj87r4BNQthdHRyaWJ1dGlvbgRudWxsh9j87r4BHAMFaW1hZ2UoANj87r4BNwRlZGl0AX8oANj87r4BNwt1cGxvYWRTdGF0ZQF3CGZpbmlzaGVkKADY/O6+ATcDc3JjAXeJAWh0dHBzOi8vdXBsb2Fkcy5saW5lYXIuYXBwL2Q4YjRhNGMzLTVmZWEtNDU2OC05ZmRjLWUwOGI3YjhhYjg0Ni83ZDFjMTgwOC1kZmU3LTQzNzctODY3YS0zYTUwNGUxZmEzODAvZDJhMWQyZDQtM2ZhZC00OWVhLWI2ODQtMTY0MDcxZTYzMjY2KADY/O6+ATcDYWx0AXcFQWZ0ZXIoANj87r4BNxJjb250ZW50QXR0cmlidXRpb24BdgIGdXNlcklkdyRiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzcJYWN0b3JUeXBldwR1c2Vyh9j87r4BNwMTY29sbGFwc2libGVfc2VjdGlvbgcA2PzuvgE9AxNjb2xsYXBzaWJsZV9oZWFkaW5nBwDY/O6+AT4DCXBhcmFncmFwaAcA2PzuvgE/BgYA2PzuvgFAC2F0dHJpYnV0aW9uRHsidXNlcklkIjoiYjc2MDdiMjEtMTYzMS00MzVlLTkyZDgtZDZhNjUyODZmZjc3IiwiYWN0b3JUeXBlIjoidXNlciJ9hNj87r4BQQZCZWZvcmWG2PzuvgFHC2F0dHJpYnV0aW9uBG51bGyH2PzuvgE+AwVpbWFnZSgA2PzuvgFJBGVkaXQBfygA2PzuvgFJC3VwbG9hZFN0YXRlAXcIZmluaXNoZWQoANj87r4BSQNzcmMBd4kBaHR0cHM6Ly91cGxvYWRzLmxpbmVhci5hcHAvZDhiNGE0YzMtNWZlYS00NTY4LTlmZGMtZTA4YjdiOGFiODQ2L2I1MWIwMTBmLWZlOWQtNDMwYy1iNWU2LTU1MzNhZmE2MTBhMi9kZWEwYzE0MC1iODc1LTRlNDQtYjhiYS1kZTkwMmViNWFkMDYoANj87r4BSQNhbHQBdwZCZWZvcmUoANj87r4BSRJjb250ZW50QXR0cmlidXRpb24BdgIGdXNlcklkdyRiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzcJYWN0b3JUeXBldwR1c2VyKADY/O6+AT0CaWQBdyQ0MjY3YjYxMi1mMDIwLTRjMmUtYmE5NS05Yjk1YTQ2MGQ2OTIoANj87r4BPRJ3YXNDb3BpZWRXaGlsZU9wZW4BfygA2PzuvgERAmlkAXckNDJkZDU3ZTktOWQ0Yy00ZmJkLWEwNzEtMjJhMDgyMzBmNzk4KADY/O6+ARESd2FzQ29waWVkV2hpbGVPcGVuAX+H2PzuvgERAwlwYXJhZ3JhcGgHANj87r4BUwYGANj87r4BVAthdHRyaWJ1dGlvbkR7InVzZXJJZCI6ImI3NjA3YjIxLTE2MzEtNDM1ZS05MmQ4LWQ2YTY1Mjg2ZmY3NyIsImFjdG9yVHlwZSI6InVzZXIifYTY/O6+AVUVUGFyYWdyYXBoIGFmdGVyIGJvdGguhtj87r4BagthdHRyaWJ1dGlvbgRudWxsAA==",
+      "editor_state": [
+        {
+          "tag": "paragraph",
+          "text": "Nested probe."
+        },
+        {
+          "tag": "collapsible_section",
+          "children": [
+            {
+              "tag": "collapsible_heading",
+              "text": "Outer",
+              "children": [
+                {
+                  "tag": "paragraph",
+                  "text": "Outer"
+                }
+              ]
+            },
+            {
+              "tag": "paragraph",
+              "text": "Paragraph inside Outer."
+            },
+            {
+              "tag": "image",
+              "src": "https://uploads.linear.app/d8b4a4c3-5fea-4568-9fdc-e08b7b8ab846/7d1c1808-dfe7-4377-867a-3a504e1fa380/d2a1d2d4-3fad-49ea-b684-164071e63266"
+            },
+            {
+              "tag": "collapsible_section",
+              "children": [
+                {
+                  "tag": "collapsible_heading",
+                  "text": "Before",
+                  "children": [
+                    {
+                      "tag": "paragraph",
+                      "text": "Before"
+                    }
+                  ]
+                },
+                {
+                  "tag": "image",
+                  "src": "https://uploads.linear.app/d8b4a4c3-5fea-4568-9fdc-e08b7b8ab846/b51b010f-fe9d-430c-b5e6-5533afa610a2/dea0c140-b875-4e44-b8ba-de902eb5ad06"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "paragraph",
+          "text": "Paragraph after both."
+        }
+      ],
+      "outline": [
+        "paragraph 'Nested probe.'",
+        "section 'Outer'",
+        "  paragraph 'Paragraph inside Outer.'",
+        "  image after.png",
+        "  section 'Before'",
+        "    image before.png",
+        "paragraph 'Paragraph after both.'"
+      ]
+    },
+    {
+      "kind": "issue",
+      "form": "control",
+      "id": "2261e73a-4531-43ae-a86a-d5690b272016",
+      "identifier": "TES2-3871",
+      "created": "2026-11-27T15:04:36.678Z",
+      "spelling": "one `+++ Section` holding a paragraph and an image",
+      "sent": "Control probe.\n\n+++ Section\n\nParagraph inside Section.\n\n![After](https://uploads.linear.app/d8b4a4c3-5fea-4568-9fdc-e08b7b8ab846/7d1c1808-dfe7-4377-867a-3a504e1fa380/d2a1d2d4-3fad-49ea-b684-164071e63266)\n\n+++\n\nParagraph after the section.\n",
+      "stored": "Control probe.\n\n+++ Section\n\nParagraph inside Section.\n\n![After](https://uploads.linear.app/d8b4a4c3-5fea-4568-9fdc-e08b7b8ab846/7d1c1808-dfe7-4377-867a-3a504e1fa380/d2a1d2d4-3fad-49ea-b684-164071e63266)\n\n+++\n\nParagraph after the section.",
+      "encoded_state": "AR7t2smsBgAHAQtwcm9zZW1pcnJvcgMJcGFyYWdyYXBoBwDt2smsBgAGBgDt2smsBgELYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2E7drJrAYCDkNvbnRyb2wgcHJvYmUuhu3ayawGEAthdHRyaWJ1dGlvbgRudWxsh+3ayawGAAMTY29sbGFwc2libGVfc2VjdGlvbgcA7drJrAYSAxNjb2xsYXBzaWJsZV9oZWFkaW5nBwDt2smsBhMDCXBhcmFncmFwaAcA7drJrAYUBgYA7drJrAYVC2F0dHJpYnV0aW9uRHsidXNlcklkIjoiYjc2MDdiMjEtMTYzMS00MzVlLTkyZDgtZDZhNjUyODZmZjc3IiwiYWN0b3JUeXBlIjoidXNlciJ9hO3ayawGFgdTZWN0aW9uhu3ayawGHQthdHRyaWJ1dGlvbgRudWxsh+3ayawGEwMJcGFyYWdyYXBoBwDt2smsBh8GBgDt2smsBiALYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2E7drJrAYhGVBhcmFncmFwaCBpbnNpZGUgU2VjdGlvbi6G7drJrAY6C2F0dHJpYnV0aW9uBG51bGyH7drJrAYfAwVpbWFnZSgA7drJrAY8BGVkaXQBfygA7drJrAY8C3VwbG9hZFN0YXRlAXcIZmluaXNoZWQoAO3ayawGPANzcmMBd4kBaHR0cHM6Ly91cGxvYWRzLmxpbmVhci5hcHAvZDhiNGE0YzMtNWZlYS00NTY4LTlmZGMtZTA4YjdiOGFiODQ2LzdkMWMxODA4LWRmZTctNDM3Ny04NjdhLTNhNTA0ZTFmYTM4MC9kMmExZDJkNC0zZmFkLTQ5ZWEtYjY4NC0xNjQwNzFlNjMyNjYoAO3ayawGPANhbHQBdwVBZnRlcigA7drJrAY8EmNvbnRlbnRBdHRyaWJ1dGlvbgF2AgZ1c2VySWR3JGI3NjA3YjIxLTE2MzEtNDM1ZS05MmQ4LWQ2YTY1Mjg2ZmY3NwlhY3RvclR5cGV3BHVzZXIoAO3ayawGEgJpZAF3JGI3ZjdjN2ViLTgwYmYtNGRjMS1hMWM2LWE1YjYzNmFiMGM3NSgA7drJrAYSEndhc0NvcGllZFdoaWxlT3BlbgF/h+3ayawGEgMJcGFyYWdyYXBoBwDt2smsBkQGBgDt2smsBkULYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2E7drJrAZGHFBhcmFncmFwaCBhZnRlciB0aGUgc2VjdGlvbi6G7drJrAZiC2F0dHJpYnV0aW9uBG51bGwA",
+      "editor_state": [
+        {
+          "tag": "paragraph",
+          "text": "Control probe."
+        },
+        {
+          "tag": "collapsible_section",
+          "children": [
+            {
+              "tag": "collapsible_heading",
+              "text": "Section",
+              "children": [
+                {
+                  "tag": "paragraph",
+                  "text": "Section"
+                }
+              ]
+            },
+            {
+              "tag": "paragraph",
+              "text": "Paragraph inside Section."
+            },
+            {
+              "tag": "image",
+              "src": "https://uploads.linear.app/d8b4a4c3-5fea-4568-9fdc-e08b7b8ab846/7d1c1808-dfe7-4377-867a-3a504e1fa380/d2a1d2d4-3fad-49ea-b684-164071e63266"
+            }
+          ]
+        },
+        {
+          "tag": "paragraph",
+          "text": "Paragraph after the section."
+        }
+      ],
+      "outline": [
+        "paragraph 'Control probe.'",
+        "section 'Section'",
+        "  paragraph 'Paragraph inside Section.'",
+        "  image after.png",
+        "paragraph 'Paragraph after the section.'"
+      ]
+    },
+    {
+      "kind": "document",
+      "form": "plus-in-plus",
+      "id": "57e71bdc-96cd-433d-8ba7-9a117167a2f2",
+      "identifier": null,
+      "created": "2026-11-27T15:04:37.282Z",
+      "spelling": "`+++ Outer` … `+++ Before` … `+++` … `+++`",
+      "sent": "Nested probe.\n\n+++ Outer\n\nParagraph inside Outer.\n\n![After](https://uploads.linear.app/d8b4a4c3-5fea-4568-9fdc-e08b7b8ab846/7d1c1808-dfe7-4377-867a-3a504e1fa380/d2a1d2d4-3fad-49ea-b684-164071e63266)\n\n+++ Before\n\n![Before](https://uploads.linear.app/d8b4a4c3-5fea-4568-9fdc-e08b7b8ab846/b51b010f-fe9d-430c-b5e6-5533afa610a2/dea0c140-b875-4e44-b8ba-de902eb5ad06)\n\n+++\n\n+++\n\nParagraph after both.\n",
+      "stored": "Nested probe.\n\n+++ Outer\n\nParagraph inside Outer.\n\n![After](https://uploads.linear.app/d8b4a4c3-5fea-4568-9fdc-e08b7b8ab846/7d1c1808-dfe7-4377-867a-3a504e1fa380/d2a1d2d4-3fad-49ea-b684-164071e63266)\n\n+++ Before\n\n![Before](https://uploads.linear.app/d8b4a4c3-5fea-4568-9fdc-e08b7b8ab846/b51b010f-fe9d-430c-b5e6-5533afa610a2/dea0c140-b875-4e44-b8ba-de902eb5ad06)\n\n+++\n\n+++\n\nParagraph after both.",
+      "encoded_state": "AS3yzNl9AAcBC3Byb3NlbWlycm9yAwlwYXJhZ3JhcGgHAPLM2X0ABgYA8szZfQELYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2E8szZfQINTmVzdGVkIHByb2JlLobyzNl9DwthdHRyaWJ1dGlvbgRudWxsh/LM2X0AAxNjb2xsYXBzaWJsZV9zZWN0aW9uBwDyzNl9EQMTY29sbGFwc2libGVfaGVhZGluZwcA8szZfRIDCXBhcmFncmFwaAcA8szZfRMGBgDyzNl9FAthdHRyaWJ1dGlvbkR7InVzZXJJZCI6ImI3NjA3YjIxLTE2MzEtNDM1ZS05MmQ4LWQ2YTY1Mjg2ZmY3NyIsImFjdG9yVHlwZSI6InVzZXIifYTyzNl9FQVPdXRlcobyzNl9GgthdHRyaWJ1dGlvbgRudWxsh/LM2X0SAwlwYXJhZ3JhcGgHAPLM2X0cBgYA8szZfR0LYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2E8szZfR4XUGFyYWdyYXBoIGluc2lkZSBPdXRlci6G8szZfTULYXR0cmlidXRpb24EbnVsbIfyzNl9HAMFaW1hZ2UoAPLM2X03BGVkaXQBfygA8szZfTcLdXBsb2FkU3RhdGUBdwhmaW5pc2hlZCgA8szZfTcDc3JjAXeJAWh0dHBzOi8vdXBsb2Fkcy5saW5lYXIuYXBwL2Q4YjRhNGMzLTVmZWEtNDU2OC05ZmRjLWUwOGI3YjhhYjg0Ni83ZDFjMTgwOC1kZmU3LTQzNzctODY3YS0zYTUwNGUxZmEzODAvZDJhMWQyZDQtM2ZhZC00OWVhLWI2ODQtMTY0MDcxZTYzMjY2KADyzNl9NwNhbHQBdwVBZnRlcigA8szZfTcSY29udGVudEF0dHJpYnV0aW9uAXYCBnVzZXJJZHckYjc2MDdiMjEtMTYzMS00MzVlLTkyZDgtZDZhNjUyODZmZjc3CWFjdG9yVHlwZXcEdXNlcofyzNl9NwMTY29sbGFwc2libGVfc2VjdGlvbgcA8szZfT0DE2NvbGxhcHNpYmxlX2hlYWRpbmcHAPLM2X0+AwlwYXJhZ3JhcGgHAPLM2X0/BgYA8szZfUALYXR0cmlidXRpb25EeyJ1c2VySWQiOiJiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzciLCJhY3RvclR5cGUiOiJ1c2VyIn2E8szZfUEGQmVmb3JlhvLM2X1HC2F0dHJpYnV0aW9uBG51bGyH8szZfT4DBWltYWdlKADyzNl9SQRlZGl0AX8oAPLM2X1JC3VwbG9hZFN0YXRlAXcIZmluaXNoZWQoAPLM2X1JA3NyYwF3iQFodHRwczovL3VwbG9hZHMubGluZWFyLmFwcC9kOGI0YTRjMy01ZmVhLTQ1NjgtOWZkYy1lMDhiN2I4YWI4NDYvYjUxYjAxMGYtZmU5ZC00MzBjLWI1ZTYtNTUzM2FmYTYxMGEyL2RlYTBjMTQwLWI4NzUtNGU0NC1iOGJhLWRlOTAyZWI1YWQwNigA8szZfUkDYWx0AXcGQmVmb3JlKADyzNl9SRJjb250ZW50QXR0cmlidXRpb24BdgIGdXNlcklkdyRiNzYwN2IyMS0xNjMxLTQzNWUtOTJkOC1kNmE2NTI4NmZmNzcJYWN0b3JUeXBldwR1c2VyKADyzNl9PQJpZAF3JDZmMjBlMWVhLTU1OGUtNDljMi04MzRiLWVhMzNiNjg0Nzc2YygA8szZfT0Sd2FzQ29waWVkV2hpbGVPcGVuAX8oAPLM2X0RAmlkAXckYmQ4NzViM2ItZTdiMS00ZDJkLWJjOTgtMGU4YmNiMWFjOWNlKADyzNl9ERJ3YXNDb3BpZWRXaGlsZU9wZW4Bf4fyzNl9EQMJcGFyYWdyYXBoBwDyzNl9UwYGAPLM2X1UC2F0dHJpYnV0aW9uRHsidXNlcklkIjoiYjc2MDdiMjEtMTYzMS00MzVlLTkyZDgtZDZhNjUyODZmZjc3IiwiYWN0b3JUeXBlIjoidXNlciJ9hPLM2X1VFVBhcmFncmFwaCBhZnRlciBib3RoLobyzNl9agthdHRyaWJ1dGlvbgRudWxsAA==",
+      "editor_state": [
+        {
+          "tag": "paragraph",
+          "text": "Nested probe."
+        },
+        {
+          "tag": "collapsible_section",
+          "children": [
+            {
+              "tag": "collapsible_heading",
+              "text": "Outer",
+              "children": [
+                {
+                  "tag": "paragraph",
+                  "text": "Outer"
+                }
+              ]
+            },
+            {
+              "tag": "paragraph",
+              "text": "Paragraph inside Outer."
+            },
+            {
+              "tag": "image",
+              "src": "https://uploads.linear.app/d8b4a4c3-5fea-4568-9fdc-e08b7b8ab846/7d1c1808-dfe7-4377-867a-3a504e1fa380/d2a1d2d4-3fad-49ea-b684-164071e63266"
+            },
+            {
+              "tag": "collapsible_section",
+              "children": [
+                {
+                  "tag": "collapsible_heading",
+                  "text": "Before",
+                  "children": [
+                    {
+                      "tag": "paragraph",
+                      "text": "Before"
+                    }
+                  ]
+                },
+                {
+                  "tag": "image",
+                  "src": "https://uploads.linear.app/d8b4a4c3-5fea-4568-9fdc-e08b7b8ab846/b51b010f-fe9d-430c-b5e6-5533afa610a2/dea0c140-b875-4e44-b8ba-de902eb5ad06"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "tag": "paragraph",
+          "text": "Paragraph after both."
+        }
+      ],
+      "outline": [
+        "paragraph 'Nested probe.'",
+        "section 'Outer'",
+        "  paragraph 'Paragraph inside Outer.'",
+        "  image after.png",
+        "  section 'Before'",
+        "    image before.png",
+        "paragraph 'Paragraph after both.'"
+      ]
+    }
+  ]
+}
