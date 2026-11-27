@@ -5,7 +5,9 @@ ordinary_builds.py hashes < cargo-json > hashes.txt
     fresh or rebuilt: the 16-hex `-<hash>` in an artifact's name or a build script's
     output directory.
 ordinary_builds.py entries HASHES < listing
-    Each listed `target/<profile>/<dir>/<name>` entry whose name carries one of those hashes.
+    Each listed `target/debug/<dir>/<name>` entry whose name carries one of those hashes:
+    the ordinary build writes that profile directory alone, and another target directory
+    (llvm-cov's, say) can hold a unit under the same hash that it never built.
 ordinary_builds.py copy HASHES < listing
     A sibling of each such entry under a stand-in hash derived from its own, byte for
     byte a copy: to cargo-prune-superseded, which reads only names and modification
@@ -95,7 +97,7 @@ def known_hashes(listing: str) -> set[BuildHash]:
 
 
 def ordinary(listing: str) -> list[Entry]:
-    """The listed entries of the ordinary build; each must be `target/<profile>/<dir>/<name>`."""
+    """The ordinary build's listed entries; every listed entry must be under target/."""
     known = known_hashes(listing)
     chosen = []
     for line in sys.stdin:
@@ -109,6 +111,8 @@ def ordinary(listing: str) -> list[Entry]:
             raise SystemExit(
                 f"ordinary_builds.py: a listed entry is not inside target/: {str(path)!r}"
             )
+        if path.parts[1] != "debug" or len(path.parts) != 4:
+            continue
         match = HASH.search(path.name)
         if match and BuildHash(match.group(1)) in known:
             chosen.append(Entry(path.parent, path.name, match.start(1), match.end(1)))

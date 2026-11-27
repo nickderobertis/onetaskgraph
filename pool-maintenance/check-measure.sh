@@ -307,11 +307,13 @@ printf 'library bytes\n' > "$tree/target/debug/deps/liba-1111111111111111.rlib"
 printf 'fingerprint\n' > "$tree/target/debug/.fingerprint/a-1111111111111111/lib-a"
 ln -s lib-a "$tree/target/debug/.fingerprint/a-1111111111111111/link"
 printf 'other build\n' > "$tree/target/debug/deps/libb-2222222222222222.rlib"
+mkdir -p "$tree/target/llvm-cov-target/debug/deps"
+printf 'same hash, another target\n' > "$tree/target/llvm-cov-target/debug/deps/liba-1111111111111111.rlib"
 printf '1111111111111111\n' > "$tree/hashes.txt"
 stand_in="$(printf '1111111111111111' | sha256sum | cut -c1-16)"
 mkdir "$tree/target/debug/.fingerprint/a-$stand_in"
 printf 'already here\n' > "$tree/target/debug/.fingerprint/a-$stand_in/kept"
-(cd "$tree" && find target/debug/deps target/debug/.fingerprint -mindepth 1 -maxdepth 1 \
+(cd "$tree" && find target/debug/deps target/debug/.fingerprint target/llvm-cov-target/debug/deps -mindepth 1 -maxdepth 1 \
   | LC_ALL=C sort | python3 "$ROOT/pool-maintenance/ordinary_builds.py" copy hashes.txt) \
   || fatal "the helper's copy failed over a small tree" "run pool-maintenance/ordinary_builds.py copy by hand over $tree"
 cmp -s "$tree/target/debug/deps/liba-1111111111111111.rlib" "$tree/target/debug/deps/liba-$stand_in.rlib" \
@@ -328,6 +330,10 @@ rm -rf "$tree/target/debug/.fingerprint/a-$stand_in"
   || fatal "a symlink inside a build was not copied as a link" "restore copytree(symlinks=True) in ordinary_builds.py"
 cmp -s "$tree/target/debug/.fingerprint/a-1111111111111111/lib-a" "$tree/target/debug/.fingerprint/a-$stand_in/lib-a" \
   || fatal "a file inside a copied build is not byte for byte its original" "restore the byte copy in ordinary_builds.py"
+if [ "$(ls "$tree/target/llvm-cov-target/debug/deps")" != "liba-1111111111111111.rlib" ]; then
+  fatal "the helper copied an entry outside target/debug, which the ordinary build never writes" \
+    "restore ordinary_builds.py's selection of target/debug alone"
+fi
 if ls "$tree/target/debug/deps" | grep -qv -e '^liba-' -e '^libb-2222222222222222.rlib$'; then
   fatal "the helper copied an entry of a build the ordinary build did not report: $(ls "$tree/target/debug/deps")" \
     "restore ordinary_builds.py's selection by the reported hashes"
