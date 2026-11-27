@@ -12,7 +12,9 @@
 #      the stand-in copies and nothing else;
 #   2. a timed pass that removes nothing is an error, not a figure;
 #   3. a timed pass that removes an ordinary build is an error, not a figure;
-#   4. a backlog that never settles is an error, not a figure.
+#   4. a backlog that never settles is an error, not a figure;
+#   5. the helper's stand-in copies are byte for byte their builds, symlinks kept as links,
+#      and a stand-in already present is left as it is while every other entry is copied.
 # Cases 2 to 4 put a stand-in pruner first on PATH that runs the real one and then departs
 # from it, so each refusal is reached by the state it exists for.
 set -euo pipefail
@@ -296,3 +298,37 @@ for case in \
       "restore the refusal in measure.sh that reports '$expected'"
   fi
 done
+
+# 5. The copies measure.sh times the removal of are the builds themselves: same bytes, links
+#    as links, an existing stand-in untouched, entries of other builds not copied.
+tree="$scratch/copies"
+mkdir -p "$tree/target/debug/deps" "$tree/target/debug/.fingerprint/a-1111111111111111"
+printf 'library bytes\n' > "$tree/target/debug/deps/liba-1111111111111111.rlib"
+printf 'fingerprint\n' > "$tree/target/debug/.fingerprint/a-1111111111111111/lib-a"
+ln -s lib-a "$tree/target/debug/.fingerprint/a-1111111111111111/link"
+printf 'other build\n' > "$tree/target/debug/deps/libb-2222222222222222.rlib"
+printf '1111111111111111\n' > "$tree/hashes.txt"
+stand_in="$(printf '1111111111111111' | sha256sum | cut -c1-16)"
+mkdir "$tree/target/debug/.fingerprint/a-$stand_in"
+printf 'already here\n' > "$tree/target/debug/.fingerprint/a-$stand_in/kept"
+(cd "$tree" && find target/debug/deps target/debug/.fingerprint -mindepth 1 -maxdepth 1 \
+  | LC_ALL=C sort | python3 "$ROOT/pool-maintenance/ordinary_builds.py" copy hashes.txt) \
+  || fatal "the helper's copy failed over a small tree" "run pool-maintenance/ordinary_builds.py copy by hand over $tree"
+cmp -s "$tree/target/debug/deps/liba-1111111111111111.rlib" "$tree/target/debug/deps/liba-$stand_in.rlib" \
+  || fatal "a stand-in copy is not byte for byte its build" "restore the byte copy in ordinary_builds.py"
+[ "$(readlink "$tree/target/debug/.fingerprint/a-$stand_in/link" 2>/dev/null)" = "" ] \
+  || fatal "the existing stand-in was overwritten by a copy" "restore ordinary_builds.py's skip of a stand-in already present"
+[ "$(cat "$tree/target/debug/.fingerprint/a-$stand_in/kept")" = "already here" ] \
+  || fatal "the existing stand-in did not keep its own contents" "restore ordinary_builds.py's skip of a stand-in already present"
+rm -rf "$tree/target/debug/.fingerprint/a-$stand_in"
+(cd "$tree" && find target/debug/.fingerprint -mindepth 1 -maxdepth 1 \
+  | python3 "$ROOT/pool-maintenance/ordinary_builds.py" copy hashes.txt) \
+  || fatal "the helper's copy of a directory failed" "run pool-maintenance/ordinary_builds.py copy by hand over $tree"
+[ "$(readlink "$tree/target/debug/.fingerprint/a-$stand_in/link")" = "lib-a" ] \
+  || fatal "a symlink inside a build was not copied as a link" "restore copytree(symlinks=True) in ordinary_builds.py"
+cmp -s "$tree/target/debug/.fingerprint/a-1111111111111111/lib-a" "$tree/target/debug/.fingerprint/a-$stand_in/lib-a" \
+  || fatal "a file inside a copied build is not byte for byte its original" "restore the byte copy in ordinary_builds.py"
+if ls "$tree/target/debug/deps" | grep -qv -e '^liba-' -e '^libb-2222222222222222.rlib$'; then
+  fatal "the helper copied an entry of a build the ordinary build did not report: $(ls "$tree/target/debug/deps")" \
+    "restore ordinary_builds.py's selection by the reported hashes"
+fi
