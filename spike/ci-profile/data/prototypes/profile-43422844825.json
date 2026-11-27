@@ -1,0 +1,936 @@
+{
+ "run": 43422844825,
+ "head_sha": "2e2676b4be80f3a4cd5e2b65b0afde87034ac77f",
+ "jobs": {
+  "test-linux": {
+   "job_id": 131876836464,
+   "wall_s": 1499.0,
+   "buckets_s": {
+    "setup": 55.7,
+    "cache-restore": 32.3,
+    "report": 3.0,
+    "nx-planning": 12.2,
+    "test-run(plain)": 535.8,
+    "scripts-and-other-tasks": 72.6,
+    "compile-link(plain)": 166.3,
+    "cache-restore(nx)": 0.0,
+    "test-run(instrumented)": 385.2,
+    "compile-link(instrumented)": 113.5,
+    "wait:cargo-file-lock": 67.5,
+    "budget-checks": 50.7,
+    "unattributed": 4.2
+   },
+   "tasks": [
+    {
+     "task": "sdk-python:test-uncovered",
+     "result": "executed",
+     "start": 1794571883.491,
+     "end": 1794571883.694,
+     "share_s": 0.2
+    },
+    {
+     "task": "scripts:distribution-check",
+     "result": "executed",
+     "start": 1794571889.713,
+     "end": 1794572281.466,
+     "share_s": 46.0
+    },
+    {
+     "task": "onetaskgraph:build",
+     "result": "executed",
+     "start": 1794571891.464,
+     "end": 1794571971.387,
+     "share_s": 27.9
+    },
+    {
+     "task": "onetaskgraph-linear:test",
+     "result": "remote_hit",
+     "start": 1794571972.503,
+     "end": 1794571972.503,
+     "share_s": 0
+    },
+    {
+     "task": "onetaskgraph-linear-e2e:test",
+     "result": "executed",
+     "start": 1794571972.687,
+     "end": 1794572349.849,
+     "share_s": 44.0
+    },
+    {
+     "task": "onetaskgraph:build",
+     "result": "executed",
+     "start": 1794571891.831,
+     "end": 1794571971.454,
+     "share_s": 27.9
+    },
+    {
+     "task": "sdk-typescript:generate-check",
+     "result": "executed",
+     "start": 1794571971.633,
+     "end": 1794571977.089,
+     "share_s": 0.6
+    },
+    {
+     "task": "sdk-typescript:coverage",
+     "result": "executed",
+     "start": 1794571977.239,
+     "end": 1794572152.65,
+     "share_s": 17.6
+    },
+    {
+     "task": "sdk-python:coverage",
+     "result": "executed",
+     "start": 1794571971.633,
+     "end": 1794572764.685,
+     "share_s": 113.3
+    },
+    {
+     "task": "onetaskgraph-plugin-api:coverage",
+     "result": "remote_hit",
+     "start": 1794571895.4,
+     "end": 1794571895.402,
+     "share_s": 0.0
+    },
+    {
+     "task": "onetaskgraph-live:coverage",
+     "result": "remote_hit",
+     "start": 1794571895.4,
+     "end": 1794571895.402,
+     "share_s": 0.0
+    },
+    {
+     "task": "onetaskgraph-github-live:coverage",
+     "result": "remote_hit",
+     "start": 1794571895.4,
+     "end": 1794571895.402,
+     "share_s": 0.0
+    },
+    {
+     "task": "onetaskgraph-in-memory:coverage",
+     "result": "remote_hit",
+     "start": 1794571895.4,
+     "end": 1794571895.402,
+     "share_s": 0.0
+    },
+    {
+     "task": "onetaskgraph-local-md:coverage",
+     "result": "remote_hit",
+     "start": 1794571895.4,
+     "end": 1794571895.402,
+     "share_s": 0.0
+    },
+    {
+     "task": "onetaskgraph-status-options:coverage",
+     "result": "remote_hit",
+     "start": 1794571895.4,
+     "end": 1794571895.402,
+     "share_s": 0.0
+    },
+    {
+     "task": "onetaskgraph-e2e-support:coverage",
+     "result": "remote_hit",
+     "start": 1794571895.4,
+     "end": 1794571895.402,
+     "share_s": 0.0
+    },
+    {
+     "task": "onetaskgraph-live-janitor:coverage",
+     "result": "remote_hit",
+     "start": 1794571895.4,
+     "end": 1794571895.402,
+     "share_s": 0.0
+    },
+    {
+     "task": "screenshots:coverage",
+     "result": "remote_hit",
+     "start": 1794571895.4,
+     "end": 1794571895.402,
+     "share_s": 0.0
+    },
+    {
+     "task": "onetaskgraph-github-projects:coverage",
+     "result": "executed",
+     "start": 1794571895.405,
+     "end": 1794571942.37,
+     "share_s": 5.2
+    },
+    {
+     "task": "onetaskgraph-core:coverage",
+     "result": "executed",
+     "start": 1794571895.405,
+     "end": 1794572175.687,
+     "share_s": 29.6
+    },
+    {
+     "task": "onetaskgraph:coverage-build",
+     "result": "executed",
+     "start": 1794571895.405,
+     "end": 1794572225.43,
+     "share_s": 35.8
+    },
+    {
+     "task": "onetaskgraph:coverage",
+     "result": "executed",
+     "start": 1794571942.699,
+     "end": 1794572232.761,
+     "share_s": 31.5
+    },
+    {
+     "task": "onetaskgraph-core:test-uncovered",
+     "result": "executed",
+     "start": 1794572176.035,
+     "end": 1794572319.541,
+     "share_s": 18.6
+    },
+    {
+     "task": "onetaskgraph-status-options-e2e:coverage",
+     "result": "executed",
+     "start": 1794572319.545,
+     "end": 1794572452.103,
+     "share_s": 21.4
+    },
+    {
+     "task": "onetaskgraph-e2e:coverage",
+     "result": "executed",
+     "start": 1794572225.664,
+     "end": 1794572887.622,
+     "share_s": 110.5
+    },
+    {
+     "task": "github-cache-policy:coverage",
+     "result": "executed",
+     "start": 1794572889.139,
+     "end": 1794572889.178,
+     "share_s": 0.0
+    },
+    {
+     "task": "github-nx-policy:coverage",
+     "result": "executed",
+     "start": 1794572889.224,
+     "end": 1794572889.226,
+     "share_s": 0.0
+    },
+    {
+     "task": "report-job:coverage",
+     "result": "executed",
+     "start": 1794572889.237,
+     "end": 1794572889.24,
+     "share_s": 0.0
+    },
+    {
+     "task": "scripts:coverage",
+     "result": "executed",
+     "start": 1794572889.269,
+     "end": 1794572889.281,
+     "share_s": 0.0
+    },
+    {
+     "task": "github-workflows:coverage",
+     "result": "executed",
+     "start": 1794572889.297,
+     "end": 1794572889.301,
+     "share_s": 0.0
+    },
+    {
+     "task": "onetaskgraph-github-projects-e2e:coverage",
+     "result": "executed",
+     "start": 1794572232.947,
+     "end": 1794572894.002,
+     "share_s": 110.9
+    },
+    {
+     "task": "linear-documents-policy:coverage",
+     "result": "executed",
+     "start": 1794572894.264,
+     "end": 1794572894.268,
+     "share_s": 0.0
+    },
+    {
+     "task": "github-workflow-policy:coverage",
+     "result": "executed",
+     "start": 1794572894.278,
+     "end": 1794572894.28,
+     "share_s": 0.0
+    },
+    {
+     "task": "onetaskgraph-linear-e2e:coverage",
+     "result": "executed",
+     "start": 1794572452.518,
+     "end": 1794572898.649,
+     "share_s": 79.1
+    },
+    {
+     "task": "workspace:coverage",
+     "result": "executed",
+     "start": 1794572898.823,
+     "end": 1794572899.491,
+     "share_s": 0.2
+    },
+    {
+     "task": "workspace:test-uncovered",
+     "result": "executed",
+     "start": 1794572889.327,
+     "end": 1794572911.7,
+     "share_s": 6.4
+    },
+    {
+     "task": "github-nx-policy:coverage-read-set",
+     "result": "executed",
+     "start": 1794571895.777,
+     "end": 1794571907.383,
+     "share_s": 1.3
+    },
+    {
+     "task": "onetaskgraph:build",
+     "result": "executed",
+     "start": 1794571895.479,
+     "end": 1794571971.499,
+     "share_s": 27.9
+    },
+    {
+     "task": "workspace:test",
+     "result": "executed",
+     "start": 1794571907.503,
+     "end": 1794572143.482,
+     "share_s": 24.3
+    },
+    {
+     "task": "onetaskgraph-github-projects:test",
+     "result": "executed",
+     "start": 1794571895.479,
+     "end": 1794573188.011,
+     "share_s": 291.3
+    },
+    {
+     "task": "onetaskgraph-github-projects-e2e:test",
+     "result": "executed",
+     "start": 1794571971.657,
+     "end": 1794573230.454,
+     "share_s": 325.3
+    },
+    {
+     "task": "onetaskgraph-e2e:budgets",
+     "result": "executed",
+     "start": 1794573233.299,
+     "end": 1794573268.165,
+     "share_s": 11.6
+    },
+    {
+     "task": "onetaskgraph-linear-e2e:budgets",
+     "result": "executed",
+     "start": 1794573233.299,
+     "end": 1794573272.362,
+     "share_s": 13.7
+    },
+    {
+     "task": "onetaskgraph-github-projects-e2e:budgets",
+     "result": "executed",
+     "start": 1794573233.299,
+     "end": 1794573283.95,
+     "share_s": 25.3
+    },
+    {
+     "task": "github-workflows:bootstrap",
+     "result": "executed",
+     "start": 1794571895.842799,
+     "end": 1794571895.842895,
+     "share_s": 0.0
+    }
+   ],
+   "binaries_s": {
+    "instrumented:onetaskgraph-plugin-api::onetaskgraph_plugin_api": 1.037610318,
+    "instrumented:onetaskgraph-plugin-api::by_origin": 0.197352104,
+    "instrumented:onetaskgraph-plugin-api::cache": 0.08147135999999999,
+    "instrumented:onetaskgraph-plugin-api::comment_origin": 0.29783951200000003,
+    "instrumented:onetaskgraph-plugin-api::contract": 2.5204504440000006,
+    "instrumented:onetaskgraph-plugin-api::designator": 0.227344131,
+    "instrumented:onetaskgraph-plugin-api::issue_ref": 0.200559975,
+    "instrumented:onetaskgraph-plugin-api::update": 0.312794314,
+    "instrumented:onetaskgraph-live::onetaskgraph_live": 4.068676127,
+    "instrumented:onetaskgraph-live::artifact_ci": 0.096888766,
+    "instrumented:onetaskgraph-github-live::names": 0.164786643,
+    "instrumented:onetaskgraph-github-live::quota": 0.7249259469999999,
+    "instrumented:onetaskgraph-in-memory::assets": 0.224982497,
+    "instrumented:onetaskgraph-in-memory::commented_since": 0.100424045,
+    "instrumented:onetaskgraph-in-memory::comments": 0.175205008,
+    "instrumented:onetaskgraph-in-memory::exact_content": 0.065575666,
+    "instrumented:onetaskgraph-in-memory::metadata": 0.12347267299999999,
+    "instrumented:onetaskgraph-in-memory::metadata_origin": 0.026282102,
+    "instrumented:onetaskgraph-in-memory::priority": 0.081332878,
+    "instrumented:onetaskgraph-in-memory::relations": 0.06514534599999999,
+    "instrumented:onetaskgraph-in-memory::source": 0.8548411170000004,
+    "instrumented:onetaskgraph-in-memory::status_and_delivery": 0.09510502500000001,
+    "instrumented:onetaskgraph-local-md::onetaskgraph_local_md": 0.461224831,
+    "instrumented:onetaskgraph-local-md::assets": 0.390225284,
+    "instrumented:onetaskgraph-local-md::commented_since": 0.06888875800000001,
+    "instrumented:onetaskgraph-local-md::comments": 1.5296927519999999,
+    "instrumented:onetaskgraph-local-md::content": 0.178965207,
+    "instrumented:onetaskgraph-local-md::exact_content": 0.23305194499999998,
+    "instrumented:onetaskgraph-local-md::held": 0.021440796,
+    "instrumented:onetaskgraph-local-md::item_hold": 0.34131192899999996,
+    "instrumented:onetaskgraph-local-md::metadata": 1.919151552,
+    "instrumented:onetaskgraph-local-md::metadata_origin": 0.08311705100000001,
+    "instrumented:onetaskgraph-local-md::plan_store": 0.35378565500000003,
+    "instrumented:onetaskgraph-local-md::plugin": 1.4258304800000001,
+    "instrumented:onetaskgraph-local-md::priority": 0.300107281,
+    "instrumented:onetaskgraph-local-md::replacement_race": 3.4784912849999996,
+    "instrumented:onetaskgraph-local-md::scoped_reads": 3.037828823,
+    "instrumented:onetaskgraph-local-md::status_and_delivery": 2.602803942,
+    "instrumented:onetaskgraph-local-md::status_mapping": 0.094185722,
+    "instrumented:onetaskgraph-local-md::targeted_update": 2.4769717399999998,
+    "instrumented:onetaskgraph-local-md::template_answers": 0.347216737,
+    "instrumented:onetaskgraph-local-md::torn_writes": 4.82187358,
+    "instrumented:onetaskgraph-status-options::onetaskgraph_status_options": 0.158023412,
+    "instrumented:onetaskgraph-e2e-support::onetaskgraph_e2e_support": 1.1596092489999998,
+    "instrumented:onetaskgraph-e2e-support::board_client": 2.261490846,
+    "instrumented:onetaskgraph-e2e-support::loopback_reads": 0.18178120700000003,
+    "instrumented:onetaskgraph-e2e-support::clock_lease": 0.292382441,
+    "instrumented:onetaskgraph-e2e-support::spawn_lengths": 0.19121839000000002,
+    "instrumented:onetaskgraph-live-janitor::journeys": 69.895716661,
+    "instrumented:onetaskgraph-live-janitor::schema": 2.204560609,
+    "instrumented:onetaskgraph-core::onetaskgraph_core": 4.871013348,
+    "instrumented:onetaskgraph-core::assets": 1.47140719,
+    "instrumented:onetaskgraph-core::batch": 1.0422169199999998,
+    "instrumented:onetaskgraph-core::cache": 0.054714656,
+    "instrumented:onetaskgraph-core::closure": 0.058895359,
+    "instrumented:onetaskgraph-core::comments": 0.602509602,
+    "instrumented:onetaskgraph-core::commented_since": 0.132498683,
+    "instrumented:onetaskgraph-core::configuration": 2.706653673999999,
+    "instrumented:onetaskgraph-core::copy": 9.017419115000001,
+    "instrumented:onetaskgraph-core::copy_link": 0.709196725,
+    "instrumented:onetaskgraph-core::copy_snapshot": 0.14159785,
+    "instrumented:onetaskgraph-core::delivery": 1.0268404050000002,
+    "instrumented:onetaskgraph-core::documents": 0.43842476399999997,
+    "instrumented:onetaskgraph-core::designator_pattern": 0.122853836,
+    "instrumented:onetaskgraph-core::engine": 0.531289034,
+    "instrumented:onetaskgraph-core::follow_up": 0.17705456,
+    "instrumented:onetaskgraph-core::held_writes": 0.408804344,
+    "instrumented:onetaskgraph-core::human_routes": 0.30556156300000004,
+    "instrumented:onetaskgraph-core::locate": 0.09101656200000001,
+    "instrumented:onetaskgraph-core::metadata": 0.112280638,
+    "instrumented:onetaskgraph-core::no_reuse": 0.028610268,
+    "instrumented:onetaskgraph-core::plugin_features": 1.288563464,
+    "instrumented:onetaskgraph-core::plan_graph": 0.071889692,
+    "instrumented:onetaskgraph-core::priority": 0.150011925,
+    "instrumented:onetaskgraph-core::projection_intent": 0.7118665949999999,
+    "instrumented:onetaskgraph-core::query": 1.1035759530000002,
+    "instrumented:onetaskgraph-core::relations": 0.089126911,
+    "instrumented:onetaskgraph-core::rendered": 0.737860544,
+    "instrumented:onetaskgraph-core::section_links": 0.17995889599999998,
+    "instrumented:onetaskgraph-core::subprocess": 3.580107334,
+    "instrumented:onetaskgraph-core::task_projection": 0.28913175700000004,
+    "instrumented:onetaskgraph-core::templates": 0.8912785640000002,
+    "instrumented:onetaskgraph-core::unasked": 0.075381192,
+    "instrumented:onetaskgraph-core::update": 0.47182290099999996,
+    "instrumented:onetaskgraph-core::version": 0.17349575799999997,
+    "instrumented:onetaskgraph-core::yaml": 0.015268439,
+    "instrumented:onetaskgraph::onetaskgraph": 1.093038045,
+    "instrumented:onetaskgraph::live": 1.664425877,
+    "instrumented:onetaskgraph-e2e::configuration": 6.521555237000002,
+    "instrumented:onetaskgraph-e2e::ambient_credentials": 0.069482596,
+    "instrumented:onetaskgraph-e2e::e2e": 1765.395502356002,
+    "instrumented:onetaskgraph-github-projects-e2e::e2e": 1566.9134191660005,
+    "instrumented:onetaskgraph-status-options-e2e::e2e": 3.183947155,
+    "instrumented:onetaskgraph-linear-e2e::e2e": 746.0454455860001,
+    "instrumented:onetaskgraph-e2e::incomplete_sources": 2.6514362730000003,
+    "instrumented:onetaskgraph-github-projects-e2e::lane_wiring": 45.70859119399999,
+    "instrumented:onetaskgraph-github-projects-e2e::live": 6.514018397999999,
+    "instrumented:onetaskgraph-github-projects-e2e::live_pair": 96.68377911300001
+   },
+   "slowest": [
+    [
+     "instrumented:onetaskgraph-github-projects-e2e::e2e::cache_budget::the_cache_spends_no_more_board_points_than_no_cache_over_every_kind_sequence_and_scale",
+     313.544363993
+    ],
+    [
+     "instrumented:onetaskgraph-linear-e2e::e2e::cache_budget::the_cache_sends_fewer_of_the_linear_keys_requests_in_an_hour_than_no_cache",
+     217.761862889
+    ],
+    [
+     "instrumented:onetaskgraph-github-projects-e2e::e2e::plan_copy::a_plan_copy_reads_what_the_plan_holds_whatever_the_board_has_accumulated",
+     156.801043081
+    ],
+    [
+     "instrumented:onetaskgraph-github-projects-e2e::e2e::plan_pacing::filling_the_minutes_points_with_queries_alone_holds_the_next_query",
+     71.590217717
+    ],
+    [
+     "instrumented:onetaskgraph-e2e::e2e::held_writes::every_task_write_verb_held_to_a_version_lands_at_it_and_is_refused_once_it_moved",
+     60.291599716
+    ],
+    [
+     "instrumented:onetaskgraph-github-projects-e2e::e2e::human_cost::a_hundred_tasks_from_ten_managers_are_projected_recovered_and_resolved_once_each",
+     54.860409732
+    ],
+    [
+     "instrumented:onetaskgraph-live-janitor::journeys::offline_linear_cleanup_journeys",
+     48.158756471
+    ],
+    [
+     "instrumented:onetaskgraph-github-projects-e2e::e2e::assets::asset_requests_take_mutation_slots_and_each_limiter_recovers_or_exhausts_its_budget",
+     47.162127053
+    ],
+    [
+     "instrumented:onetaskgraph-e2e::e2e::section_links::every_pair_of_kinds_writes_the_others_section_links_in_its_own_form_and_repeats_write_nothing",
+     37.940622021
+    ],
+    [
+     "instrumented:onetaskgraph-e2e::e2e::section_links::public_copies_keep_sections_and_screen_private_record_links_in_bodies_and_comments",
+     31.990588814
+    ],
+    [
+     "instrumented:onetaskgraph-github-projects-e2e::e2e::plan_pacing::filling_the_hours_creations_holds_the_next_until_the_first_has_left_the_hour",
+     30.150612563
+    ],
+    [
+     "instrumented:onetaskgraph-github-projects-e2e::lane_wiring::budget_adapter_uses_the_real_checker_and_never_substitutes_missing_live_evidence",
+     29.285209002
+    ],
+    [
+     "instrumented:onetaskgraph-linear-e2e::e2e::plan_copy::an_unchanged_private_plan_with_repositories_and_a_dependency_sends_no_write",
+     28.740290947
+    ],
+    [
+     "instrumented:onetaskgraph-e2e::e2e::expandable_blocks::every_pair_of_kinds_writes_each_block_in_the_destinations_form_and_repeats_write_nothing",
+     27.692242057
+    ],
+    [
+     "instrumented:onetaskgraph-e2e::e2e::copy_retry::a_project_or_document_copy_stopped_at_either_point_of_its_create_is_finished_by_its_retry",
+     25.6150676
+    ],
+    [
+     "instrumented:onetaskgraph-linear-e2e::e2e::cache::every_change_measured_or_covered_by_construction_is_read_again_pinned_to_the_new_token",
+     24.586831421
+    ],
+    [
+     "instrumented:onetaskgraph-linear-e2e::e2e::cache_parts::every_route_to_a_tasks_comments_is_served_warm_and_read_fresh_on_a_newer_or_unordered_pin",
+     24.078023006
+    ],
+    [
+     "instrumented:onetaskgraph-github-projects-e2e::e2e::assets::measure_single_and_three_concurrent_project_copies_in_virtual_time",
+     20.849986831
+    ],
+    [
+     "instrumented:onetaskgraph-live-janitor::journeys::offline_cleanup_journeys",
+     20.788658169
+    ],
+    [
+     "instrumented:onetaskgraph-github-projects-e2e::e2e::plan_copy::a_private_design_documents_copy_reads_no_more_of_the_board_than_a_public_ones",
+     17.676661449
+    ]
+   ],
+   "sampler": null,
+   "rust_cache": {
+    "seconds": 30.8,
+    "size": "1362 MB",
+    "hit": true
+   },
+   "stored": {
+    "entries": 0,
+    "bytes": 0,
+    "replayed": 10
+   }
+  },
+  "test-macos": {
+   "job_id": 131876836432,
+   "wall_s": 1741.0,
+   "buckets_s": {
+    "setup": 113.9,
+    "cache-restore": 17.1,
+    "report": 7.0,
+    "nx-planning": 10.4,
+    "scripts-and-other-tasks": 383.2,
+    "compile-link(plain)": 401.9,
+    "cache-restore(nx)": 0.0,
+    "wait:cargo-file-lock": 0.4,
+    "compile-link(release)": 210.8,
+    "test-run(plain)": 479.9,
+    "budget-checks": 112.9,
+    "unattributed": 3.4
+   },
+   "tasks": [
+    {
+     "task": "github-workflow-policy:rust-cache-action",
+     "result": "executed",
+     "start": 1794577669.704,
+     "end": 1794577684.45,
+     "share_s": 3.5
+    },
+    {
+     "task": "scripts:distribution-check",
+     "result": "executed",
+     "start": 1794577667.256,
+     "end": 1794578044.396,
+     "share_s": 77.9
+    },
+    {
+     "task": "onetaskgraph:build",
+     "result": "executed",
+     "start": 1794577672.723,
+     "end": 1794577740.546,
+     "share_s": 57.9
+    },
+    {
+     "task": "onetaskgraph-linear:test",
+     "result": "remote_hit",
+     "start": 1794577741.233,
+     "end": 1794577741.234,
+     "share_s": 0.0
+    },
+    {
+     "task": "onetaskgraph-linear-e2e:test",
+     "result": "executed",
+     "start": 1794577741.405,
+     "end": 1794578031.667,
+     "share_s": 58.1
+    },
+    {
+     "task": "onetaskgraph-linear-e2e:budgets",
+     "result": "executed",
+     "start": 1794578032.764,
+     "end": 1794578413.153,
+     "share_s": 94.7
+    },
+    {
+     "task": "onetaskgraph:build",
+     "result": "executed",
+     "start": 1794577672.403,
+     "end": 1794577740.198,
+     "share_s": 57.9
+    },
+    {
+     "task": "scripts:distribution-test",
+     "result": "executed",
+     "start": 1794577740.204,
+     "end": 1794578945.936,
+     "share_s": 331.2
+    },
+    {
+     "task": "onetaskgraph:build",
+     "result": "executed",
+     "start": 1794577674.146,
+     "end": 1794577831.796,
+     "share_s": 57.9
+    },
+    {
+     "task": "onetaskgraph-github-projects:test",
+     "result": "executed",
+     "start": 1794577674.146,
+     "end": 1794578126.645,
+     "share_s": 94.4
+    },
+    {
+     "task": "onetaskgraph-e2e:test",
+     "result": "executed",
+     "start": 1794577832.191,
+     "end": 1794578407.474,
+     "share_s": 133.3
+    },
+    {
+     "task": "sdk-typescript:generate-check",
+     "result": "executed",
+     "start": 1794578409.497,
+     "end": 1794578417.328,
+     "share_s": 2.3
+    },
+    {
+     "task": "github-nx-policy:coverage-read-set",
+     "result": "executed",
+     "start": 1794578417.856,
+     "end": 1794578418.21,
+     "share_s": 0.1
+    },
+    {
+     "task": "onetaskgraph-github-projects-e2e:test",
+     "result": "executed",
+     "start": 1794578127.265,
+     "end": 1794578838.062,
+     "share_s": 213.3
+    },
+    {
+     "task": "onetaskgraph-core:test",
+     "result": "executed",
+     "start": 1794578418.216,
+     "end": 1794578882.022,
+     "share_s": 154.8
+    },
+    {
+     "task": "onetaskgraph:test",
+     "result": "executed",
+     "start": 1794578838.968,
+     "end": 1794578883.382,
+     "share_s": 14.8
+    },
+    {
+     "task": "onetaskgraph-status-options-e2e:test",
+     "result": "executed",
+     "start": 1794578883.39,
+     "end": 1794578913.545,
+     "share_s": 10.1
+    },
+    {
+     "task": "onetaskgraph-e2e:budgets",
+     "result": "executed",
+     "start": 1794578913.574,
+     "end": 1794578914.307,
+     "share_s": 0.2
+    },
+    {
+     "task": "sdk-typescript:test",
+     "result": "executed",
+     "start": 1794578914.312,
+     "end": 1794579028.614,
+     "share_s": 51.9
+    },
+    {
+     "task": "onetaskgraph-github-projects-e2e:budgets",
+     "result": "executed",
+     "start": 1794579028.657,
+     "end": 1794579064.501,
+     "share_s": 17.9
+    },
+    {
+     "task": "sdk-python:test",
+     "result": "executed",
+     "start": 1794578882.054,
+     "end": 1794579090.058,
+     "share_s": 93.4
+    },
+    {
+     "task": "workspace:test",
+     "result": "executed",
+     "start": 1794579064.536,
+     "end": 1794579256.465,
+     "share_s": 179.2
+    },
+    {
+     "task": "github-workflows:bootstrap",
+     "result": "executed",
+     "start": 1794577669.429969,
+     "end": 1794577669.69875,
+     "share_s": 0.2
+    },
+    {
+     "task": "github-workflows:bootstrap",
+     "result": "executed",
+     "start": 1794578417.516328,
+     "end": 1794578417.700855,
+     "share_s": 0.2
+    }
+   ],
+   "binaries_s": {},
+   "slowest": [],
+   "sampler": null,
+   "rust_cache": {
+    "seconds": 13.6,
+    "size": "615 MB",
+    "hit": true
+   },
+   "stored": {
+    "entries": 0,
+    "bytes": 0,
+    "replayed": 1
+   }
+  },
+  "test-windows": {
+   "job_id": 131876835996,
+   "wall_s": 2037.0,
+   "buckets_s": {
+    "setup": 167.9,
+    "cache-restore": 23.1,
+    "report": 5.0,
+    "nx-planning": 20.4,
+    "compile-link(plain)": 416.1,
+    "scripts-and-other-tasks": 220.4,
+    "cache-restore(nx)": 0.0,
+    "compile-link(release)": 111.6,
+    "test-run(plain)": 1022.9,
+    "budget-checks": 46.8,
+    "unattributed": 2.7
+   },
+   "tasks": [
+    {
+     "task": "github-workflow-policy:rust-cache-action",
+     "result": "executed",
+     "start": 1794572005.827,
+     "end": 1794572024.949,
+     "share_s": 3.4
+    },
+    {
+     "task": "scripts:distribution-check",
+     "result": "executed",
+     "start": 1794572004.57,
+     "end": 1794572096.49,
+     "share_s": 15.9
+    },
+    {
+     "task": "onetaskgraph:build",
+     "result": "executed",
+     "start": 1794572006.609,
+     "end": 1794572077.281,
+     "share_s": 36.0
+    },
+    {
+     "task": "onetaskgraph-linear:test",
+     "result": "remote_hit",
+     "start": 1794572078.351,
+     "end": 1794572078.352,
+     "share_s": 0.0
+    },
+    {
+     "task": "onetaskgraph-linear-e2e:test",
+     "result": "executed",
+     "start": 1794572080.019,
+     "end": 1794573337.952,
+     "share_s": 251.3
+    },
+    {
+     "task": "onetaskgraph-linear-e2e:budgets",
+     "result": "executed",
+     "start": 1794573351.477,
+     "end": 1794573394.552,
+     "share_s": 8.6
+    },
+    {
+     "task": "onetaskgraph:build",
+     "result": "executed",
+     "start": 1794572003.735,
+     "end": 1794572077.093,
+     "share_s": 36.0
+    },
+    {
+     "task": "scripts:distribution-test",
+     "result": "executed",
+     "start": 1794572077.096,
+     "end": 1794573536.754,
+     "share_s": 299.5
+    },
+    {
+     "task": "github-nx-policy:coverage-read-set",
+     "result": "executed",
+     "start": 1794572012.074,
+     "end": 1794572012.365,
+     "share_s": 0.0
+    },
+    {
+     "task": "onetaskgraph:build",
+     "result": "executed",
+     "start": 1794572011.062,
+     "end": 1794572077.518,
+     "share_s": 36.0
+    },
+    {
+     "task": "onetaskgraph-core:test",
+     "result": "executed",
+     "start": 1794572012.372,
+     "end": 1794572818.762,
+     "share_s": 158.3
+    },
+    {
+     "task": "onetaskgraph-github-projects:test",
+     "result": "executed",
+     "start": 1794572011.062,
+     "end": 1794572933.005,
+     "share_s": 181.4
+    },
+    {
+     "task": "sdk-typescript:generate-check",
+     "result": "executed",
+     "start": 1794572933.257,
+     "end": 1794572942.457,
+     "share_s": 1.8
+    },
+    {
+     "task": "onetaskgraph:test",
+     "result": "executed",
+     "start": 1794572947.144,
+     "end": 1794572961.795,
+     "share_s": 2.9
+    },
+    {
+     "task": "sdk-python:test",
+     "result": "executed",
+     "start": 1794572961.801,
+     "end": 1794573606.599,
+     "share_s": 146.1
+    },
+    {
+     "task": "onetaskgraph-github-projects-e2e:test",
+     "result": "executed",
+     "start": 1794572818.794,
+     "end": 1794573648.205,
+     "share_s": 188.8
+    },
+    {
+     "task": "onetaskgraph-status-options-e2e:test",
+     "result": "executed",
+     "start": 1794573606.608,
+     "end": 1794573651.498,
+     "share_s": 15.3
+    },
+    {
+     "task": "onetaskgraph-e2e:test",
+     "result": "executed",
+     "start": 1794572078.31,
+     "end": 1794573751.821,
+     "share_s": 371.2
+    },
+    {
+     "task": "onetaskgraph-e2e:budgets",
+     "result": "executed",
+     "start": 1794573753.239,
+     "end": 1794573754.094,
+     "share_s": 0.3
+    },
+    {
+     "task": "onetaskgraph-github-projects-e2e:budgets",
+     "result": "executed",
+     "start": 1794573651.503,
+     "end": 1794573764.631,
+     "share_s": 37.9
+    },
+    {
+     "task": "workspace:test",
+     "result": "executed",
+     "start": 1794573754.1,
+     "end": 1794573779.68,
+     "share_s": 11.0
+    },
+    {
+     "task": "sdk-typescript:test",
+     "result": "executed",
+     "start": 1794573650.054,
+     "end": 1794573821.602,
+     "share_s": 87.9
+    },
+    {
+     "task": "github-workflows:bootstrap",
+     "result": "executed",
+     "start": 1794572004.797028,
+     "end": 1794572005.564883,
+     "share_s": 0.3
+    },
+    {
+     "task": "github-workflows:bootstrap",
+     "result": "executed",
+     "start": 1794572011.155783,
+     "end": 1794572011.650768,
+     "share_s": 0.3
+    }
+   ],
+   "binaries_s": {},
+   "slowest": [],
+   "sampler": null,
+   "rust_cache": {
+    "seconds": 17.4,
+    "size": "613 MB",
+    "hit": true
+   },
+   "stored": {
+    "entries": 0,
+    "bytes": 0,
+    "replayed": 1
+   }
+  }
+ }
+}

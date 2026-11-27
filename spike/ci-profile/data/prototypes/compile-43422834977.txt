@@ -1,0 +1,66 @@
+run 43422834977  head 85161bcee663  branch spike-otg-csplit-1  created 2026-11-13T12:09:44Z
+
+== test-linux (job 131876802064, success) wall 7.73 min
+  build step: 6.27 min
+  cargo timings: 460 units, span 6.26 min, summed 22.71 min
+    onetaskgraph-core                           167.9 s
+    onetaskgraph-github-projects                 95.8 s
+    onetaskgraph-linear                          37.8 s
+    onetaskgraph-e2e                             34.7 s
+    onetaskgraph-github-projects-e2e             31.6 s
+    onetaskgraph-local-md                        23.4 s
+    onetaskgraph                                 21.8 s
+    onetaskgraph-linear-e2e                      19.9 s
+    onetaskgraph-plugin-api                      17.8 s
+    onetaskgraph-e2e-support                     15.9 s
+    onetaskgraph-in-memory                        9.1 s
+    onetaskgraph-live-janitor                     6.3 s
+    onetaskgraph-template                         5.2 s
+    onetaskgraph-github-live                      2.4 s
+    onetaskgraph-live                             1.7 s
+    onetaskgraph-status-options                   0.8 s
+    onetaskgraph-status-options-e2e               0.6 s
+
+== test-macos (job 131876801940, success) wall 3.70 min
+  build step: 2.47 min
+  cargo timings: 447 units, span 2.47 min, summed 12.21 min
+    onetaskgraph-core                           115.6 s
+    onetaskgraph-github-projects                 63.9 s
+    onetaskgraph-e2e                             28.7 s
+    onetaskgraph-linear                          25.6 s
+    onetaskgraph-github-projects-e2e             24.4 s
+    onetaskgraph-local-md                        17.8 s
+    onetaskgraph                                 16.8 s
+    onetaskgraph-linear-e2e                      14.7 s
+    onetaskgraph-plugin-api                      10.9 s
+    onetaskgraph-e2e-support                     10.3 s
+    onetaskgraph-in-memory                        7.4 s
+    onetaskgraph-live-janitor                     6.0 s
+    onetaskgraph-template                         3.7 s
+    onetaskgraph-github-live                      2.1 s
+    onetaskgraph-live                             1.1 s
+    onetaskgraph-status-options                   0.7 s
+    onetaskgraph-status-options-e2e               0.5 s
+
+== test-windows (job 131876801615, success) wall 12.22 min
+  build step: 8.58 min
+  cargo timings: 446 units, span 8.58 min, summed 34.09 min
+    onetaskgraph-core                           328.7 s
+    onetaskgraph-github-projects                168.4 s
+    onetaskgraph-e2e                             72.2 s
+    onetaskgraph-linear                          72.0 s
+    onetaskgraph-github-projects-e2e             65.1 s
+    onetaskgraph-local-md                        46.1 s
+    onetaskgraph                                 43.7 s
+    onetaskgraph-linear-e2e                      37.0 s
+    onetaskgraph-e2e-support                     30.9 s
+    onetaskgraph-plugin-api                      30.1 s
+    onetaskgraph-in-memory                       20.3 s
+    onetaskgraph-live-janitor                    13.8 s
+    onetaskgraph-template                        10.2 s
+    onetaskgraph-github-live                      4.8 s
+    onetaskgraph-live                             3.2 s
+    onetaskgraph-status-options                   1.8 s
+    onetaskgraph-status-options-e2e               1.6 s
+
+(GitHub reads this invocation: 0)

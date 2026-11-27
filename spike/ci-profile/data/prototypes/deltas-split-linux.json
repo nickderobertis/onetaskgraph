@@ -1,0 +1,152 @@
+{
+ "control": [
+  43457659504,
+  43457450179
+ ],
+ "sides": {
+  "split": {
+   "runs": [
+    43528710535,
+    43528719773
+   ],
+   "jobs": {
+    "test-linux": {
+     "runs": [
+      2,
+      2
+     ],
+     "control": {
+      "wall_s": 1639.5,
+      "gate_span_s": 1524.7,
+      "runs_wall_s": [
+       1797.0,
+       1482.0
+      ],
+      "runs_gate_span_s": [
+       1676.2,
+       1373.2
+      ]
+     },
+     "side": {
+      "wall_s": 1891.5,
+      "gate_span_s": 1781.3,
+      "runs_wall_s": [
+       1903.0,
+       1880.0
+      ],
+      "runs_gate_span_s": [
+       1789.9,
+       1772.7
+      ]
+     },
+     "side_only": [
+      "onetaskgraph-template:coverage"
+     ],
+     "left_out": [],
+     "executed_by_one_side": {
+      "control": [],
+      "split": []
+     },
+     "elapsed_saved_s": {
+      "github-nx-policy:coverage-read-set": -3.6,
+      "github-workflows:bootstrap": -0.0,
+      "github-workflows:coverage": -0.0,
+      "onetaskgraph-core:coverage": 0.3,
+      "onetaskgraph-core:test-uncovered": 4.2,
+      "onetaskgraph-e2e-support:coverage": 43.1,
+      "onetaskgraph-e2e:budgets": -5.6,
+      "onetaskgraph-e2e:coverage": -101.0,
+      "onetaskgraph-github-live:coverage": -24.9,
+      "onetaskgraph-github-projects-e2e:budgets": 5.3,
+      "onetaskgraph-github-projects-e2e:coverage": -80.3,
+      "onetaskgraph-github-projects-e2e:test": -95.1,
+      "onetaskgraph-github-projects:coverage": 7.0,
+      "onetaskgraph-github-projects:test": -111.7,
+      "onetaskgraph-in-memory:coverage": -155.6,
+      "onetaskgraph-linear-e2e:budgets": 7.2,
+      "onetaskgraph-linear-e2e:coverage": -88.6,
+      "onetaskgraph-linear-e2e:test": -5.1,
+      "onetaskgraph-linear:test": -196.5,
+      "onetaskgraph-live-janitor:coverage": -9.1,
+      "onetaskgraph-live:coverage": -4.7,
+      "onetaskgraph-local-md:coverage": -38.1,
+      "onetaskgraph-plugin-api:coverage": -78.6,
+      "onetaskgraph-status-options-e2e:coverage": -17.8,
+      "onetaskgraph-status-options:coverage": -41.4,
+      "onetaskgraph:build": -19.4,
+      "onetaskgraph:coverage": 8.7,
+      "onetaskgraph:coverage-build": -15.4,
+      "scripts:distribution-check": -100.5,
+      "sdk-python:coverage": -107.2,
+      "sdk-python:test-uncovered": -0.0,
+      "sdk-typescript:coverage": -41.7,
+      "sdk-typescript:generate-check": -1.4,
+      "workspace:coverage": -0.1,
+      "workspace:test": -47.6,
+      "workspace:test-uncovered": -0.7,
+      "onetaskgraph-template:coverage": -300.2
+     },
+     "share_saved_s": {
+      "github-nx-policy:coverage-read-set": -0.4,
+      "github-workflows:bootstrap": 0.0,
+      "github-workflows:coverage": 0.0,
+      "onetaskgraph-core:coverage": -1.9,
+      "onetaskgraph-core:test-uncovered": -1.9,
+      "onetaskgraph-e2e-support:coverage": 4.2,
+      "onetaskgraph-e2e:budgets": -1.9,
+      "onetaskgraph-e2e:coverage": -37.5,
+      "onetaskgraph-github-live:coverage": -2.7,
+      "onetaskgraph-github-projects-e2e:budgets": 2.6,
+      "onetaskgraph-github-projects-e2e:coverage": -51.7,
+      "onetaskgraph-github-projects-e2e:test": 16.1,
+      "onetaskgraph-github-projects:coverage": 1.0,
+      "onetaskgraph-github-projects:test": 0.6,
+      "onetaskgraph-in-memory:coverage": -18.4,
+      "onetaskgraph-linear-e2e:budgets": 4.6,
+      "onetaskgraph-linear-e2e:coverage": -34.2,
+      "onetaskgraph-linear-e2e:test": -0.8,
+      "onetaskgraph-linear:test": -25.8,
+      "onetaskgraph-live-janitor:coverage": -0.2,
+      "onetaskgraph-live:coverage": -0.5,
+      "onetaskgraph-local-md:coverage": -7.6,
+      "onetaskgraph-plugin-api:coverage": -8.3,
+      "onetaskgraph-status-options-e2e:coverage": -1.8,
+      "onetaskgraph-status-options:coverage": -6.4,
+      "onetaskgraph:build": -7.2,
+      "onetaskgraph:coverage": -0.4,
+      "onetaskgraph:coverage-build": -1.7,
+      "scripts:distribution-check": -11.6,
+      "sdk-python:coverage": -9.9,
+      "sdk-python:test-uncovered": 0.0,
+      "sdk-typescript:coverage": -4.1,
+      "sdk-typescript:generate-check": -0.1,
+      "workspace:coverage": -0.2,
+      "workspace:test": -4.8,
+      "workspace:test-uncovered": -3.4
+     },
+     "work_saved_s": {
+      "onetaskgraph": 0.7,
+      "onetaskgraph-core": 4.2,
+      "onetaskgraph-e2e": -205.2,
+      "onetaskgraph-e2e-support": -3.4,
+      "onetaskgraph-github-live": -0.1,
+      "onetaskgraph-github-projects-e2e": -271.3,
+      "onetaskgraph-in-memory": 0.7,
+      "onetaskgraph-linear-e2e": -109.8,
+      "onetaskgraph-live": 0.4,
+      "onetaskgraph-live-janitor": -4.2,
+      "onetaskgraph-local-md": -9.3,
+      "onetaskgraph-plugin-api": -2.0,
+      "onetaskgraph-status-options": 0.1,
+      "onetaskgraph-status-options-e2e": -1.9,
+      "onetaskgraph-template": -2.0
+     },
+     "model_on_control_s": [
+      5.3,
+      -106.2
+     ]
+    }
+   }
+  }
+ }
+}

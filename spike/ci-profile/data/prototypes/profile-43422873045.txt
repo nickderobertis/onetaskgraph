@@ -1,0 +1,189 @@
+run 43422873045  head d6a90891503e  branch spike-otg-wsplit-2  created 2026-11-13T12:10:01Z
+
+== test-linux (job 131876931581, failure) wall 31.10 min; Nx tasks: 47 run, 3 replayed [executions artifact]
+  category                          minutes   share
+  test-run(instrumented)            11.12   35.7%
+  test-run(plain)                    6.15   19.8%
+  compile-link(plain)                3.77   12.1%
+  wait:cargo-file-lock               3.19   10.2%
+  compile-link(instrumented)         2.70    8.7%
+  budget-checks                      1.20    3.9%
+  setup                              1.18    3.8%
+  scripts-and-other-tasks            0.93    3.0%
+  nx-planning                        0.40    1.3%
+  cache-restore                      0.34    1.1%
+  unattributed                       0.08    0.2%
+  report                             0.05    0.2%
+  cache-restore(nx)                  0.00    0.0%
+  (sum)                             31.10
+  rust-cache restore: 18.9 s, 1362 MB, hit
+  Nx sidecar: stored 0 entries (0 bytes), replayed 3
+  Nx tasks by share of wall clock (own seconds, result):
+    onetaskgraph-github-projects:test                         3.32 min  (  1346s executed, compile 410s)
+    onetaskgraph-github-projects-e2e:test                     3.30 min  (  1302s executed, compile 435s)
+    onetaskgraph-e2e:coverage                                 3.28 min  (   948s executed, compile 201s)
+    onetaskgraph-github-projects-e2e:coverage                 3.12 min  (   747s executed, compile 105s)
+    onetaskgraph-linear-e2e:coverage                          2.86 min  (   849s executed, compile 183s)
+    sdk-python:coverage                                       2.22 min  (   989s executed)
+    onetaskgraph-linear:test                                  1.71 min  (   800s executed, compile 181s)
+    onetaskgraph-core:coverage                                0.84 min  (   409s executed, compile 374s)
+    workspace:test                                            0.81 min  (   394s executed)
+    onetaskgraph:coverage                                     0.77 min  (   372s executed, compile 354s)
+    onetaskgraph-e2e-support:coverage                         0.76 min  (   357s executed, compile 343s)
+    onetaskgraph-template:coverage                            0.60 min  (   107s executed, compile 100s)
+    onetaskgraph-github-projects-e2e:budgets                  0.58 min  (    72s executed)
+    onetaskgraph-live-janitor:test                            0.43 min  (   223s executed, compile 165s)
+    onetaskgraph-live-janitor:coverage                        0.39 min  (   164s executed, compile 102s)
+  latest-finishing chain (9 links, 28.94 min):
+    + 0.28 → + 0.34  scripts:distribution-check
+    + 0.42 → + 1.65  onetaskgraph-plugin-api:coverage
+    + 1.65 → + 2.78  onetaskgraph-github-projects:coverage
+    + 2.78 → + 5.61  onetaskgraph-local-md:coverage
+    + 5.61 → +11.56  onetaskgraph-e2e-support:coverage
+    +11.56 → +25.72  onetaskgraph-linear-e2e:coverage
+    +25.74 → +27.52  onetaskgraph-template:coverage
+    +27.53 → +28.13  workspace:test-uncovered
+    +28.24 → +29.45  onetaskgraph-github-projects-e2e:budgets
+  test binaries (99, seconds):
+    instrumented:onetaskgraph-e2e::e2e                             2088.3
+    instrumented:onetaskgraph-github-projects-e2e::e2e             1948.2
+    instrumented:onetaskgraph-linear-e2e::e2e                       985.7
+    instrumented:onetaskgraph-github-projects-e2e::live_pair        187.8
+    instrumented:onetaskgraph-live-janitor::journeys                 88.1
+    instrumented:onetaskgraph-github-projects-e2e::lane_wiring       86.4
+    instrumented:onetaskgraph-e2e::configuration                      8.7
+    instrumented:onetaskgraph-core::copy                              8.3
+    instrumented:onetaskgraph-github-projects-e2e::live               7.6
+    instrumented:onetaskgraph-local-md::torn_writes                   7.2
+    instrumented:onetaskgraph-e2e-support::board_client               7.1
+    instrumented:onetaskgraph-local-md::scoped_reads                  6.9
+    instrumented:onetaskgraph-core::onetaskgraph_core                 6.8
+    instrumented:onetaskgraph-core::subprocess                        5.5
+    instrumented:onetaskgraph-e2e::incomplete_sources                 4.9
+  slowest tests (of 3207):
+      445.6s  instrumented:onetaskgraph-linear-e2e::e2e::cache_budget::the_cache_sends_fewer_of_the_linear_keys_requests_in_
+      415.2s  instrumented:onetaskgraph-github-projects-e2e::e2e::cache_budget::the_cache_spends_no_more_board_points_than_n
+      186.6s  instrumented:onetaskgraph-github-projects-e2e::e2e::plan_copy::a_plan_copy_reads_what_the_plan_holds_whatever_
+       94.1s  instrumented:onetaskgraph-e2e::e2e::held_writes::every_task_write_verb_held_to_a_version_lands_at_it_and_is_re
+       81.7s  instrumented:onetaskgraph-github-projects-e2e::e2e::plan_pacing::filling_the_minutes_points_with_queries_alone
+       72.4s  instrumented:onetaskgraph-github-projects-e2e::e2e::human_cost::a_hundred_tasks_from_ten_managers_are_projecte
+       63.1s  instrumented:onetaskgraph-github-projects-e2e::lane_wiring::budget_adapter_uses_the_real_checker_and_never_sub
+       52.8s  instrumented:onetaskgraph-e2e::e2e::section_links::every_pair_of_kinds_writes_the_others_section_links_in_its_
+       51.8s  instrumented:onetaskgraph-e2e::e2e::section_links::public_copies_keep_sections_and_screen_private_record_links
+       51.4s  instrumented:onetaskgraph-live-janitor::journeys::offline_linear_cleanup_journeys
+       50.1s  instrumented:onetaskgraph-e2e::e2e::expandable_blocks::every_pair_of_kinds_writes_each_block_in_the_destinatio
+       49.1s  instrumented:onetaskgraph-github-projects-e2e::e2e::assets::asset_requests_take_mutation_slots_and_each_limite
+       36.2s  instrumented:onetaskgraph-github-projects-e2e::e2e::plan_pacing::filling_the_hours_creations_holds_the_next_un
+       34.8s  instrumented:onetaskgraph-live-janitor::journeys::offline_cleanup_journeys
+       31.4s  instrumented:onetaskgraph-linear-e2e::e2e::plan_copy::an_unchanged_private_plan_with_repositories_and_a_depend
+       27.6s  instrumented:onetaskgraph-github-projects-e2e::e2e::plan_copy::a_private_design_documents_copy_reads_no_more_o
+       27.4s  instrumented:onetaskgraph-e2e::e2e::copy_retry::a_project_or_document_copy_stopped_at_either_point_of_its_crea
+       25.3s  instrumented:onetaskgraph-github-projects-e2e::e2e::assets::measure_single_and_three_concurrent_project_copies
+       23.4s  instrumented:onetaskgraph-linear-e2e::e2e::cache::every_change_measured_or_covered_by_construction_is_read_aga
+       23.3s  instrumented:onetaskgraph-github-projects-e2e::live_pair::an_asset_entry_point_started_before_main_waits_for_i
+
+== test-macos (job 131876931528, failure) wall 29.82 min; Nx tasks: 34 run, 1 replayed [executions artifact]
+  category                          minutes   share
+  test-run(plain)                   11.41   38.3%
+  compile-link(plain)                7.61   25.5%
+  scripts-and-other-tasks            4.70   15.8%
+  compile-link(release)              1.98    6.6%
+  setup                              1.85    6.2%
+  budget-checks                      1.56    5.2%
+  cache-restore                      0.35    1.2%
+  nx-planning                        0.21    0.7%
+  report                             0.10    0.3%
+  unattributed                       0.05    0.2%
+  cache-restore(nx)                  0.00    0.0%
+  (sum)                             29.82
+  rust-cache restore: 17.3 s, 615 MB, hit
+  Nx sidecar: stored 0 entries (0 bytes), replayed 1
+  Nx tasks by share of wall clock (own seconds, result):
+    onetaskgraph-github-projects-e2e:test                     4.04 min  (   665s executed, compile 210s)
+    scripts:distribution-test                                 3.96 min  (   878s executed)
+    onetaskgraph-e2e:test                                     2.79 min  (   611s executed, compile 207s)
+    workspace:test                                            2.49 min  (   163s executed)
+    onetaskgraph-github-projects:test                         2.10 min  (   505s executed, compile 167s)
+    sdk-python:test                                           1.73 min  (   207s executed)
+    onetaskgraph-core:test                                    1.33 min  (   159s executed, compile 97s)
+    onetaskgraph-linear-e2e:budgets                           1.28 min  (   308s executed)
+    onetaskgraph-linear:test                                  1.06 min  (   257s executed, compile 85s)
+    onetaskgraph:build                                        0.95 min  (     1s executed, compile 1s)
+    sdk-typescript:test                                       0.92 min  (   110s executed)
+    onetaskgraph-template:test                                0.86 min  (   103s executed, compile 103s)
+    onetaskgraph:test                                         0.75 min  (    89s executed, compile 87s)
+    onetaskgraph-linear-e2e:test                              0.70 min  (   167s executed, compile 56s)
+    onetaskgraph-live-janitor:test                            0.51 min  (   123s executed, compile 43s)
+  latest-finishing chain (19 links, 27.11 min):
+    + 0.20 → + 0.29  scripts:distribution-check
+    + 0.30 → + 3.10  onetaskgraph:build
+    + 3.11 → + 5.16  onetaskgraph-live-janitor:test
+    + 5.17 → +15.35  onetaskgraph-e2e:test
+    +15.43 → +15.77  sdk-typescript:generate-check
+    +15.78 → +15.80  github-nx-policy:coverage-read-set
+    +15.80 → +16.64  onetaskgraph-plugin-api:test
+    +16.64 → +16.73  onetaskgraph-live:test
+    +16.73 → +16.83  onetaskgraph-github-live:test
+    +16.83 → +18.55  onetaskgraph-template:test
+    +18.55 → +19.00  onetaskgraph-status-options:test
+    +19.00 → +19.11  onetaskgraph-in-memory:test
+    +19.12 → +19.66  onetaskgraph-local-md:test
+    +19.66 → +22.30  onetaskgraph-core:test
+    +22.30 → +22.35  onetaskgraph-status-options-e2e:test
+    +22.35 → +22.35  onetaskgraph-live-janitor:budgets
+    +22.36 → +24.20  sdk-typescript:test
+    +24.20 → +24.74  onetaskgraph-github-projects-e2e:budgets
+    +24.74 → +27.45  workspace:test
+
+== test-windows (job 131876931170, failure) wall 28.27 min; Nx tasks: 34 run, 1 replayed [executions artifact]
+  category                          minutes   share
+  test-run(plain)                   16.04   56.7%
+  compile-link(plain)                4.79   16.9%
+  setup                              2.48    8.8%
+  scripts-and-other-tasks            1.86    6.6%
+  compile-link(release)              1.36    4.8%
+  budget-checks                      0.71    2.5%
+  cache-restore                      0.52    1.8%
+  nx-planning                        0.39    1.4%
+  report                             0.08    0.3%
+  unattributed                       0.04    0.2%
+  cache-restore(nx)                  0.00    0.0%
+  (sum)                             28.27
+  rust-cache restore: 21.1 s, 613 MB, hit
+  Nx sidecar: stored 0 entries (0 bytes), replayed 1
+  Nx tasks by share of wall clock (own seconds, result):
+    onetaskgraph-e2e:test                                     5.02 min  (  1319s executed, compile 203s)
+    onetaskgraph-github-projects-e2e:test                     3.87 min  (  1060s executed, compile 215s)
+    scripts:distribution-test                                 2.93 min  (   877s executed)
+    onetaskgraph-linear-e2e:test                              2.48 min  (   680s executed, compile 84s)
+    onetaskgraph-github-projects:test                         1.94 min  (   585s executed, compile 181s)
+    onetaskgraph-linear:test                                  1.64 min  (   495s executed, compile 72s)
+    sdk-python:test                                           1.32 min  (   214s executed)
+    onetaskgraph-core:test                                    1.05 min  (   252s executed, compile 169s)
+    sdk-typescript:test                                       0.79 min  (   142s executed)
+    onetaskgraph-live-janitor:test                            0.74 min  (   225s executed, compile 97s)
+    onetaskgraph-local-md:test                                0.60 min  (   168s executed, compile 37s)
+    onetaskgraph:build                                        0.51 min  (    54s executed, compile 54s)
+    onetaskgraph-linear-e2e:budgets                           0.38 min  (    92s executed)
+    onetaskgraph-github-projects-e2e:budgets                  0.32 min  (    52s executed)
+    onetaskgraph-template:test                                0.25 min  (    75s executed, compile 73s)
+  latest-finishing chain (16 links, 24.62 min):
+    + 0.41 → + 0.42  github-workflows:bootstrap
+    + 0.51 → +10.26  onetaskgraph-github-projects:test
+    +10.26 → +10.37  sdk-typescript:generate-check
+    +10.38 → +10.40  github-workflows:bootstrap
+    +10.41 → +10.43  github-nx-policy:coverage-read-set
+    +10.43 → +10.85  onetaskgraph-plugin-api:test
+    +10.85 → +11.59  onetaskgraph-live:test
+    +11.59 → +11.75  onetaskgraph-github-live:test
+    +11.75 → +13.00  onetaskgraph-template:test
+    +13.00 → +13.64  onetaskgraph-status-options:test
+    +13.64 → +13.98  onetaskgraph-in-memory:test
+    +13.98 → +16.78  onetaskgraph-local-md:test
+    +16.78 → +20.98  onetaskgraph-core:test
+    +20.98 → +21.06  onetaskgraph:test
+    +21.06 → +21.57  onetaskgraph-e2e-support:test
+    +21.57 → +25.13  sdk-python:test
+
+(GitHub reads this invocation: 0)
+(json: profile-43422873045.json, beside this file)
