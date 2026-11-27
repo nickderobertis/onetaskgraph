@@ -7732,6 +7732,8 @@ fn linear_serve(
         .map(|operation| (*operation).into())
         .collect();
     let failing = Arc::new(Mutex::new(failing));
+    // Where an image upload's signed URL points: this workspace's own address.
+    let address = endpoint.trim_end_matches("/graphql").to_owned();
     thread::spawn(move || {
         for mut stream in listener.incoming().flatten() {
             let mut bytes = Vec::new();
@@ -7793,6 +7795,29 @@ fn linear_serve(
                 .next()
                 .unwrap_or_default()
                 .trim_end_matches('\r');
+            // An image's bytes, sent to the signed URL `fileUpload` answered: held as Linear's
+            // storage holds the file, by the upload's number.
+            if let Some(upload) = request_line
+                .strip_prefix("PUT /upload/")
+                .and_then(|rest| rest.strip_suffix(" HTTP/1.1"))
+            {
+                let mut held = state.lock().unwrap();
+                let known = held["_linear_uploads"]
+                    .get(upload)
+                    .is_some_and(|file| file["bytes"].is_null());
+                let status = if known {
+                    held["_linear_uploads"][upload]["bytes"] = json!(bytes.len() - split);
+                    "200 OK"
+                } else {
+                    "404 Not Found"
+                };
+                drop(held);
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                );
+                continue;
+            }
             if request_line != "POST /graphql HTTP/1.1" {
                 let text = r#"{"errors":[{"message":"expected POST /graphql"}]}"#;
                 let _ = write!(
@@ -7824,6 +7849,38 @@ fn linear_serve(
                 request["query"].as_str().unwrap_or_default().to_owned(),
                 request.get("variables").cloned().unwrap_or(Value::Null),
             ));
+            // An image upload asked for: a signed URL on this workspace's own address to `PUT`
+            // the bytes to, and the `uploads.linear.app` address the image is served at, as
+            // Linear answers `fileUpload`.
+            if request["query"].as_str() == Some(onetaskgraph_linear::graphql::FILE_UPLOAD) {
+                let mut held = state.lock().unwrap();
+                if !held["_linear_uploads"].is_object() {
+                    held["_linear_uploads"] = json!({});
+                }
+                let number = held["_linear_uploads"]
+                    .as_object()
+                    .map_or(0, serde_json::Map::len)
+                    + 1;
+                held["_linear_uploads"][number.to_string()] = json!({
+                    "filename": request["variables"]["filename"].clone(),
+                    "size": request["variables"]["size"].clone(),
+                    "bytes": null,
+                });
+                drop(held);
+                let body = json!({"data": {"fileUpload": {"success": true, "uploadFile": {
+                    "uploadUrl": format!("{address}/upload/{number}"),
+                    "assetUrl": format!("https://uploads.linear.app/loopback/{number}"),
+                    "headers": [],
+                }}}});
+                let text = body.to_string();
+                answers.lock().unwrap().push(body);
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{text}",
+                    text.len()
+                );
+                continue;
+            }
             // An aliased document carrying an operation refused is refused at that alias, whole,
             // as Linear refuses one item of a batch: nothing of it is applied.
             let refused_alias = {

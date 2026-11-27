@@ -634,7 +634,20 @@ fn shapes() -> Vec<Shape> {
             "DINDENTED",
             "document-in-list-item",
         ),
-        region("a nested block", "NESTED", "A13"),
+        unrecorded(
+            "a nested block missing a blank line",
+            "NESTED",
+            "<details>\n<summary>Outer</summary>\n\nOuter text.\n\n<details>\n<summary>Inner\
+             </summary>\nInner text.\n\n</details>\n\n</details>\n"
+                .to_owned(),
+        ),
+        unrecorded(
+            "a nested summary holding another tag",
+            "NESTAG",
+            "<details>\n<summary>Outer</summary>\n\nOuter text.\n\n<details>\n<summary>Uses \
+             <em>emphasis</em></summary>\n\nInner text.\n\n</details>\n\n</details>\n"
+                .to_owned(),
+        ),
         region("a summary holding a literal backtick", "TICK", "A03"),
         region("a summary holding a literal *", "STAR", "A05"),
         unrecorded(
@@ -933,8 +946,8 @@ fn every_copied_item_reads_back_through_the_store_as_authored() {
 
         // A shape Linear holds that is not one section in its form reads back as it is stored:
         // a section with an empty summary — Linear's own after a stray `>>>` — one missing a
-        // margin, and one never closed; and of sections nested in Linear, the outer reads back
-        // as the authored block, the inner kept as it is, because authored blocks do not nest.
+        // margin, and one never closed; and sections nested in Linear read back as a block
+        // inside a block.
         for (stored, read) in [
             ("+++ \n\nUnder no summary.\n\n+++", None),
             ("+++ Tight\nNo margin above.\n\n+++", None),
@@ -942,8 +955,8 @@ fn every_copied_item_reads_back_through_the_store_as_authored() {
             (
                 "+++ Outer\n\nOuter text.\n\n+++ Inner\n\nInner text.\n\n+++\n\n+++",
                 Some(
-                    "<details>\n<summary>Outer</summary>\n\nOuter text.\n\n+++ Inner\n\nInner \
-                     text.\n\n+++\n\n</details>",
+                    "<details>\n<summary>Outer</summary>\n\nOuter text.\n\n<details>\n\
+                     <summary>Inner</summary>\n\nInner text.\n\n</details>\n\n</details>",
                 ),
             ),
         ] {
@@ -2337,5 +2350,306 @@ fn another_items_read_of_the_same_block_never_changes_what_a_write_back_keeps() 
             "{what}: the metadata write landed: {raw}"
         );
         lands_as_sections(&plan.stored(&section), &[summary], &what);
+    }
+}
+
+// A block nested in another: Linear's section inside a section, the authored form elsewhere.
+
+/// A design document's collapsed visual change, as spike `spike-linear-nested-blocks` probed it:
+/// an outer block holding a paragraph and the after image, and inside it a block holding the
+/// before image — each image `after` and `before` names.
+fn nested_body(what: &str, (after, before): (&str, &str)) -> String {
+    format!(
+        "The {what}.\n\n<details>\n<summary>Visual <strong>change</strong> of the {what}</summary>\
+         \n\nParagraph inside the {what}'s change.\n\n![After]({after})\n\n<details>\n\
+         <summary>Before</summary>\n\n![Before]({before})\n\n</details>\n\n</details>\n\n\
+         After both.\n"
+    )
+}
+
+/// The images each record of the nested plan shows: a task's and a document's are its own image
+/// assets; a project holds none (README "Image assets"), so its description shows the images the
+/// spike uploaded to Linear by their addresses.
+fn nested_images(key: &str) -> (String, String) {
+    if key == "P" {
+        let images: Value = serde_json::from_str(include_str!(
+            "../../../onetaskgraph-e2e-support/fixtures/expandable_blocks/nested/observations.json"
+        ))
+        .expect("the nested recording");
+        let url = |name: &str| {
+            images["images"][name]
+                .as_str()
+                .expect("an image")
+                .to_owned()
+        };
+        (url("after.png"), url("before.png"))
+    } else {
+        ("./after.png".to_owned(), "./before.png".to_owned())
+    }
+}
+
+/// Write the nested plan into the folder `name`: a project, a task under it and a design
+/// document under it, each holding [`nested_body`], the task and the document with their assets.
+fn nested_plan(sandbox: &Sandbox, name: &str) -> (Value, BTreeMap<&'static str, String>) {
+    use onetaskgraph_e2e_support::images::png;
+    let config = empty_folder(sandbox, name);
+    let root = root_of(sandbox, name);
+    let mut bodies = BTreeMap::new();
+    for (key, folder, what, front) in [
+        (
+            "P",
+            "projects",
+            "project",
+            "title: Nested plan\nstatus: todo",
+        ),
+        (
+            "T",
+            "tasks",
+            "task",
+            "title: Nested task\nstatus: todo\nproject: P",
+        ),
+        (
+            "D",
+            "documents",
+            "document",
+            "title: Nested design\nproject: P",
+        ),
+    ] {
+        std::fs::create_dir_all(root.join(folder)).expect("a folder");
+        let (after, before) = nested_images(key);
+        let body = nested_body(what, (&after, &before));
+        std::fs::write(
+            root.join(folder).join(format!("{key}.md")),
+            format!("---\n{front}\n---\n{body}"),
+        )
+        .expect("a record");
+        if key != "P" {
+            let assets = root.join(folder).join(format!("{key}.assets"));
+            std::fs::create_dir_all(&assets).expect("its assets");
+            std::fs::write(assets.join("after.png"), png(21, 60_000)).expect("an image");
+            std::fs::write(assets.join("before.png"), png(22, 70_000)).expect("an image");
+        }
+        bodies.insert(key, body);
+    }
+    (json!({"plugin": "local-md", "config": config}), bodies)
+}
+
+/// Copy the nested plan's project with its task, and then its document, from the folder
+/// `authored` into `dst`, answering where each landed: [`copy_plan`] without `--comments`, which
+/// the nested plan holds none of.
+fn copy_nested(sandbox: &Sandbox) -> BTreeMap<&'static str, Landed> {
+    let project = outcomes(&ok(
+        sandbox,
+        &["project", "copy", "authored:P", "--to", "dst", "--json"],
+    ));
+    let document = outcomes(&ok(
+        sandbox,
+        &["document", "copy", "authored:D", "--to", "dst", "--json"],
+    ));
+    authored_ids("authored")
+        .into_iter()
+        .map(|(key, source)| {
+            let report = if source.verb == "document" {
+                &document
+            } else {
+                &project
+            };
+            let id = report[&source.id]["destination"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{} landed: {report:#?}", source.id))
+                .to_owned();
+            (
+                key,
+                Landed {
+                    verb: source.verb,
+                    id,
+                },
+            )
+        })
+        .collect()
+}
+
+/// Each collapsible section of a decoded editor state at any depth, as its summary and the
+/// sections and images inside it, indented by depth: an `image` node by its `src`, and an image
+/// the loopback keeps in a paragraph's text by its address.
+fn sections_of(nodes: &Value, depth: usize, found: &mut Vec<String>) {
+    fn text(node: &Value) -> String {
+        let own: String = node["runs"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|run| run["text"].as_str())
+            .collect();
+        node["content"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .fold(own, |held, child| held + &text(child))
+    }
+    for node in nodes.as_array().into_iter().flatten() {
+        let indent = "  ".repeat(depth);
+        if node["type"] == "collapsible_section" {
+            let content = node["content"].as_array().cloned().unwrap_or_default();
+            let heading = content.first().map(text).unwrap_or_default();
+            found.push(format!("{indent}section {}", heading.trim()));
+            sections_of(&Value::Array(content[1..].to_vec()), depth + 1, found);
+        } else if depth > 0 {
+            let text = text(node);
+            if let Some(at) = text.find("![") {
+                found.push(format!("{indent}image {}", &text[at..]));
+            }
+        }
+    }
+}
+
+// llmlint: ignore[expensive_tests_stay_behind_their_own_edge] No service and no credential: folders of Markdown, the loopback board and the loopback Linear workspace.
+#[test]
+fn a_nested_block_lands_on_linear_as_a_section_inside_a_section_and_reads_back_as_authored() {
+    use onetaskgraph_e2e_support::fixtures::LinearRecord;
+    use onetaskgraph_e2e_support::linear_editor::decoded_tree;
+    for kind in KINDS {
+        let sandbox = Sandbox::new();
+        let (authored_config, bodies) = nested_plan(&sandbox, "authored");
+        let (dst, config) = destination(&sandbox, kind, "dst", None);
+        configure(
+            &sandbox,
+            &[("authored", &authored_config), ("dst", &config)],
+        );
+        let landed = copy_nested(&sandbox);
+        let mut names = BTreeMap::new();
+        for verb_key in ["T", "D"] {
+            asset_names(
+                &shown(&sandbox, landed[verb_key].verb, &landed[verb_key].id),
+                &mut names,
+            );
+        }
+        for (key, body) in &bodies {
+            let what = format!("{kind}: {key}");
+            let at = &landed[key];
+            let raw = match &dst {
+                Store::Local => {
+                    let file = std::fs::read_to_string(at.location(&sandbox)).expect("its file");
+                    file.splitn(3, "---\n")
+                        .nth(2)
+                        .unwrap_or_default()
+                        .to_owned()
+                }
+                _ => dst.raw(at),
+            };
+            let lines: Vec<&str> = raw.lines().collect();
+            if kind == "linear" {
+                // A section inside a section, each closed by a bare `+++`, and nothing else
+                // that marks a block: no authored markup and no `>>>`.
+                let marks: Vec<&str> = lines
+                    .iter()
+                    .copied()
+                    .filter(|line| line.starts_with("+++") || line.starts_with(">>>"))
+                    .collect();
+                let what_kind = ["P", "T", "D"]
+                    .iter()
+                    .zip(["project", "task", "document"])
+                    .find(|(held, _)| *held == key)
+                    .map(|(_, what)| what)
+                    .expect("a key");
+                assert_eq!(
+                    marks,
+                    [
+                        format!("+++ Visual **change** of the {what_kind}").as_str(),
+                        "+++ Before",
+                        "+++",
+                        "+++"
+                    ],
+                    "{what}: stored as a section inside a section:\n{raw}"
+                );
+                for line in &lines {
+                    assert!(
+                        !(line.starts_with("<details") || line.starts_with("<summary>"))
+                            && *line != "</details>",
+                        "{what}: no authored markup is left on Linear: {line:?}\n{raw}"
+                    );
+                }
+                let position = |wanted: &dyn Fn(&str) -> bool| {
+                    lines
+                        .iter()
+                        .position(|line| wanted(line))
+                        .unwrap_or_else(|| panic!("{what}: holds the line:\n{raw}"))
+                };
+                let (outer, inner) = (
+                    position(&|line| line.starts_with("+++ Visual")),
+                    position(&|line| line == "+++ Before"),
+                );
+                let after = position(&|line| line.starts_with("![After]("));
+                let before = position(&|line| line.starts_with("![Before]("));
+                let close = position(&|line| line == "+++");
+                assert!(
+                    outer < after && after < inner && inner < before && before < close,
+                    "{what}: the after image in the outer section, the before image in the inner \
+                     one:\n{raw}"
+                );
+                // And Linear's editor state holds that nesting, each image where it was written.
+                let Store::Linear(workspace) = &dst else {
+                    unreachable!()
+                };
+                let record = match at.verb {
+                    "task" => LinearRecord::Task,
+                    "project" => LinearRecord::Project,
+                    _ => LinearRecord::Document,
+                };
+                let state = workspace
+                    .editor_state(record, at.native())
+                    .unwrap_or_else(|| panic!("{what}: an editor state"));
+                let tree = decoded_tree(&state).expect("the state decodes");
+                let mut outline = Vec::new();
+                sections_of(&tree["content"], 0, &mut outline);
+                // The slot is a collapsed block of its own after the content.
+                outline.retain(|line| line != "section onetaskgraph metadata");
+                let (after, before) = nested_images(key);
+                assert_eq!(
+                    outline
+                        .iter()
+                        .map(|line| by_asset(line, &names))
+                        .collect::<Vec<_>>(),
+                    [
+                        format!("section Visual change of the {what_kind}"),
+                        by_asset(&format!("  image ![After]({after})"), &names),
+                        "  section Before".to_owned(),
+                        by_asset(&format!("    image ![Before]({before})"), &names),
+                    ],
+                    "{what}: the editor state nests the sections, each image in its own"
+                );
+            } else {
+                // The authored form, byte for byte: a folder's file as authored, a board's body
+                // as authored with each asset at the address the board serves it from.
+                assert_eq!(
+                    by_asset(raw.trim_end_matches('\n'), &names),
+                    by_asset(body.trim_end_matches('\n'), &names),
+                    "{what}: held in the authored form"
+                );
+                if kind == "local-md" {
+                    assert_eq!(raw, *body, "{what}: the folder holds it byte for byte");
+                }
+            }
+            // Read back through the store: the authored nested blocks, byte for byte, each
+            // image at the address its destination serves it from.
+            assert_eq!(
+                by_asset(at.content(&sandbox).trim_end_matches('\n'), &names),
+                by_asset(body.trim_end_matches('\n'), &names),
+                "{what}: reads back as the authored nested blocks"
+            );
+        }
+        let root = (kind == "local-md").then(|| root_of(&sandbox, "dst"));
+        repeats_settling(
+            &sandbox,
+            &format!("{kind}: nested"),
+            &|| {
+                let again = copy_nested(&sandbox);
+                for (key, record) in &landed {
+                    assert_eq!(again[key].id, record.id, "{kind}: {key} landed once");
+                }
+            },
+            (&dst, root.as_deref()),
+            (&landed, false),
+            &[],
+        );
     }
 }
