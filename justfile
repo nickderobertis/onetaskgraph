@@ -42,8 +42,8 @@ pool-maintenance:
     @cargo-prune-superseded --keep-within 2d target
 
 # The pool-maintenance pass-time budget. Deliberately outside `check` and `gate`: its
-# measurement rebuilds the workspace's leaf crates and prunes the real target directory.
-# The release pull request runs it after its gate, where those builds are already fresh.
+# measurement builds the workspace's leaf crates, copies every build in the target directory
+# and prunes it. The release pull request runs it after its gate, where those builds are fresh.
 # It runs onebudgetspec directly, as the pool-maintenance project's own `budgets-host`
 # target does, because a recipe naming an Nx target is read as a stage every gate runs.
 

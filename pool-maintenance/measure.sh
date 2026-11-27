@@ -5,10 +5,12 @@
 # The figure is the pass a regular post-run maintenance faces — one ordinary run's worth of
 # new superseded builds — never a first pass over accumulated history, so this sets that
 # state up before it times anything. It reuses the target directory as the run before it
-# left it, and builds only the workspace's leaf crates — the members no other member
-# depends on — each as its own `test` target builds it, so on the release pull request,
-# straight after that job's tests, those builds are already fresh and each step below costs
-# little more than the pruner:
+# left it, and its ordinary build is the workspace's leaf crates — the members no other
+# member depends on — each built as its own `test` target builds it, which builds every
+# other member and dependency they reach, so on the release pull request, straight after
+# that job's tests, the build is already fresh. Nothing is compiled a second time: the
+# superseded builds are copies of the real ones, so each step but (a)'s settling costs
+# little more than copying and pruning:
 #   (a) runs the ordinary build, and then the declared maintenance, untimed, to clear the
 #       backlog — repeating the two until a pass removes nothing, because one pass over a
 #       warm directory is not a steady state. The pruner groups every build named for one
@@ -18,14 +20,19 @@
 #       modification times, so a pass removes some the build still needs, the next build
 #       makes them anew, and that build supersedes the old sibling the pass had kept. Left
 #       there, the timed pass in (d) removed those siblings too;
-#   (b) builds the leaf crates under a profile override naming only those packages, which
-#       gives each of their units a new metadata hash in the same profile directory and
-#       leaves every unit they depend on as it is — the units a run that moved those crates
-#       (a version bump, a feature change) leaves superseded — then backdates exactly the
-#       entries that build created to a date past the 2-day window and older than anything
-#       a slot holds, so they stand in for a run's builds that have since been superseded;
+#   (b) gives every build in the settled directory — every unit of every member, leaf or
+#       not, and of every dependency — a superseded sibling: a byte-for-byte copy of each of
+#       its entries (deps/, .fingerprint/, build/ and incremental/) under a new metadata
+#       hash of the same length and alphabet, as a build under another profile or another
+#       version of the workspace would leave beside it. That is the workload a rebuild of
+#       the whole workspace under an alternative profile made, and what the pruner faces is
+#       the same: the same unit names, files and bytes to walk and remove. It then backdates
+#       exactly the entries the copy created to a date past the 2-day window and older than
+#       anything a slot holds, so they stand in for a run's builds that have since been
+#       superseded;
 #   (c) runs the ordinary build, so each unit's newest build is the ordinary one;
-#   (d) times one declared pass, which removes the alternative build.
+#   (d) times one declared pass, which removes the superseded copies — the alternative
+#       build, as the evidence lists and refusals name it.
 # Both passes are the justfile's `pool-maintenance` recipe, the command onevcs.toml declares.
 # Only (d) reports the figure, through cargo-prune-superseded's own onebudgetspec report;
 # (a)'s seconds are appended to that report's detail as separate evidence, and the figure is
@@ -100,16 +107,45 @@ ordinary_build() {
   done
 }
 
-# The same builds with line-table debuginfo in place of .cargo/config.toml's none, for the
-# leaf package alone. The profile is part of a unit's metadata hash, so each of its units
-# gets a new build beside the ordinary one, in the same target/debug the ordinary build
-# writes, and no unit it depends on is built again.
-alternative_build() {
-  local leaf
-  for leaf in "${LEAVES[@]}"; do
-    cargo test --quiet -p "$leaf" --all-features --locked --no-run \
-      --config "profile.dev.package.\"$leaf\".debug = \"line-tables-only\""
-  done
+# A superseded sibling of every build listed in $1: each entry named <unit>-<hash> is
+# copied, bytes, modes and links as they are, to <unit>-<new hash>, the new hash derived from
+# the old one and of its length and alphabet (16 hex digits in deps/, .fingerprint/ and
+# build/; incremental/'s 13 base-36 characters). An entry with no such name is left alone,
+# and a copy whose name is already taken is an error rather than an overwrite.
+supersede_every_build() {
+  python3 - "$1" <<'PY'
+import hashlib
+import os
+import re
+import shutil
+import sys
+
+NAMED = re.compile(r"^(?P<unit>.+-)(?P<hash>[0-9a-f]{16}|[0-9a-z]{13})(?P<rest>(\..*)?)$")
+BASE36 = "0123456789abcdefghijklmnopqrstuvwxyz"
+
+
+def sibling(old: str) -> str:
+    digest = hashlib.sha256(f"superseded:{old}".encode()).digest()
+    if len(old) == 16 and all(c in "0123456789abcdef" for c in old):
+        return digest.hex()[:16]
+    return "".join(BASE36[b % 36] for b in digest[: len(old)])
+
+
+with open(sys.argv[1], encoding="utf-8") as listing:
+    entries = [line.rstrip("\n") for line in listing if line.strip()]
+for entry in entries:
+    directory, name = os.path.split(entry)
+    named = NAMED.match(name)
+    if not named:
+        continue
+    copy = os.path.join(directory, named["unit"] + sibling(named["hash"]) + named["rest"])
+    if os.path.lexists(copy):
+        sys.exit(f"pool-maintenance/measure.sh: the superseded copy {copy} of {entry} already exists, so this directory already holds a sibling it cannot tell from a real build; remove {copy}, then re-run.")
+    if os.path.isdir(entry) and not os.path.islink(entry):
+        shutil.copytree(entry, copy, symlinks=True)
+    else:
+        shutil.copy2(entry, copy, follow_symlinks=False)
+PY
 }
 
 seconds_reported() {
@@ -142,17 +178,20 @@ done
 
 # (b) One run's worth of builds that the next ordinary build supersedes.
 list_entries > "$EVIDENCE/before-alternative.txt"
-alternative_build
+supersede_every_build "$EVIDENCE/before-alternative.txt"
 list_entries > "$EVIDENCE/after-alternative.txt"
 LC_ALL=C comm -13 "$EVIDENCE/before-alternative.txt" "$EVIDENCE/after-alternative.txt" \
   > "$EVIDENCE/alternative-created.txt"
 if [ ! -s "$EVIDENCE/alternative-created.txt" ]; then
-  echo "pool-maintenance/measure.sh: the alternative build created no new entry, so there is nothing superseded to time; check that a profile.dev.package override still changes a unit's metadata hash." >&2
+  echo "pool-maintenance/measure.sh: the alternative build created no new entry, so there is nothing superseded to time; check that the settled directory's entries are still named <unit>-<hash>." >&2
   exit 1
 fi
 while IFS= read -r entry; do
   find "$entry" -exec touch -h -d "$SUPERSEDED_AT" {} +
 done < "$EVIDENCE/alternative-created.txt"
+# A slot's superseded builds are days old and long written back; a copy made seconds ago is
+# still in the page cache, and removing it would time the writeback rather than the pass.
+sync
 
 # (c) The ordinary build, newest for every unit.
 ordinary_build
