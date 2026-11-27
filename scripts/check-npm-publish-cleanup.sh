@@ -114,7 +114,6 @@ drive() {
 drive ordinary-exit ordinary present
 drive failure-exit failure present
 
-# The cleanup without its wait, substituted in the clone's copy of the real check.
 check="$scratch/repo/scripts/check-npm-publish.sh"
 grep -q '^    wait "\$REGISTRY_PID" 2>/dev/null || true$' "$check" || fatal \
   "cleanup() in scripts/check-npm-publish.sh no longer waits with the line this check removes, so its control case cannot be built" \
