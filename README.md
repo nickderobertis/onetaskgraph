@@ -2025,8 +2025,32 @@ BODY
 - One blank line, then BODY — one or more lines of Markdown: paragraphs, lists, fenced code,
   tables, images, headings — then one blank line, then `</details>` alone on its line. GitHub
   renders Markdown inside a block only with these blank lines.
-- Blocks do not nest. The authored form carries no destination markup; a destination's own
-  form is the copy's to write and to read back.
+- BODY may hold further blocks in the authored form, to any depth. Each one meets every rule
+  above — its own `<details>` and `<summary>` lines, the blank lines on either side of its body,
+  a summary with only `<code>` and `<strong>` — on lines of the outer block's BODY, not indented:
+
+  ```text
+  <details>
+  <summary>Visual change</summary>
+
+  The settings page after the change.
+
+  ![After](./after.png)
+
+  <details>
+  <summary>Before</summary>
+
+  ![Before](./before.png)
+
+  </details>
+
+  </details>
+  ```
+
+  A block holding anything that is not the authored form at any depth is not one: it is carried
+  whole, as it stands (below).
+- The authored form carries no destination markup; a destination's own form is the copy's to
+  write and to read back.
 
 **Each destination's form.** Each form is one entry of `ExpandableForm` in `onetaskgraph-core`'s
 `expandable_blocks` module, the one place a destination's form is decided: it writes the form
@@ -2036,7 +2060,7 @@ from the authored one and parses it back.
 | --- | --- |
 | A folder of Markdown | the authored form, byte for byte |
 | A GitHub Projects issue | the authored form, byte for byte; the anchor line the source writes before a heading reaches one inside a block's body too |
-| A Linear issue, project, document or comment | `+++ LSUMMARY` alone on its line, a blank line, BODY, a blank line, `+++` alone on its line |
+| A Linear issue, project, document or comment | `+++ LSUMMARY` alone on its line, a blank line, BODY, a blank line, `+++` alone on its line; a block nested in BODY is a section of its own inside it, written the same way |
 
 LSUMMARY is SUMMARY with each `<code>TEXT</code>` written `` `TEXT` ``, each `<strong>TEXT</strong>`
 written `**TEXT**`, and `&amp;`, `&lt;` and `&gt;` written as the characters they stand for,
@@ -2046,6 +2070,37 @@ a `**…**` span `<strong>…</strong>`, and every `&`, `<` and `>` of the text 
 never Linear's editor shortcut `>>>`, which closes every open section at once when nested. Linear
 normalizes the content inside a section as it normalizes any other ("Writing to a destination
 that rewrites Markdown", above).
+
+**A nested block on Linear.** A block nested in another is written as a `+++` section inside the
+outer one's section, every section closed by a bare `+++` line — the block above as:
+
+```text
++++ Visual change
+
+The settings page after the change.
+
+![After](<the after image's address>)
+
++++ Before
+
+![Before](<the before image's address>)
+
++++
+
++++
+```
+
+Linear stores that byte for byte and draws a collapsible section holding the paragraph, the after
+image and a collapsible section holding the before image, each image inside the section it was
+written in. Reading back takes Linear's stored form as a well-nested run of `+++ LSUMMARY`
+openers and bare `+++` closers — an opener with an empty summary is stored as `+++ ` with a
+trailing space, so a bare `+++` always closes — and reads each section, and each section inside
+it, back as the authored block it is written from: the nested authored blocks, byte for byte. A
+section is read back only when its block would be written as exactly that section; otherwise it
+is left as Linear stores it, inside the block around it when that one reads back. A block nested
+in another follows every rule below as any other block does: one whose Linear form would not read
+back as itself is carried as it stands inside its outer section, and one Linear holds as literal
+text is written back so.
 
 `+++ LSUMMARY` … `+++` is the canonical Linear form: it is what the store writes, and it is what
 Linear's API stores and answers for a collapsible section however the section was made. A `>>>`
@@ -2071,8 +2126,9 @@ own normalization:
 - `<details open>`, or `<details>` with any other attribute;
 - a block missing either blank line;
 - a block inside a fenced code block, or indented;
-- a block nested in another, the outer one with it;
 - a summary holding any other tag;
+- a block holding any of the above at any depth: a block nested in it breaking a rule of the
+  authored form carries its outermost block as it stands;
 - a block whose Linear form would not read back as itself: a summary whose text holds a literal
   backtick or `*`, which Linear would read as a code or strong mark, a raw `&`, `<` or `>`, or a
   space at either end; and a block written with carriage returns, which Linear does not keep.
@@ -2104,8 +2160,11 @@ A plugin served over the stdio protocol has no expandable form: it is sent the a
 predicted: spike `spike-expandable-blocks` wrote every form to team `TES2` through the API and
 recorded what Linear stored, and that recording is committed unchanged in
 `crates/onetaskgraph-e2e-support/fixtures/expandable_blocks/` — every record sent and stored,
-its editor state, and every change Linear made. The loopback Linear the journeys copy into is
-held to storing each recorded record exactly so, and a chain of copies through Linear is
+its editor state, and every change Linear made — and, under `nested/`, the records spike
+`spike-linear-nested-blocks` wrote to `TES2`: a section inside a section in each mix of `+++` and
+`>>>`, with an image in each, as sent, stored and in Linear's editor state. The loopback Linear
+the journeys copy into is held to storing each recorded record exactly so, and to nesting each
+section and image as the recorded editor state does, and a chain of copies through Linear is
 accounted for line by line against those changes. Linear entities in a block's *body* are
 decoded as they are anywhere else in a body: one of the recorded normalizations. It rests too on
 what the credentialed live check `scripts/live-expandable-blocks.py`, run by hand, observes of the
@@ -2113,7 +2172,9 @@ real trackers: a project copied to a copy of board #1 stores every block in the 
 copied on from the board to team `TES2` stores each as `+++ LSUMMARY` … `+++`, a
 `collapsible_section` node of the record's editor state whose `collapsible_heading` holds the
 summary, with every body construct inside it, and reads back through the store in the authored
-form.
+form; and a block nested in one, holding an image, is stored as a `collapsible_section` inside
+that block's section with its `image` node inside it, and reads back as the nested authored
+blocks.
 
 ### Image assets
 
