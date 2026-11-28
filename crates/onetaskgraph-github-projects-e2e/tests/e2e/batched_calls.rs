@@ -1724,3 +1724,111 @@ fn a_search_limited_to_21_of_1000_matches_stops_its_slot_and_leaves_its_neighbou
         "no round after it reached 21 carries its slot: {served:#?}"
     );
 }
+
+/// A find reads its hits whole in batches after its searches: a batch the board refuses fails
+/// exactly the searches with a hit in it — each answered `complete: false`, naming the page —
+/// while a search whose hits all sit in another batch completes, and the command exits 4.
+#[test]
+fn a_refused_read_of_a_finds_hits_fails_only_the_searches_with_a_hit_in_it() {
+    let board = searched_board();
+    // The 25 releases fill the first batch of hits with their first 24; the last release and
+    // the seven deploy steps the second, which is answered.
+    board.board.refuse_once(graphql::ISSUE_DETAILS);
+    let request = json!({"schema_version": 1, "queries": [
+        {"key": "releases", "text": "release"},
+        {"key": "deploys", "text": "deploy"},
+    ]})
+    .to_string();
+    let (answered, served) = board.measured(
+        &["task", "find", "board", "--queries", "-", "--json"],
+        &request,
+    );
+    assert_eq!(answered.code, Some(4), "{}", answered.stderr);
+    let releases = &answered.json["answers"][0];
+    assert_eq!(releases["key"], "releases");
+    assert_eq!(releases["complete"], false, "{releases:#}");
+    assert!(
+        releases["reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("page 1") && reason.contains("releases")),
+        "{releases:#}"
+    );
+    assert_eq!(
+        found(&answered.json, "deploys"),
+        set((0..7).map(|n| format!("DS-{n}")))
+    );
+    assert_eq!(answered.json["answers"][1]["complete"], true);
+    // One round of searches, its two batches of hits, and nothing more: the refused search
+    // is walked no further.
+    assert_eq!(searches(&served), [graphql::SEARCH_BATCH], "{served:#?}");
+    assert_eq!(
+        documents(&served)
+            .iter()
+            .filter(|document| **document == graphql::ISSUE_DETAILS)
+            .count(),
+        2,
+        "{served:#?}"
+    );
+}
+
+/// An issue a search hit that is gone from the board by the time the find reads it whole — taken
+/// off it, or deleted — is no task of this board and is left out of that search's answer, which
+/// is still complete: every other hit of every page is answered once each, in order.
+#[test]
+fn a_hit_gone_from_the_board_before_it_is_read_whole_is_left_out_of_a_complete_answer() {
+    let board = searched_board();
+    let handle = board.board.clone();
+    // Once the releases' last page is answered — the third round of searches — R-21 leaves the
+    // board and R-22 is deleted, before either is read whole. (Earlier, the board's own cursors
+    // would move under every later page, as an index re-ranking does.)
+    board.board.after_request(
+        |document, _| document == graphql::SEARCH_BATCH,
+        2,
+        move |_| {
+            handle.take_off_the_board("R-21");
+            handle.delete_issue("R-22");
+        },
+    );
+    let request = json!({"schema_version": 1, "queries": [
+        {"key": "releases", "text": "release"},
+        {"key": "deploys", "text": "deploy"},
+    ]})
+    .to_string();
+    let (answered, served) = board.measured(
+        &[
+            "task",
+            "find",
+            "board",
+            "--queries",
+            "-",
+            "--json",
+            "--page-size",
+            "10",
+        ],
+        &request,
+    );
+    assert_eq!(answered.code, Some(0), "{}", answered.stderr);
+    let releases: Vec<String> = in_order(&answered.json)[0].1.clone();
+    let expected: Vec<String> = (0..25)
+        .filter(|n| ![21, 22].contains(n))
+        .map(|n| format!("R-{n}"))
+        .collect();
+    assert_eq!(
+        releases, expected,
+        "every other release, once each, in order"
+    );
+    assert_eq!(answered.json["answers"][0]["complete"], true);
+    assert_eq!(
+        found(&answered.json, "deploys"),
+        set((0..7).map(|n| format!("DS-{n}")))
+    );
+    // Its pages resume each from where the one before ended, and both gone hits were asked
+    // after, by the read that found them gone.
+    let resumed: Vec<usize> = pages_of(&served, "release")
+        .iter()
+        .map(|(_, offset, _)| *offset)
+        .collect();
+    assert_eq!(resumed, [0, 10, 20], "{served:#?}");
+    let read = read_whole(&served);
+    assert!(read.contains(&"R-21".to_owned()) && read.contains(&"R-22".to_owned()));
+}

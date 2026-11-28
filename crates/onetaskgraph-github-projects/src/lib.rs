@@ -975,7 +975,7 @@ pub fn request_point_cost(document: &str, variables: &Value) -> Result<u64, Node
     // default, which no request binds.
     bindings
         .entry("assigneeFirst".to_owned())
-        .or_insert(graphql::ASSIGNEE_FIRST);
+        .or_insert_with(graphql::assignee_first);
     point_cost(document, &bindings)
 }
 
@@ -2911,8 +2911,17 @@ pub mod graphql {
     /// people GitHub assigns one issue — so no caller binds it, and inserted first among a
     /// document's variables.
     const ASSIGNEE_VARIABLE: &str = "$assigneeFirst:Int!=10 ";
-    /// The default [`ASSIGNEE_VARIABLE`] declares, which a request is priced at.
-    pub(crate) const ASSIGNEE_FIRST: u32 = 10;
+
+    /// The default [`ASSIGNEE_VARIABLE`] declares, read out of that declaration: what a request
+    /// spelled with assignees is priced at.
+    pub(crate) fn assignee_first() -> u32 {
+        ASSIGNEE_VARIABLE
+            .trim()
+            .rsplit('=')
+            .next()
+            .and_then(|default| default.parse().ok())
+            .expect("the assignee variable declares a numeric default")
+    }
     /// [`ASSIGNEE_VARIABLE`] for a document declaring no variables of its own.
     const ASSIGNEE_VARIABLES: &str = "($assigneeFirst:Int!=10)";
     /// Where [`ASSIGNEES`] goes: straight after each of these, wherever an issue or a draft is
