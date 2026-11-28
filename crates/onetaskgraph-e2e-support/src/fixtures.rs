@@ -4226,11 +4226,19 @@ fn github_projects_board_at(
         // Every one of these refuses a request the plugin should not have sent, and
         // each names the request it refused: a shape assumed silently here surfaces as
         // a journey failing about something else entirely.
-        let query = request["query"]
+        let wire = request["query"]
             .as_str()
             .unwrap_or_else(|| panic!("GraphQL request carries no query string: {request}"));
-        graphql_parser::parse_query::<String>(query)
-            .unwrap_or_else(|problem| panic!("invalid GraphQL document ({problem}): {query}"));
+        graphql_parser::parse_query::<String>(wire)
+            .unwrap_or_else(|problem| panic!("invalid GraphQL document ({problem}): {wire}"));
+        // Every read selects what it cost under an alias of its own: the board serves and
+        // records the document as it was written, and answers that alias beside it with what
+        // GitHub's published rules price the request at — the plugin's own table.
+        let unpriced = onetaskgraph_github_projects::graphql::without_reported_cost(wire);
+        let priced = unpriced.is_some();
+        let query = unpriced.as_deref().unwrap_or(wire);
+        // Priced as it ran, assignees and all.
+        let executed = query.to_owned();
         let variables = request["variables"]
             .as_object()
             .unwrap_or_else(|| panic!("GraphQL request carries no variables object: {request}"));
@@ -4342,63 +4350,69 @@ fn github_projects_board_at(
                 .position(|operation| query.contains(operation))
                 .map(|at| held.refusing_stale.remove(at))
         };
-        let body =
-            if let Some(operation) = stale {
-                json!({"data":Value::Null,
+        let body = if let Some(operation) = stale {
+            json!({"data":Value::Null,
                        "errors":[{"message":format!(
                            "Could not resolve to a node with the global id of '{operation}'")}]})
-                .to_string()
-            } else if let Some(operation) = owed {
-                // The operation is named in the message so a journey can tell *which*
-                // failure reached the caller — a copy whose write failed and whose tidy-up
-                // then failed too has two, and which one it reports is the behaviour.
-                json!({"data":Value::Null,
+            .to_string()
+        } else if let Some(operation) = owed {
+            // The operation is named in the message so a journey can tell *which*
+            // failure reached the caller — a copy whose write failed and whose tidy-up
+            // then failed too has two, and which one it reports is the behaviour.
+            json!({"data":Value::Null,
                        "errors":[{"message":format!(
                            "Something went wrong while executing your query: {operation}")}]})
-                .to_string()
-            } else if let Some(refused) = github_assignees::refused(&board, query, &variables) {
-                refused.to_string()
-            } else {
-                let variables = github_assignees::applied(&board, query, &variables);
-                // A document selecting the whole issue it writes is answered as its plain twin
-                // is, and then with that issue as a read of it by its own id shows it.
-                let plain = github_plain_of(query);
-                let data = github_answer(&board, plain.unwrap_or(query), &variables);
-                let data = match plain {
-                    Some(_) => board.lock().unwrap().whole(query, data, &variables),
-                    None => data,
-                };
-                let data = github_assignees::answered(&board, query, &variables, data, spelled);
+            .to_string()
+        } else if let Some(refused) = github_assignees::refused(&board, query, &variables) {
+            refused.to_string()
+        } else {
+            let variables = github_assignees::applied(&board, query, &variables);
+            // A document selecting the whole issue it writes is answered as its plain twin
+            // is, and then with that issue as a read of it by its own id shows it.
+            let plain = github_plain_of(query);
+            let data = github_answer(&board, plain.unwrap_or(query), &variables);
+            let data = match plain {
+                Some(_) => board.lock().unwrap().whole(query, data, &variables),
+                None => data,
+            };
+            let mut data = github_assignees::answered(&board, query, &variables, data, spelled);
+            if priced {
+                let cost = onetaskgraph_github_projects::request_point_cost(&executed, &variables)
+                    .unwrap_or_else(|error| panic!("an unpriced read ({error}): {executed}"));
+                onetaskgraph_github_projects::graphql::answer_reported_cost(&mut data, cost);
+            }
+            {
+                let mut held = board.lock().unwrap();
+                if let Some(at) = held
+                    .erring_beside
+                    .iter()
+                    .position(|(operation, _)| query.contains(operation))
                 {
-                    let mut held = board.lock().unwrap();
-                    if let Some(at) = held
-                        .erring_beside
-                        .iter()
-                        .position(|(operation, _)| query.contains(operation))
-                    {
-                        let (_, message) = held.erring_beside.remove(at);
-                        held.owed_errors.push(message);
-                    }
-                    if let Some(at) = held.erring_at_alias.iter().position(|(alias, _)| {
-                        data.get(*alias).is_some_and(|value| !value.is_null())
-                    }) {
-                        let (alias, message) = held.erring_at_alias.remove(at);
-                        held.owed_error_objects
-                            .push(json!({"message": message, "path": [alias, "issue"]}));
-                    }
+                    let (_, message) = held.erring_beside.remove(at);
+                    held.owed_errors.push(message);
                 }
-                let owed = std::mem::take(&mut board.lock().unwrap().owed_errors);
-                let objects = std::mem::take(&mut board.lock().unwrap().owed_error_objects);
-                if owed.is_empty() && objects.is_empty() {
-                    json!({ "data": data }).to_string()
-                } else {
-                    json!({"data": data,
+                if let Some(at) = held
+                    .erring_at_alias
+                    .iter()
+                    .position(|(alias, _)| data.get(*alias).is_some_and(|value| !value.is_null()))
+                {
+                    let (alias, message) = held.erring_at_alias.remove(at);
+                    held.owed_error_objects
+                        .push(json!({"message": message, "path": [alias, "issue"]}));
+                }
+            }
+            let owed = std::mem::take(&mut board.lock().unwrap().owed_errors);
+            let objects = std::mem::take(&mut board.lock().unwrap().owed_error_objects);
+            if owed.is_empty() && objects.is_empty() {
+                json!({ "data": data }).to_string()
+            } else {
+                json!({"data": data,
                            "errors": owed.iter().map(|message| json!({"message": message}))
                                .chain(objects)
                                .collect::<Vec<_>>()})
-                    .to_string()
-                }
-            };
+                .to_string()
+            }
+        };
         // Answered, and not yet sent: a change made here is one the next request sees and
         // this one did not.
         let due: Vec<BoardHook> = {
@@ -4951,10 +4965,22 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
                 let one = json!({"search": search, "type": variables["type"],
                     "first": variables[format!("first{slot}")],
                     "after": variables[format!("after{slot}")],
-                    "nestedFirst": variables["nestedFirst"],
-                    "boardItems": variables["boardItems"],
-                    "duplicates": variables["duplicates"]});
-                let answer = github_answer(board, documents::SEARCH_ISSUES, &one);
+                    "nestedFirst": 50, "boardItems": 3, "duplicates": true});
+                let mut answer = github_answer(board, documents::SEARCH_ISSUES, &one);
+                // The slot selects each hit's scalar fields alone, and is answered with nothing
+                // more, so nothing downstream can read what it did not ask.
+                if let Some(nodes) = answer["search"]["nodes"].as_array_mut() {
+                    for node in nodes.iter_mut() {
+                        *node = if node["__typename"] == "Issue" {
+                            json!({"__typename": "Issue", "id": node["id"],
+                                   "number": node["number"], "title": node["title"],
+                                   "state": node["state"], "updatedAt": node["updatedAt"],
+                                   "repository": node["repository"]})
+                        } else {
+                            json!({"__typename": node["__typename"]})
+                        };
+                    }
+                }
                 result.insert(alias, answer["search"].clone());
             }
             for slot in 0..onetaskgraph_github_projects::SEARCH_BATCH_ORIGINS {
@@ -4969,7 +4995,23 @@ fn github_answer(board: &Arc<Mutex<GitHubBoard>>, query: &str, variables: &Value
                     "originFirst": variables[format!("itemsFirst{slot}")],
                     "itemsAfter": variables[format!("itemsAfter{slot}")],
                     "searchAfter": null});
-                let answer = board.lock().unwrap().origin_lookup(&one);
+                let mut answer = board.lock().unwrap().origin_lookup(&one);
+                // Each item's id and its content's kind and id alone, as the slot asks.
+                if let Some(nodes) =
+                    answer["originItems"]["projectV2"]["items"]["nodes"].as_array_mut()
+                {
+                    for node in nodes.iter_mut() {
+                        let content = &node["content"];
+                        let content = if content.is_null() {
+                            Value::Null
+                        } else if content["__typename"] == "Issue" {
+                            json!({"__typename": "Issue", "id": content["id"]})
+                        } else {
+                            json!({"__typename": content["__typename"]})
+                        };
+                        *node = json!({"id": node["id"], "content": content});
+                    }
+                }
                 result.insert(format!("o{slot}"), answer["originItems"].clone());
             }
             return Value::Object(result);

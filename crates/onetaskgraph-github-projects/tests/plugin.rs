@@ -1476,8 +1476,13 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
             let Some(request) = read_http_json_unless_abandoned(&mut stream) else {
                 continue;
             };
-            let query = request["query"].as_str().expect("a GraphQL document");
-            graphql_parser::parse_query::<String>(query).expect("a valid GraphQL document");
+            let wire = request["query"].as_str().expect("a GraphQL document");
+            graphql_parser::parse_query::<String>(wire).expect("a valid GraphQL document");
+            // Every read selects what it cost under an alias; the board answers the document
+            // it was written as, and that alias beside it.
+            let priced = onetaskgraph_github_projects::graphql::without_reported_cost(wire);
+            let query = priced.as_deref().unwrap_or(wire);
+            let priced = priced.is_some();
             let variables = &request["variables"];
             served.lock().unwrap().documents.push(query.to_owned());
             // Slept here rather than under the lock, so the board's state stays readable while
@@ -1565,11 +1570,15 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
                     {
                         Some(message) => {
                             let mut response = json!({"errors":[{"message":message}]});
-                            if query.contains("rateLimit{cost}")
+                            if (priced || query.contains("rateLimit{cost}"))
                                 && let Some(cost) =
                                     served.lock().unwrap().limits.reported_refusal_cost
                             {
-                                response["data"] = json!({"rateLimit":{"cost":cost}});
+                                response["data"] = if priced {
+                                    json!({"actualCost":{"cost":cost}})
+                                } else {
+                                    json!({"rateLimit":{"cost":cost}})
+                                };
                             }
                             if query.contains("rateLimit{cost nodeCount limit remaining}") {
                                 response["data"] = board::answer_a_stateless_session_call(
@@ -1589,11 +1598,14 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
                         }
                         None => {
                             let mut data = answer(&served, query, variables);
-                            if query.contains("rateLimit{cost}")
-                                && let Some(cost) =
-                                    served.lock().unwrap().limits.reported_query_cost
-                            {
-                                data["rateLimit"] = json!({"cost":cost});
+                            if let Some(cost) = served.lock().unwrap().limits.reported_query_cost {
+                                if priced {
+                                    onetaskgraph_github_projects::graphql::answer_reported_cost(
+                                        &mut data, cost,
+                                    );
+                                } else if query.contains("rateLimit{cost}") {
+                                    data["rateLimit"] = json!({"cost":cost});
+                                }
                             }
                             if query.contains("actualCost:rateLimit")
                                 && served.lock().unwrap().limits.ignore_pricing_aliases
@@ -4139,7 +4151,9 @@ fn committed_server() -> String {
         for stream in listener.incoming() {
             let mut stream = stream.unwrap();
             let request = read_http_json(&mut stream);
-            let query = request["query"].as_str().expect("a GraphQL document");
+            let wire = request["query"].as_str().expect("a GraphQL document");
+            let plain = onetaskgraph_github_projects::graphql::without_reported_cost(wire);
+            let query = plain.as_deref().unwrap_or(wire);
             let variables = &request["variables"];
             let recorded = issues
                 .pointer("/data/search/nodes")
@@ -19988,9 +20002,11 @@ async fn inconsistent_search_cursor_states_are_refused_without_a_request() {
         (json!({"state":"initial"}), 0),
         // An exhausted connection has no page to be part of the way through.
         (json!({"state":"exhausted"}), 2),
-        // No page is resumed a whole page or more into it: those rows were never handed out.
-        (json!({"state":"initial"}), 20),
-        (json!({"state":"continuing","after":"20"}), 20),
+        // No page is resumed GitHub's whole page maximum or more into it: no page holds those
+        // rows, so nobody was handed them. (A page shared by two searches of one text may stop
+        // anywhere short of that, which `batched_calls.rs` in the e2e suite resumes.)
+        (json!({"state":"initial"}), 100),
+        (json!({"state":"continuing","after":"20"}), 100),
     ] {
         let token = json!({"version":onetaskgraph_github_projects::SEARCH_CURSOR_VERSION,"connection":connection,"offset":offset}).to_string();
         assert!(
@@ -22103,12 +22119,13 @@ async fn opted_in_actual_query_prices_reach_the_ledger_through_the_real_source()
             .iter()
             .all(|request| request.spend().amount() == 7)
     );
-    assert!(
-        fixture
-            .documents()
-            .iter()
-            .all(|query| query.contains("rateLimit{cost}"))
-    );
+    // The fixture records each read as the document it was written as; what went out selected
+    // its cost under the alias, and every recorded request carries what GitHub said of it.
+    assert!(snapshot.requests().iter().all(|request| {
+        request
+            .document()
+            .is_some_and(|sent| sent.contains("actualCost:rateLimit(dryRun:false){cost}"))
+    }));
     // Unknown prices are retained as unknown response facts by the live reader, rather
     // than inferred from account movement; the legacy ledger retains its model.
     fixture.state.lock().unwrap().limits.reported_query_cost = None;
@@ -22188,7 +22205,11 @@ async fn actual_execution_facts_distinguish_refusals_retries_and_unreadable_resp
         assert_eq!(snapshot.requests().len(), 1);
         let call = &snapshot.requests()[0];
         assert_eq!(call.response_outcome(), expected);
-        assert_eq!(call.document(), Some(fixture.documents()[0].as_str()));
+        assert_eq!(
+            call.document().map(str::to_owned),
+            graphql::with_reported_cost(&fixture.documents()[0]),
+            "the ledger keeps the document as it went out, selecting its cost"
+        );
         assert_eq!(call.attempt(), 1);
         assert_eq!(
             call.reported_query_cost(),
@@ -22285,7 +22306,7 @@ async fn fresh_token_polling_child() {
             .iter()
             .all(|call| call.reported_query_cost() == Some(1))
     );
-    let read_by_id = Accounting::with_query_prices().priced_document(graphql::ISSUE);
+    let read_by_id = graphql::with_reported_cost(graphql::ISSUE).expect("a read");
     assert!(
         calls
             .iter()
@@ -23798,4 +23819,17 @@ async fn a_parent_source_refuses_every_project_write_naming_the_setting_before_s
         );
     }
     assert!(fixture.seen().is_empty(), "nothing was written");
+}
+
+#[test]
+fn a_callers_priced_document_selects_one_cost_beside_any_rate_limit_already_selected() {
+    let ledger = Accounting::with_query_prices();
+    let priced = ledger.priced_document(graphql::ISSUE);
+    assert_eq!(priced.matches("rateLimit").count(), 1, "{priced}");
+    // A document the source already spelled with its cost, and a dry-run probe, are left as
+    // they are: never a second `rateLimit` selection beside the first.
+    let spelled = graphql::with_reported_cost(graphql::ISSUE).expect("a read");
+    assert_eq!(ledger.priced_document(&spelled), spelled);
+    let probe = graphql::ISSUE.replacen('{', "{rateLimit(dryRun:true){cost} ", 1);
+    assert_eq!(ledger.priced_document(&probe), probe);
 }

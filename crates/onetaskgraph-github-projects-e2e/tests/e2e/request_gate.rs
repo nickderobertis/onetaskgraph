@@ -873,3 +873,172 @@ fn a_repository_visibility_read_failing_in_transport_ends_once() {
     );
     assert_eq!(setup.board.status(&ticket(1)).as_deref(), Some("Todo"));
 }
+
+/// A gate writing down, in order, every ask, every response's readings, every cost reported
+/// and every end — so where a cost arrives among the others is what a test reads.
+#[derive(Default)]
+struct Ledger {
+    events: Mutex<Vec<Event>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Event {
+    Asked,
+    Readings,
+    Cost(onetaskgraph_plugin_api::ReportedCost),
+    Ended,
+}
+
+#[async_trait::async_trait]
+impl RequestGate for Ledger {
+    async fn before_request(&self, _: &GatedRequest) -> Result<(), SourceError> {
+        self.events.lock().unwrap().push(Event::Asked);
+        Ok(())
+    }
+
+    fn after_response(&self, _: &[QuotaReading]) {
+        self.events.lock().unwrap().push(Event::Readings);
+    }
+
+    fn cost_reported(&self, cost: &onetaskgraph_plugin_api::ReportedCost) {
+        self.events.lock().unwrap().push(Event::Cost(cost.clone()));
+    }
+
+    fn request_ended(&self) {
+        self.events.lock().unwrap().push(Event::Ended);
+    }
+}
+
+/// The fixture board's token, for a journey that builds the plugin itself.
+struct FixtureToken;
+
+impl onetaskgraph_plugin_api::SecretResolver for FixtureToken {
+    fn get(&self, variable: &str) -> Option<secrecy::SecretString> {
+        (variable == "GITHUB_PROJECTS_FIXTURE_TOKEN").then(|| "test-token".into())
+    }
+}
+
+#[test]
+fn every_answered_read_reports_its_own_cost_between_its_readings_and_its_end() {
+    use onetaskgraph_github_projects::graphql;
+    use onetaskgraph_plugin_api::{
+        PageRequest, SourcePlugin as _, TaskQuery, TaskUpdate, TextFields, TextQuery,
+    };
+    let sandbox = Sandbox::new();
+    let (config, fixture) =
+        github_projects_with_items(&sandbox, (0..30).map(|n| issue(&ticket(n))).collect());
+    fixture.answer_from_windows(windows());
+    let source = onetaskgraph_github_projects::Plugin
+        .build(&board(), &config, &FixtureToken)
+        .expect("the plugin builds");
+    let search = |terms: &str| TaskQuery {
+        text: Some(TextQuery {
+            terms: terms.to_owned(),
+            fields: TextFields::TitleOrContent,
+        }),
+        ..TaskQuery::default()
+    };
+    let page = |limit: u32| PageRequest {
+        cursor: None,
+        limit,
+    };
+    let gate = Arc::new(Ledger::default());
+    let installed: Arc<dyn RequestGate> = gate.clone();
+    // A batched find of three searches, one asked twice; a read of one task; a write; and a
+    // read the board refuses.
+    fixture.refuse_once(graphql::ISSUE);
+    let (found, written, refused) =
+        runtime().block_on(<dyn RequestGate>::scope(installed, async {
+            let found = source
+                .query_tasks_batch(&[
+                    (search("G-1"), page(5)),
+                    (search("Ticket"), page(21)),
+                    (search("G-1"), page(5)),
+                    (search("nowhere"), page(5)),
+                ])
+                .await;
+            let refused = source.get_task(&NativeId(ticket(3))).await;
+            let shown = source.get_task(&NativeId(ticket(2))).await;
+            assert!(matches!(shown, Ok(Some(_))), "{shown:?}");
+            let written = source
+                .update_task(
+                    &NativeId(ticket(4)),
+                    &TaskUpdate {
+                        title: Some("Retitled".to_owned()),
+                        ..TaskUpdate::default()
+                    },
+                )
+                .await;
+            (found, written, refused)
+        }));
+    assert!(found.iter().all(Result::is_ok), "{found:?}");
+    assert_eq!(
+        found[0], found[2],
+        "a search asked twice answers both alike"
+    );
+    assert!(matches!(written, Ok(Some(_))), "{written:?}");
+    assert!(refused.is_err(), "the board refused the read: {refused:?}");
+
+    // Split what the gate was told into one run per request the board received, in order.
+    let events = gate.events.lock().unwrap().clone();
+    let mut requests: Vec<Vec<Event>> = Vec::new();
+    for event in events {
+        if event == Event::Asked {
+            requests.push(Vec::new());
+        }
+        requests.last_mut().expect("asked first").push(event);
+    }
+    let served = fixture.served();
+    assert_eq!(requests.len(), served.len(), "one ask per request");
+    let refused_at = served
+        .iter()
+        .position(|(query, variables)| query == graphql::ISSUE && variables["id"] == ticket(3))
+        .expect("the refused read was sent");
+    let mut reported = 0;
+    let mut mutations = 0;
+    for (at, ((query, variables), told)) in served.iter().zip(&requests).enumerate() {
+        let mutation = query.trim_start().starts_with("mutation");
+        let expected = if mutation || at == refused_at {
+            // A mutation selects no cost and a refused read reports none: neither delivers one.
+            mutations += usize::from(mutation);
+            vec![Event::Asked, Event::Readings, Event::Ended]
+        } else {
+            // What its response reported: the board prices each request with the plugin's own
+            // table, as GitHub prices it.
+            let cost = onetaskgraph_github_projects::request_point_cost(query, variables)
+                .expect("a priced read");
+            reported += cost;
+            vec![
+                Event::Asked,
+                Event::Readings,
+                Event::Cost(onetaskgraph_plugin_api::ReportedCost {
+                    resource: "graphql".to_owned(),
+                    cost,
+                }),
+                Event::Ended,
+            ]
+        };
+        assert_eq!(*told, expected, "request {at}: {query}");
+    }
+    assert!(mutations > 0, "the write sent a mutation: {served:#?}");
+    assert!(
+        served
+            .iter()
+            .any(|(query, _)| query == graphql::SEARCH_BATCH),
+        "the find was batched: {served:#?}"
+    );
+    // And the source's own metering attributes exactly those figures as reported, every
+    // mutation and the refused read at the modelled one-point minimum.
+    let metering = runtime()
+        .block_on(source.metering())
+        .expect("metering")
+        .expect("this source meters");
+    let graphql = metering
+        .budgets
+        .iter()
+        .find(|budget| budget.budget == "graphql")
+        .expect("a graphql budget");
+    assert_eq!(graphql.measured, reported);
+    assert_eq!(graphql.modelled, (mutations + 1) as u64);
+    assert_eq!(metering.requests, served.len() as u64);
+}

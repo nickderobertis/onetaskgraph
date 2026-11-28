@@ -145,6 +145,35 @@ fn documents(served: &[(String, Value)]) -> Vec<&str> {
         .collect()
 }
 
+/// The documents of `served` that search, in order: every batched round, and any search read
+/// on its own — what a find's rounds are counted by, its detail reads aside.
+fn searches(served: &[(String, Value)]) -> Vec<&str> {
+    documents(served)
+        .into_iter()
+        .filter(|document| {
+            *document == graphql::SEARCH_BATCH || *document == graphql::SEARCH_ISSUES
+        })
+        .collect()
+}
+
+/// Every issue a find read whole, once per read of it: each distinct id of a batched detail
+/// read — whose unused slots repeat its last id — and each single read of one issue.
+fn read_whole(served: &[(String, Value)]) -> Vec<String> {
+    let mut read = Vec::new();
+    for (document, variables) in served {
+        if document == graphql::ISSUE_DETAILS {
+            let mut batch: Vec<String> = (0..onetaskgraph_github_projects::DETAIL_BATCH)
+                .filter_map(|slot| variables[format!("id{slot}")].as_str().map(str::to_owned))
+                .collect();
+            batch.dedup();
+            read.extend(batch);
+        } else if document == graphql::ISSUE {
+            read.push(variables["id"].as_str().expect("an id").to_owned());
+        }
+    }
+    read
+}
+
 /// Whether `document` is a mutation.
 fn mutation(document: &str) -> bool {
     document.trim_start().starts_with("mutation")
@@ -199,7 +228,7 @@ fn searched_board() -> Board {
         .collect();
     items.extend((0..7).map(|n| {
         issue(
-            &format!("D-{n}"),
+            &format!("DS-{n}"),
             &format!("Deploy step {n}"),
             &format!("deploy {n}"),
             if n % 2 == 0 { "Doing" } else { "Todo" },
@@ -245,8 +274,18 @@ fn five_queries() -> String {
 #[test]
 fn a_find_answers_each_query_under_its_key_across_pages_in_one_request_a_round() {
     let board = searched_board();
+    // Pages of ten: the releases span three, the copies' lookup and the deploy steps one.
     let (answered, served) = board.measured(
-        &["task", "find", "board", "--queries", "-", "--json"],
+        &[
+            "task",
+            "find",
+            "board",
+            "--queries",
+            "-",
+            "--json",
+            "--page-size",
+            "10",
+        ],
         &five_queries(),
     );
     assert_eq!(answered.code, Some(0), "{}", answered.stderr);
@@ -267,26 +306,32 @@ fn a_find_answers_each_query_under_its_key_across_pages_in_one_request_a_round()
     );
     assert_eq!(
         found(answer, "deploying"),
-        set([0, 2, 4, 6].map(|n| format!("D-{n}")))
+        set([0, 2, 4, 6].map(|n| format!("DS-{n}")))
     );
     assert_eq!(found(answer, "nothing"), BTreeSet::new());
     for each in answer["answers"].as_array().expect("answers") {
         assert_eq!(each["complete"], true, "{each}");
         assert_eq!(each["reason"], Value::Null, "{each}");
     }
-    // One request a round: the five together, then the three with more than a first page
-    // together, then the last page of the one with more still — one search request per
-    // result page, never one per query.
-    assert_eq!(
-        documents(&served),
-        [
+    // One search request a round: the five together, then the releases' two further pages
+    // alone — one search request per result page, never one per query.
+    assert_eq!(searches(&served), [graphql::SEARCH_BATCH; 3], "{served:#?}");
+    // Beside them only the reads of the hits, whole: nothing else, and no write.
+    assert!(
+        documents(&served).iter().all(|document| [
             graphql::SEARCH_BATCH,
-            graphql::SEARCH_BATCH,
-            graphql::SEARCH_ISSUES
-        ],
+            graphql::ISSUE_DETAILS,
+            graphql::ISSUE
+        ]
+        .contains(document)),
         "{served:#?}"
     );
-    let first = &served[0].1;
+    let batched: Vec<&Value> = served
+        .iter()
+        .filter(|(document, _)| document == graphql::SEARCH_BATCH)
+        .map(|(_, variables)| variables)
+        .collect();
+    let first = batched[0];
     let asked: Vec<&str> = (0..onetaskgraph_github_projects::SEARCH_BATCH)
         .filter(|slot| first[format!("ask{slot}")] == true)
         .map(|slot| first[format!("search{slot}")].as_str().expect("a search"))
@@ -298,37 +343,37 @@ fn a_find_answers_each_query_under_its_key_across_pages_in_one_request_a_round()
     );
     assert_eq!(first["origin0"], true, "{first:#}");
     assert_eq!(first["filter0"], "onetaskgraph.origin:\"notes:o1\"");
-    let second = &served[1].1;
-    let continuing = (0..onetaskgraph_github_projects::SEARCH_BATCH)
-        .filter(|slot| second[format!("ask{slot}")] == true)
-        .count();
-    assert_eq!(continuing, 2, "{second:#}");
-    assert_eq!(
-        second["origin0"], true,
-        "the origin's board half goes on: {second:#}"
-    );
-    // Every page of that round resumes, and together they ask one page of rows rather than a
-    // page each: a round of twenty resumed searches would otherwise cost 22 points.
-    let rows = |slots: usize, asked: &str, first: &str| -> u64 {
-        (0..slots)
-            .filter(|slot| second[format!("{asked}{slot}")] == true)
-            .map(|slot| {
-                second[format!("{first}{slot}")]
-                    .as_u64()
-                    .expect("a page size")
-            })
-            .sum()
-    };
-    let shared = rows(onetaskgraph_github_projects::SEARCH_BATCH, "ask", "first")
-        + rows(
-            onetaskgraph_github_projects::SEARCH_BATCH_ORIGINS,
-            "origin",
-            "itemsFirst",
+    // Every page asks all the rows its search still lacks, up to the page size: the releases
+    // ten, ten and then ten more, of which five are left.
+    for (round, variables) in batched.iter().enumerate() {
+        for slot in 0..onetaskgraph_github_projects::SEARCH_BATCH {
+            if variables[format!("ask{slot}")] == true {
+                assert_eq!(variables[format!("first{slot}")], 10, "round {round}");
+            }
+        }
+    }
+    for later in &batched[1..] {
+        let continuing = (0..onetaskgraph_github_projects::SEARCH_BATCH)
+            .filter(|slot| later[format!("ask{slot}")] == true)
+            .count();
+        assert_eq!(continuing, 1, "the releases walk on alone: {later:#}");
+        assert_eq!(
+            later["origin0"], false,
+            "the copies' lookup has ended: {later:#}"
         );
-    assert!(
-        shared <= u64::from(onetaskgraph_github_projects::SEARCH_PAGE_SIZE),
-        "the resumed pages of one round share one page of rows, and asked {shared}: {second:#}"
-    );
+    }
+    // Each issue a search hit is read whole once, however many searches hit it.
+    let read = read_whole(&served);
+    let distinct: BTreeSet<&String> = read.iter().collect();
+    assert_eq!(distinct.len(), read.len(), "an issue read twice: {read:?}");
+    for key in ["releases", "follow-ups", "copies", "deploying"] {
+        for id in found(answer, key) {
+            assert!(
+                read.contains(&id),
+                "{id} of {key} was never read whole: {read:?}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -358,7 +403,16 @@ fn a_refused_page_of_one_query_cuts_that_answer_short_and_completes_the_others()
     // The release search's first page is answered and its second refused at its own alias.
     board.board.refuse_search_page("\"release\"", 1);
     let (answered, served) = board.measured(
-        &["task", "find", "board", "--queries", "-", "--json"],
+        &[
+            "task",
+            "find",
+            "board",
+            "--queries",
+            "-",
+            "--json",
+            "--page-size",
+            "10",
+        ],
         &five_queries(),
     );
     assert_eq!(answered.code, Some(4), "{}", answered.stderr);
@@ -373,7 +427,7 @@ fn a_refused_page_of_one_query_cuts_that_answer_short_and_completes_the_others()
     assert!(reason.contains("releases"), "{reason}");
     assert_eq!(
         found(&answered.json, "releases").len(),
-        onetaskgraph_github_projects::SEARCH_BATCH_FIRST_PAGE as usize,
+        10,
         "what its first page answered"
     );
     for key in ["follow-ups", "copies", "deploying", "nothing"] {
@@ -385,10 +439,10 @@ fn a_refused_page_of_one_query_cuts_that_answer_short_and_completes_the_others()
     }
     assert_eq!(
         found(&answered.json, "deploying"),
-        set([0, 2, 4, 6].map(|n| format!("D-{n}")))
+        set([0, 2, 4, 6].map(|n| format!("DS-{n}")))
     );
     assert_eq!(
-        documents(&served),
+        searches(&served),
         [graphql::SEARCH_BATCH, graphql::SEARCH_BATCH],
         "the refused search is walked no further: {served:#?}"
     );
@@ -404,7 +458,16 @@ fn a_refused_page_of_a_limited_query_cuts_it_short_and_does_not_call_it_limited(
     ]})
     .to_string();
     let answered = board.run(
-        &["task", "find", "board", "--queries", "-", "--json"],
+        &[
+            "task",
+            "find",
+            "board",
+            "--queries",
+            "-",
+            "--json",
+            "--page-size",
+            "5",
+        ],
         &request,
     );
     assert_eq!(answered.code, Some(4), "{}", answered.stderr);
@@ -1211,8 +1274,8 @@ fn a_second_comment_held_to_the_version_the_first_moved_is_refused() {
 #[test]
 fn a_find_wider_than_one_request_is_split_across_requests_answering_every_query() {
     let board = searched_board();
-    // Sixteen searches and six origin lookups: twenty-two search slots and six origin slots,
-    // more of each than one request carries.
+    // Sixteen searches of one text, asked once and answered to each, and six origin lookups:
+    // six origin slots, more than one request carries.
     let mut queries: Vec<Value> = (0..16)
         .map(|n| json!({"key": format!("deploy-{n}"), "text": "deploy"}))
         .collect();
@@ -1238,7 +1301,7 @@ fn a_find_wider_than_one_request_is_split_across_requests_answering_every_query(
     for n in 0..16 {
         assert_eq!(
             found(answer, &format!("deploy-{n}")),
-            set((0..7).map(|n| format!("D-{n}"))),
+            set((0..7).map(|n| format!("DS-{n}"))),
             "deploy-{n}"
         );
     }
@@ -1269,6 +1332,20 @@ fn a_find_wider_than_one_request_is_split_across_requests_answering_every_query(
         assert!(searches <= onetaskgraph_github_projects::SEARCH_BATCH);
         assert!(lookups <= onetaskgraph_github_projects::SEARCH_BATCH_ORIGINS);
     }
+    // The text sixteen queries share is one slot of one request.
+    let deploy = served
+        .iter()
+        .filter(|(query, _)| query == graphql::SEARCH_BATCH)
+        .flat_map(|(_, variables)| {
+            (0..onetaskgraph_github_projects::SEARCH_BATCH).filter(move |slot| {
+                variables[format!("ask{slot}")] == true
+                    && variables[format!("search{slot}")]
+                        .as_str()
+                        .is_some_and(|search| search.ends_with("\"deploy\""))
+            })
+        })
+        .count();
+    assert_eq!(deploy, 1, "{served:#?}");
 }
 
 /// The fixture board's token, for a journey that builds the plugin itself.
@@ -1484,9 +1561,14 @@ fn a_limited_find_on_a_board_asks_no_more_rows_than_it_lacks_and_none_once_it_ho
             status,
         )
     }));
-    items.extend(
-        (0..60).map(|n| issue(&format!("P-{n}"), &format!("Filler {n}"), "padding", "Todo")),
-    );
+    items.extend((0..60).map(|n| {
+        issue(
+            &format!("PAD-{n}"),
+            &format!("Filler {n}"),
+            "padding",
+            "Todo",
+        )
+    }));
     let board = Board::of(items);
     board.board.pass_time(120);
     let find = |lanterns: Option<u32>, beacons: Option<u32>| {
@@ -1640,5 +1722,348 @@ fn a_search_limited_to_21_of_1000_matches_stops_its_slot_and_leaves_its_neighbou
     assert_eq!(
         batched_after, 0,
         "no round after it reached 21 carries its slot: {served:#?}"
+    );
+}
+
+/// A find reads its hits whole in batches after its searches: a batch the board refuses fails
+/// exactly the searches with a hit in it — each answered `complete: false`, naming the page —
+/// while a search whose hits all sit in another batch completes, and the command exits 4.
+#[test]
+fn a_refused_read_of_a_finds_hits_fails_only_the_searches_with_a_hit_in_it() {
+    let board = searched_board();
+    // The 25 releases fill the first batch of hits with their first 24; the last release and
+    // the seven deploy steps the second, which is answered.
+    board.board.refuse_once(graphql::ISSUE_DETAILS);
+    let request = json!({"schema_version": 1, "queries": [
+        {"key": "releases", "text": "release"},
+        {"key": "deploys", "text": "deploy"},
+    ]})
+    .to_string();
+    let (answered, served) = board.measured(
+        &["task", "find", "board", "--queries", "-", "--json"],
+        &request,
+    );
+    assert_eq!(answered.code, Some(4), "{}", answered.stderr);
+    let releases = &answered.json["answers"][0];
+    assert_eq!(releases["key"], "releases");
+    assert_eq!(releases["complete"], false, "{releases:#}");
+    assert!(
+        releases["reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("page 1") && reason.contains("releases")),
+        "{releases:#}"
+    );
+    assert_eq!(
+        found(&answered.json, "deploys"),
+        set((0..7).map(|n| format!("DS-{n}")))
+    );
+    assert_eq!(answered.json["answers"][1]["complete"], true);
+    // One round of searches, its two batches of hits, and nothing more: the refused search
+    // is walked no further.
+    assert_eq!(searches(&served), [graphql::SEARCH_BATCH], "{served:#?}");
+    assert_eq!(
+        documents(&served)
+            .iter()
+            .filter(|document| **document == graphql::ISSUE_DETAILS)
+            .count(),
+        2,
+        "{served:#?}"
+    );
+}
+
+/// An issue a search hit that is gone from the board by the time the find reads it whole — taken
+/// off it, or deleted — is no task of this board and is left out of that search's answer, which
+/// is still complete: every other hit of every page is answered once each, in order.
+#[test]
+fn a_hit_gone_from_the_board_before_it_is_read_whole_is_left_out_of_a_complete_answer() {
+    let board = searched_board();
+    let handle = board.board.clone();
+    // Once the releases' last page is answered — the third round of searches — R-21 leaves the
+    // board and R-22 is deleted, before either is read whole. (Earlier, the board's own cursors
+    // would move under every later page, as an index re-ranking does.)
+    board.board.after_request(
+        |document, _| document == graphql::SEARCH_BATCH,
+        2,
+        move |_| {
+            handle.take_off_the_board("R-21");
+            handle.delete_issue("R-22");
+        },
+    );
+    let request = json!({"schema_version": 1, "queries": [
+        {"key": "releases", "text": "release"},
+        {"key": "deploys", "text": "deploy"},
+    ]})
+    .to_string();
+    let (answered, served) = board.measured(
+        &[
+            "task",
+            "find",
+            "board",
+            "--queries",
+            "-",
+            "--json",
+            "--page-size",
+            "10",
+        ],
+        &request,
+    );
+    assert_eq!(answered.code, Some(0), "{}", answered.stderr);
+    let releases: Vec<String> = in_order(&answered.json)[0].1.clone();
+    let expected: Vec<String> = (0..25)
+        .filter(|n| ![21, 22].contains(n))
+        .map(|n| format!("R-{n}"))
+        .collect();
+    assert_eq!(
+        releases, expected,
+        "every other release, once each, in order"
+    );
+    assert_eq!(answered.json["answers"][0]["complete"], true);
+    assert_eq!(
+        found(&answered.json, "deploys"),
+        set((0..7).map(|n| format!("DS-{n}")))
+    );
+    // Its pages resume each from where the one before ended, and both gone hits were asked
+    // after, by the read that found them gone.
+    let resumed: Vec<usize> = pages_of(&served, "release")
+        .iter()
+        .map(|(_, offset, _)| *offset)
+        .collect();
+    assert_eq!(resumed, [0, 10, 20], "{served:#?}");
+    let read = read_whole(&served);
+    assert!(read.contains(&"R-21".to_owned()) && read.contains(&"R-22".to_owned()));
+}
+
+/// The slots of every [`graphql::SEARCH_BATCH`] request served that search for `word`, by
+/// request: each slot's `after` and `first`.
+fn slots_of(served: &[(String, Value)], word: &str) -> Vec<Vec<(Value, u64)>> {
+    served
+        .iter()
+        .filter(|(document, _)| document == graphql::SEARCH_BATCH)
+        .map(|(_, variables)| {
+            (0..onetaskgraph_github_projects::SEARCH_BATCH)
+                .filter(|slot| {
+                    variables[format!("ask{slot}")] == true
+                        && variables[format!("search{slot}")]
+                            .as_str()
+                            .is_some_and(|search| search.ends_with(&format!("\"{word}\"")))
+                })
+                .map(|slot| {
+                    (
+                        variables[format!("after{slot}")].clone(),
+                        variables[format!("first{slot}")]
+                            .as_u64()
+                            .expect("a page size"),
+                    )
+                })
+                .collect()
+        })
+        .filter(|slots: &Vec<(Value, u64)>| !slots.is_empty())
+        .collect()
+}
+
+/// One text asked at several limits in one find is one search: its page is fetched once, at the
+/// most rows any of them asks, and each answer is the first rows of that page its own limit
+/// keeps — in order, `limited` while more matched, and, where a project among its rows leaves
+/// it short of its limit, resumed from the row it stopped at rather than the page's end.
+#[test]
+fn one_text_at_several_limits_is_fetched_once_and_each_answer_resumes_where_its_own_rows_ended() {
+    let board = searched_board();
+    let find = |queries: Value| {
+        let request = json!({"schema_version": 1, "queries": queries}).to_string();
+        let (answered, served) = board.measured(
+            &[
+                "task",
+                "find",
+                "board",
+                "--queries",
+                "-",
+                "--json",
+                "--page-size",
+                "100",
+            ],
+            &request,
+        );
+        assert_eq!(answered.code, Some(0), "{}", answered.stderr);
+        (in_order(&answered.json), served)
+    };
+    let releases: Vec<String> = (0..25).map(|n| format!("R-{n}")).collect();
+
+    // The same text kept at 1 and at 21: one slot of 21 rows in one request, and nothing more.
+    let (answers, served) = find(json!([
+        {"key": "one", "text": "release", "limit": 1},
+        {"key": "many", "text": "release", "limit": 21},
+    ]));
+    assert_eq!(answers[0].1, releases[..1], "{answers:?}");
+    assert_eq!(answers[1].1, releases[..21], "{answers:?}");
+    for answer in &answers {
+        assert_eq!(
+            (&answer.2, &answer.3),
+            (&json!(true), &json!(true)),
+            "{answer:?}"
+        );
+    }
+    assert_eq!(
+        slots_of(&served, "release"),
+        [vec![(Value::Null, 21)]],
+        "one page, at the most rows either asks: {served:#?}"
+    );
+
+    // Two of the first rows projects: the search keeping 3 meets them inside the shared page,
+    // stops at its third row with one task, and resumes from that row; the one keeping 8 goes
+    // on from the page's end.
+    for n in [1, 2] {
+        board.board.set_metadata(
+            &format!("R-{n}"),
+            "onetaskgraph.item_kind",
+            json!("project"),
+        );
+    }
+    board.board.pass_time(120);
+    let tasks: Vec<String> = releases
+        .iter()
+        .filter(|id| !["R-1", "R-2"].contains(&id.as_str()))
+        .cloned()
+        .collect();
+    let (answers, served) = find(json!([
+        {"key": "few", "text": "release", "limit": 3},
+        {"key": "more", "text": "release", "limit": 8},
+    ]));
+    assert_eq!(answers[0].1, tasks[..3], "{answers:?}");
+    assert_eq!(answers[1].1, tasks[..8], "{answers:?}");
+    for answer in &answers {
+        assert_eq!(
+            (&answer.2, &answer.3),
+            (&json!(true), &json!(true)),
+            "{answer:?}"
+        );
+    }
+    assert_eq!(
+        slots_of(&served, "release"),
+        [
+            // The first page once, at the eight rows the larger asks.
+            vec![(Value::Null, 8)],
+            // Then the smaller from its own third row, for the two tasks it still lacks, and
+            // the larger from where the page ended, for its two.
+            vec![(Value::Null, 5), (json!("8"), 2)],
+        ],
+        "{served:#?}"
+    );
+    // And each issue either answer holds was read whole once.
+    let read = read_whole(&served);
+    let distinct: BTreeSet<&String> = read.iter().collect();
+    assert_eq!(
+        distinct.len(),
+        read.len(),
+        "an issue read whole twice: {read:?}"
+    );
+}
+
+/// A cursor a shared search page handed out 22 rows into that page — the search kept at 22
+/// beside one kept at 60 — stays resumable once a write of the same source instance has turned
+/// batching off: its own read answers the very next matches, nothing repeated or skipped, and
+/// a cursor that read hands out again past the twentieth row resumes as well.
+#[test]
+fn a_cursor_deep_inside_a_shared_page_resumes_through_a_search_read_after_a_write() {
+    use onetaskgraph_plugin_api::{
+        NativeId, PageRequest, SourceName, SourcePlugin as _, TaskQuery, TaskUpdate, TextFields,
+        TextQuery,
+    };
+    let board = searched_board();
+    let source = onetaskgraph_github_projects::Plugin
+        .build(
+            &SourceName::new("board").unwrap(),
+            &board.config,
+            &FixtureToken,
+        )
+        .expect("the plugin builds");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a runtime");
+    let releases = TaskQuery {
+        text: Some(TextQuery {
+            terms: "release".to_owned(),
+            fields: TextFields::TitleOrContent,
+        }),
+        ..TaskQuery::default()
+    };
+    let page = |cursor, limit| PageRequest { cursor, limit };
+    let ids = |tasks: &[onetaskgraph_plugin_api::Task]| -> Vec<String> {
+        tasks.iter().map(|task| task.id.0.clone()).collect()
+    };
+    let every: Vec<String> = (0..25).map(|n| format!("R-{n}")).collect();
+
+    // One slot of 60 rows answers both; the one kept at 22 stops 22 rows into it.
+    let mark = board.board.served_count();
+    let mut answered = runtime.block_on(source.query_tasks_batch(&[
+        (releases.clone(), page(None, 22)),
+        (releases.clone(), page(None, 60)),
+    ]));
+    assert_eq!(
+        slots_of(&board.board.served_since(mark), "release"),
+        [vec![(Value::Null, 60)]]
+    );
+    let wide = answered.pop().unwrap().expect("the wider search");
+    let first = answered.pop().unwrap().expect("the narrower search");
+    assert_eq!(ids(&wide.items), every);
+    assert_eq!(ids(&first.items), every[..22]);
+    let cursor = first.next.expect("more matched past 22");
+
+    // A write of this same source: its own writes complete a narrowed answer, which only a
+    // search's own read does, so nothing of this source is batched from here.
+    let retitled = runtime.block_on(source.update_task(
+        &NativeId("DS-0".to_owned()),
+        &TaskUpdate {
+            title: Some("Deploy step zero".to_owned()),
+            ..TaskUpdate::default()
+        },
+    ));
+    assert!(matches!(retitled, Ok(Some(_))), "{retitled:?}");
+
+    let mark = board.board.served_count();
+    let resumed = runtime
+        .block_on(source.query_tasks(&releases, &page(Some(cursor.clone()), 2)))
+        .expect("the cursor resumes");
+    assert_eq!(ids(&resumed.items), every[22..24], "the very next two");
+    let last = runtime
+        .block_on(source.query_tasks(&releases, &page(resumed.next.clone(), 10)))
+        .expect("its own cursor, 24 rows in, resumes too");
+    assert_eq!(ids(&last.items), every[24..], "the last, and nothing after");
+    assert_eq!(last.next, None);
+    // Each resume asked the page its cursor names from its start, far enough to hold a page of
+    // rows past the 22, then the 24, already handed out.
+    let searched: Vec<(Value, Value)> = board
+        .board
+        .served_since(mark)
+        .into_iter()
+        .filter(|(document, _)| document == graphql::SEARCH_ISSUES)
+        .map(|(_, variables)| (variables["after"].clone(), variables["first"].clone()))
+        .collect();
+    assert_eq!(
+        searched,
+        [(Value::Null, json!(42)), (Value::Null, json!(44))],
+        "{:#?}",
+        board.board.served_since(mark)
+    );
+
+    // This process deletes R-5, a row before the cursor's; the same cursor resumed again is
+    // answered from the page this read already holds, whose later rows keep their places: R-22
+    // and R-23 again, and no request.
+    runtime
+        .block_on(source.delete_task(&NativeId("R-5".to_owned())))
+        .expect("the delete lands");
+    let mark = board.board.served_count();
+    let again = runtime
+        .block_on(source.query_tasks(&releases, &page(Some(cursor), 2)))
+        .expect("the cursor resumes again");
+    assert_eq!(ids(&again.items), every[22..24]);
+    assert!(
+        board
+            .board
+            .served_since(mark)
+            .iter()
+            .all(|(document, _)| document != graphql::SEARCH_ISSUES),
+        "{:#?}",
+        board.board.served_since(mark)
     );
 }

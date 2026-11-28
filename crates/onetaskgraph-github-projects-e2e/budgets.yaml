@@ -77,6 +77,17 @@ budgets:
     unit: points
     direction: max
     threshold: 25
+  # llmlint: ignore[budgets_track_product_owner_outcomes] An inner measure by its task's statement, which registers it: the outcome a person feels is onefollowup's per-draft prepare cost (`prepare-graphql-points-per-draft`, held in another repository), and `github-points-per-follow-up-cycle` prices another workload — a 400-item board, a find of 20 queries among comments, copies and updates — on which a find priced by nested pages moves a few points of a large total, so only a real-board-sized find fails where its query shape regresses.
+  - id: github-batched-find-points
+    description: >-
+      An inner measure of the shared board token that no check may spend: the GitHub GraphQL points one batched `task find` of a ten-draft follow-up prepare's duplicate searches spends, driven through the binary against the loopback board and priced with the plugin's own table. It protects every run's share of that token from a find priced by nested pages rather than by the hits it keeps.
+    labels: [github]
+    measure: reported
+    # llmlint: ignore[budget_commands_measure_directly] Every budget of this file selects its own report-only entry in `budget_runner`, the harness-runner convention this crate's budgets landed with (report_visibility_reads, report_metadata_fields); this one follows `report_landing_closure`, and its task names that pattern. The entry reads only the telemetry the `batched_find_cost` journey recorded and hands it to onebudgetspec, which alone judges it.
+    command: ["cargo", "test", "--quiet", "-p", "onetaskgraph-github-projects-e2e", "--all-features", "--locked", "--test", "e2e", "--", "budget_runner::report_batched_find", "--exact", "--nocapture", "../../target/debug/telemetry/onetaskgraph-github-projects-e2e"]
+    unit: points
+    direction: max
+    threshold: 45
   - id: github-cache-points-not-above-uncached
     description: >-
       An inner measure of the shared board token that no check may spend: the largest difference, cache on minus cache off, in GitHub GraphQL points over every kind (tasks, projects, documents, manifests, asset bytes), sequence (cold, unchanged pinned reread by two concurrent passes, list-then-load after edits, write-then-read; for asset bytes, which only a render reads, a cold render, an unchanged render, a render after edits and a render after a render) and scale (20 projects, 100 documents, 80 tasks and 8 images, and ten times that), and each scale's total, driven through the binary against a loopback board and priced with the plugin's own table. It protects every manager's share of that token from quota the cache adds; the stale-option fallback is recorded beside it and kept out.

@@ -20,12 +20,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::{
-    ANSWER_ERRORS, BOARD_ITEMS_PAGE_SIZE, BoardKind, COMMENT_BATCH, ContentKind,
-    GitHubProjectsSource, MAX_PAGE_SIZE, MUTATION_BATCH, NESTED_PAGE_SIZE, ORIGIN_FIELD, Resolved,
-    SEARCH_BATCH, SEARCH_BATCH_FIRST_PAGE, SEARCH_BATCH_ORIGINS, SEARCH_CURSOR_VERSION,
-    SEARCH_PAGE_SIZE, SearchConnection, SearchPosition, TASK_FIELD_BATCH, as_stored, comment_from,
-    graphql, optional_nodes, quoted, refuse_unsearchable, required_bool, required_str,
-    search_qualifiers, task_matches, validate_cursor_progress, validate_page,
+    ANSWER_ERRORS, BoardKind, COMMENT_BATCH, ContentKind, DETAIL_BATCH, GitHubProjectsSource,
+    MAX_PAGE_SIZE, MUTATION_BATCH, ORIGIN_FIELD, Resolved, SEARCH_BATCH, SEARCH_BATCH_ORIGINS,
+    SEARCH_CURSOR_VERSION, SearchConnection, SearchPosition, TASK_FIELD_BATCH, as_stored,
+    comment_from, graphql, optional_nodes, optional_str, quoted, refuse_unsearchable,
+    required_bool, required_str, search_qualifiers, task_matches, validate_cursor_progress,
+    validate_page,
 };
 
 /// The board field writes and issue updates a batch of targeted updates holds back while it
@@ -72,8 +72,20 @@ struct Slotted {
     search: String,
     /// Where its page resumes; `None` for its first page.
     after: Option<String>,
-    /// The rows its page asks for.
+    /// The rows its page asks for, counted from `after`: the rows already handed out at the
+    /// start of that page, `skip`, and then as many as the caller still lacks.
     first: u32,
+    /// How many rows from `after` an earlier page of this search already handed out — a
+    /// search that shared a page with another of the same text and stopped inside it.
+    skip: usize,
+}
+
+impl Slotted {
+    /// Whether this asks GitHub exactly what `other` does, but perhaps for fewer rows: one
+    /// slot at the larger page answers both.
+    fn shares(&self, other: &Self) -> bool {
+        self.search == other.search && self.after == other.after && self.skip == other.skip
+    }
 }
 
 /// One task query of a batch that [`graphql::SEARCH_BATCH`] answers.
@@ -142,10 +154,103 @@ enum Slots {
 }
 
 /// One batched ask placed in a request: where its answer goes, its query, and its slots.
-struct Placed<'a> {
+struct Placed {
     at: usize,
-    query: &'a TaskQuery,
     slots: Slots,
+}
+
+/// Which issues one page of one connection of a batched search hit, in the order it answered
+/// them, and where that connection goes on — `None` once it has ended.
+#[derive(Clone)]
+struct Hits {
+    ids: Vec<NativeId>,
+    next: Option<Resume>,
+}
+
+/// Where a connection goes on after one answer of it.
+#[derive(Clone)]
+enum Resume {
+    /// From the end of the page GitHub answered: its `endCursor`.
+    After(String),
+    /// From inside a page another search of the same text asked for more of: `offset` rows
+    /// past `after` (`None` for the connection's start).
+    Within {
+        after: Option<String>,
+        offset: usize,
+    },
+}
+
+/// One page of a search slot as GitHub answered it, which every search sharing the slot
+/// answers its own rows from.
+#[derive(Clone)]
+struct SearchPage {
+    /// Each row from where the slot resumed, `None` for one that is no issue.
+    rows: Vec<Option<NativeId>>,
+    /// Where the slot resumed, and how many of its rows an earlier page already handed out.
+    after: Option<String>,
+    skip: usize,
+    /// The page's own `endCursor`, when GitHub has more past it.
+    next: Option<String>,
+}
+
+impl SearchPage {
+    /// What a search asking `first` rows of this slot is answered: the rows past those already
+    /// handed out and up to its own `first`, and — where the page holds rows past those — the
+    /// row it stopped at, else where the page itself goes on.
+    fn hits(&self, first: u32) -> Hits {
+        let end = (first as usize).min(self.rows.len());
+        Hits {
+            ids: self.rows[self.skip.min(end)..end]
+                .iter()
+                .flatten()
+                .cloned()
+                .collect(),
+            next: if end < self.rows.len() {
+                Some(Resume::Within {
+                    after: self.after.clone(),
+                    offset: end,
+                })
+            } else {
+                self.next.clone().map(Resume::After)
+            },
+        }
+    }
+}
+
+/// What one batched ask's slots of a [`graphql::SEARCH_BATCH`] answer said, before any issue
+/// it names is read.
+#[derive(Clone)]
+enum Heard {
+    /// A narrowed issue search's page, which every search sharing its slot answers from.
+    Search { page: SearchPage },
+    /// An origin lookup's page of each connection it asked — `None` for one walked to its end
+    /// before this page — and the candidates its earlier pages answered.
+    Origin {
+        items: Option<Hits>,
+        search: Option<Hits>,
+        answered: Vec<NativeId>,
+    },
+    /// The refusal of one of its slots, or of the whole request.
+    Refused(SourceError),
+}
+
+impl Heard {
+    /// Every issue it names, in order.
+    fn ids(&self) -> impl Iterator<Item = &NativeId> {
+        let (page, pages): (Option<&SearchPage>, Vec<&Hits>) = match self {
+            Self::Search { page } => (Some(page), Vec::new()),
+            Self::Origin { items, search, .. } => {
+                (None, [items, search].into_iter().flatten().collect())
+            }
+            Self::Refused(_) => (None, Vec::new()),
+        };
+        // A shared page's rows from the first one not yet handed out: every one of them is some
+        // sharing search's.
+        let rows = page
+            .into_iter()
+            .flat_map(|page| page.rows[page.skip.min(page.rows.len())..].iter().flatten());
+        rows.chain(pages.into_iter().flat_map(|hits| hits.ids.iter()))
+    }
 }
 
 /// The messages of every GraphQL error a response carried beside its data whose path begins at
@@ -248,11 +353,12 @@ impl GitHubProjectsSource {
         {
             return None;
         }
-        let limit = page.limit.min(MAX_PAGE_SIZE);
-        let first = |after: &Option<String>| match after {
-            None => SEARCH_BATCH_FIRST_PAGE.min(limit),
-            Some(_) => SEARCH_PAGE_SIZE.min(limit),
-        };
+        // Every page asks all the rows the caller still lacks, up to GitHub's page maximum:
+        // a slot is priced as one connection whatever its page size, so a smaller page would
+        // cost a round more for nothing.
+        let limit = page.limit.clamp(1, MAX_PAGE_SIZE);
+        let first = |_: &Option<String>| limit;
+        let max_rows = MAX_PAGE_SIZE as usize;
         let resumed = |connection: &SearchConnection| match connection {
             SearchConnection::Initial {} => Some(None),
             SearchConnection::Continuing { after } => Some(Some(after.0.clone())),
@@ -279,44 +385,60 @@ impl GitHubProjectsSource {
                     search: String::new(),
                     first: first(&after),
                     after,
+                    skip: 0,
                 }),
                 search: search.map(|after| Slotted {
                     search: search_for,
                     first: first(&after),
                     after,
+                    skip: 0,
                 }),
                 answered,
             });
         }
         let also = search_qualifiers(query)?;
-        let after = match &page.cursor {
-            None => None,
+        // A cursor of a batched page: the end of a page, or — for a search that shared a page
+        // with a larger one of its text and stopped inside it — that page's start and the rows
+        // of it already handed out, which the next page asks again and skips.
+        let (after, skip) = match &page.cursor {
+            None => (None, 0),
             Some(cursor) => {
                 let position = serde_json::from_str::<SearchPosition>(&cursor.0).ok()?;
+                if position.version != SEARCH_CURSOR_VERSION
+                    || !position.seen.is_empty()
+                    || !position.own.is_empty()
+                    || position.offset >= max_rows
+                {
+                    return None;
+                }
                 match position.connection {
-                    SearchConnection::Continuing { after }
-                        if position.version == SEARCH_CURSOR_VERSION
-                            && position.offset == 0
-                            && position.seen.is_empty()
-                            && position.own.is_empty()
-                            && !after.0.is_empty() =>
-                    {
-                        Some(after.0)
+                    SearchConnection::Continuing { after } if !after.0.is_empty() => {
+                        (Some(after.0), position.offset)
                     }
+                    SearchConnection::Initial {} if position.offset > 0 => (None, position.offset),
                     _ => return None,
                 }
             }
         };
+        let rows = u32::try_from(skip).unwrap_or(MAX_PAGE_SIZE);
         Some(Batched::Search(Slotted {
             search: format!("{scope} {also}"),
-            first: first(&after),
+            first: rows.saturating_add(first(&after)).min(MAX_PAGE_SIZE),
             after,
+            skip,
         }))
     }
 
     /// [`TaskSource::query_tasks_batch`](onetaskgraph_plugin_api::TaskSource::query_tasks_batch):
     /// every narrowed search and origin lookup a page at a time in one
-    /// [`graphql::SEARCH_BATCH`] request a round, and every other query by its own read.
+    /// [`graphql::SEARCH_BATCH`] request per [`SEARCH_BATCH`] searches, and every other query
+    /// by its own read.
+    ///
+    /// The searches read which issues match; the distinct issues they hit — across every
+    /// search of the call, each once — are then read whole, [`DETAIL_BATCH`] to a
+    /// [`graphql::ISSUE_DETAILS`] request, and every page answered from those reads. A search
+    /// asked twice, the same text from the same place for the same rows, is asked once and
+    /// answered to both; an issue this command already read whole is not read again.
     pub(super) async fn search_batched(
         &self,
         asks: &[(TaskQuery, PageRequest)],
@@ -330,26 +452,39 @@ impl GitHubProjectsSource {
             Ok(wrote) => !wrote,
             Err(error) => return asks.iter().map(|_| Err(error.clone())).collect(),
         };
-        let mut batched: Vec<(usize, Batched)> = if batchable {
-            asks.iter()
-                .enumerate()
-                .filter_map(|(at, (query, page))| {
-                    Self::batched(query, page, &scope).map(|batched| (at, batched))
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
-        // One search alone is its own read, which asks a page of its own size at one point; an
-        // origin resumed from a batch's cursor is answered only by another batch.
-        let resumed_origin = batched.iter().any(|(at, batched)| {
-            matches!(batched, Batched::Origin { .. }) && asks[*at].1.cursor.is_some()
-        });
-        if batched.len() < 2 && !resumed_origin {
-            batched.clear();
+        let mut batched: Vec<(usize, Batched)> = Vec::new();
+        // Each ask whose search GitHub is asked exactly as an earlier one's — the same text from
+        // the same place — with the rows it asks for: answered from that one's slot, which asks
+        // the most rows any of them does.
+        let mut sharing: Vec<(usize, usize)> = Vec::new();
+        // The rows each search asked for itself, before a slot it shares grew to another's.
+        let mut own_rows: BTreeMap<usize, u32> = BTreeMap::new();
+        if batchable {
+            for (at, (query, page)) in asks.iter().enumerate() {
+                let Some(ask) = Self::batched(query, page, &scope) else {
+                    continue;
+                };
+                let same = batched
+                    .iter_mut()
+                    .find_map(|(earlier, held)| match (held, &ask) {
+                        (Batched::Search(held), Batched::Search(asked)) if held.shares(asked) => {
+                            held.first = held.first.max(asked.first);
+                            Some(*earlier)
+                        }
+                        _ => None,
+                    });
+                if let Batched::Search(asked) = &ask {
+                    own_rows.insert(at, asked.first);
+                }
+                match same {
+                    Some(earlier) => sharing.push((at, earlier)),
+                    None => batched.push((at, ask)),
+                }
+            }
         }
+        let mut heard: Vec<(usize, Heard)> = Vec::with_capacity(batched.len());
         while !batched.is_empty() {
-            let mut placed: Vec<Placed<'_>> = Vec::new();
+            let mut placed: Vec<Placed> = Vec::new();
             let (mut searches, mut origins) = (0, 0);
             let mut rest = Vec::new();
             for (at, ask) in batched {
@@ -358,7 +493,6 @@ impl GitHubProjectsSource {
                 {
                     placed.push(Placed {
                         at,
-                        query: &asks[at].0,
                         slots: ask.placed(&mut searches, &mut origins),
                     });
                 } else {
@@ -366,8 +500,20 @@ impl GitHubProjectsSource {
                 }
             }
             batched = rest;
-            for (at, answer) in self.search_round(placed, &scope).await {
-                answers[at] = Some(answer);
+            heard.extend(self.search_round(placed, &scope).await);
+        }
+        let read = self.read_hits(&heard).await;
+        let heard: BTreeMap<usize, Heard> = heard.into_iter().collect();
+        for (at, page) in &heard {
+            let rows = own_rows.get(at).copied();
+            answers[*at] = Some(self.answer_heard(page.clone(), rows, &asks[*at].0, &read));
+        }
+        // Each search sharing a slot: its own rows of that slot's page, its own query confirming
+        // them.
+        for (at, earlier) in sharing {
+            if let Some(page) = heard.get(&earlier) {
+                let rows = own_rows.get(&at).copied();
+                answers[at] = Some(self.answer_heard(page.clone(), rows, &asks[at].0, &read));
             }
         }
         let mut out = Vec::with_capacity(asks.len());
@@ -380,21 +526,14 @@ impl GitHubProjectsSource {
         out
     }
 
-    /// One [`graphql::SEARCH_BATCH`] request answering every ask `placed` holds, each with its
-    /// page or the refusal of its own slots.
-    async fn search_round(
-        &self,
-        placed: Vec<Placed<'_>>,
-        scope: &str,
-    ) -> Vec<(usize, Result<Page<Task>, SourceError>)> {
+    /// One [`graphql::SEARCH_BATCH`] request asking every ask `placed` holds, each with which
+    /// issues its slots hit or the refusal of its own slots.
+    async fn search_round(&self, placed: Vec<Placed>, scope: &str) -> Vec<(usize, Heard)> {
         let mut variables = serde_json::Map::new();
         for (name, value) in [
             ("owner", json!(self.owner)),
             ("number", json!(self.project_number)),
             ("type", json!("ISSUE")),
-            ("nestedFirst", json!(NESTED_PAGE_SIZE)),
-            ("boardItems", json!(BOARD_ITEMS_PAGE_SIZE)),
-            ("duplicates", json!(true)),
         ] {
             variables.insert(name.to_owned(), value);
         }
@@ -412,27 +551,6 @@ impl GitHubProjectsSource {
             variables.insert(format!("itemsFirst{slot}"), json!(1));
             variables.insert(format!("origin{slot}"), json!(false));
         }
-        // Every resumed page of the round shares one page of rows: see
-        // `search_batch_resumed_page`.
-        let resumed = placed
-            .iter()
-            .map(|ask| match &ask.slots {
-                Slots::Search(slotted, _) => usize::from(slotted.after.is_some()),
-                Slots::Origin { items, search, .. } => [items, search]
-                    .into_iter()
-                    .flatten()
-                    .filter(|(slotted, _)| slotted.after.is_some())
-                    .count(),
-            })
-            .sum::<usize>();
-        let shared = super::search_batch_resumed_page(resumed);
-        let first = |slotted: &Slotted| {
-            if slotted.after.is_some() {
-                slotted.first.min(shared)
-            } else {
-                slotted.first
-            }
-        };
         for ask in &placed {
             let (search, origin) = match &ask.slots {
                 Slots::Search(slotted, slot) => (Some((slotted, *slot)), None),
@@ -449,13 +567,13 @@ impl GitHubProjectsSource {
             if let Some((search, slot)) = search {
                 variables.insert(format!("search{slot}"), json!(search.search));
                 variables.insert(format!("after{slot}"), json!(search.after));
-                variables.insert(format!("first{slot}"), json!(first(search)));
+                variables.insert(format!("first{slot}"), json!(search.first));
                 variables.insert(format!("ask{slot}"), json!(true));
             }
             if let Some((items, slot, filter)) = origin {
                 variables.insert(format!("filter{slot}"), json!(filter));
                 variables.insert(format!("itemsAfter{slot}"), json!(items.after));
-                variables.insert(format!("itemsFirst{slot}"), json!(first(items)));
+                variables.insert(format!("itemsFirst{slot}"), json!(items.first));
                 variables.insert(format!("origin{slot}"), json!(true));
             }
         }
@@ -467,21 +585,19 @@ impl GitHubProjectsSource {
             Err(error) => {
                 return placed
                     .into_iter()
-                    .map(|ask| (ask.at, Err(error.clone())))
+                    .map(|ask| (ask.at, Heard::Refused(error.clone())))
                     .collect();
             }
         };
-        let mut answered = Vec::with_capacity(placed.len());
-        for ask in placed {
-            let at = ask.at;
-            answered.push((at, self.answer_slots(&data, ask).await));
-        }
-        answered
+        placed
+            .into_iter()
+            .map(|ask| (ask.at, self.heard_slots(&data, ask)))
+            .collect()
     }
 
-    /// The page one ask's slots of a [`graphql::SEARCH_BATCH`] answer hold, or the refusal of
-    /// one of them.
-    async fn answer_slots(&self, data: &Value, ask: Placed<'_>) -> Result<Page<Task>, SourceError> {
+    /// Which issues one ask's slots of a [`graphql::SEARCH_BATCH`] answer hit, in order, and
+    /// where each of its connections goes on — or the refusal of one of them.
+    fn heard_slots(&self, data: &Value, ask: Placed) -> Heard {
         let doing = "searching this board's issues several ways at once";
         let connection = |alias: &str, pointer: &str| -> Result<Value, SourceError> {
             match alias_answer(data, alias, doing)? {
@@ -514,89 +630,217 @@ impl GitHubProjectsSource {
                 }
                 Ok(next)
             };
-        let mut found: Vec<Resolved> = Vec::new();
-        let keep = |resolved: Resolved, found: &mut Vec<Resolved>| {
-            if !found.iter().any(|held| held.id == resolved.id) {
-                found.push(resolved);
+        // Each issue a search's page hit, by its id: a hit that is no issue is none of a
+        // task query's answer, as a narrowed read reads it.
+        let searched = |alias: &str, after: Option<&str>| -> Result<Hits, SourceError> {
+            let read = connection(alias, "")?;
+            let mut ids = Vec::new();
+            for node in optional_nodes(Some(&read), "search")?.into_iter().flatten() {
+                if optional_str(node, "__typename")? == Some("Issue") {
+                    ids.push(NativeId(required_str(node, "id")?.to_owned()));
+                }
             }
+            Ok(Hits {
+                ids,
+                next: next_of(&read, after)?.map(Resume::After),
+            })
         };
-        let page = match ask.slots {
-            Slots::Search(slotted, slot) => {
-                let alias = format!("s{slot}");
-                let searched = connection(&alias, "")?;
-                for node in optional_nodes(Some(&searched), "search")?
-                    .into_iter()
-                    .flatten()
-                {
-                    if let Some(resolved) = self.resolve_issue(node).await? {
-                        keep(resolved, &mut found);
+        let heard = || -> Result<Heard, SourceError> {
+            Ok(match ask.slots {
+                Slots::Search(slotted, slot) => {
+                    let read = connection(&format!("s{slot}"), "")?;
+                    let mut rows = Vec::new();
+                    for node in optional_nodes(Some(&read), "search")?.into_iter().flatten() {
+                        rows.push(if optional_str(node, "__typename")? == Some("Issue") {
+                            Some(NativeId(required_str(node, "id")?.to_owned()))
+                        } else {
+                            None
+                        });
+                    }
+                    Heard::Search {
+                        page: SearchPage {
+                            rows,
+                            next: next_of(&read, slotted.after.as_deref())?,
+                            after: slotted.after,
+                            skip: slotted.skip,
+                        },
                     }
                 }
-                let next = next_of(&searched, slotted.after.as_deref())?;
-                let tasks = self.matching(&found, ask.query)?;
-                Page {
+                Slots::Origin {
+                    items,
+                    search,
+                    answered,
+                    ..
+                } => {
+                    let items = match &items {
+                        Some((items, slot)) => {
+                            let read = connection(&format!("o{slot}"), "/projectV2/items")?;
+                            let mut ids = Vec::new();
+                            for item in optional_nodes(Some(&read), "project items")?
+                                .into_iter()
+                                .flatten()
+                            {
+                                // The board's own items list its drafts too, and a draft is no
+                                // issue: no narrowed read answers with one, whatever its origin
+                                // field holds.
+                                let content =
+                                    item.get("content").ok_or_else(|| SourceError::Malformed {
+                                        message: "GitHub project item is missing content".into(),
+                                    })?;
+                                if !content.is_null()
+                                    && optional_str(content, "__typename")? == Some("Issue")
+                                {
+                                    ids.push(NativeId(required_str(content, "id")?.to_owned()));
+                                }
+                            }
+                            Some(Hits {
+                                ids,
+                                next: next_of(&read, items.after.as_deref())?.map(Resume::After),
+                            })
+                        }
+                        None => None,
+                    };
+                    let search = match &search {
+                        Some((search, slot)) => {
+                            Some(searched(&format!("s{slot}"), search.after.as_deref())?)
+                        }
+                        None => None,
+                    };
+                    Heard::Origin {
+                        items,
+                        search,
+                        answered,
+                    }
+                }
+            })
+        };
+        heard().unwrap_or_else(Heard::Refused)
+    }
+
+    /// Every distinct issue `heard` names, read whole: each this command already read whole
+    /// from what it holds, and the rest [`DETAIL_BATCH`] to a [`graphql::ISSUE_DETAILS`]
+    /// request, each read once however many searches hit it — `None` for an issue that is not
+    /// an item of this board, and the refusal of the read that would have answered it for an
+    /// issue whose read failed.
+    async fn read_hits(
+        &self,
+        heard: &[(usize, Heard)],
+    ) -> BTreeMap<NativeId, Result<Option<Resolved>, SourceError>> {
+        let mut read: BTreeMap<NativeId, Result<Option<Resolved>, SourceError>> = BTreeMap::new();
+        let mut wanted: Vec<NativeId> = Vec::new();
+        {
+            // A record left inconsistent by an earlier failure answers nothing here: every
+            // issue is then read afresh.
+            let held = self.resolved_cache().ok();
+            for id in heard.iter().flat_map(|(_, heard)| heard.ids()) {
+                if read.contains_key(id) || wanted.contains(id) {
+                    continue;
+                }
+                match held.as_ref().and_then(|held| held.get(id)) {
+                    Some(item) => {
+                        read.insert(id.clone(), Ok(Some(item.clone())));
+                    }
+                    None => wanted.push(id.clone()),
+                }
+            }
+        }
+        for batch in wanted.chunks(DETAIL_BATCH) {
+            match self.items_by_ids(batch).await {
+                Ok(items) => {
+                    for (id, item) in batch.iter().zip(items) {
+                        read.insert(id.clone(), Ok(item));
+                    }
+                }
+                Err(error) => {
+                    for id in batch {
+                        read.insert(id.clone(), Err(error.clone()));
+                    }
+                }
+            }
+        }
+        read
+    }
+
+    /// The page one ask answers, from which issues its slots hit — `heard` — and each issue
+    /// read whole in `read`.
+    fn answer_heard(
+        &self,
+        heard: Heard,
+        rows: Option<u32>,
+        query: &TaskQuery,
+        read: &BTreeMap<NativeId, Result<Option<Resolved>, SourceError>>,
+    ) -> Result<Page<Task>, SourceError> {
+        let mut found: Vec<Resolved> = Vec::new();
+        let mut keep = |ids: &[NativeId]| -> Result<(), SourceError> {
+            for id in ids {
+                let item = read.get(id).ok_or_else(|| SourceError::Malformed {
+                    message: format!("a batched search hit {} and it was never read", id.0),
+                })?;
+                if let Some(item) = item.clone()?
+                    && !found.iter().any(|held| held.id == item.id)
+                {
+                    found.push(item);
+                }
+            }
+            Ok(())
+        };
+        match heard {
+            Heard::Refused(error) => Err(error),
+            Heard::Search { page } => {
+                let hits = page.hits(rows.unwrap_or(MAX_PAGE_SIZE));
+                keep(&hits.ids)?;
+                let tasks = self.matching(&found, query)?;
+                Ok(Page {
                     items: tasks,
-                    next: next.map(|after| {
-                        let position = SearchPosition {
-                            connection: SearchConnection::Continuing {
-                                after: Cursor(after),
+                    next: hits.next.map(|resume| {
+                        let position = match resume {
+                            Resume::After(after) => SearchPosition {
+                                connection: SearchConnection::Continuing {
+                                    after: Cursor(after),
+                                },
+                                ..SearchPosition::default()
                             },
-                            ..SearchPosition::default()
+                            Resume::Within { after, offset } => SearchPosition {
+                                connection: after.map_or(SearchConnection::Initial {}, |after| {
+                                    SearchConnection::Continuing {
+                                        after: Cursor(after),
+                                    }
+                                }),
+                                offset,
+                                ..SearchPosition::default()
+                            },
                         };
                         Cursor(
                             serde_json::to_string(&position)
                                 .expect("search position is serializable"),
                         )
                     }),
-                }
+                })
             }
-            Slots::Origin {
+            Heard::Origin {
                 items,
                 search,
                 mut answered,
-                ..
             } => {
-                let mut items_next = SearchConnection::Exhausted {};
-                let mut search_next = SearchConnection::Exhausted {};
-                if let Some((items, slot)) = &items {
-                    let read = connection(&format!("o{slot}"), "/projectV2/items")?;
-                    for item in optional_nodes(Some(&read), "project items")?
-                        .into_iter()
-                        .flatten()
-                    {
-                        // The board's own items list its drafts too, and a draft is no issue:
-                        // no narrowed read answers with one, whatever its origin field holds.
-                        if let Some(resolved) = self.resolve(item)?
-                            && resolved.content_kind == ContentKind::Issue
-                        {
-                            keep(resolved, &mut found);
-                        }
-                    }
-                    if let Some(next) = next_of(&read, items.after.as_deref())? {
-                        items_next = SearchConnection::Continuing {
+                let continuing =
+                    |hits: &Option<Hits>| match hits.as_ref().and_then(|h| h.next.clone()) {
+                        // An origin's connections are never shared, so each goes on from its
+                        // page's end.
+                        Some(Resume::After(next)) => SearchConnection::Continuing {
                             after: Cursor(next),
-                        };
-                    }
-                }
-                if let Some((search, slot)) = &search {
-                    let read = connection(&format!("s{slot}"), "")?;
-                    for node in optional_nodes(Some(&read), "search")?.into_iter().flatten() {
-                        if let Some(resolved) = self.resolve_issue(node).await? {
-                            keep(resolved, &mut found);
-                        }
-                    }
-                    if let Some(next) = next_of(&read, search.after.as_deref())? {
-                        search_next = SearchConnection::Continuing {
-                            after: Cursor(next),
-                        };
-                    }
+                        },
+                        Some(Resume::Within { .. }) | None => SearchConnection::Exhausted {},
+                    };
+                let (items_next, search_next) = (continuing(&items), continuing(&search));
+                for hits in [&items, &search].into_iter().flatten() {
+                    keep(&hits.ids)?;
                 }
                 // A candidate an earlier page answered is not answered again.
                 found.retain(|item| !answered.contains(&item.id));
                 answered.extend(found.iter().map(|item| item.id.clone()));
-                let tasks = self.matching(&found, ask.query)?;
+                let tasks = self.matching(&found, query)?;
                 let more = !items_next.exhausted() || !search_next.exhausted();
-                Page {
+                Ok(Page {
                     items: tasks,
                     next: more.then(|| {
                         let position = OriginPosition {
@@ -610,10 +854,9 @@ impl GitHubProjectsSource {
                                 .expect("origin position is serializable"),
                         )
                     }),
-                }
+                })
             }
-        };
-        Ok(page)
+        }
     }
 
     /// Every task among `found` that `query` keeps, in order — confirmed exactly as a read of

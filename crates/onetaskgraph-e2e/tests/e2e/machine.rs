@@ -93,6 +93,7 @@ fn a_copy_says_what_its_metering_sources_spent_and_nothing_where_none_meters() {
         // Into the board: the board is a socket this test holds, so what it served for the
         // command is counted independently of anything the binary says about itself.
         let before = board.served().len();
+        let sent_before = before;
         let copied: Value = serde_json::from_str(&stdout(
             sandbox
                 .command()
@@ -124,9 +125,30 @@ fn a_copy_says_what_its_metering_sources_spent_and_nothing_where_none_meters() {
             .find(|budget| budget["budget"] == "graphql")
             .unwrap_or_else(|| panic!("{boundary:?}: no graphql budget: {copied:#}"));
         assert_eq!(graphql["unit"], "points");
-        // No document this source sends asks GitHub what it cost, so every call is the
-        // one-point minimum — a lower bound, and flagged as one.
-        assert_eq!(graphql["amount"], json!(served));
+        // Every read asks GitHub what it cost, and is counted at what the board reported —
+        // the plugin's own price of it; a mutation, whose cost GitHub cannot be asked, is the
+        // one-point minimum, so a copy that wrote is a lower bound, and flagged as one.
+        let sent = board.served()[sent_before..].to_vec();
+        let expected: u64 = sent
+            .iter()
+            .map(|(document, variables)| {
+                if document.trim_start().starts_with("mutation") {
+                    1
+                } else {
+                    onetaskgraph_github_projects::request_point_cost(document, variables)
+                        .expect("a document the plugin prices")
+                }
+            })
+            .sum();
+        assert!(
+            sent.iter()
+                .any(|(document, _)| document.trim_start().starts_with("mutation"))
+        );
+        assert_eq!(
+            graphql["amount"],
+            json!(expected),
+            "{boundary:?}: {copied:#}"
+        );
         assert_eq!(graphql["lower_bound"], json!(true));
 
         // Between two folders of Markdown, neither of which counts what it sends: absent,

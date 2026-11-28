@@ -84,6 +84,123 @@ fn the_documents_that_reach_an_issue_under_a_page_are_the_ones_with_least_headro
     assert_eq!(count(graphql::ISSUE_COMMENTS), 100);
     assert_eq!(count(graphql::COMMENT_ISSUE), 0);
     assert_eq!(count(graphql::REPOSITORY), 0);
+    // The batched search at the largest round a find sends — every one of its twenty search
+    // slots and five origin slots asking a whole page of a hundred — and no connection under a
+    // row: a slot's count is its page, never its page times what each row carries.
+    assert_eq!(
+        count(graphql::SEARCH_BATCH),
+        u64::from(onetaskgraph_github_projects::MAX_PAGE_SIZE)
+            * (onetaskgraph_github_projects::SEARCH_BATCH
+                + onetaskgraph_github_projects::SEARCH_BATCH_ORIGINS) as u64
+    );
+}
+
+/// Every connection — a field paged by `first` or `last` — that one row of a batched search's
+/// slots selects, by the path it is at, or the fragment spread that could hide one.
+///
+/// GitHub prices a connection under a page once per row asked, so a search slot selecting one
+/// costs a round more with every row it asks; the batched search reads which issues match and
+/// nothing beneath them, and this is what says so of the document as written.
+fn connections_under_a_row(document: &str) -> Vec<String> {
+    use graphql_parser::query::{Definition, OperationDefinition, Selection};
+    fn walk(selections: &[Selection<'_, String>], path: &str, found: &mut Vec<String>) {
+        for selection in selections {
+            match selection {
+                Selection::Field(field) => {
+                    let here = format!("{path}/{}", field.name);
+                    if field
+                        .arguments
+                        .iter()
+                        .any(|(name, _)| name == "first" || name == "last")
+                    {
+                        found.push(here.clone());
+                    }
+                    walk(&field.selection_set.items, &here, found);
+                }
+                Selection::InlineFragment(fragment) => {
+                    walk(&fragment.selection_set.items, path, found);
+                }
+                Selection::FragmentSpread(spread) => {
+                    found.push(format!("{path}/...{}", spread.fragment_name));
+                }
+            }
+        }
+    }
+    /// The selections one row of `field`'s connection holds: its `nodes`, however deep the
+    /// connection sits under the slot's root field.
+    fn rows<'a>(
+        selections: &'a [Selection<'a, String>],
+        found: &mut Vec<&'a [Selection<'a, String>]>,
+    ) {
+        for selection in selections {
+            match selection {
+                Selection::Field(field) if field.name == "nodes" => {
+                    found.push(&field.selection_set.items);
+                }
+                Selection::Field(field) => rows(&field.selection_set.items, found),
+                Selection::InlineFragment(fragment) => rows(&fragment.selection_set.items, found),
+                Selection::FragmentSpread(_) => {}
+            }
+        }
+    }
+    let parsed = graphql_parser::parse_query::<String>(document).expect("a document");
+    let mut found = Vec::new();
+    for definition in &parsed.definitions {
+        let Definition::Operation(OperationDefinition::Query(query)) = definition else {
+            continue;
+        };
+        for selection in &query.selection_set.items {
+            let Selection::Field(slot) = selection else {
+                continue;
+            };
+            let Some(alias) = &slot.alias else {
+                continue;
+            };
+            let mut held = Vec::new();
+            rows(&slot.selection_set.items, &mut held);
+            assert!(!held.is_empty(), "the slot {alias} reads no rows");
+            for row in held {
+                walk(row, alias, &mut found);
+            }
+        }
+    }
+    found
+}
+
+/// The batched search's slots read which issues match — each row's scalar fields alone — and
+/// select no connection GitHub prices per row asked: not a hit's `labels`, not its
+/// `projectItems` and their `fieldValues`, not any other.
+#[test]
+fn a_batched_search_slot_selects_no_connection_priced_per_row() {
+    assert_eq!(
+        connections_under_a_row(graphql::SEARCH_BATCH),
+        Vec::<String>::new()
+    );
+}
+
+/// The check above names a connection a search slot's row selects again — through the shared
+/// issue fragment or written out — which is what makes it evidence rather than a pass over any
+/// document at all.
+#[test]
+fn the_row_check_names_a_connection_a_search_slot_selects_again() {
+    let fragment = graphql::SEARCH_BATCH.replacen(
+        "nodes{__typename ... on Issue{id number",
+        "nodes{__typename ...BoardIssue ... on Issue{id number",
+        1,
+    ) + " fragment BoardIssue on Issue{id}";
+    assert_eq!(connections_under_a_row(&fragment), ["s0/...BoardIssue"]);
+    let labels = graphql::SEARCH_BATCH.replacen(
+        "repository{nameWithOwner}}}}",
+        "repository{nameWithOwner} labels(first:50){nodes{id}}}}}",
+        1,
+    );
+    assert_eq!(connections_under_a_row(&labels), ["s0/labels"]);
+    let field_values = graphql::SEARCH_BATCH.replacen(
+        "content{__typename ... on Issue{id}}",
+        "content{__typename ... on Issue{id}} fieldValues(first:50){nodes{__typename}}",
+        1,
+    );
+    assert_eq!(connections_under_a_row(&field_values), ["o0/fieldValues"]);
 }
 
 /// The board-issue fragment as it stood before the innermost label connection came out.

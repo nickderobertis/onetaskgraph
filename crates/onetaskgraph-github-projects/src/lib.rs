@@ -756,23 +756,27 @@ pub const SEARCH_BATCH: usize = 20;
 /// the board's own field filter in an aliased `items` field of its own and by one of the
 /// request's searches.
 pub const SEARCH_BATCH_ORIGINS: usize = 5;
-/// The rows each search of a [`graphql::SEARCH_BATCH`] request asks for on its first page.
+/// The rows each search of a [`graphql::SEARCH_BATCH`] request asked for on its first page,
+/// when every row carried the whole issue and was priced by it.
 ///
-/// A batched find asks narrowed questions that each expect a handful of answers, and every
-/// search slot is priced at its page size: three rows a slot keep a first round of
-/// [`SEARCH_BATCH`] searches at three points, where a page of [`SEARCH_PAGE_SIZE`] each would
-/// cost twenty. A search with more to answer is walked on at [`SEARCH_PAGE_SIZE`] rows a page.
+/// No longer what a batched find asks: a search slot now selects each hit's scalar fields
+/// alone, which GitHub prices as one connection whatever its page size, so a search asks its
+/// whole remaining limit — up to [`MAX_PAGE_SIZE`] — on every page.
+#[deprecated(
+    since = "0.18.0",
+    note = "a batched search slot asks its remaining limit, up to `MAX_PAGE_SIZE`, on every page"
+)]
 pub const SEARCH_BATCH_FIRST_PAGE: u32 = 3;
 
-/// The rows each resumed page of one [`graphql::SEARCH_BATCH`] round asks for, when `resumed`
-/// of its slots — searches and origin item listings alike — resume from a cursor.
+/// The rows each resumed page of one [`graphql::SEARCH_BATCH`] round asked for, when `resumed`
+/// of its slots resumed from a cursor and every row carried the whole issue.
 ///
-/// Every resumed page of a round shares one [`SEARCH_PAGE_SIZE`] of rows, rather than each
-/// asking that many: a round in which all twenty searches walked on at twenty rows a slot cost
-/// 22 points in one request, while sharing holds every round to what its first pages cost and
-/// one page more. A search with more to answer is walked on over more rounds, each page still
-/// read, so what a walk answers is unchanged; a round of one resumed search asks the page a
-/// search alone asks.
+/// No longer what a batched find asks: with each hit's scalar fields alone, a round's price no
+/// longer grows with its rows, so its resumed pages no longer share one page of rows.
+#[deprecated(
+    since = "0.18.0",
+    note = "a batched search slot asks its remaining limit, up to `MAX_PAGE_SIZE`, on every page"
+)]
 #[must_use]
 pub fn search_batch_resumed_page(resumed: usize) -> u32 {
     let resumed = u32::try_from(resumed.max(1)).unwrap_or(u32::MAX);
@@ -780,24 +784,15 @@ pub fn search_batch_resumed_page(resumed: usize) -> u32 {
 }
 
 /// The page sizes of the most expensive [`graphql::SEARCH_BATCH`] round this source sends:
-/// every slot on its first page, at [`SEARCH_BATCH_FIRST_PAGE`] rows, but one resumed slot
-/// asking all of [`search_batch_resumed_page`]'s shared rows.
+/// every search and origin slot asking a whole page of [`MAX_PAGE_SIZE`] rows — what
+/// [`largest_page_sizes`] binds them to.
 ///
-/// `tests/point_cost.rs` holds every round shape [`search_batch_resumed_page`] allows to cost
-/// no more than this, and the credentialed lane reconciles GitHub's own price of the document
-/// under it. [`largest_page_sizes`] still binds every slot at [`SEARCH_PAGE_SIZE`], an upper
-/// bound on this, so the offline worst case covers more than any round sends.
+/// A search slot selects each hit's scalar fields alone, so asking every row a slot can is
+/// what the round costs at most; `tests/point_cost.rs` prices it, and the credentialed lane
+/// reconciles GitHub's own price of the document under it.
 #[must_use]
 pub fn search_batch_largest_round() -> Variables {
-    let mut sizes = largest_page_sizes();
-    for slot in 0..SEARCH_BATCH {
-        sizes.insert(format!("first{slot}"), SEARCH_BATCH_FIRST_PAGE);
-    }
-    for slot in 0..SEARCH_BATCH_ORIGINS {
-        sizes.insert(format!("itemsFirst{slot}"), SEARCH_BATCH_FIRST_PAGE);
-    }
-    sizes.insert("first0".to_owned(), search_batch_resumed_page(1));
-    sizes
+    largest_page_sizes()
 }
 /// How many comments one [`graphql::ADD_COMMENTS`] request adds, and how many issue updates one
 /// [`graphql::WRITE_TASKS`] request carries: [`MUTATION_BATCH`], the most aliased mutations
@@ -904,12 +899,12 @@ pub fn largest_page_sizes() -> Variables {
         ("lookupFirst".to_owned(), ORIGIN_LOOKUPS_PAGE_SIZE),
         ("memberFirst".to_owned(), MEMBER_PAGE_SIZE),
     ]);
-    // Each slot of the batched search pages at most what one search does.
+    // Each slot of the batched search pages at most a whole page of GitHub's.
     for slot in 0..SEARCH_BATCH {
-        sizes.insert(format!("first{slot}"), SEARCH_PAGE_SIZE);
+        sizes.insert(format!("first{slot}"), MAX_PAGE_SIZE);
     }
     for slot in 0..SEARCH_BATCH_ORIGINS {
-        sizes.insert(format!("itemsFirst{slot}"), SEARCH_PAGE_SIZE);
+        sizes.insert(format!("itemsFirst{slot}"), MAX_PAGE_SIZE);
     }
     sizes
 }
@@ -964,6 +959,24 @@ pub fn worst_case_point_cost(document: &str) -> Result<u64, NodeCountError> {
 /// no single operation, or binds a page size `variables` does not name.
 pub fn point_cost(document: &str, variables: &Variables) -> Result<u64, NodeCountError> {
     github_graphql_node_count::point_cost(document, variables)
+}
+
+/// The rate-limit points one request of `document` sending `variables` spends, by GitHub's
+/// published rules: [`point_cost`] under the page sizes those variables bind, each page-size
+/// variable they leave out at its largest — the price this source's accounting records a
+/// request at, and what a loopback board reports as a request's `rateLimit { cost }`.
+///
+/// # Errors
+///
+/// As [`point_cost`].
+pub fn request_point_cost(document: &str, variables: &Value) -> Result<u64, NodeCountError> {
+    let mut bindings = accounting::bindings(variables);
+    // A document spelled with assignees pages them by a variable it declares with its own
+    // default, which no request binds.
+    bindings
+        .entry("assigneeFirst".to_owned())
+        .or_insert_with(graphql::assignee_first);
+    point_cost(document, &bindings)
 }
 
 /// The most nodes `document` could be asked to return under `variables`.
@@ -2355,15 +2368,25 @@ pub mod graphql {
         };
     }
     /// The search slots `<n>` of [`SEARCH_BATCH`]: [`SEARCH_ISSUES`]'s one connection, aliased
-    /// `s<n>`, sent only while `$ask<n>` holds.
+    /// `s<n>`, sent only while `$ask<n>` holds — each hit's scalar fields alone, and no
+    /// connection beneath a row, so GitHub prices the slot as the one connection it is however
+    /// many rows it asks for.
     macro_rules! search_batch_slots {
         ($($n:literal)+) => {
             concat!($(
                 "\n      s", stringify!($n), ":search(query:$search", stringify!($n),
                 ",type:$type,first:$first", stringify!($n), ",after:$after", stringify!($n),
                 ") @include(if:$ask", stringify!($n),
-                "){pageInfo{hasNextPage endCursor} nodes{__typename ...BoardIssue}}",
+                "){pageInfo{hasNextPage endCursor} nodes{", search_hit!(), "}}",
             )+)
+        };
+    }
+    /// What one hit of a [`SEARCH_BATCH`] search slot carries: its scalar fields and its
+    /// repository's name — never a connection, so no field of it is priced per row. Every task
+    /// a batched find answers is read whole afterwards, through [`ISSUE_DETAILS`].
+    macro_rules! search_hit {
+        () => {
+            "__typename ... on Issue{id number title state updatedAt repository{nameWithOwner}}"
         };
     }
     /// The variables of the origin slots `<n>` of [`SEARCH_BATCH`]: the board's field filter
@@ -2378,7 +2401,9 @@ pub mod graphql {
         };
     }
     /// The origin slots `<n>` of [`SEARCH_BATCH`]: [`ORIGIN_LOOKUP`]'s board half, the board's
-    /// own items through its field filter, aliased `o<n>`, sent only while `$origin<n>` holds.
+    /// own items through its field filter, aliased `o<n>`, sent only while `$origin<n>` holds —
+    /// each item's id and its content's kind and id alone, read whole afterwards as a search
+    /// hit is.
     macro_rules! origin_batch_slots {
         ($($n:literal)+) => {
             concat!($(
@@ -2386,8 +2411,8 @@ pub mod graphql {
                 stringify!($n),
                 "){... on ProjectV2Owner{projectV2(number:$number){items(first:$itemsFirst",
                 stringify!($n), ",after:$itemsAfter", stringify!($n), ",query:$filter",
-                stringify!($n), "){nodes{id updatedAt ", board_item_values!(),
-                board_item_content!(), "} pageInfo{hasNextPage endCursor}}}}}",
+                stringify!($n), "){nodes{id content{__typename ... on Issue{id}}} ",
+                "pageInfo{hasNextPage endCursor}}}}}",
             )+)
         };
     }
@@ -2403,16 +2428,22 @@ pub mod graphql {
     /// rather than one per search. A slot not asked is left out by `@include`, its page size
     /// bound to one; GitHub answers an error about one slot at that slot's path, and the other
     /// slots are answered beside it.
+    ///
+    /// **It reads which issues match, never the issues themselves.** Every row is its scalar
+    /// fields alone, so GitHub prices each slot as one connection whatever its page size, and a
+    /// round of twenty searches of a hundred rows each costs one point — where one page of the
+    /// whole issue fragment cost a point per twenty rows, every row's labels and board field
+    /// values priced whether or not that hit was kept. The distinct hits of a whole find are
+    /// then read once each, [`DETAIL_BATCH`](super::DETAIL_BATCH) at a time, by
+    /// [`ISSUE_DETAILS`], which every field a find answers comes from.
     pub const SEARCH_BATCH: &str = concat!(
-        r#"query($owner:String!,$number:Int!,$type:SearchType!,$nestedFirst:Int!,$boardItems:Int!,$duplicates:Boolean!"#,
-        relationship_events_variable!(),
+        r#"query($owner:String!,$number:Int!,$type:SearchType!"#,
         search_batch_variables!(0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19),
         origin_batch_variables!(0 1 2 3 4),
         "){",
         search_batch_slots!(0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19),
         origin_batch_slots!(0 1 2 3 4),
-        "\n    }",
-        board_issue!()
+        "\n    }"
     );
 
     /// The comment slots `<n>` of [`ADD_COMMENTS`]: [`ADD_COMMENT`]'s mutation, aliased
@@ -2804,6 +2835,74 @@ pub mod graphql {
         }
     }
 
+    /// The selection every read this source sends carries so GitHub reports what that very
+    /// request cost: `rateLimit { cost }` executed (`dryRun: false`), under an alias of its own,
+    /// so it never collides with the unaliased `rateLimit(dryRun: true)` probe the credentialed
+    /// lane adds to price a document without running it. `rateLimit` is one object of scalars
+    /// and no connection, so it adds nothing to the document's node count or its price — GitHub
+    /// prices a read the same with it and without it — which is why it rides on every read.
+    const REPORTED_COST: &str = "actualCost:rateLimit(dryRun:false){cost} ";
+    /// The alias [`REPORTED_COST`] answers under.
+    const REPORTED_COST_ALIAS: &str = "actualCost";
+
+    /// `document` as this source sends it, selecting what GitHub charged the request:
+    /// [`REPORTED_COST`] as the first field of its operation — or `None` for a mutation, whose
+    /// `rateLimit` GitHub offers no way to select, and for a document already selecting one.
+    ///
+    /// A rewrite of the one text sent, at the one place a document leaves for GitHub, rather
+    /// than a second set of documents: every constant here stays the document it prices as, and
+    /// [`without_reported_cost`] is the exact inverse a loopback board answers a document by.
+    #[must_use]
+    pub fn with_reported_cost(document: &str) -> Option<String> {
+        if super::is_mutation(document) || document.contains("rateLimit") {
+            return None;
+        }
+        let root = document.find('{')?;
+        Some(format!(
+            "{}{REPORTED_COST}{}",
+            &document[..=root],
+            &document[root + 1..]
+        ))
+    }
+
+    /// `document` as [`with_reported_cost`] spelled it, back as the document it was written as
+    /// — or `None` for a document it did not rewrite.
+    #[must_use]
+    pub fn without_reported_cost(document: &str) -> Option<String> {
+        let plain = document.replacen(REPORTED_COST, "", 1);
+        // Only what `with_reported_cost` spelled: a caller's own document selecting the alias
+        // beside a dry-run probe, which that never spells, is left as it is.
+        (with_reported_cost(&plain).as_deref() == Some(document)).then_some(plain)
+    }
+
+    /// What GitHub said a request [`with_reported_cost`] spelled cost, in points, read from the
+    /// response's `data` — or `None` where it said nothing.
+    #[must_use]
+    pub fn reported_cost(data: &serde_json::Value) -> Option<u64> {
+        data.get(REPORTED_COST_ALIAS)
+            .and_then(|cost| cost.get("cost"))
+            .and_then(serde_json::Value::as_u64)
+    }
+
+    /// `data` without the field [`with_reported_cost`] selects, so what a document answered is
+    /// read as the document it was written as.
+    pub fn forget_reported_cost(data: &mut serde_json::Value) {
+        if let Some(object) = data.as_object_mut() {
+            object.remove(REPORTED_COST_ALIAS);
+        }
+    }
+
+    /// The answer a loopback board gives the field [`with_reported_cost`] selects: `data` with
+    /// GitHub's report of `cost` points beside what the document asked.
+    pub fn answer_reported_cost(data: &mut serde_json::Value, cost: u64) {
+        if let Some(object) = data.as_object_mut() {
+            object.insert(
+                REPORTED_COST_ALIAS.to_owned(),
+                serde_json::json!({ "cost": cost }),
+            );
+        }
+    }
+
     /// The selection of an issue's — or a draft's — assignees, as a source opted in to them
     /// (`config.assignees: true`) adds it to every document that reads one; see
     /// [`with_assignees`].
@@ -2812,6 +2911,17 @@ pub mod graphql {
     /// people GitHub assigns one issue — so no caller binds it, and inserted first among a
     /// document's variables.
     const ASSIGNEE_VARIABLE: &str = "$assigneeFirst:Int!=10 ";
+
+    /// The default [`ASSIGNEE_VARIABLE`] declares, read out of that declaration: what a request
+    /// spelled with assignees is priced at.
+    pub(crate) fn assignee_first() -> u32 {
+        ASSIGNEE_VARIABLE
+            .trim()
+            .rsplit('=')
+            .next()
+            .and_then(|default| default.parse().ok())
+            .expect("the assignee variable declares a numeric default")
+    }
     /// [`ASSIGNEE_VARIABLE`] for a document declaring no variables of its own.
     const ASSIGNEE_VARIABLES: &str = "($assigneeFirst:Int!=10)";
     /// Where [`ASSIGNEES`] goes: straight after each of these, wherever an issue or a draft is
@@ -4903,6 +5013,11 @@ pub struct GitHubProjectsSource {
     /// narrowed question twice — a wait polling for its own items, a listing repeated after a
     /// write — pays for it once, which is what the whole-board read it replaced gave it.
     narrowed_cache: Mutex<BTreeMap<String, Vec<Resolved>>>,
+    /// Each page of a narrowed search's own read, row for row as GitHub answered it — `None`
+    /// for a row that is no item of this board, or one this process deleted since — held on
+    /// the terms [`Self::narrowed_cache`] is. Row for row because a cursor names a row of a
+    /// page by its position (`SearchPosition::offset`), which an entry removed would move.
+    search_rows: Mutex<SearchRows>,
     search_next: Mutex<BTreeMap<String, Option<String>>>,
     /// Records already resolved in this command, reused by writes and for comment identity.
     /// Explicit item reads still reach GitHub. Nothing is persisted, and
@@ -6177,6 +6292,7 @@ impl GitHubProjectsSource {
             carried: Mutex::new(BTreeMap::new()),
             held_cache: Mutex::new(BTreeMap::new()),
             children_cache: Mutex::new(BTreeMap::new()),
+            search_rows: Mutex::new(BTreeMap::new()),
             search_next: Mutex::new(BTreeMap::new()),
             fields_cache: Mutex::new(None),
             repository_cache: Mutex::new(BTreeMap::new()),
@@ -6432,10 +6548,18 @@ impl GitHubProjectsSource {
                     return Err(refused);
                 }
             };
-            let attempt = self.send_once(query, &variables, waits + 1).await;
+            let (attempt, cost) = self.send_once(query, &variables, waits + 1).await;
             // Over however it ended — answered, refused or failed before any header — and
-            // ended before any wait for a retry, which is asked for as a request of its own.
-            admitted.end();
+            // ended before any wait for a retry, which is asked for as a request of its own;
+            // an answered read is first told to the gate with what GitHub said it cost, after
+            // the readings its response carried.
+            match cost {
+                Some(cost) => admitted.end_reporting(&onetaskgraph_plugin_api::ReportedCost {
+                    resource: accounting::Budget::Graphql.name().to_owned(),
+                    cost,
+                }),
+                None => admitted.end(),
+            }
             self.paced(ticket, mutation);
             let remaining = self.pacing.retry_budget.saturating_sub(waited);
             let (wait, cause) = match attempt {
@@ -6575,18 +6699,25 @@ impl GitHubProjectsSource {
         query: &str,
         variables: &Value,
         number: u32,
-    ) -> Result<Value, Attempt> {
+    ) -> (Result<Value, Attempt>, Option<u64>) {
         // A lookup goes out sized to the people it names, and the record names and counts it as
         // what it is; everything that decides how it is retried or read compares `query`, the
         // constant it was written as.
         let sized = graphql::sized(query, variables);
-        let executed = self.ledger.priced_document(sized.as_ref());
+        // Every read asks GitHub what it cost, so the gate and the ledger are told the
+        // request's own charge rather than a model of it.
+        let executed: std::borrow::Cow<'_, str> = match graphql::with_reported_cost(&sized) {
+            Some(priced) => std::borrow::Cow::Owned(priced),
+            None => std::borrow::Cow::Borrowed(sized.as_ref()),
+        };
         let Attempted {
             result,
             limits,
             reported_cost,
             response_outcome,
-        } = self.attempt(executed.as_ref(), variables).await;
+        } = self
+            .attempt(sized.as_ref(), executed.as_ref(), variables)
+            .await;
         // No `otherwise` name: every document this source sends is one of its own, and the
         // inventory gate on `graphql::DOCUMENTS` is what keeps that true.
         let sending = accounting::Request::graphql(sized.as_ref(), variables, None, reported_cost);
@@ -6601,7 +6732,10 @@ impl GitHubProjectsSource {
                 response_outcome,
                 number,
             ));
-        result
+        // Only an answered request's cost is the gate's to be told: a refused or failed one
+        // delivers none, whatever its body said.
+        let answered_cost = reported_cost.filter(|_| result.is_ok());
+        (result, answered_cost)
     }
 
     /// The attempt itself, with what its response said about the rate limit alongside.
@@ -6609,21 +6743,23 @@ impl GitHubProjectsSource {
     /// The two are returned together rather than recorded here because every one of the
     /// early exits below is a different outcome, and a record written at each of them is a
     /// record one of them can be added without.
-    async fn attempt(&self, query: &str, variables: &Value) -> Attempted {
+    async fn attempt(&self, query: &str, executed: &str, variables: &Value) -> Attempted {
         let mut limits = accounting::RateLimit::default();
         let mut reported_cost = None;
         let mut response_outcome = accounting::ResponseOutcome::TransportError;
         // Spelled here, at the one place a document leaves for GitHub, and nowhere earlier:
         // everything that decides how a document is retried or how its answer is read compares
         // it with the constant it was written as.
+        // `query` is the document as written, which decides how the answer is read; `executed`
+        // is that document selecting its own cost, which is what is sent.
         let spelled = self
             .assignees
-            .then(|| graphql::with_assignees(query))
+            .then(|| graphql::with_assignees(executed))
             .flatten();
         let result = self
             .attempted(
                 query,
-                spelled.as_deref().unwrap_or(query),
+                spelled.as_deref().unwrap_or(executed),
                 variables,
                 &mut limits,
                 &mut reported_cost,
@@ -6718,12 +6854,15 @@ impl GitHubProjectsSource {
                 ),
             })
         })?;
-        *reported_cost = serde_json::from_str::<Value>(&body)
-            .ok()
-            .as_ref()
-            .and_then(|body| body.pointer("/data/rateLimit/cost"))
-            .and_then(Value::as_u64);
         let parsed = serde_json::from_str::<Value>(&body).ok();
+        *reported_cost = parsed.as_ref().and_then(|body| {
+            let data = body.get("data")?;
+            graphql::reported_cost(data).or_else(|| {
+                data.get("rateLimit")
+                    .and_then(|limit| limit.get("cost"))
+                    .and_then(Value::as_u64)
+            })
+        });
         *response_outcome = accounting::ResponseOutcome::of_graphql_reply(status, parsed.as_ref());
         if let Some(limiter) = Limiter::classify(status, exhausted, &body) {
             return Err(Attempt::Limited(Limited {
@@ -6773,6 +6912,8 @@ impl GitHubProjectsSource {
             self.answer(&body)
         };
         let mut data = answered.map_err(Attempt::Failed)?;
+        // What GitHub said the request cost is the request's, never part of what it answered.
+        graphql::forget_reported_cost(&mut data);
         if let Some(served) = served {
             *self
                 .last_served
@@ -7074,6 +7215,18 @@ impl GitHubProjectsSource {
         first: u32,
         after: Option<&str>,
     ) -> Result<(Vec<Resolved>, Option<String>), SourceError> {
+        let (rows, next) = self.search_rows_page(search, first, after).await?;
+        Ok((rows.into_iter().flatten().collect(), next))
+    }
+
+    /// [`Self::search_page`], row for row: `None` for a row that is no item of this board, so a
+    /// row's position in the answer is its position in GitHub's — what a cursor's offset counts.
+    async fn search_rows_page(
+        &self,
+        search: &str,
+        first: u32,
+        after: Option<&str>,
+    ) -> Result<(Vec<Option<Resolved>>, Option<String>), SourceError> {
         let data = self
             .graphql(
                 graphql::SEARCH_ISSUES,
@@ -7093,9 +7246,7 @@ impl GitHubProjectsSource {
                 message: "GitHub search nodes is not an array".into(),
             })?
         {
-            if let Some(resolved) = self.resolve_issue(node).await? {
-                found.push(resolved);
-            }
+            found.push(self.resolve_issue(node).await?);
         }
         let info = connection
             .get("pageInfo")
@@ -7947,13 +8098,22 @@ impl GitHubProjectsSource {
         }
         let mut tasks = Vec::new();
         while !position.connection.exhausted() && tasks.len() < limit {
-            let first = SEARCH_PAGE_SIZE;
+            // A page this read resumes 20 rows or more into — a cursor a batched page shared with
+            // a larger search handed out — is asked far enough to hold a page of rows past them.
+            let first = if position.offset < SEARCH_PAGE_SIZE as usize {
+                SEARCH_PAGE_SIZE
+            } else {
+                u32::try_from(position.offset)
+                    .unwrap_or(MAX_PAGE_SIZE)
+                    .saturating_add(SEARCH_PAGE_SIZE)
+                    .min(MAX_PAGE_SIZE)
+            };
             // Page size is part of the key: a short cached answer cannot answer a wider ask.
             let key =
                 serde_json::to_string(&("page", &search, &position.connection.after(), first))
                     .expect("search page key is serializable");
             let cached = if query.commented_since.is_none() {
-                self.narrowed_cache()?.get(&key).cloned()
+                self.search_rows()?.get(&key).cloned()
             } else {
                 None
             };
@@ -7974,7 +8134,7 @@ impl GitHubProjectsSource {
                 }
                 None => {
                     let (found, next) = self
-                        .search_page(&search, first, position.connection.after())
+                        .search_rows_page(&search, first, position.connection.after())
                         .await?;
                     if query.commented_since.is_none() {
                         self.search_next
@@ -7985,21 +8145,27 @@ impl GitHubProjectsSource {
                                         .into(),
                             })?
                             .insert(key.clone(), next.clone());
-                        self.narrowed_cache()?.insert(key, found.clone());
+                        self.search_rows()?.insert(key, found.clone());
                     }
                     (found, next)
                 }
             };
             let rows = found.len();
             // Every candidate of the page this read confirms by its comments is read together.
-            let candidates =
-                self.comment_candidates(found.iter().skip(position.offset), query, &query.project)?;
+            let candidates = self.comment_candidates(
+                found.iter().skip(position.offset).flatten(),
+                query,
+                &query.project,
+            )?;
             self.hold_comment_pages(&candidates).await?;
-            for mut item in found.into_iter().skip(position.offset) {
+            for row in found.into_iter().skip(position.offset) {
                 if tasks.len() == limit {
                     break;
                 }
                 position.offset += 1;
+                let Some(mut item) = row else {
+                    continue;
+                };
                 if position.own.contains(&item.id) {
                     if position.seen.contains(&item.id) {
                         continue;
@@ -8584,6 +8750,11 @@ impl GitHubProjectsSource {
                 *held = item.clone();
             }
         }
+        for rows in self.search_rows()?.values_mut() {
+            if let Some(held) = rows.iter_mut().flatten().find(|held| held.id == item.id) {
+                *held = item.clone();
+            }
+        }
         for (_, found) in self.children_cache()?.values_mut() {
             if let Some(held) = found.iter_mut().find(|held| held.id == item.id) {
                 *held = item.clone();
@@ -8612,10 +8783,30 @@ impl GitHubProjectsSource {
         for found in self.narrowed_cache()?.values_mut() {
             found.retain(|item| item.id != *id);
         }
+        // Emptied rather than removed, so every later row of its page keeps its position.
+        for rows in self.search_rows()?.values_mut() {
+            for row in rows.iter_mut() {
+                if row.as_ref().is_some_and(|item| item.id == *id) {
+                    *row = None;
+                }
+            }
+        }
         for (_, found) in self.children_cache()?.values_mut() {
             found.retain(|item| item.id != *id);
         }
         Ok(())
+    }
+
+    /// This process's own record of each page of a narrowed search's own read, row for row, or
+    /// the refusal a poisoned lock is.
+    fn search_rows(&self) -> Result<std::sync::MutexGuard<'_, SearchRows>, SourceError> {
+        self.search_rows
+            .lock()
+            .map_err(|_| SourceError::Unavailable {
+                message: "this source's view of a narrowed search was left inconsistent by an \
+                      earlier failure; next: run the command again"
+                    .into(),
+            })
     }
 
     /// This process's own record of each narrowed answer, or the refusal a poisoned lock is.
@@ -14116,6 +14307,10 @@ impl Board {
     }
 }
 
+/// Each held page of a narrowed search's own read, by its key, row for row: see
+/// `GitHubProjectsSource::search_rows`.
+type SearchRows = BTreeMap<String, Vec<Option<Resolved>>>;
+
 /// One board item, resolved into everything this source reports about it.
 ///
 /// Serializable because it is what [`TaskSource::write_context`] hands the store's cache and
@@ -15505,13 +15700,15 @@ impl TaskSource for GitHubProjectsSource {
     /// query by [`Self::query_tasks`] on its own: one narrowed by a project or by comment
     /// activity, one carrying no narrowing, one resumed from a cursor that read handed out, and
     /// every query of a process that has written this board, whose own writes complete a
-    /// narrowed answer. A lone search is its own read too, which costs a batch's point at a
-    /// page of its own size.
+    /// narrowed answer.
     ///
-    /// Each search's first page asks [`SEARCH_BATCH_FIRST_PAGE`] rows and each later page
-    /// [`SEARCH_PAGE_SIZE`]. GitHub answers an error about one aliased field at that field's
-    /// path, beside the others' answers, so a refused page fails that query's answer alone; a
-    /// request it refuses whole is every query of that request's answer.
+    /// Each page asks all the rows its search still lacks, up to [`MAX_PAGE_SIZE`], and reads
+    /// which issues match alone; the distinct issues every search of the call hit are then read
+    /// whole, [`DETAIL_BATCH`] to a [`graphql::ISSUE_DETAILS`] request, each once. GitHub
+    /// answers an error about one aliased field at that field's path, beside the others'
+    /// answers, so a refused page fails that query's answer alone; a request it refuses whole is
+    /// every query of that request's answer, and a detail read it refuses is the answer of
+    /// every query that hit one of its issues.
     async fn query_tasks_batch(
         &self,
         asks: &[(TaskQuery, PageRequest)],
@@ -16912,6 +17109,7 @@ impl TaskSource for GitHubProjectsSource {
         clear(&self.board_cache);
         clear(&self.search_cache);
         clear(&self.narrowed_cache);
+        clear(&self.search_rows);
         clear(&self.search_next);
         clear(&self.resolved_cache);
         clear(&self.read_ahead);
@@ -17801,11 +17999,12 @@ impl SearchConnection {
     }
     /// Whether a cursor naming this position, `offset` rows into its page, is one this
     /// plugin could have handed out: a page is resumed only part of the way through it — an
-    /// offset of a whole page or more would skip rows nobody was given — an initial page
-    /// only once some of it was handed out, and an exhausted connection has no page to be
-    /// part of the way through.
+    /// offset of GitHub's whole page maximum or more would skip rows nobody was given; a batched
+    /// search sharing a page with a larger one of its text stops anywhere inside it — an
+    /// initial page only once some of it was handed out, and an exhausted connection has no
+    /// page to be part of the way through.
     fn valid_resume(&self, offset: usize) -> bool {
-        let within = offset < SEARCH_PAGE_SIZE as usize;
+        let within = offset < MAX_PAGE_SIZE as usize;
         match self {
             Self::Initial { .. } => offset > 0 && within,
             Self::Continuing { after } => !after.0.is_empty() && within,
@@ -18081,6 +18280,11 @@ mod end_command_tests {
             (NativeId("P-1".into()), vec![item.clone()]),
         );
         source
+            .search_rows
+            .lock()
+            .unwrap()
+            .insert("status:todo".into(), vec![Some(item.clone()), None]);
+        source
             .search_next
             .lock()
             .unwrap()
@@ -18107,6 +18311,7 @@ mod end_command_tests {
         assert!(source.board_cache().unwrap().is_none(), "board");
         assert!(source.search_cache.lock().unwrap().is_none(), "search");
         assert!(source.narrowed_cache.lock().unwrap().is_empty(), "narrowed");
+        assert!(source.search_rows.lock().unwrap().is_empty(), "search rows");
         assert!(
             source.children_cache.lock().unwrap().is_empty(),
             "project children"
@@ -18163,6 +18368,7 @@ mod end_command_tests {
         poison(&source.board_cache);
         poison(&source.search_cache);
         poison(&source.narrowed_cache);
+        poison(&source.search_rows);
         poison(&source.search_next);
         poison(&source.resolved_cache);
         poison(&source.fields_cache);

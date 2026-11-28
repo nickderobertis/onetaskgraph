@@ -85,7 +85,7 @@ silence. See the note on `Health` below for the one difference it carries delibe
   comment types `Comment`, `CommentBody`, `NewComment`, `CommentOrigin`, `CommentCopy`,
   `AuthorKind` and `TaskDetailRead`; the section types `StoredHeading`, `BodyMarkup` and `SharedBodyMarkup`; the
   metering types `Metering` and `Metered`; the quota types `QuotaReading`, `RequestGate`,
-  `GatedRequest` and `AdmittedRequest`; the metadata-projection type `ProjectedValue`; the `status_mapping` types `StatusMapping`,
+  `GatedRequest`, `AdmittedRequest` and `ReportedCost`; the metadata-projection type `ProjectedValue`; the `status_mapping` types `StatusMapping`,
   `StatusNames`, `StatusName` and `UnmappedStatus`; the image-asset types `Asset`,
   `AssetName`, `AssetContentType`, `AssetPayload`, `AssetUpload`, `AssetUploads`, `AssetWrite`
   and `AssetsWritten`; the clock types `Clock`, `SharedClock` and `WaitCause`; the held-write type `HeldVersion`;
@@ -1675,6 +1675,12 @@ them do; this is the inventory of what is owed, not a status board.
      more rows than the hits it still lacks and none asked once it holds them, one limited to 21
      of a term matching 1,000 issues leaving its neighbours' answers as they were; a `limit` of
      `0` is refused naming its key, reading nothing; an answer without `limited` reads `false`.
+
+175. A batched `task find` of a ten-draft prepare's 77 searches and 10 origin lookups on a GitHub
+     board of 2,138 issues answers each search exactly the board's matches in its order up to its
+     limit, each task whole as a listing reads it, `limited` exactly when more matched; each page
+     asks no more rows than its search lacks nor than 100, nothing once it holds its limit or has
+     ended, a text asked twice is sent once, and each hit is read whole in one detail slot.
 
 ## The public boundary
 
