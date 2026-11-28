@@ -540,12 +540,12 @@ wheels = [
 
 [[package]]
 name = "onetaskgraph-cli"
-version = "0.17.2"
+version = "0.17.3"
 source = { editable = "." }
 
 [[package]]
 name = "onetaskgraph-sdk"
-version = "0.17.2"
+version = "0.17.3"
 source = { editable = "sdks/python" }
 dependencies = [
     { name = "onetaskgraph-cli" },
