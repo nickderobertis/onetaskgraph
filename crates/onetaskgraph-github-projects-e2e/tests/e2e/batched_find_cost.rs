@@ -263,7 +263,7 @@ fn a_batched_find_of_a_prepares_searches_answers_each_whole_and_pages_each_to_it
     );
     sandbox.project_document(
         &serde_json::to_string_pretty(&json!({
-            "sources": {"board": {"plugin": "github-projects", "config": config}},
+            "sources": {"board": {"plugin": "github-projects", "config": config.clone()}},
         }))
         .expect("a document"),
     );
@@ -543,4 +543,205 @@ fn a_batched_find_of_a_prepares_searches_answers_each_whole_and_pages_each_to_it
     )
     .expect("the telemetry is written");
     eprintln!("{detail}");
+
+    // Each answer's cursor resumes: the same find's batch asked of the source itself, whose
+    // answers carry the cursor the command line walks internally, then every limited answer
+    // walked on from it to the search's end.
+    resume_every_cursor(&config, &matched, &found);
+}
+
+/// The token the fixture configuration names.
+struct FixtureToken;
+
+impl onetaskgraph_plugin_api::SecretResolver for FixtureToken {
+    fn get(&self, variable: &str) -> Option<secrecy::SecretString> {
+        (variable == "GITHUB_PROJECTS_FIXTURE_TOKEN").then(|| "test-token".into())
+    }
+}
+
+/// The find's own batch — every search at the page the find first asks it, beside the origin
+/// lookups — asked of a source built from `config`, its first pages exactly what the command
+/// line answered, and each answer that reports more resumed from its cursor at page sizes that
+/// leave the next cursor anywhere inside a page, until the search ends: the pages together are
+/// every match the board holds, in the board's order, nothing repeated and nothing skipped.
+/// Then a cursor 22 rows deep inside a page a larger search of the same text shared, resumed
+/// the same way.
+fn resume_every_cursor(config: &Value, matched: &[BTreeSet<usize>], found: &Value) {
+    use onetaskgraph_plugin_api::{
+        PageRequest, SourceName, SourcePlugin as _, TaskQuery, TaskSource, TextFields, TextQuery,
+    };
+    let build = || {
+        onetaskgraph_github_projects::Plugin
+            .build(&SourceName::new("board").unwrap(), config, &FixtureToken)
+            .expect("the plugin builds")
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a runtime");
+    let searching = |text: usize| TaskQuery {
+        text: Some(TextQuery {
+            terms: word(text),
+            fields: TextFields::TitleOrContent,
+        }),
+        ..TaskQuery::default()
+    };
+    let every = |text: usize| -> Vec<String> {
+        matched[text]
+            .iter()
+            .map(|position| issue_id(*position))
+            .collect()
+    };
+    let ids = |tasks: &[onetaskgraph_plugin_api::Task]| -> Vec<String> {
+        tasks.iter().map(|task| task.id.0.clone()).collect()
+    };
+    // Resume sizes cycled so cursors land at the page's start, deep inside it and at its end.
+    const RESUMES: [u32; 4] = [37, 100, 1, 63];
+    let walk_on = |source: &dyn TaskSource, text: usize, held: Vec<String>, cursor| {
+        let mut walked = held;
+        let mut cursor = Some(cursor);
+        let mut turn = 0;
+        while let Some(at) = cursor {
+            let limit = RESUMES[turn % RESUMES.len()];
+            turn += 1;
+            assert!(turn <= 2 * HITS[text], "text {text}: the walk never ends");
+            let page = runtime
+                .block_on(source.query_tasks(
+                    &searching(text),
+                    &PageRequest {
+                        cursor: Some(at),
+                        limit,
+                    },
+                ))
+                .unwrap_or_else(|error| panic!("text {text}: the cursor resumes: {error:?}"));
+            assert!(page.items.len() <= limit as usize, "text {text}");
+            walked.extend(ids(&page.items));
+            cursor = page.next;
+        }
+        let distinct: BTreeSet<&String> = walked.iter().collect();
+        assert_eq!(
+            distinct.len(),
+            walked.len(),
+            "text {text}: a match repeated"
+        );
+        assert_eq!(
+            walked,
+            every(text),
+            "text {text}: every match in order, none skipped"
+        );
+    };
+
+    // The find's batch, in its order.
+    let mut asks = Vec::new();
+    let mut texts = Vec::new();
+    for text in 0..HITS.len() {
+        let times = if ASKED_TWICE.contains(&text) { 2 } else { 1 };
+        for time in 0..times {
+            let first = u32::try_from(keeps(text).min(PAGE_SIZE)).expect("a page size");
+            asks.push((
+                searching(text),
+                PageRequest {
+                    cursor: None,
+                    limit: first,
+                },
+            ));
+            texts.push(Some((text, time)));
+        }
+    }
+    for n in 0..ORIGINS {
+        asks.push((
+            TaskQuery {
+                origin: Some(origin(n)),
+                ..TaskQuery::default()
+            },
+            PageRequest {
+                cursor: None,
+                limit: PAGE_SIZE as u32,
+            },
+        ));
+        texts.push(None);
+    }
+    let source = build();
+    let answers = runtime.block_on(source.query_tasks_batch(&asks));
+    assert_eq!(answers.len(), asks.len());
+    let mut resumed = 0;
+    for ((answer, (_, page)), asked) in answers.into_iter().zip(&asks).zip(&texts) {
+        let answer = answer.expect("the batch answers every search");
+        let Some((text, time)) = *asked else {
+            assert_eq!(answer.next, None, "an origin lookup is one page");
+            continue;
+        };
+        let first = ids(&answer.items);
+        let answered: Vec<String> = answer_items(found, &format!("text-{text}-{time}"))
+            .into_iter()
+            .take(page.limit as usize)
+            .collect();
+        assert_eq!(
+            first, answered,
+            "text {text}: the page the command line answered"
+        );
+        assert_eq!(
+            answer.next.is_some(),
+            HITS[text] > page.limit as usize,
+            "text {text}: a cursor exactly when the board holds more"
+        );
+        match answer.next {
+            Some(cursor) => {
+                walk_on(source.as_ref(), text, first, cursor);
+                resumed += 1;
+            }
+            None => assert_eq!(first, every(text), "text {text}: every match"),
+        }
+    }
+    // Every search the board holds more of than its first page was walked on: the 43 texts
+    // matching more than 21 — those keeping 1, 100 and 250 among them — and the three of them
+    // asked twice once more each.
+    assert_eq!(resumed, 43 + 3, "the answers that report more");
+
+    // A cursor deep inside a shared page: the text the find keeps at 100 asked beside itself
+    // kept at 22, by a source that has read nothing, so one page of 100 answers both and the
+    // narrower stops 22 rows into it.
+    let source = build();
+    let mut answers = runtime.block_on(source.query_tasks_batch(&[
+        (
+            searching(KEEPS_100),
+            PageRequest {
+                cursor: None,
+                limit: 100,
+            },
+        ),
+        (
+            searching(KEEPS_100),
+            PageRequest {
+                cursor: None,
+                limit: 22,
+            },
+        ),
+    ]));
+    let narrow = answers.pop().unwrap().expect("the narrower search");
+    let wide = answers.pop().unwrap().expect("the wider search");
+    assert_eq!(ids(&wide.items), every(KEEPS_100)[..100]);
+    assert_eq!(ids(&narrow.items), every(KEEPS_100)[..22]);
+    walk_on(
+        source.as_ref(),
+        KEEPS_100,
+        ids(&narrow.items),
+        narrow.next.expect("more matched past 22"),
+    );
+}
+
+/// The native ids of the command line's answer under `key`, in order.
+fn answer_items(found: &Value, key: &str) -> Vec<String> {
+    found["answers"]
+        .as_array()
+        .expect("the answers")
+        .iter()
+        .find(|answer| answer["key"] == key)
+        .map(|answer| {
+            answered_ids(answer)
+                .into_iter()
+                .map(|id| id.trim_start_matches("board:").to_owned())
+                .collect()
+        })
+        .unwrap_or_else(|| panic!("no answer under {key}"))
 }
