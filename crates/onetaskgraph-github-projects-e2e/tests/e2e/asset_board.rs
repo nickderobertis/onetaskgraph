@@ -238,6 +238,23 @@ pub(super) fn secondary_points(path: &str, bytes: &[u8]) -> u64 {
     }
 }
 
+/// A request's body as the document it was written as: every read the plugin sends selects
+/// what it cost under an alias, which this board's latency, pacing and record all read past —
+/// the board behind it still receives, and answers, the bytes as they were sent.
+fn plain_body(body: &[u8]) -> Vec<u8> {
+    let Ok(mut request) = serde_json::from_slice::<Value>(body) else {
+        return body.to_vec();
+    };
+    let Some(plain) = request["query"]
+        .as_str()
+        .and_then(onetaskgraph_github_projects::graphql::without_reported_cost)
+    else {
+        return body.to_vec();
+    };
+    request["query"] = Value::String(plain);
+    serde_json::to_vec(&request).expect("a request serializes")
+}
+
 #[derive(Clone)]
 pub(super) struct Refusal {
     pub stage: Stage,
@@ -340,7 +357,7 @@ impl Board {
                 return After::Close;
             }
             let request = clock.request(client);
-            let (headers, bytes) = (sent.head().to_owned(), sent.body().to_vec());
+            let (headers, bytes) = (sent.head().to_owned(), plain_body(sent.body()));
             let raw = sent.bytes();
             let first = headers.lines().next().unwrap();
             let path = first.split_whitespace().nth(1).unwrap().to_owned();

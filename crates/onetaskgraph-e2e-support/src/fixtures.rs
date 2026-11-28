@@ -4226,11 +4226,19 @@ fn github_projects_board_at(
         // Every one of these refuses a request the plugin should not have sent, and
         // each names the request it refused: a shape assumed silently here surfaces as
         // a journey failing about something else entirely.
-        let query = request["query"]
+        let wire = request["query"]
             .as_str()
             .unwrap_or_else(|| panic!("GraphQL request carries no query string: {request}"));
-        graphql_parser::parse_query::<String>(query)
-            .unwrap_or_else(|problem| panic!("invalid GraphQL document ({problem}): {query}"));
+        graphql_parser::parse_query::<String>(wire)
+            .unwrap_or_else(|problem| panic!("invalid GraphQL document ({problem}): {wire}"));
+        // Every read selects what it cost under an alias of its own: the board serves and
+        // records the document as it was written, and answers that alias beside it with what
+        // GitHub's published rules price the request at — the plugin's own table.
+        let unpriced = onetaskgraph_github_projects::graphql::without_reported_cost(wire);
+        let priced = unpriced.is_some();
+        let query = unpriced.as_deref().unwrap_or(wire);
+        // Priced as it ran, assignees and all.
+        let executed = query.to_owned();
         let variables = request["variables"]
             .as_object()
             .unwrap_or_else(|| panic!("GraphQL request carries no variables object: {request}"));
@@ -4368,7 +4376,16 @@ fn github_projects_board_at(
                     Some(_) => board.lock().unwrap().whole(query, data, &variables),
                     None => data,
                 };
-                let data = github_assignees::answered(&board, query, &variables, data, spelled);
+                let mut data =
+                    github_assignees::answered(&board, query, &variables, data, spelled);
+                if priced {
+                    let cost =
+                        onetaskgraph_github_projects::request_point_cost(&executed, &variables)
+                            .unwrap_or_else(|error| {
+                                panic!("an unpriced read ({error}): {executed}")
+                            });
+                    onetaskgraph_github_projects::graphql::answer_reported_cost(&mut data, cost);
+                }
                 {
                     let mut held = board.lock().unwrap();
                     if let Some(at) = held

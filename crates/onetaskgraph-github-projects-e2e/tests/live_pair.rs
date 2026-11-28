@@ -745,8 +745,10 @@ fn run_pair(scenario: &str) {
     assert!(bill.query_points > 0 && bill.modelled_mutations > 0 && bill.rest_requests > 0);
     // Every token the change-token leg asserts on is the plugin's own read by id.
     let token_read_hash = onetaskgraph_github_live::quota::operation_sha256(
-        &onetaskgraph_github_projects::accounting::Accounting::with_query_prices()
-            .priced_document(onetaskgraph_github_projects::graphql::ISSUE),
+        &onetaskgraph_github_projects::graphql::with_reported_cost(
+            onetaskgraph_github_projects::graphql::ISSUE,
+        )
+        .expect("a read selects its cost"),
     );
     let mut reported_query_points = 0;
     let mut fresh_token_reads = 0;

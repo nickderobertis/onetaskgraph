@@ -865,7 +865,11 @@ fn overlapping_library_copies_read_visibility_independently() {
             move |sent: &loopback::Request, stream: &mut std::net::TcpStream| {
                 let response = upstream.forward(&sent.bytes());
                 if serde_json::from_slice::<Value>(sent.body()).is_ok_and(|request| {
-                    request["query"] == onetaskgraph_github_projects::graphql::PROJECT_VISIBILITY
+                    request["query"].as_str()
+                        == onetaskgraph_github_projects::graphql::with_reported_cost(
+                            onetaskgraph_github_projects::graphql::PROJECT_VISIBILITY,
+                        )
+                        .as_deref()
                 }) && !paused.swap(true, Ordering::SeqCst)
                 {
                     released

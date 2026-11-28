@@ -154,7 +154,11 @@ fn serve(
     let request = clock.request(0);
     let visibility = sent.line().starts_with("GET /repos/")
         || serde_json::from_slice::<Value>(sent.body()).is_ok_and(|request| {
-            request["query"] == onetaskgraph_github_projects::graphql::PROJECT_VISIBILITY
+            request["query"].as_str()
+                == onetaskgraph_github_projects::graphql::with_reported_cost(
+                    onetaskgraph_github_projects::graphql::PROJECT_VISIBILITY,
+                )
+                .as_deref()
         });
     let response = upstream.forward(&sent.bytes());
     if response.is_empty() {

@@ -966,6 +966,24 @@ pub fn point_cost(document: &str, variables: &Variables) -> Result<u64, NodeCoun
     github_graphql_node_count::point_cost(document, variables)
 }
 
+/// The rate-limit points one request of `document` sending `variables` spends, by GitHub's
+/// published rules: [`point_cost`] under the page sizes those variables bind, each page-size
+/// variable they leave out at its largest — the price this source's accounting records a
+/// request at, and what a loopback board reports as a request's `rateLimit { cost }`.
+///
+/// # Errors
+///
+/// As [`point_cost`].
+pub fn request_point_cost(document: &str, variables: &Value) -> Result<u64, NodeCountError> {
+    let mut bindings = accounting::bindings(variables);
+    // A document spelled with assignees pages them by a variable it declares with its own
+    // default, which no request binds.
+    bindings
+        .entry("assigneeFirst".to_owned())
+        .or_insert(graphql::ASSIGNEE_FIRST);
+    point_cost(document, &bindings)
+}
+
 /// The most nodes `document` could be asked to return under `variables`.
 ///
 /// [`worst_case_node_count`] is this under [`largest_page_sizes`], and the accounting in
@@ -2804,6 +2822,74 @@ pub mod graphql {
         }
     }
 
+    /// The selection every read this source sends carries so GitHub reports what that very
+    /// request cost: `rateLimit { cost }` executed (`dryRun: false`), under an alias of its own,
+    /// so it never collides with the unaliased `rateLimit(dryRun: true)` probe the credentialed
+    /// lane adds to price a document without running it. `rateLimit` is one object of scalars
+    /// and no connection, so it adds nothing to the document's node count or its price — GitHub
+    /// prices a read the same with it and without it — which is why it rides on every read.
+    const REPORTED_COST: &str = "actualCost:rateLimit(dryRun:false){cost} ";
+    /// The alias [`REPORTED_COST`] answers under.
+    const REPORTED_COST_ALIAS: &str = "actualCost";
+
+    /// `document` as this source sends it, selecting what GitHub charged the request:
+    /// [`REPORTED_COST`] as the first field of its operation — or `None` for a mutation, whose
+    /// `rateLimit` GitHub offers no way to select, and for a document already selecting one.
+    ///
+    /// A rewrite of the one text sent, at the one place a document leaves for GitHub, rather
+    /// than a second set of documents: every constant here stays the document it prices as, and
+    /// [`without_reported_cost`] is the exact inverse a loopback board answers a document by.
+    #[must_use]
+    pub fn with_reported_cost(document: &str) -> Option<String> {
+        if super::is_mutation(document) || document.contains("rateLimit") {
+            return None;
+        }
+        let root = document.find('{')?;
+        Some(format!(
+            "{}{REPORTED_COST}{}",
+            &document[..=root],
+            &document[root + 1..]
+        ))
+    }
+
+    /// `document` as [`with_reported_cost`] spelled it, back as the document it was written as
+    /// — or `None` for a document it did not rewrite.
+    #[must_use]
+    pub fn without_reported_cost(document: &str) -> Option<String> {
+        let plain = document.replacen(REPORTED_COST, "", 1);
+        // Only what `with_reported_cost` spelled: a caller's own document selecting the alias
+        // beside a dry-run probe, which that never spells, is left as it is.
+        (with_reported_cost(&plain).as_deref() == Some(document)).then_some(plain)
+    }
+
+    /// What GitHub said a request [`with_reported_cost`] spelled cost, in points, read from the
+    /// response's `data` — or `None` where it said nothing.
+    #[must_use]
+    pub fn reported_cost(data: &serde_json::Value) -> Option<u64> {
+        data.get(REPORTED_COST_ALIAS)
+            .and_then(|cost| cost.get("cost"))
+            .and_then(serde_json::Value::as_u64)
+    }
+
+    /// `data` without the field [`with_reported_cost`] selects, so what a document answered is
+    /// read as the document it was written as.
+    pub fn forget_reported_cost(data: &mut serde_json::Value) {
+        if let Some(object) = data.as_object_mut() {
+            object.remove(REPORTED_COST_ALIAS);
+        }
+    }
+
+    /// The answer a loopback board gives the field [`with_reported_cost`] selects: `data` with
+    /// GitHub's report of `cost` points beside what the document asked.
+    pub fn answer_reported_cost(data: &mut serde_json::Value, cost: u64) {
+        if let Some(object) = data.as_object_mut() {
+            object.insert(
+                REPORTED_COST_ALIAS.to_owned(),
+                serde_json::json!({ "cost": cost }),
+            );
+        }
+    }
+
     /// The selection of an issue's — or a draft's — assignees, as a source opted in to them
     /// (`config.assignees: true`) adds it to every document that reads one; see
     /// [`with_assignees`].
@@ -2812,6 +2898,8 @@ pub mod graphql {
     /// people GitHub assigns one issue — so no caller binds it, and inserted first among a
     /// document's variables.
     const ASSIGNEE_VARIABLE: &str = "$assigneeFirst:Int!=10 ";
+    /// The default [`ASSIGNEE_VARIABLE`] declares, which a request is priced at.
+    pub(crate) const ASSIGNEE_FIRST: u32 = 10;
     /// [`ASSIGNEE_VARIABLE`] for a document declaring no variables of its own.
     const ASSIGNEE_VARIABLES: &str = "($assigneeFirst:Int!=10)";
     /// Where [`ASSIGNEES`] goes: straight after each of these, wherever an issue or a draft is
@@ -6432,10 +6520,18 @@ impl GitHubProjectsSource {
                     return Err(refused);
                 }
             };
-            let attempt = self.send_once(query, &variables, waits + 1).await;
+            let (attempt, cost) = self.send_once(query, &variables, waits + 1).await;
             // Over however it ended — answered, refused or failed before any header — and
-            // ended before any wait for a retry, which is asked for as a request of its own.
-            admitted.end();
+            // ended before any wait for a retry, which is asked for as a request of its own;
+            // an answered read is first told to the gate with what GitHub said it cost, after
+            // the readings its response carried.
+            match cost {
+                Some(cost) => admitted.end_reporting(&onetaskgraph_plugin_api::ReportedCost {
+                    resource: accounting::Budget::Graphql.name().to_owned(),
+                    cost,
+                }),
+                None => admitted.end(),
+            }
             self.paced(ticket, mutation);
             let remaining = self.pacing.retry_budget.saturating_sub(waited);
             let (wait, cause) = match attempt {
@@ -6575,18 +6671,23 @@ impl GitHubProjectsSource {
         query: &str,
         variables: &Value,
         number: u32,
-    ) -> Result<Value, Attempt> {
+    ) -> (Result<Value, Attempt>, Option<u64>) {
         // A lookup goes out sized to the people it names, and the record names and counts it as
         // what it is; everything that decides how it is retried or read compares `query`, the
         // constant it was written as.
         let sized = graphql::sized(query, variables);
-        let executed = self.ledger.priced_document(sized.as_ref());
+        // Every read asks GitHub what it cost, so the gate and the ledger are told the
+        // request's own charge rather than a model of it.
+        let executed: std::borrow::Cow<'_, str> = match graphql::with_reported_cost(&sized) {
+            Some(priced) => std::borrow::Cow::Owned(priced),
+            None => std::borrow::Cow::Borrowed(sized.as_ref()),
+        };
         let Attempted {
             result,
             limits,
             reported_cost,
             response_outcome,
-        } = self.attempt(executed.as_ref(), variables).await;
+        } = self.attempt(sized.as_ref(), executed.as_ref(), variables).await;
         // No `otherwise` name: every document this source sends is one of its own, and the
         // inventory gate on `graphql::DOCUMENTS` is what keeps that true.
         let sending = accounting::Request::graphql(sized.as_ref(), variables, None, reported_cost);
@@ -6601,7 +6702,10 @@ impl GitHubProjectsSource {
                 response_outcome,
                 number,
             ));
-        result
+        // Only an answered request's cost is the gate's to be told: a refused or failed one
+        // delivers none, whatever its body said.
+        let answered_cost = reported_cost.filter(|_| result.is_ok());
+        (result, answered_cost)
     }
 
     /// The attempt itself, with what its response said about the rate limit alongside.
@@ -6609,21 +6713,23 @@ impl GitHubProjectsSource {
     /// The two are returned together rather than recorded here because every one of the
     /// early exits below is a different outcome, and a record written at each of them is a
     /// record one of them can be added without.
-    async fn attempt(&self, query: &str, variables: &Value) -> Attempted {
+    async fn attempt(&self, query: &str, executed: &str, variables: &Value) -> Attempted {
         let mut limits = accounting::RateLimit::default();
         let mut reported_cost = None;
         let mut response_outcome = accounting::ResponseOutcome::TransportError;
         // Spelled here, at the one place a document leaves for GitHub, and nowhere earlier:
         // everything that decides how a document is retried or how its answer is read compares
         // it with the constant it was written as.
+        // `query` is the document as written, which decides how the answer is read; `executed`
+        // is that document selecting its own cost, which is what is sent.
         let spelled = self
             .assignees
-            .then(|| graphql::with_assignees(query))
+            .then(|| graphql::with_assignees(executed))
             .flatten();
         let result = self
             .attempted(
                 query,
-                spelled.as_deref().unwrap_or(query),
+                spelled.as_deref().unwrap_or(executed),
                 variables,
                 &mut limits,
                 &mut reported_cost,
@@ -6718,12 +6824,15 @@ impl GitHubProjectsSource {
                 ),
             })
         })?;
-        *reported_cost = serde_json::from_str::<Value>(&body)
-            .ok()
-            .as_ref()
-            .and_then(|body| body.pointer("/data/rateLimit/cost"))
-            .and_then(Value::as_u64);
         let parsed = serde_json::from_str::<Value>(&body).ok();
+        *reported_cost = parsed.as_ref().and_then(|body| {
+            let data = body.get("data")?;
+            graphql::reported_cost(data).or_else(|| {
+                data.get("rateLimit")
+                    .and_then(|limit| limit.get("cost"))
+                    .and_then(Value::as_u64)
+            })
+        });
         *response_outcome = accounting::ResponseOutcome::of_graphql_reply(status, parsed.as_ref());
         if let Some(limiter) = Limiter::classify(status, exhausted, &body) {
             return Err(Attempt::Limited(Limited {
@@ -6773,6 +6882,8 @@ impl GitHubProjectsSource {
             self.answer(&body)
         };
         let mut data = answered.map_err(Attempt::Failed)?;
+        // What GitHub said the request cost is the request's, never part of what it answered.
+        graphql::forget_reported_cost(&mut data);
         if let Some(served) = served {
             *self
                 .last_served
