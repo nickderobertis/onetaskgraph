@@ -1424,3 +1424,31 @@ reconciliation requests, **7,272** and **2,400** worst-case nodes, at one point 
 sends none of the five.
 
 **`session-cost.txt`**: requests go 239 → **241**, and nodes 325,488 → **335,160**.
+
+## The batched search reads which issues match, and what that moved
+
+`graphql::SEARCH_BATCH` — the twenty search slots and five origin slots `task find` sends in one
+request — selected the whole issue fragment under every row, so GitHub priced each slot's labels
+and board field values once per row asked: a first round of twenty slots at three rows cost 3
+points, and each search then walked on a row or two a round, sharing one page of resumed rows. A
+search slot now selects each hit's scalar fields alone (`id number title state updatedAt
+repository{nameWithOwner}`) and an origin slot each item's content id, so GitHub prices a slot as
+the one connection it is whatever its page size; every page asks all the rows its search still
+lacks, up to `MAX_PAGE_SIZE`, and the distinct hits of the whole call are then read once each,
+`DETAIL_BATCH` to an `ISSUE_DETAILS` request, which every field a find answers comes from. A
+search asked twice in one call is asked once. `SEARCH_BATCH_FIRST_PAGE` and
+`search_batch_resumed_page` are deprecated rather than removed; `search_batch_largest_round` is
+now every slot at a whole page, which is `largest_page_sizes`.
+
+The worst case of the document is **1** point (`tests/point_cost.rs`, from 22) and **2,500**
+worst-case nodes (`tests/node_count.rs`, from 91,700), and its largest round is the worst case.
+What one batched find spends is `github-batched-find-points`, recorded by
+`onetaskgraph-github-projects-e2e`'s `batched_find_cost.rs` and judged by onebudgetspec.
+
+Every read this source sends now also selects `actualCost:rateLimit(dryRun:false){cost}`, a
+`rateLimit` object of scalars that adds nothing to a document's node count or price, and reports
+that figure to the caller's request gate (`RequestGate::cost_reported`) and to its metering as
+reported rather than modelled.
+
+**`session-cost.txt`**: requests stay **243**; the reconciliation of `SEARCH_BATCH` at its largest
+round goes 17,223 → **2,500** nodes, so the session goes 345,310 → **330,587**.

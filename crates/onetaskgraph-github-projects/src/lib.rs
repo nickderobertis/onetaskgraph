@@ -756,23 +756,27 @@ pub const SEARCH_BATCH: usize = 20;
 /// the board's own field filter in an aliased `items` field of its own and by one of the
 /// request's searches.
 pub const SEARCH_BATCH_ORIGINS: usize = 5;
-/// The rows each search of a [`graphql::SEARCH_BATCH`] request asks for on its first page.
+/// The rows each search of a [`graphql::SEARCH_BATCH`] request asked for on its first page,
+/// when every row carried the whole issue and was priced by it.
 ///
-/// A batched find asks narrowed questions that each expect a handful of answers, and every
-/// search slot is priced at its page size: three rows a slot keep a first round of
-/// [`SEARCH_BATCH`] searches at three points, where a page of [`SEARCH_PAGE_SIZE`] each would
-/// cost twenty. A search with more to answer is walked on at [`SEARCH_PAGE_SIZE`] rows a page.
+/// No longer what a batched find asks: a search slot now selects each hit's scalar fields
+/// alone, which GitHub prices as one connection whatever its page size, so a search asks its
+/// whole remaining limit — up to [`MAX_PAGE_SIZE`] — on every page.
+#[deprecated(
+    since = "0.18.0",
+    note = "a batched search slot asks its remaining limit, up to `MAX_PAGE_SIZE`, on every page"
+)]
 pub const SEARCH_BATCH_FIRST_PAGE: u32 = 3;
 
-/// The rows each resumed page of one [`graphql::SEARCH_BATCH`] round asks for, when `resumed`
-/// of its slots — searches and origin item listings alike — resume from a cursor.
+/// The rows each resumed page of one [`graphql::SEARCH_BATCH`] round asked for, when `resumed`
+/// of its slots resumed from a cursor and every row carried the whole issue.
 ///
-/// Every resumed page of a round shares one [`SEARCH_PAGE_SIZE`] of rows, rather than each
-/// asking that many: a round in which all twenty searches walked on at twenty rows a slot cost
-/// 22 points in one request, while sharing holds every round to what its first pages cost and
-/// one page more. A search with more to answer is walked on over more rounds, each page still
-/// read, so what a walk answers is unchanged; a round of one resumed search asks the page a
-/// search alone asks.
+/// No longer what a batched find asks: with each hit's scalar fields alone, a round's price no
+/// longer grows with its rows, so its resumed pages no longer share one page of rows.
+#[deprecated(
+    since = "0.18.0",
+    note = "a batched search slot asks its remaining limit, up to `MAX_PAGE_SIZE`, on every page"
+)]
 #[must_use]
 pub fn search_batch_resumed_page(resumed: usize) -> u32 {
     let resumed = u32::try_from(resumed.max(1)).unwrap_or(u32::MAX);
@@ -780,24 +784,15 @@ pub fn search_batch_resumed_page(resumed: usize) -> u32 {
 }
 
 /// The page sizes of the most expensive [`graphql::SEARCH_BATCH`] round this source sends:
-/// every slot on its first page, at [`SEARCH_BATCH_FIRST_PAGE`] rows, but one resumed slot
-/// asking all of [`search_batch_resumed_page`]'s shared rows.
+/// every search and origin slot asking a whole page of [`MAX_PAGE_SIZE`] rows — what
+/// [`largest_page_sizes`] binds them to.
 ///
-/// `tests/point_cost.rs` holds every round shape [`search_batch_resumed_page`] allows to cost
-/// no more than this, and the credentialed lane reconciles GitHub's own price of the document
-/// under it. [`largest_page_sizes`] still binds every slot at [`SEARCH_PAGE_SIZE`], an upper
-/// bound on this, so the offline worst case covers more than any round sends.
+/// A search slot selects each hit's scalar fields alone, so asking every row a slot can is
+/// what the round costs at most; `tests/point_cost.rs` prices it, and the credentialed lane
+/// reconciles GitHub's own price of the document under it.
 #[must_use]
 pub fn search_batch_largest_round() -> Variables {
-    let mut sizes = largest_page_sizes();
-    for slot in 0..SEARCH_BATCH {
-        sizes.insert(format!("first{slot}"), SEARCH_BATCH_FIRST_PAGE);
-    }
-    for slot in 0..SEARCH_BATCH_ORIGINS {
-        sizes.insert(format!("itemsFirst{slot}"), SEARCH_BATCH_FIRST_PAGE);
-    }
-    sizes.insert("first0".to_owned(), search_batch_resumed_page(1));
-    sizes
+    largest_page_sizes()
 }
 /// How many comments one [`graphql::ADD_COMMENTS`] request adds, and how many issue updates one
 /// [`graphql::WRITE_TASKS`] request carries: [`MUTATION_BATCH`], the most aliased mutations
@@ -904,12 +899,12 @@ pub fn largest_page_sizes() -> Variables {
         ("lookupFirst".to_owned(), ORIGIN_LOOKUPS_PAGE_SIZE),
         ("memberFirst".to_owned(), MEMBER_PAGE_SIZE),
     ]);
-    // Each slot of the batched search pages at most what one search does.
+    // Each slot of the batched search pages at most a whole page of GitHub's.
     for slot in 0..SEARCH_BATCH {
-        sizes.insert(format!("first{slot}"), SEARCH_PAGE_SIZE);
+        sizes.insert(format!("first{slot}"), MAX_PAGE_SIZE);
     }
     for slot in 0..SEARCH_BATCH_ORIGINS {
-        sizes.insert(format!("itemsFirst{slot}"), SEARCH_PAGE_SIZE);
+        sizes.insert(format!("itemsFirst{slot}"), MAX_PAGE_SIZE);
     }
     sizes
 }
@@ -2373,15 +2368,25 @@ pub mod graphql {
         };
     }
     /// The search slots `<n>` of [`SEARCH_BATCH`]: [`SEARCH_ISSUES`]'s one connection, aliased
-    /// `s<n>`, sent only while `$ask<n>` holds.
+    /// `s<n>`, sent only while `$ask<n>` holds — each hit's scalar fields alone, and no
+    /// connection beneath a row, so GitHub prices the slot as the one connection it is however
+    /// many rows it asks for.
     macro_rules! search_batch_slots {
         ($($n:literal)+) => {
             concat!($(
                 "\n      s", stringify!($n), ":search(query:$search", stringify!($n),
                 ",type:$type,first:$first", stringify!($n), ",after:$after", stringify!($n),
                 ") @include(if:$ask", stringify!($n),
-                "){pageInfo{hasNextPage endCursor} nodes{__typename ...BoardIssue}}",
+                "){pageInfo{hasNextPage endCursor} nodes{", search_hit!(), "}}",
             )+)
+        };
+    }
+    /// What one hit of a [`SEARCH_BATCH`] search slot carries: its scalar fields and its
+    /// repository's name — never a connection, so no field of it is priced per row. Every task
+    /// a batched find answers is read whole afterwards, through [`ISSUE_DETAILS`].
+    macro_rules! search_hit {
+        () => {
+            "__typename ... on Issue{id number title state updatedAt repository{nameWithOwner}}"
         };
     }
     /// The variables of the origin slots `<n>` of [`SEARCH_BATCH`]: the board's field filter
@@ -2396,7 +2401,9 @@ pub mod graphql {
         };
     }
     /// The origin slots `<n>` of [`SEARCH_BATCH`]: [`ORIGIN_LOOKUP`]'s board half, the board's
-    /// own items through its field filter, aliased `o<n>`, sent only while `$origin<n>` holds.
+    /// own items through its field filter, aliased `o<n>`, sent only while `$origin<n>` holds —
+    /// each item's id and its content's kind and id alone, read whole afterwards as a search
+    /// hit is.
     macro_rules! origin_batch_slots {
         ($($n:literal)+) => {
             concat!($(
@@ -2404,8 +2411,8 @@ pub mod graphql {
                 stringify!($n),
                 "){... on ProjectV2Owner{projectV2(number:$number){items(first:$itemsFirst",
                 stringify!($n), ",after:$itemsAfter", stringify!($n), ",query:$filter",
-                stringify!($n), "){nodes{id updatedAt ", board_item_values!(),
-                board_item_content!(), "} pageInfo{hasNextPage endCursor}}}}}",
+                stringify!($n), "){nodes{id content{__typename ... on Issue{id}}} ",
+                "pageInfo{hasNextPage endCursor}}}}}",
             )+)
         };
     }
@@ -2421,16 +2428,22 @@ pub mod graphql {
     /// rather than one per search. A slot not asked is left out by `@include`, its page size
     /// bound to one; GitHub answers an error about one slot at that slot's path, and the other
     /// slots are answered beside it.
+    ///
+    /// **It reads which issues match, never the issues themselves.** Every row is its scalar
+    /// fields alone, so GitHub prices each slot as one connection whatever its page size, and a
+    /// round of twenty searches of a hundred rows each costs one point — where one page of the
+    /// whole issue fragment cost a point per twenty rows, every row's labels and board field
+    /// values priced whether or not that hit was kept. The distinct hits of a whole find are
+    /// then read once each, [`DETAIL_BATCH`](super::DETAIL_BATCH) at a time, by
+    /// [`ISSUE_DETAILS`], which every field a find answers comes from.
     pub const SEARCH_BATCH: &str = concat!(
-        r#"query($owner:String!,$number:Int!,$type:SearchType!,$nestedFirst:Int!,$boardItems:Int!,$duplicates:Boolean!"#,
-        relationship_events_variable!(),
+        r#"query($owner:String!,$number:Int!,$type:SearchType!"#,
         search_batch_variables!(0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19),
         origin_batch_variables!(0 1 2 3 4),
         "){",
         search_batch_slots!(0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19),
         origin_batch_slots!(0 1 2 3 4),
-        "\n    }",
-        board_issue!()
+        "\n    }"
     );
 
     /// The comment slots `<n>` of [`ADD_COMMENTS`]: [`ADD_COMMENT`]'s mutation, aliased
@@ -6687,7 +6700,9 @@ impl GitHubProjectsSource {
             limits,
             reported_cost,
             response_outcome,
-        } = self.attempt(sized.as_ref(), executed.as_ref(), variables).await;
+        } = self
+            .attempt(sized.as_ref(), executed.as_ref(), variables)
+            .await;
         // No `otherwise` name: every document this source sends is one of its own, and the
         // inventory gate on `graphql::DOCUMENTS` is what keeps that true.
         let sending = accounting::Request::graphql(sized.as_ref(), variables, None, reported_cost);
@@ -15616,13 +15631,15 @@ impl TaskSource for GitHubProjectsSource {
     /// query by [`Self::query_tasks`] on its own: one narrowed by a project or by comment
     /// activity, one carrying no narrowing, one resumed from a cursor that read handed out, and
     /// every query of a process that has written this board, whose own writes complete a
-    /// narrowed answer. A lone search is its own read too, which costs a batch's point at a
-    /// page of its own size.
+    /// narrowed answer.
     ///
-    /// Each search's first page asks [`SEARCH_BATCH_FIRST_PAGE`] rows and each later page
-    /// [`SEARCH_PAGE_SIZE`]. GitHub answers an error about one aliased field at that field's
-    /// path, beside the others' answers, so a refused page fails that query's answer alone; a
-    /// request it refuses whole is every query of that request's answer.
+    /// Each page asks all the rows its search still lacks, up to [`MAX_PAGE_SIZE`], and reads
+    /// which issues match alone; the distinct issues every search of the call hit are then read
+    /// whole, [`DETAIL_BATCH`] to a [`graphql::ISSUE_DETAILS`] request, each once. GitHub
+    /// answers an error about one aliased field at that field's path, beside the others'
+    /// answers, so a refused page fails that query's answer alone; a request it refuses whole is
+    /// every query of that request's answer, and a detail read it refuses is the answer of
+    /// every query that hit one of its issues.
     async fn query_tasks_batch(
         &self,
         asks: &[(TaskQuery, PageRequest)],

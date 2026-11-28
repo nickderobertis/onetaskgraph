@@ -1598,8 +1598,7 @@ fn board_with(items: Vec<Item>, status_field: bool, origin_field: bool) -> Fixtu
                         }
                         None => {
                             let mut data = answer(&served, query, variables);
-                            if let Some(cost) = served.lock().unwrap().limits.reported_query_cost
-                            {
+                            if let Some(cost) = served.lock().unwrap().limits.reported_query_cost {
                                 if priced {
                                     onetaskgraph_github_projects::graphql::answer_reported_cost(
                                         &mut data, cost,

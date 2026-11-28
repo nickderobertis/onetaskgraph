@@ -313,7 +313,9 @@ mod tests {
         let gate = Recording::refusing_at(usize::MAX);
         let installed: Arc<dyn RequestGate> = gate.clone();
         <dyn RequestGate>::scope(installed, async {
-            let answered = <dyn RequestGate>::before(&request("graphql")).await.unwrap();
+            let answered = <dyn RequestGate>::before(&request("graphql"))
+                .await
+                .unwrap();
             <dyn RequestGate>::after(&[reading()]);
             answered.end_reporting(&charged(3));
             // A request whose response reported no cost delivers none.

@@ -144,7 +144,11 @@ fn a_copy_says_what_its_metering_sources_spent_and_nothing_where_none_meters() {
             sent.iter()
                 .any(|(document, _)| document.trim_start().starts_with("mutation"))
         );
-        assert_eq!(graphql["amount"], json!(expected), "{boundary:?}: {copied:#}");
+        assert_eq!(
+            graphql["amount"],
+            json!(expected),
+            "{boundary:?}: {copied:#}"
+        );
         assert_eq!(graphql["lower_bound"], json!(true));
 
         // Between two folders of Markdown, neither of which counts what it sends: absent,
