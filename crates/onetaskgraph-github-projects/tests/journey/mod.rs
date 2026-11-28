@@ -763,12 +763,12 @@ fn with_rate_limit_probe(document: &str) -> Result<String, String> {
 /// The page sizes the reconciliation binds every document's page-size variables to, and prices
 /// this workspace's own figures under: the largest request this source sends of each document.
 ///
-/// That is every page at its largest, which is what the offline bound is computed under, but
-/// for the batched search: one round of it never asks every slot for a whole page, so its
-/// largest request is [`search_batch_largest_round`], which production's own rounds are held to
-/// by `search_batch_resumed_page` and `tests/point_cost.rs`. The offline worst case of every
-/// document stays [`onetaskgraph_github_projects::largest_page_sizes`], held by
-/// `tests/node_count.rs` and `tests/point_cost.rs`.
+/// That is every page at its largest, which is what the offline bound is computed under: the
+/// batched search's largest round, [`search_batch_largest_round`], is every slot asking a whole
+/// page, since its slots read each hit's scalar fields alone, and `tests/point_cost.rs` holds
+/// every round it sends to it. The offline worst case of every document stays
+/// [`onetaskgraph_github_projects::largest_page_sizes`], held by `tests/node_count.rs` and
+/// `tests/point_cost.rs`.
 #[must_use]
 pub fn reconciliation_page_sizes() -> Variables {
     search_batch_largest_round()
