@@ -77,6 +77,7 @@ budgets:
     unit: points
     direction: max
     threshold: 25
+  # llmlint: ignore[budgets_track_product_owner_outcomes] An inner measure by its task's statement, which registers it: the outcome a person feels is onefollowup's per-draft prepare cost (`prepare-graphql-points-per-draft`, held in another repository), and `github-points-per-follow-up-cycle` prices another workload — a 400-item board, a find of 20 queries among comments, copies and updates — on which a find priced by nested pages moves a few points of a large total, so only a real-board-sized find fails where its query shape regresses.
   - id: github-batched-find-points
     description: >-
       An inner measure of the shared board token that no check may spend: the GitHub GraphQL points one batched `task find` of a ten-draft follow-up prepare's duplicate searches spends, driven through the binary against the loopback board and priced with the plugin's own table. It protects every run's share of that token from a find priced by nested pages rather than by the hits it keeps.
