@@ -23818,3 +23818,16 @@ async fn a_parent_source_refuses_every_project_write_naming_the_setting_before_s
     }
     assert!(fixture.seen().is_empty(), "nothing was written");
 }
+
+#[test]
+fn a_callers_priced_document_selects_one_cost_beside_any_rate_limit_already_selected() {
+    let ledger = Accounting::with_query_prices();
+    let priced = ledger.priced_document(graphql::ISSUE);
+    assert_eq!(priced.matches("rateLimit").count(), 1, "{priced}");
+    // A document the source already spelled with its cost, and a dry-run probe, are left as
+    // they are: never a second `rateLimit` selection beside the first.
+    let spelled = graphql::with_reported_cost(graphql::ISSUE).expect("a read");
+    assert_eq!(ledger.priced_document(&spelled), spelled);
+    let probe = graphql::ISSUE.replacen('{', "{rateLimit(dryRun:true){cost} ", 1);
+    assert_eq!(ledger.priced_document(&probe), probe);
+}

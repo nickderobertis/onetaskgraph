@@ -969,13 +969,13 @@ impl Accounting {
     /// Select a read's actual cost, preserving mutation documents and existing probe aliases.
     ///
     /// For a caller's own requests: the source spells every read it sends with
-    /// [`graphql::with_reported_cost`] instead, whose alias this leaves alone.
+    /// [`graphql::with_reported_cost`] instead. A document that already selects `rateLimit` in
+    /// any spelling — that alias, a dry-run probe, an unaliased cost — is left as it is.
     #[must_use]
     pub fn priced_document<'a>(&self, document: &'a str) -> std::borrow::Cow<'a, str> {
         if !self.query_prices
             || Mode::of_document(document) == Mode::Write
-            || document.contains("dryRun:true")
-            || document.contains("rateLimit{cost")
+            || document.contains("rateLimit")
         {
             return std::borrow::Cow::Borrowed(document);
         }
