@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.3](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-plugin-api-v0.17.2...onetaskgraph-plugin-api-v0.17.3) - 2026-11-28
+
+### Added
+
+- *(github-projects)* price a batched find by the hits its caller keeps and report each read's own cost ([#4109](https://github.com/nickderobertis/onetaskgraph/pull/4109))
+
 ## [0.16.0](https://github.com/nickderobertis/onetaskgraph/compare/onetaskgraph-plugin-api-v0.15.1...onetaskgraph-plugin-api-v0.16.0) - 2026-11-25
 
 ### Added
