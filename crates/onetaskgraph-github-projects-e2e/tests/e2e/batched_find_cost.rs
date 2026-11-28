@@ -559,13 +559,9 @@ impl onetaskgraph_plugin_api::SecretResolver for FixtureToken {
     }
 }
 
-/// The find's own batch — every search at the page the find first asks it, beside the origin
-/// lookups — asked of a source built from `config`, its first pages exactly what the command
-/// line answered, and each answer that reports more resumed from its cursor at page sizes that
-/// leave the next cursor anywhere inside a page, until the search ends: the pages together are
-/// every match the board holds, in the board's order, nothing repeated and nothing skipped.
-/// Then a cursor 22 rows deep inside a page a larger search of the same text shared, resumed
-/// the same way.
+/// Every cursor the find's batch hands out resumes to its search's end with nothing repeated
+/// or skipped — one 22 rows deep inside a page a larger search shared among them. The command
+/// line's answer carries no cursor, so the batch is asked of the source itself.
 fn resume_every_cursor(config: &Value, matched: &[BTreeSet<usize>], found: &Value) {
     use onetaskgraph_plugin_api::{
         PageRequest, SourceName, SourcePlugin as _, TaskQuery, TaskSource, TextFields, TextQuery,
