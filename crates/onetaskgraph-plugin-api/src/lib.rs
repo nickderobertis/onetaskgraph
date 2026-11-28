@@ -72,7 +72,7 @@ pub use query::{
     Cursor, DocumentQuery, LabelFilter, MetadataMatch, Page, PageRequest, ProjectFilter,
     ProjectQuery, TaskQuery, TextFields, TextQuery,
 };
-pub use quota::{AdmittedRequest, GatedRequest, QuotaReading, RequestGate};
+pub use quota::{AdmittedRequest, GatedRequest, QuotaReading, ReportedCost, RequestGate};
 pub use relation::{
     LINKS_HEADING, LinkDirection, LinkTypeConfig, LinkTypes, NativeLink, NativeWord, ParentAnswer,
     ParentWrite, Relations, TaskLink, arrow, link_line, read_content, relationless, relinked,

@@ -12,7 +12,9 @@
 //! writes, retries and a quota read alike — tells it, through
 //! [`<dyn RequestGate>::after`], what each response said is left, and holds the
 //! [`AdmittedRequest`] that ask answered until the request is over, whose drop tells the gate
-//! so through [`RequestGate::request_ended`]. Like
+//! so through [`RequestGate::request_ended`]. A response that said what the request itself cost
+//! — GitHub's `rateLimit { cost }` on a GraphQL read — is told to the gate through
+//! [`RequestGate::cost_reported`], as a [`ReportedCost`], between the two. Like
 //! [`WriteGuard`](crate::WriteGuard) the gate is task-local, installed by the engine for the
 //! length of each call it makes to a source: a source that never asks — every one that
 //! predates this — sends exactly what it sent, and one that asks outside a gated call is
@@ -67,6 +69,18 @@ pub struct GatedRequest {
     pub cost_hint: Option<u64>,
 }
 
+/// What the backend reported one answered request itself cost against one resource: that
+/// request's own charge, never the credential's shared spend.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ReportedCost {
+    /// The resource charged, in `QuotaReading::resource`'s vocabulary (`graphql`).
+    // llmlint: ignore[invalid_states_unrepresentable] The same open vocabulary as `QuotaReading::resource`, which a gate compares it against; the contract states it as a plain string.
+    pub resource: String,
+    /// What the backend said the request cost, in that resource's unit: for GitHub's GraphQL
+    /// API, the `rateLimit { cost }` its response carried, in points.
+    pub cost: u64,
+}
+
 tokio::task_local! {
     static GATE: Arc<dyn RequestGate>;
 }
@@ -111,6 +125,16 @@ pub trait RequestGate: Send + Sync {
     /// any [`after_response`](Self::after_response) its response carried, and never for a
     /// request `before_request` refused. A gate that keeps no such count needs nothing here.
     fn request_ended(&self) {}
+
+    /// What the backend said the request it just answered cost, when its response said.
+    /// Delivered at most once per admitted request, after `after_response` and before
+    /// `request_ended`; a request whose response reported no cost (a REST read, a refused or
+    /// failed request) delivers none.
+    #[expect(
+        unused_variables,
+        reason = "the contract names the parameter `cost`, and a gate that keeps no costs needs nothing here"
+    )]
+    fn cost_reported(&self, cost: &ReportedCost) {}
 }
 
 /// A request a [`RequestGate`] admitted, held by the source for as long as the request is in
@@ -128,6 +152,17 @@ pub struct AdmittedRequest {
 impl AdmittedRequest {
     /// End the request now, rather than when the admission goes out of scope.
     pub fn end(self) {}
+
+    /// Tell the gate that admitted this request what its response said the request cost —
+    /// through [`RequestGate::cost_reported`] — and then end it, as [`Self::end`] does: so the
+    /// cost is delivered at most once, after whatever [`<dyn RequestGate>::after`] the response
+    /// carried, and before [`RequestGate::request_ended`]. With no gate installed, nothing is
+    /// told.
+    pub fn end_reporting(self, cost: &ReportedCost) {
+        if let Some(gate) = &self.gate {
+            gate.cost_reported(cost);
+        }
+    }
 }
 
 impl std::fmt::Debug for AdmittedRequest {
@@ -203,6 +238,8 @@ mod tests {
         asked: Mutex<Vec<GatedRequest>>,
         told: Mutex<Vec<QuotaReading>>,
         ended: Mutex<usize>,
+        /// Every reading, cost and end the gate was told, in the order told.
+        events: Mutex<Vec<String>>,
         refuse_at: usize,
     }
 
@@ -212,6 +249,7 @@ mod tests {
                 asked: Mutex::new(Vec::new()),
                 told: Mutex::new(Vec::new()),
                 ended: Mutex::new(0),
+                events: Mutex::new(Vec::new()),
                 refuse_at,
             })
         }
@@ -236,11 +274,84 @@ mod tests {
 
         fn after_response(&self, readings: &[QuotaReading]) {
             self.told.lock().unwrap().extend_from_slice(readings);
+            self.events.lock().unwrap().push("readings".into());
         }
 
         fn request_ended(&self) {
             *self.ended.lock().unwrap() += 1;
+            self.events.lock().unwrap().push("ended".into());
         }
+
+        fn cost_reported(&self, cost: &ReportedCost) {
+            self.events
+                .lock()
+                .unwrap()
+                .push(format!("cost {} {}", cost.resource, cost.cost));
+        }
+    }
+
+    /// A gate that keeps no costs, relying on every default.
+    struct Silent;
+
+    #[async_trait::async_trait]
+    impl RequestGate for Silent {
+        async fn before_request(&self, _: &GatedRequest) -> Result<(), SourceError> {
+            Ok(())
+        }
+        fn after_response(&self, _: &[QuotaReading]) {}
+    }
+
+    fn charged(cost: u64) -> ReportedCost {
+        ReportedCost {
+            resource: "graphql".into(),
+            cost,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_reported_cost_reaches_the_gate_after_the_readings_and_before_the_end_once() {
+        let gate = Recording::refusing_at(usize::MAX);
+        let installed: Arc<dyn RequestGate> = gate.clone();
+        <dyn RequestGate>::scope(installed, async {
+            let answered = <dyn RequestGate>::before(&request("graphql")).await.unwrap();
+            <dyn RequestGate>::after(&[reading()]);
+            answered.end_reporting(&charged(3));
+            // A request whose response reported no cost delivers none.
+            let unpriced = <dyn RequestGate>::before(&request("core")).await.unwrap();
+            <dyn RequestGate>::after(&[reading()]);
+            unpriced.end();
+        })
+        .await;
+        assert_eq!(
+            *gate.events.lock().unwrap(),
+            ["readings", "cost graphql 3", "ended", "readings", "ended"]
+        );
+        assert_eq!(gate.ended(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_gate_keeping_no_costs_is_told_one_by_its_default_and_ungated_requests_tell_none() {
+        let installed: Arc<dyn RequestGate> = Arc::new(Silent);
+        <dyn RequestGate>::scope(installed, async {
+            <dyn RequestGate>::before(&request("graphql"))
+                .await
+                .unwrap()
+                .end_reporting(&charged(1));
+        })
+        .await;
+        // With no gate installed there is nobody to tell, and nothing fails.
+        <dyn RequestGate>::before(&request("graphql"))
+            .await
+            .unwrap()
+            .end_reporting(&charged(1));
+    }
+
+    #[test]
+    fn a_reported_cost_serialises_as_the_contract_states_it() {
+        assert_eq!(
+            serde_json::to_value(charged(21)).unwrap(),
+            serde_json::json!({"resource":"graphql","cost":21})
+        );
     }
 
     fn request(resource: &str) -> GatedRequest {

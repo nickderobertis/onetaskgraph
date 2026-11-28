@@ -85,7 +85,7 @@ silence. See the note on `Health` below for the one difference it carries delibe
   comment types `Comment`, `CommentBody`, `NewComment`, `CommentOrigin`, `CommentCopy`,
   `AuthorKind` and `TaskDetailRead`; the section types `StoredHeading`, `BodyMarkup` and `SharedBodyMarkup`; the
   metering types `Metering` and `Metered`; the quota types `QuotaReading`, `RequestGate`,
-  `GatedRequest` and `AdmittedRequest`; the metadata-projection type `ProjectedValue`; the `status_mapping` types `StatusMapping`,
+  `GatedRequest`, `AdmittedRequest` and `ReportedCost`; the metadata-projection type `ProjectedValue`; the `status_mapping` types `StatusMapping`,
   `StatusNames`, `StatusName` and `UnmappedStatus`; the image-asset types `Asset`,
   `AssetName`, `AssetContentType`, `AssetPayload`, `AssetUpload`, `AssetUploads`, `AssetWrite`
   and `AssetsWritten`; the clock types `Clock`, `SharedClock` and `WaitCause`; the held-write type `HeldVersion`;
