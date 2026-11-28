@@ -1832,3 +1832,128 @@ fn a_hit_gone_from_the_board_before_it_is_read_whole_is_left_out_of_a_complete_a
     let read = read_whole(&served);
     assert!(read.contains(&"R-21".to_owned()) && read.contains(&"R-22".to_owned()));
 }
+
+/// The slots of every [`graphql::SEARCH_BATCH`] request served that search for `word`, by
+/// request: each slot's `after` and `first`.
+fn slots_of(served: &[(String, Value)], word: &str) -> Vec<Vec<(Value, u64)>> {
+    served
+        .iter()
+        .filter(|(document, _)| document == graphql::SEARCH_BATCH)
+        .map(|(_, variables)| {
+            (0..onetaskgraph_github_projects::SEARCH_BATCH)
+                .filter(|slot| {
+                    variables[format!("ask{slot}")] == true
+                        && variables[format!("search{slot}")]
+                            .as_str()
+                            .is_some_and(|search| search.ends_with(&format!("\"{word}\"")))
+                })
+                .map(|slot| {
+                    (
+                        variables[format!("after{slot}")].clone(),
+                        variables[format!("first{slot}")]
+                            .as_u64()
+                            .expect("a page size"),
+                    )
+                })
+                .collect()
+        })
+        .filter(|slots: &Vec<(Value, u64)>| !slots.is_empty())
+        .collect()
+}
+
+/// One text asked at several limits in one find is one search: its page is fetched once, at the
+/// most rows any of them asks, and each answer is the first rows of that page its own limit
+/// keeps — in order, `limited` while more matched, and, where a project among its rows leaves
+/// it short of its limit, resumed from the row it stopped at rather than the page's end.
+#[test]
+fn one_text_at_several_limits_is_fetched_once_and_each_answer_resumes_where_its_own_rows_ended() {
+    let board = searched_board();
+    let find = |queries: Value| {
+        let request = json!({"schema_version": 1, "queries": queries}).to_string();
+        let (answered, served) = board.measured(
+            &[
+                "task",
+                "find",
+                "board",
+                "--queries",
+                "-",
+                "--json",
+                "--page-size",
+                "100",
+            ],
+            &request,
+        );
+        assert_eq!(answered.code, Some(0), "{}", answered.stderr);
+        (in_order(&answered.json), served)
+    };
+    let releases: Vec<String> = (0..25).map(|n| format!("R-{n}")).collect();
+
+    // The same text kept at 1 and at 21: one slot of 21 rows in one request, and nothing more.
+    let (answers, served) = find(json!([
+        {"key": "one", "text": "release", "limit": 1},
+        {"key": "many", "text": "release", "limit": 21},
+    ]));
+    assert_eq!(answers[0].1, releases[..1], "{answers:?}");
+    assert_eq!(answers[1].1, releases[..21], "{answers:?}");
+    for answer in &answers {
+        assert_eq!(
+            (&answer.2, &answer.3),
+            (&json!(true), &json!(true)),
+            "{answer:?}"
+        );
+    }
+    assert_eq!(
+        slots_of(&served, "release"),
+        [vec![(Value::Null, 21)]],
+        "one page, at the most rows either asks: {served:#?}"
+    );
+
+    // Two of the first rows projects: the search keeping 3 meets them inside the shared page,
+    // stops at its third row with one task, and resumes from that row; the one keeping 8 goes
+    // on from the page's end.
+    for n in [1, 2] {
+        board.board.set_metadata(
+            &format!("R-{n}"),
+            "onetaskgraph.item_kind",
+            json!("project"),
+        );
+    }
+    board.board.pass_time(120);
+    let tasks: Vec<String> = releases
+        .iter()
+        .filter(|id| !["R-1", "R-2"].contains(&id.as_str()))
+        .cloned()
+        .collect();
+    let (answers, served) = find(json!([
+        {"key": "few", "text": "release", "limit": 3},
+        {"key": "more", "text": "release", "limit": 8},
+    ]));
+    assert_eq!(answers[0].1, tasks[..3], "{answers:?}");
+    assert_eq!(answers[1].1, tasks[..8], "{answers:?}");
+    for answer in &answers {
+        assert_eq!(
+            (&answer.2, &answer.3),
+            (&json!(true), &json!(true)),
+            "{answer:?}"
+        );
+    }
+    assert_eq!(
+        slots_of(&served, "release"),
+        [
+            // The first page once, at the eight rows the larger asks.
+            vec![(Value::Null, 8)],
+            // Then the smaller from its own third row, for the two tasks it still lacks, and
+            // the larger from where the page ended, for its two.
+            vec![(Value::Null, 5), (json!("8"), 2)],
+        ],
+        "{served:#?}"
+    );
+    // And each issue either answer holds was read whole once.
+    let read = read_whole(&served);
+    let distinct: BTreeSet<&String> = read.iter().collect();
+    assert_eq!(
+        distinct.len(),
+        read.len(),
+        "an issue read whole twice: {read:?}"
+    );
+}
