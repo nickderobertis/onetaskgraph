@@ -5013,6 +5013,11 @@ pub struct GitHubProjectsSource {
     /// narrowed question twice — a wait polling for its own items, a listing repeated after a
     /// write — pays for it once, which is what the whole-board read it replaced gave it.
     narrowed_cache: Mutex<BTreeMap<String, Vec<Resolved>>>,
+    /// Each page of a narrowed search's own read, row for row as GitHub answered it — `None`
+    /// for a row that is no item of this board, or one this process deleted since — held on
+    /// the terms [`Self::narrowed_cache`] is. Row for row because a cursor names a row of a
+    /// page by its position (`SearchPosition::offset`), which an entry removed would move.
+    search_rows: Mutex<SearchRows>,
     search_next: Mutex<BTreeMap<String, Option<String>>>,
     /// Records already resolved in this command, reused by writes and for comment identity.
     /// Explicit item reads still reach GitHub. Nothing is persisted, and
@@ -6287,6 +6292,7 @@ impl GitHubProjectsSource {
             carried: Mutex::new(BTreeMap::new()),
             held_cache: Mutex::new(BTreeMap::new()),
             children_cache: Mutex::new(BTreeMap::new()),
+            search_rows: Mutex::new(BTreeMap::new()),
             search_next: Mutex::new(BTreeMap::new()),
             fields_cache: Mutex::new(None),
             repository_cache: Mutex::new(BTreeMap::new()),
@@ -7209,6 +7215,18 @@ impl GitHubProjectsSource {
         first: u32,
         after: Option<&str>,
     ) -> Result<(Vec<Resolved>, Option<String>), SourceError> {
+        let (rows, next) = self.search_rows_page(search, first, after).await?;
+        Ok((rows.into_iter().flatten().collect(), next))
+    }
+
+    /// [`Self::search_page`], row for row: `None` for a row that is no item of this board, so a
+    /// row's position in the answer is its position in GitHub's — what a cursor's offset counts.
+    async fn search_rows_page(
+        &self,
+        search: &str,
+        first: u32,
+        after: Option<&str>,
+    ) -> Result<(Vec<Option<Resolved>>, Option<String>), SourceError> {
         let data = self
             .graphql(
                 graphql::SEARCH_ISSUES,
@@ -7228,9 +7246,7 @@ impl GitHubProjectsSource {
                 message: "GitHub search nodes is not an array".into(),
             })?
         {
-            if let Some(resolved) = self.resolve_issue(node).await? {
-                found.push(resolved);
-            }
+            found.push(self.resolve_issue(node).await?);
         }
         let info = connection
             .get("pageInfo")
@@ -8082,13 +8098,22 @@ impl GitHubProjectsSource {
         }
         let mut tasks = Vec::new();
         while !position.connection.exhausted() && tasks.len() < limit {
-            let first = SEARCH_PAGE_SIZE;
+            // A page this read resumes 20 rows or more into — a cursor a batched page shared with
+            // a larger search handed out — is asked far enough to hold a page of rows past them.
+            let first = if position.offset < SEARCH_PAGE_SIZE as usize {
+                SEARCH_PAGE_SIZE
+            } else {
+                u32::try_from(position.offset)
+                    .unwrap_or(MAX_PAGE_SIZE)
+                    .saturating_add(SEARCH_PAGE_SIZE)
+                    .min(MAX_PAGE_SIZE)
+            };
             // Page size is part of the key: a short cached answer cannot answer a wider ask.
             let key =
                 serde_json::to_string(&("page", &search, &position.connection.after(), first))
                     .expect("search page key is serializable");
             let cached = if query.commented_since.is_none() {
-                self.narrowed_cache()?.get(&key).cloned()
+                self.search_rows()?.get(&key).cloned()
             } else {
                 None
             };
@@ -8109,7 +8134,7 @@ impl GitHubProjectsSource {
                 }
                 None => {
                     let (found, next) = self
-                        .search_page(&search, first, position.connection.after())
+                        .search_rows_page(&search, first, position.connection.after())
                         .await?;
                     if query.commented_since.is_none() {
                         self.search_next
@@ -8120,21 +8145,27 @@ impl GitHubProjectsSource {
                                         .into(),
                             })?
                             .insert(key.clone(), next.clone());
-                        self.narrowed_cache()?.insert(key, found.clone());
+                        self.search_rows()?.insert(key, found.clone());
                     }
                     (found, next)
                 }
             };
             let rows = found.len();
             // Every candidate of the page this read confirms by its comments is read together.
-            let candidates =
-                self.comment_candidates(found.iter().skip(position.offset), query, &query.project)?;
+            let candidates = self.comment_candidates(
+                found.iter().skip(position.offset).flatten(),
+                query,
+                &query.project,
+            )?;
             self.hold_comment_pages(&candidates).await?;
-            for mut item in found.into_iter().skip(position.offset) {
+            for row in found.into_iter().skip(position.offset) {
                 if tasks.len() == limit {
                     break;
                 }
                 position.offset += 1;
+                let Some(mut item) = row else {
+                    continue;
+                };
                 if position.own.contains(&item.id) {
                     if position.seen.contains(&item.id) {
                         continue;
@@ -8719,6 +8750,11 @@ impl GitHubProjectsSource {
                 *held = item.clone();
             }
         }
+        for rows in self.search_rows()?.values_mut() {
+            if let Some(held) = rows.iter_mut().flatten().find(|held| held.id == item.id) {
+                *held = item.clone();
+            }
+        }
         for (_, found) in self.children_cache()?.values_mut() {
             if let Some(held) = found.iter_mut().find(|held| held.id == item.id) {
                 *held = item.clone();
@@ -8747,10 +8783,30 @@ impl GitHubProjectsSource {
         for found in self.narrowed_cache()?.values_mut() {
             found.retain(|item| item.id != *id);
         }
+        // Emptied rather than removed, so every later row of its page keeps its position.
+        for rows in self.search_rows()?.values_mut() {
+            for row in rows.iter_mut() {
+                if row.as_ref().is_some_and(|item| item.id == *id) {
+                    *row = None;
+                }
+            }
+        }
         for (_, found) in self.children_cache()?.values_mut() {
             found.retain(|item| item.id != *id);
         }
         Ok(())
+    }
+
+    /// This process's own record of each page of a narrowed search's own read, row for row, or
+    /// the refusal a poisoned lock is.
+    fn search_rows(&self) -> Result<std::sync::MutexGuard<'_, SearchRows>, SourceError> {
+        self.search_rows
+            .lock()
+            .map_err(|_| SourceError::Unavailable {
+                message: "this source's view of a narrowed search was left inconsistent by an \
+                      earlier failure; next: run the command again"
+                    .into(),
+            })
     }
 
     /// This process's own record of each narrowed answer, or the refusal a poisoned lock is.
@@ -14251,6 +14307,10 @@ impl Board {
     }
 }
 
+/// Each held page of a narrowed search's own read, by its key, row for row: see
+/// `GitHubProjectsSource::search_rows`.
+type SearchRows = BTreeMap<String, Vec<Option<Resolved>>>;
+
 /// One board item, resolved into everything this source reports about it.
 ///
 /// Serializable because it is what [`TaskSource::write_context`] hands the store's cache and
@@ -17049,6 +17109,7 @@ impl TaskSource for GitHubProjectsSource {
         clear(&self.board_cache);
         clear(&self.search_cache);
         clear(&self.narrowed_cache);
+        clear(&self.search_rows);
         clear(&self.search_next);
         clear(&self.resolved_cache);
         clear(&self.read_ahead);
@@ -17938,11 +17999,12 @@ impl SearchConnection {
     }
     /// Whether a cursor naming this position, `offset` rows into its page, is one this
     /// plugin could have handed out: a page is resumed only part of the way through it — an
-    /// offset of a whole page or more would skip rows nobody was given — an initial page
-    /// only once some of it was handed out, and an exhausted connection has no page to be
-    /// part of the way through.
+    /// offset of GitHub's whole page maximum or more would skip rows nobody was given; a batched
+    /// search sharing a page with a larger one of its text stops anywhere inside it — an
+    /// initial page only once some of it was handed out, and an exhausted connection has no
+    /// page to be part of the way through.
     fn valid_resume(&self, offset: usize) -> bool {
-        let within = offset < SEARCH_PAGE_SIZE as usize;
+        let within = offset < MAX_PAGE_SIZE as usize;
         match self {
             Self::Initial { .. } => offset > 0 && within,
             Self::Continuing { after } => !after.0.is_empty() && within,
@@ -18218,6 +18280,11 @@ mod end_command_tests {
             (NativeId("P-1".into()), vec![item.clone()]),
         );
         source
+            .search_rows
+            .lock()
+            .unwrap()
+            .insert("status:todo".into(), vec![Some(item.clone()), None]);
+        source
             .search_next
             .lock()
             .unwrap()
@@ -18244,6 +18311,7 @@ mod end_command_tests {
         assert!(source.board_cache().unwrap().is_none(), "board");
         assert!(source.search_cache.lock().unwrap().is_none(), "search");
         assert!(source.narrowed_cache.lock().unwrap().is_empty(), "narrowed");
+        assert!(source.search_rows.lock().unwrap().is_empty(), "search rows");
         assert!(
             source.children_cache.lock().unwrap().is_empty(),
             "project children"
@@ -18300,6 +18368,7 @@ mod end_command_tests {
         poison(&source.board_cache);
         poison(&source.search_cache);
         poison(&source.narrowed_cache);
+        poison(&source.search_rows);
         poison(&source.search_next);
         poison(&source.resolved_cache);
         poison(&source.fields_cache);

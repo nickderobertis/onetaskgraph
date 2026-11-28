@@ -1957,3 +1957,113 @@ fn one_text_at_several_limits_is_fetched_once_and_each_answer_resumes_where_its_
         "an issue read whole twice: {read:?}"
     );
 }
+
+/// A cursor a shared search page handed out 22 rows into that page — the search kept at 22
+/// beside one kept at 60 — stays resumable once a write of the same source instance has turned
+/// batching off: its own read answers the very next matches, nothing repeated or skipped, and
+/// a cursor that read hands out again past the twentieth row resumes as well.
+#[test]
+fn a_cursor_deep_inside_a_shared_page_resumes_through_a_search_read_after_a_write() {
+    use onetaskgraph_plugin_api::{
+        NativeId, PageRequest, SourceName, SourcePlugin as _, TaskQuery, TaskUpdate, TextFields,
+        TextQuery,
+    };
+    let board = searched_board();
+    let source = onetaskgraph_github_projects::Plugin
+        .build(
+            &SourceName::new("board").unwrap(),
+            &board.config,
+            &FixtureToken,
+        )
+        .expect("the plugin builds");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a runtime");
+    let releases = TaskQuery {
+        text: Some(TextQuery {
+            terms: "release".to_owned(),
+            fields: TextFields::TitleOrContent,
+        }),
+        ..TaskQuery::default()
+    };
+    let page = |cursor, limit| PageRequest { cursor, limit };
+    let ids = |tasks: &[onetaskgraph_plugin_api::Task]| -> Vec<String> {
+        tasks.iter().map(|task| task.id.0.clone()).collect()
+    };
+    let every: Vec<String> = (0..25).map(|n| format!("R-{n}")).collect();
+
+    // One slot of 60 rows answers both; the one kept at 22 stops 22 rows into it.
+    let mark = board.board.served_count();
+    let mut answered = runtime.block_on(source.query_tasks_batch(&[
+        (releases.clone(), page(None, 22)),
+        (releases.clone(), page(None, 60)),
+    ]));
+    assert_eq!(
+        slots_of(&board.board.served_since(mark), "release"),
+        [vec![(Value::Null, 60)]]
+    );
+    let wide = answered.pop().unwrap().expect("the wider search");
+    let first = answered.pop().unwrap().expect("the narrower search");
+    assert_eq!(ids(&wide.items), every);
+    assert_eq!(ids(&first.items), every[..22]);
+    let cursor = first.next.expect("more matched past 22");
+
+    // A write of this same source: its own writes complete a narrowed answer, which only a
+    // search's own read does, so nothing of this source is batched from here.
+    let retitled = runtime.block_on(source.update_task(
+        &NativeId("DS-0".to_owned()),
+        &TaskUpdate {
+            title: Some("Deploy step zero".to_owned()),
+            ..TaskUpdate::default()
+        },
+    ));
+    assert!(matches!(retitled, Ok(Some(_))), "{retitled:?}");
+
+    let mark = board.board.served_count();
+    let resumed = runtime
+        .block_on(source.query_tasks(&releases, &page(Some(cursor.clone()), 2)))
+        .expect("the cursor resumes");
+    assert_eq!(ids(&resumed.items), every[22..24], "the very next two");
+    let last = runtime
+        .block_on(source.query_tasks(&releases, &page(resumed.next.clone(), 10)))
+        .expect("its own cursor, 24 rows in, resumes too");
+    assert_eq!(ids(&last.items), every[24..], "the last, and nothing after");
+    assert_eq!(last.next, None);
+    // Each resume asked the page its cursor names from its start, far enough to hold a page of
+    // rows past the 22, then the 24, already handed out.
+    let searched: Vec<(Value, Value)> = board
+        .board
+        .served_since(mark)
+        .into_iter()
+        .filter(|(document, _)| document == graphql::SEARCH_ISSUES)
+        .map(|(_, variables)| (variables["after"].clone(), variables["first"].clone()))
+        .collect();
+    assert_eq!(
+        searched,
+        [(Value::Null, json!(42)), (Value::Null, json!(44))],
+        "{:#?}",
+        board.board.served_since(mark)
+    );
+
+    // This process deletes R-5, a row before the cursor's; the same cursor resumed again is
+    // answered from the page this read already holds, whose later rows keep their places: R-22
+    // and R-23 again, and no request.
+    runtime
+        .block_on(source.delete_task(&NativeId("R-5".to_owned())))
+        .expect("the delete lands");
+    let mark = board.board.served_count();
+    let again = runtime
+        .block_on(source.query_tasks(&releases, &page(Some(cursor), 2)))
+        .expect("the cursor resumes again");
+    assert_eq!(ids(&again.items), every[22..24]);
+    assert!(
+        board
+            .board
+            .served_since(mark)
+            .iter()
+            .all(|(document, _)| document != graphql::SEARCH_ISSUES),
+        "{:#?}",
+        board.board.served_since(mark)
+    );
+}
