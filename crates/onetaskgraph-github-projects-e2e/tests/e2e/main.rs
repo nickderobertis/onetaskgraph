@@ -26,6 +26,9 @@ mod assignees;
 // it is loopback-only and seconds long, beside the plan copy it builds on.
 mod approval_seconds;
 mod batched_calls;
+// The `github-batched-find-points` workload runs in this crate's `test` target, whose telemetry its
+// reporter reads and whose `budgets` target judges it, as every budget of this crate does.
+mod batched_find_cost;
 mod boundary;
 mod cache;
 mod cache_assets;

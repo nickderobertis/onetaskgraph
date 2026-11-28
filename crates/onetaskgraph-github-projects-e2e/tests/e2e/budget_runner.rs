@@ -150,6 +150,18 @@ fn report_landing_closure() {
     hand_over(value, &detail);
 }
 // llmlint: ignore-end[budget_commands_measure_directly]
+// llmlint: ignore-block[budget_commands_measure_directly] Every budget of this crate selects its own report-only entry here, the harness-runner convention it landed with (report_visibility_reads, report_metadata_fields), and the task registering this one names that pattern, following `report_landing_closure`. It reads only the telemetry the `batched_find_cost` journey recorded, refuses a recording of another workload, and hands the figure to onebudgetspec, which alone judges it.
+#[test]
+fn report_batched_find() {
+    let Some(budget) = selected() else {
+        return;
+    };
+    let (value, detail) =
+        batched_find_of(&recorded(&budget).unwrap_or_else(|error| refuse(&error)))
+            .unwrap_or_else(|error| refuse(&error));
+    hand_over(value, &detail);
+}
+// llmlint: ignore-end[budget_commands_measure_directly]
 // llmlint: ignore-block[budget_commands_measure_directly] Every budget of this crate selects its own report-only entry here, the harness-runner convention it landed with (report_visibility_reads, report_metadata_fields), and the task registering this one names that pattern. It reads only the telemetry the journeys recorded, refuses a recording of another workload, and hands the figure to onebudgetspec, which alone judges it.
 #[test]
 fn report_cache_points() {
@@ -1484,6 +1496,112 @@ fn landing_closure_of(value: &Value) -> Result<(f64, String), String> {
     let detail = value["detail"].as_str().ok_or("missing detail")?.to_owned();
     let figure = u32::try_from(figure).map_err(|_| "figure out of range")?;
     Ok((f64::from(figure), detail))
+}
+
+/// What `batched_find_cost` recorded, refused unless it is that journey's recording of the one
+/// batched find the budget states — its board, its searches, their limits and pages — with its
+/// phases adding up to the figure.
+fn batched_find_of(value: &Value) -> Result<(f64, String), String> {
+    use super::batched_find_cost::{ASKED_TWICE, HITS, ISSUES, OPEN, ORIGINS, WORKLOAD};
+    if value["workload"].as_str() != Some(WORKLOAD) {
+        return Err("workload does not match the batched find the budget states".into());
+    }
+    let recorded = &value["recorded"];
+    let facts = [
+        ("board_issues", ISSUES as u64),
+        ("open_issues", OPEN as u64),
+        ("searches", (HITS.len() + ASKED_TWICE.len()) as u64),
+        ("distinct_texts", HITS.len() as u64),
+        ("texts_sent", HITS.len() as u64),
+        ("asked_twice", ASKED_TWICE.len() as u64),
+        ("origin_lookups", ORIGINS as u64),
+        ("kept_at_21", 643),
+        ("page_size", 100),
+        ("pages_of_the_250_search", 3),
+        ("pages_of_every_other_search", 1),
+    ];
+    for (fact, expected) in facts {
+        if recorded[fact].as_u64() != Some(expected) {
+            return Err(format!(
+                "the recording's {fact} is not the workload the budget states"
+            ));
+        }
+    }
+    if recorded["limits"] != serde_json::json!({"250": 1, "100": 1, "1": 1, "21": 74}) {
+        return Err("the recording's limits are not the workload the budget states".into());
+    }
+    let figure = value["value"]
+        .as_u64()
+        .ok_or("missing whole-number figure")?;
+    let phases = recorded["phases"]
+        .as_object()
+        .ok_or("the recording carries no phases")?;
+    let mut sum = 0;
+    for (phase, spent) in phases {
+        sum += spent["points"]
+            .as_u64()
+            .ok_or_else(|| format!("the {phase} phase carries no points"))?;
+        spent["requests"]
+            .as_u64()
+            .ok_or_else(|| format!("the {phase} phase carries no requests"))?;
+    }
+    if sum != figure {
+        return Err("the phases do not add up to the figure".into());
+    }
+    let detail = value["detail"].as_str().ok_or("missing detail")?.to_owned();
+    let figure = u32::try_from(figure).map_err(|_| "figure out of range")?;
+    Ok((f64::from(figure), detail))
+}
+
+/// A recording `batched_find_of` accepts: the budget's workload, its phases adding up.
+fn batched_find_recording() -> Value {
+    use super::batched_find_cost::WORKLOAD;
+    serde_json::json!({"workload": WORKLOAD, "value": 3, "detail": "3 points", "recorded": {
+        "board_issues": 2138, "open_issues": 465, "searches": 77, "distinct_texts": 74,
+        "texts_sent": 74, "asked_twice": 3, "origin_lookups": 10, "kept_at_21": 643,
+        "page_size": 100, "pages_of_the_250_search": 3, "pages_of_every_other_search": 1,
+        "limits": {"250": 1, "100": 1, "1": 1, "21": 74},
+        "phases": {"search rounds": {"requests": 1, "points": 1},
+                   "detail batches": {"requests": 2, "points": 2}}}})
+}
+
+#[test]
+fn a_batched_find_recording_is_refused_unless_it_is_that_journeys_whole_measurement() {
+    assert_eq!(
+        batched_find_of(&batched_find_recording()),
+        Ok((3.0, "3 points".to_owned()))
+    );
+    let bent = |bend: &dyn Fn(&mut Value)| {
+        let mut recording = batched_find_recording();
+        bend(&mut recording);
+        batched_find_of(&recording).expect_err("a bent recording is refused")
+    };
+    for (bend, says) in [
+        (
+            Box::new(|value: &mut Value| value["workload"] = "another".into())
+                as Box<dyn Fn(&mut Value)>,
+            "workload does not match",
+        ),
+        (
+            Box::new(|value: &mut Value| value["recorded"]["texts_sent"] = 77.into()),
+            "the recording's texts_sent is not the workload",
+        ),
+        (
+            Box::new(|value: &mut Value| value["recorded"]["pages_of_the_250_search"] = 13.into()),
+            "the recording's pages_of_the_250_search is not the workload",
+        ),
+        (
+            Box::new(|value: &mut Value| value["recorded"]["limits"]["21"] = 77.into()),
+            "the recording's limits are not",
+        ),
+        (
+            Box::new(|value: &mut Value| value["value"] = 2.into()),
+            "the phases do not add up",
+        ),
+    ] {
+        let refused = bent(&*bend);
+        assert!(refused.contains(says), "{refused}");
+    }
 }
 
 /// A recording `landing_closure_of` accepts: both scales at the workload the budget states, each

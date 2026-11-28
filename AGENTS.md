@@ -1676,6 +1676,12 @@ them do; this is the inventory of what is owed, not a status board.
      of a term matching 1,000 issues leaving its neighbours' answers as they were; a `limit` of
      `0` is refused naming its key, reading nothing; an answer without `limited` reads `false`.
 
+175. A batched `task find` of a ten-draft prepare's 77 searches and 10 origin lookups on a GitHub
+     board of 2,138 issues answers each search exactly the board's matches in its order up to its
+     limit, each task whole as a listing reads it, `limited` exactly when more matched; each page
+     asks no more rows than its search lacks nor than 100, nothing once it holds its limit or has
+     ended, a text asked twice is sent once, and each hit is read whole in one detail slot.
+
 ## The public boundary
 
 Classification, a source's declared `visibility`, classification routes and `write_policy`
